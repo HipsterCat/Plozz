@@ -2,6 +2,7 @@
 import AniListService
 import AppRuntime
 import CoreModels
+import ProviderKinoPubDemo
 import CoreNetworking
 import CoreUI
 import CrashReporting
@@ -469,11 +470,22 @@ final class PlozziOSAppModel {
             into: registry,
             durableLocalStateStore: durableLocalStateStore
         )
+        // The kino.pub demo swaps the accounts hub's store and repoints the
+        // managed provider kinds at the offline catalogue. The concrete
+        // `accountStore` above stays wired to the media-share runtime, which
+        // needs the real one and which the demo never exercises.
+        let hubAccountStore: AccountPersisting
+        if KinoPubDemo.isEnabled {
+            KinoPubDemo.install(into: registry)
+            hubAccountStore = KinoPubDemo.makeAccountStore()
+        } else {
+            hubAccountStore = accountStore
+        }
         let profiles = ProfilesModel(
             store: ProfileStore(
                 secureStore: KeychainStore(service: "com.plozz.app.household")
             ),
-            defaultActiveAccountIDs: accountStore.activeAccountIDs()
+            defaultActiveAccountIDs: hubAccountStore.activeAccountIDs()
         )
         // Forced when the profile we'd restore is locked, so its content never
         // renders behind the PIN prompt — the unlock then runs through the
@@ -482,7 +494,7 @@ final class PlozziOSAppModel {
             profiles.activeProfile.isLocked
             || (profiles.askProfileOnStartup && profiles.profiles.count > 1)
         let accountsProviders = AccountsProvidersModel(
-            accountStore: accountStore,
+            accountStore: hubAccountStore,
             registry: registry,
             profilesModel: profiles
         )
@@ -497,7 +509,7 @@ final class PlozziOSAppModel {
         let simklService = SimklServiceFactory.make(namespace: trackerNamespace)
         let anilistService = AniListServiceFactory.make(namespace: trackerNamespace)
         let malService = MALServiceFactory.make(namespace: trackerNamespace)
-        self.accountStore = accountStore
+        self.accountStore = hubAccountStore
         self.profiles = profiles
         self.accountsProviders = accountsProviders
         self.authenticatedHTTPResolver = authenticatedHTTPResolver

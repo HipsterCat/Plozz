@@ -740,6 +740,7 @@ let package = Package(
                 "MediaTransportSFTP",
                 "MediaTransportWebDAV",
                 "ProviderJellyfin",
+                "ProviderKinoPubDemo",
                 "ProviderPlex",
                 "ProviderShare",
                 "RatingsService",

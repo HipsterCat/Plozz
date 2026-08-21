@@ -3,35 +3,43 @@ import Foundation
 
 /// Entry point for the kino.pub look-and-feel demo.
 ///
-/// Off unless the launch environment asks for it, so a normal build of Plozz is
-/// bit-for-bit unaffected:
+/// On this branch the demo is the **default** for Debug builds, because a build
+/// launched from the Home screen of a real Apple TV or iPhone has no launch
+/// environment to read — tapping an icon is how it will actually be looked at.
+/// Set `PLOZZ_KINOPUB_DEMO=0` to run the same build as ordinary Plozz.
 ///
-///     SIMCTL_CHILD_PLOZZ_KINOPUB_DEMO=1 xcrun simctl launch booted com.thatcube.plozz
-///
-/// or tick the scheme's environment variable `PLOZZ_KINOPUB_DEMO=1` in Xcode.
+/// Release builds never enable it.
 public enum KinoPubDemo {
     public static var isEnabled: Bool {
         #if DEBUG
-            ProcessInfo.processInfo.environment["PLOZZ_KINOPUB_DEMO"] == "1"
+            ProcessInfo.processInfo.environment["PLOZZ_KINOPUB_DEMO"] != "0"
         #else
             false
         #endif
     }
 
-    /// The account store and provider registry the demo runs on. Handed to
-    /// `AppState` in place of the Keychain-backed pair.
+    /// The account store the demo runs on: one fake account, in memory, never
+    /// written to the Keychain or anywhere else.
     public static func makeAccountStore() -> KinoPubDemoAccountStore {
         KinoPubDemoAccountStore()
     }
 
+    /// Points the managed provider kinds at the offline catalogue.
+    ///
+    /// Registered under the existing kinds on purpose: adding a `ProviderKind`
+    /// case would force every exhaustive switch in the app to grow a branch for
+    /// a provider that only exists in a demo build.
+    public static func install(into registry: ProviderRegistry) {
+        for kind in [ProviderKind.jellyfin, .emby, .plex] {
+            registry.register(kind) { context in
+                KinoPubDemoProvider(session: context.session, accountID: context.accountID)
+            }
+        }
+    }
+
     public static func makeRegistry() -> ProviderRegistry {
         let registry = ProviderRegistry()
-        // Registered under `.jellyfin` on purpose: adding a `ProviderKind` case
-        // would force every exhaustive switch in the app to grow a branch for a
-        // provider that only exists in a demo build.
-        registry.register(.jellyfin) { context in
-            KinoPubDemoProvider(session: context.session, accountID: context.accountID)
-        }
+        install(into: registry)
         return registry
     }
 }
