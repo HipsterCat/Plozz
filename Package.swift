@@ -34,6 +34,7 @@ let package = Package(
         .library(name: "FeatureDiscovery", targets: ["FeatureDiscovery"]),
         .library(name: "ProviderJellyfin", targets: ["ProviderJellyfin"]),
         .library(name: "ProviderPlex", targets: ["ProviderPlex"]),
+        .library(name: "ProviderKinoPubDemo", targets: ["ProviderKinoPubDemo"]),
         .library(name: "ProviderShare", targets: ["ProviderShare"]),
         .library(name: "ProviderTrailers", targets: ["ProviderTrailers"]),
         .library(name: "RatingsService", targets: ["RatingsService"]),
@@ -259,6 +260,15 @@ let package = Package(
         .target(
             name: "ProviderPlex",
             dependencies: ["CoreModels", "CoreNetworking"]
+        ),
+        // Offline look-and-feel demo backed by a frozen kino.pub catalogue.
+        // Debug-only in effect (see `KinoPubDemo.isEnabled`); it exists so the
+        // tvOS UI can be judged on real Russian titles and artwork with no
+        // server, no account, and no network beyond the image CDNs.
+        .target(
+            name: "ProviderKinoPubDemo",
+            dependencies: ["CoreModels", "FeatureAuthCore"],
+            resources: [.process("Resources")]
         ),
         // Second-class local media-share backend (SMB today). Scans a share into
         // a synthesised library and conforms to `MediaProvider` so the rest of the
@@ -678,6 +688,7 @@ let package = Package(
                 "MediaDownloads",
                 "MetadataKit",
                 "ProviderJellyfin",
+                "ProviderKinoPubDemo",
                 "ProviderPlex",
                 "ProviderShare",
                 "ProviderTrailers",

@@ -5,6 +5,7 @@ import AVFoundation
 #endif
 import AppRuntime
 import CoreModels
+import ProviderKinoPubDemo
 import CoreNetworking
 import CoreUI
 import FeatureHomeCore
@@ -120,7 +121,19 @@ public struct RootView: View {
 
     @MainActor
     public init(appState: AppState? = nil) {
-        _appState = State(initialValue: appState ?? AppState())
+        _appState = State(initialValue: appState ?? Self.makeAppState())
+    }
+
+    /// The demo swaps only the account store and the provider registry — every
+    /// other model, setting and screen is the real one, which is the point: what
+    /// you see is Plozz, not a mock of Plozz.
+    @MainActor
+    private static func makeAppState() -> AppState {
+        guard KinoPubDemo.isEnabled else { return AppState() }
+        return AppState(
+            accountStore: KinoPubDemo.makeAccountStore(),
+            registry: KinoPubDemo.makeRegistry()
+        )
     }
 
     /// The name THIS device holds for the offer's requested account. Since a per-server
