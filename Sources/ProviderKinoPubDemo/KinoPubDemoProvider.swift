@@ -21,16 +21,31 @@ public struct KinoPubDemoProvider: MediaProvider {
 
     // MARK: Lookup
 
-    private func item(_ raw: KinoPubDemoCatalog.Item) -> MediaItem {
-        raw.mediaItem(accountID: accountID, resume: catalog.resume[raw.id])
+    /// Mapped once for the whole process. There is exactly one demo account, so
+    /// the mapping has no per-instance input, and rebuilding 140 `MediaItem`s
+    /// (each with up to 18 cast members) on every rail request was pure waste.
+    private enum Mapped {
+        static let byID: [String: MediaItem] = {
+            let catalog = KinoPubDemoCatalog.bundled
+            return Dictionary(uniqueKeysWithValues: catalog.items.map {
+                ($0.id, $0.mediaItem(
+                    accountID: KinoPubDemo.accountID,
+                    resume: catalog.resume[$0.id]
+                ))
+            })
+        }()
+
+        static let ordered: [MediaItem] = KinoPubDemoCatalog.bundled.items.compactMap { byID[$0.id] }
     }
 
-    private var all: [MediaItem] { catalog.items.map(item) }
+    private func item(_ raw: KinoPubDemoCatalog.Item) -> MediaItem {
+        Mapped.byID[raw.id] ?? raw.mediaItem(accountID: accountID, resume: catalog.resume[raw.id])
+    }
+
+    private var all: [MediaItem] { Mapped.ordered }
 
     private func items(forRow id: String) -> [MediaItem] {
-        guard let row = catalog.rows.first(where: { $0.id == id }) else { return [] }
-        let byID = Dictionary(uniqueKeysWithValues: catalog.items.map { ($0.id, $0) })
-        return row.itemIDs.compactMap { byID[$0] }.map(item)
+        catalog.items(inRow: id).map(item)
     }
 
     private func containerKind(for libraryID: String) -> MediaItemKind {
@@ -57,37 +72,88 @@ public struct KinoPubDemoProvider: MediaProvider {
     }
 
     public func item(id: String) async throws -> MediaItem {
-        guard let raw = catalog.items.first(where: { $0.id == id }) else {
-            throw KinoPubDemoError.notFound(id)
+        switch KinoPubDemoRef(id) {
+        case .title(let titleID):
+            guard let raw = catalog.item(id: titleID) else { throw KinoPubDemoError.notFound(id) }
+            return item(raw)
+        case .season(let titleID, let number):
+            guard let raw = catalog.item(id: titleID) else { throw KinoPubDemoError.notFound(id) }
+            return season(raw, number: number)
+        case .episode(let titleID, let seasonNumber, let number):
+            guard let raw = catalog.item(id: titleID) else { throw KinoPubDemoError.notFound(id) }
+            return episode(raw, season: seasonNumber, number: number)
         }
-        return item(raw)
     }
 
-    /// Series get synthesised seasons and episodes: the catalogue carries a
-    /// season count and nothing below it, and a series detail page with no
-    /// children would render as a dead end rather than as a design to judge.
+    /// Series get synthesised seasons, and seasons synthesised episodes. The
+    /// catalogue stops at the title — kino.pub's snapshot has no episode list —
+    /// and a series that opens onto nothing is a dead end rather than a design
+    /// anyone can judge. Counts are derived from the id so they never shuffle
+    /// between launches.
     public func children(of itemID: String) async throws -> [MediaItem] {
-        guard let raw = catalog.items.first(where: { $0.id == itemID }),
-              raw.mediaKind == .series
-        else { return [] }
+        switch KinoPubDemoRef(itemID) {
+        case .title(let titleID):
+            guard let raw = catalog.item(id: titleID), raw.mediaKind == .series else { return [] }
+            return (1...(raw.seasonCount ?? 1)).map { season(raw, number: $0) }
 
-        if raw.id.hasPrefix("season-") { return [] }
-        let seasons = raw.seasonCount ?? 1
-        return (1...seasons).map { number in
-            MediaItem(
-                id: "season-\(raw.id)-\(number)",
-                title: "Сезон \(number)",
-                kind: .season,
-                parentTitle: raw.title,
-                seasonNumber: number,
-                productionYear: raw.year.map { $0 + number - 1 },
-                seriesID: raw.id,
-                posterURL: raw.posterURL,
-                backdropURL: raw.backdropURL,
-                sourceAccountID: accountID,
-                libraryID: KinoPubDemoLibrary.series
-            )
+        case .season(let titleID, let number):
+            guard let raw = catalog.item(id: titleID) else { return [] }
+            return (1...Self.episodeCount(raw, season: number)).map {
+                episode(raw, season: number, number: $0)
+            }
+
+        case .episode:
+            return []
         }
+    }
+
+    /// 8–12, stable per (title, season).
+    private static func episodeCount(_ raw: KinoPubDemoCatalog.Item, season: Int) -> Int {
+        8 + abs(raw.id.hashValue &+ season) % 5
+    }
+
+    private func season(_ raw: KinoPubDemoCatalog.Item, number: Int) -> MediaItem {
+        MediaItem(
+            id: KinoPubDemoRef.season(raw.id, number).id,
+            title: "Сезон \(number)",
+            kind: .season,
+            parentTitle: raw.title,
+            seasonNumber: number,
+            productionYear: raw.year.map { $0 + number - 1 },
+            seriesID: raw.id,
+            posterURL: raw.posterURL,
+            backdropURL: raw.backdropURL,
+            sourceAccountID: accountID,
+            libraryID: KinoPubDemoLibrary.series
+        )
+    }
+
+    private func episode(
+        _ raw: KinoPubDemoCatalog.Item,
+        season number: Int,
+        number index: Int
+    ) -> MediaItem {
+        MediaItem(
+            id: KinoPubDemoRef.episode(raw.id, number, index).id,
+            title: "Серия \(index)",
+            kind: .episode,
+            overview: raw.overview,
+            parentTitle: raw.title,
+            seasonNumber: number,
+            episodeNumber: index,
+            productionYear: raw.year.map { $0 + number - 1 },
+            officialRating: raw.displayRating,
+            genres: raw.genres,
+            seriesID: raw.id,
+            seasonID: KinoPubDemoRef.season(raw.id, number).id,
+            runtime: 45 * 60,
+            posterURL: raw.posterWideURL ?? raw.posterURL,
+            seriesPosterURL: raw.posterURL,
+            backdropURL: raw.backdropURL,
+            logoURL: raw.logoURL,
+            sourceAccountID: accountID,
+            libraryID: KinoPubDemoLibrary.series
+        )
     }
 
     public func items(

@@ -130,8 +130,12 @@ public struct RootView: View {
     @MainActor
     private static func makeAppState() -> AppState {
         guard KinoPubDemo.isEnabled else { return AppState() }
+        if let account = KinoPubDemoAccountStore().loadAccounts().first {
+            let session = account.session(token: "demo")
+            Task { await KinoPubDemo.runSelfCheckIfRequested(session: session) }
+        }
         return AppState(
-            accountStore: KinoPubDemo.makeAccountStore(),
+            accountStore: KinoPubDemoAccountStore(),
             registry: KinoPubDemo.makeRegistry()
         )
     }

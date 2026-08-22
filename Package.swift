@@ -267,7 +267,7 @@ let package = Package(
         // server, no account, and no network beyond the image CDNs.
         .target(
             name: "ProviderKinoPubDemo",
-            dependencies: ["CoreModels", "FeatureAuthCore"],
+            dependencies: ["CoreModels"],
             resources: [.process("Resources")]
         ),
         // Second-class local media-share backend (SMB today). Scans a share into
@@ -633,6 +633,7 @@ let package = Package(
                 // one implementation instead of two 560-line copies.
                 "FeatureHomeCore",
                 "FeatureWatchlistCore",
+                "ProviderKinoPubDemo",
                 "MediaTransportCore",
                 "MediaTransportFTP",
                 "MediaTransportHTTP",
@@ -772,6 +773,10 @@ let package = Package(
         ),
 
         // MARK: Tests (pure logic, no UI required)
+        .testTarget(
+            name: "ProviderKinoPubDemoTests",
+            dependencies: ["ProviderKinoPubDemo", "CoreModels"]
+        ),
         .testTarget(
             name: "CoreModelsTests",
             dependencies: ["CoreModels", "CoreUI"]

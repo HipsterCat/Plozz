@@ -1,14 +1,20 @@
 import CoreModels
 import FeatureAuthCore
 import Foundation
+import ProviderKinoPubDemo
 
 /// An in-memory account store holding one fake kino.pub account.
+///
+/// Lives here rather than beside the provider because `AccountPersisting` is a
+/// Feature-layer protocol, and a Provider module is not allowed to reach up
+/// into Features — `tools/arch-guard.py` enforces that. Wiring an account is
+/// composition-root work anyway, which is what this module is for.
 ///
 /// The demo must look signed in without writing anything: no Keychain item, no
 /// `UserDefaults` key, nothing that survives the process. Quitting the demo
 /// leaves the device exactly as it was.
 public final class KinoPubDemoAccountStore: AccountPersisting, @unchecked Sendable {
-    public static let accountID = "kinopub-demo"
+    public static let accountID = KinoPubDemo.accountID
 
     private let account: Account
     private let lock = NSLock()

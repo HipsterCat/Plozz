@@ -57,3 +57,4 @@ trace-output/
 
 # Python bytecode from the tools/ scripts and their tests.
 __pycache__/
+DerivedDataTests/

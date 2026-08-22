@@ -47,6 +47,19 @@ struct KinoPubDemoCatalog: Decodable, Sendable {
     /// Seconds already watched, for the Continue Watching row.
     let resume: [String: Double]
 
+    /// Built once, off the single bundled instance. Home asks for nine rows on
+    /// every refresh, and rebuilding a 140-entry dictionary per row is work
+    /// nobody needs — there is only ever one catalogue in a process.
+    private static let index: [String: Item] =
+        Dictionary(uniqueKeysWithValues: bundled.items.map { ($0.id, $0) })
+
+    func item(id: String) -> Item? { Self.index[id] }
+
+    func items(inRow id: String) -> [Item] {
+        guard let row = rows.first(where: { $0.id == id }) else { return [] }
+        return row.itemIDs.compactMap { Self.index[$0] }
+    }
+
     static let bundled: KinoPubDemoCatalog = {
         guard let url = Bundle.module.url(forResource: "KinoPubDemoCatalog", withExtension: "json"),
               let data = try? Data(contentsOf: url),

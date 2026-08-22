@@ -39,6 +39,14 @@ SIMCTL_CHILD_PLOZZ_KINOPUB_DEMO=1 xcrun simctl launch booted com.thatcube.Plozz
 Постеры — `m.staticpop.net` (2:3 и wide), фон и лого — Кинопоиск, ужатые до
 1920×1080 и 320×320: `orig` отдаёт 3 МБ на кадр, чего телевизору не нужно.
 
+Проверить синтезированный граф (сезоны и серии) без пульта:
+
+```bash
+SIMCTL_CHILD_PLOZZ_KINOPUB_DEMO_SELFCHECK=1 xcrun simctl launch booted com.thatcube.Plozz
+xcrun simctl spawn booted log show --last 2m --info \
+  --predicate 'subsystem == "com.thatcube.Plozz" AND category == "kinopub-demo"'
+```
+
 Пересобрать каталог:
 
 ```bash
@@ -51,6 +59,7 @@ python3 tools/kinopub-demo/build_catalog.py \
 
 - **Плеера.** `playbackInfo` бросает ошибку. Демо про внешний вид; фальшивый
   поток дал бы только странно падающий плеер.
-- **Настоящих серий.** У сериалов синтезируются сезоны — иначе страница
-  сериала упирается в пустоту. Эпизодов нет.
+- **Настоящих серий.** Снапшот кино.паба обрывается на тайтле, поэтому сезоны
+  и эпизоды синтезируются: 3 сезона, 8–12 серий в каждом, количество выводится
+  из id и потому не пляшет между запусками. Названия серий — «Серия N».
 - **Записи прогресса.** `reportPlayback` — пустышка.

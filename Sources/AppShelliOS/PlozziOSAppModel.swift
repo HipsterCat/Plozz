@@ -477,7 +477,7 @@ final class PlozziOSAppModel {
         let hubAccountStore: AccountPersisting
         if KinoPubDemo.isEnabled {
             KinoPubDemo.install(into: registry)
-            hubAccountStore = KinoPubDemo.makeAccountStore()
+            hubAccountStore = KinoPubDemoAccountStore()
         } else {
             hubAccountStore = accountStore
         }

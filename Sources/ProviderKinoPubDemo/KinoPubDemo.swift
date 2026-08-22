@@ -1,5 +1,6 @@
 import CoreModels
 import Foundation
+import os
 
 /// Entry point for the kino.pub look-and-feel demo.
 ///
@@ -10,18 +11,16 @@ import Foundation
 ///
 /// Release builds never enable it.
 public enum KinoPubDemo {
+    /// The one account the demo runs as. Declared here so the provider can key
+    /// its mapping on it without importing the store that hands it out.
+    public static let accountID = "kinopub-demo"
+
     public static var isEnabled: Bool {
         #if DEBUG
             ProcessInfo.processInfo.environment["PLOZZ_KINOPUB_DEMO"] != "0"
         #else
             false
         #endif
-    }
-
-    /// The account store the demo runs on: one fake account, in memory, never
-    /// written to the Keychain or anywhere else.
-    public static func makeAccountStore() -> KinoPubDemoAccountStore {
-        KinoPubDemoAccountStore()
     }
 
     /// Points the managed provider kinds at the offline catalogue.
@@ -41,5 +40,35 @@ public enum KinoPubDemo {
         let registry = ProviderRegistry()
         install(into: registry)
         return registry
+    }
+
+    /// Walks the synthesised season/episode graph and prints what it found.
+    ///
+    /// The package's test scheme cannot be run on this machine (the full graph
+    /// build wedges on unrelated modules), and a tvOS simulator takes no remote
+    /// input from the command line — so this is how the graph gets checked
+    /// against the real code path. `PLOZZ_KINOPUB_DEMO_SELFCHECK=1`.
+    private static let log = Logger(subsystem: "com.thatcube.Plozz", category: "kinopub-demo")
+
+    public static func runSelfCheckIfRequested(session: UserSession) async {
+        #if DEBUG
+            guard ProcessInfo.processInfo.environment["PLOZZ_KINOPUB_DEMO_SELFCHECK"] == "1"
+            else { return }
+
+            let provider = KinoPubDemoProvider(session: session, accountID: accountID)
+            let catalog = KinoPubDemoCatalog.bundled
+            let series = catalog.items.filter { $0.mediaKind == .series }
+            log.info("titles=\(catalog.items.count) series=\(series.count)")
+
+            for raw in series.prefix(3) {
+                let seasons = (try? await provider.children(of: raw.id)) ?? []
+                var counts: [Int] = []
+                for season in seasons {
+                    counts.append(((try? await provider.children(of: season.id)) ?? []).count)
+                }
+                let resolved = (try? await provider.item(id: seasons.first?.id ?? "")) != nil
+                log.info("\(raw.title, privacy: .public): seasons=\(seasons.count) episodes=\(counts) seasonResolvesByID=\(resolved)")
+            }
+        #endif
     }
 }
