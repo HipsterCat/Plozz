@@ -338,13 +338,39 @@ final class MediaBadgesTests: XCTestCase {
         XCTAssertTrue(item.cardRuntimeIsRemaining)
     }
 
-    func testCardRuntimeTextUsesOverallWhenMarkedPlayed() {
+    /// A saved resume point outranks having seen the title before, matching how
+    /// the progress bar already behaves (`testProgressTakesPriorityOverWatchedBadge`).
+    /// The two disagreed: the bar treated progress as the stronger fact, the label
+    /// treated "watched" as the stronger one, so a rewatch drew a part-filled bar
+    /// beside its full runtime.
+    ///
+    /// The risk this accepts: a server can leave a stale position behind on a title
+    /// marked watched, and that now reads as remaining time. Nothing on the item
+    /// distinguishes a stale position from a genuine restart — but a viewer who has
+    /// actually started again is the far commoner case, and the row exists to tell
+    /// them where they are.
+    func testCardRuntimeTextPrefersRemainingOverWatchedWhenAResumePointExists() {
         let item = MediaItem(
             id: "1",
             title: "Movie",
             kind: .movie,
             runtime: 7200,
             resumePosition: 1800,
+            isPlayed: true
+        )
+        XCTAssertEqual(item.cardRuntimeText, "1h 30m")
+        XCTAssertTrue(item.cardRuntimeIsRemaining)
+    }
+
+    /// Without a resume point, "watched" stands: the percentage of 1 such a title
+    /// reports describes the previous viewing, not a current one.
+    func testCardRuntimeTextUsesOverallWhenWatchedWithNoResumePoint() {
+        let item = MediaItem(
+            id: "1",
+            title: "Movie",
+            kind: .movie,
+            runtime: 7200,
+            playedPercentage: 1,
             isPlayed: true
         )
         XCTAssertEqual(item.cardRuntimeText, "2h")
@@ -399,13 +425,28 @@ final class MediaBadgesTests: XCTestCase {
         XCTAssertNil(item.resumeProgressFraction)
     }
 
-    func testResumeProgressFractionNilWhenMarkedPlayed() {
+    /// The detail page's Play button reads this, which is why restarting a film
+    /// already seen left that button showing nothing while the same title's card in
+    /// a library row showed its progress correctly. Same gate, fourth place.
+    func testResumeProgressFractionSurvivesTheWatchedMarkWhenThereIsAResumePoint() {
         let item = MediaItem(
             id: "1",
             title: "Movie",
             kind: .movie,
             runtime: 7200,
             resumePosition: 1800,
+            isPlayed: true
+        )
+        XCTAssertEqual(item.resumeProgressFraction, 0.25)
+    }
+
+    func testResumeProgressFractionNilWhenWatchedWithNoResumePoint() {
+        let item = MediaItem(
+            id: "1",
+            title: "Movie",
+            kind: .movie,
+            runtime: 7200,
+            playedPercentage: 1,
             isPlayed: true
         )
         XCTAssertNil(item.resumeProgressFraction)
@@ -427,5 +468,69 @@ final class MediaBadgesTests: XCTestCase {
         XCTAssertEqual((2820 as TimeInterval).runtimeBadgeText, "47m")
         XCTAssertEqual((3600 as TimeInterval).runtimeBadgeText, "1h")
         XCTAssertNil((0 as TimeInterval).runtimeBadgeText)
+    }
+}
+
+/// A Continue Watching card was drawing its progress bar with no time beside it.
+///
+/// The bar needs only a *fraction*, which a provider can report directly; the label
+/// needs a duration in seconds, and some titles arrive with the first and not the
+/// second — a share file has no runtime until it has been played once, and a server
+/// whose media was never probed reports none. The card then said a film was
+/// part-watched without saying how much was left.
+final class RecoveredRuntimeTests: XCTestCase {
+
+    private func movie(
+        runtime: TimeInterval? = nil,
+        resume: TimeInterval? = nil,
+        percentage: Double? = nil,
+        versionDuration: TimeInterval? = nil
+    ) -> MediaItem {
+        var item = MediaItem(id: "m1", title: "West Side Story", kind: .movie)
+        item.runtime = runtime
+        item.resumePosition = resume
+        item.playedPercentage = percentage
+        if let versionDuration {
+            item.versions = [MediaVersion(id: "v1", name: "File", duration: versionDuration)]
+        }
+        return item
+    }
+
+    /// The reported bug: a bar, and nothing beside it.
+    func testAProgressBarWithoutARuntimeNowShowsATime() {
+        let item = movie(resume: 3_600, percentage: 0.5)
+        XCTAssertNotNil(item.resumeProgressFraction, "the bar was always drawn")
+        XCTAssertNotNil(item.cardRuntimeText, "the time beside it was missing")
+        XCTAssertTrue(item.cardRuntimeIsRemaining)
+    }
+
+    /// 3600s at the halfway mark is a two-hour film, so an hour is left.
+    func testPositionOverFractionRecoversTheRuntime() {
+        XCTAssertEqual(movie(resume: 3_600, percentage: 0.5).cardRuntimeText, 3_600.runtimeBadgeText)
+    }
+
+    /// The file's own duration is the true length and outranks the derivation.
+    func testTheFilesDurationIsPreferredOverTheDerivation() {
+        let item = movie(resume: 600, percentage: 0.5, versionDuration: 7_200)
+        // 7200 × (1 − 0.5) = 3600 left, NOT the 600 the ratio would have implied.
+        XCTAssertEqual(item.cardRuntimeText, 3_600.runtimeBadgeText)
+    }
+
+    /// A stated runtime always wins; none of this may perturb a normal item.
+    func testAStatedRuntimeIsUnchanged() {
+        let item = movie(runtime: 7_200, resume: 1_800, percentage: 0.25)
+        XCTAssertEqual(item.cardRuntimeText, 5_400.runtimeBadgeText)
+    }
+
+    /// Dividing by a tiny fraction multiplies its rounding error into a wild
+    /// duration. A confident "3h 40m left" that is invented is worse than a blank.
+    func testAVanishinglySmallFractionIsNotExtrapolated() {
+        XCTAssertNil(movie(resume: 60, percentage: 0.001).cardRuntimeText)
+    }
+
+    /// Nothing to work from stays blank rather than guessing.
+    func testNoPositionMeansNoTime() {
+        XCTAssertNil(movie(percentage: 0.4).cardRuntimeText)
+        XCTAssertNil(movie().cardRuntimeText)
     }
 }

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public struct WatchlistDestinationID: RawRepresentable, Codable, Hashable, Sendable, Comparable {
@@ -28,6 +29,17 @@ public struct WatchlistDestinationID: RawRepresentable, Codable, Hashable, Senda
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(rawValue)
+    }
+}
+
+public enum WatchlistReconciliationIdentity {
+    /// One-way credential lineage used only to invalidate stale destination
+    /// confirmations. Raw OAuth credentials are never persisted in mutation state.
+    public static func credential(_ value: String) -> String {
+        let digest = SHA256.hash(data: Data(value.utf8))
+        return digest.prefix(16).map {
+            String(format: "%02x", $0)
+        }.joined()
     }
 }
 
@@ -229,6 +241,15 @@ public struct WatchlistMutationTarget: Codable, Hashable, Sendable {
             case .aniList, .seriesAniList: namespace = .aniList
             case .myAnimeList, .seriesMal: namespace = .myAnimeList
             case .aniDB, .seriesAniDB: namespace = .aniDB
+            // The ledger records `plexGuid` deliberately (see `MediaAliasEvidence`)
+            // because it is the ONLY strong id a Plex Discover / Watchlist row
+            // carries, and `PlexWatchlistDestination.resolve` addresses the
+            // account-level list by exactly that guid. Dropping it here meant a
+            // target assembled from the ledger — which is all a promoted series
+            // subject has — could only be resolved through a validated binding,
+            // so a show whose binding had not been observed yet resolved to
+            // nothing and its removal was silently discarded as unsupported.
+            case .plexGuid: namespace = .plex
             default: return nil
             }
             return WatchlistExternalID(namespace: namespace, value: evidence.value)
@@ -348,13 +369,17 @@ public struct WatchlistDestinationEntry: Codable, Hashable, Sendable {
     public let binding: WatchlistDestinationBinding
     public let corroboratedProviderBinding: MediaAliasProviderBindingKey?
     public let presentation: MediaAliasPresentation?
+    /// Account that supplied `presentation` artwork, when it came from a media
+    /// provider rather than a tracker.
+    public let presentationAccountID: String?
 
     public init?(
         kind: MediaItemKind,
         externalIDs: [WatchlistExternalID],
         binding: WatchlistDestinationBinding,
         corroboratedProviderBinding: MediaAliasProviderBindingKey? = nil,
-        presentation: MediaAliasPresentation? = nil
+        presentation: MediaAliasPresentation? = nil,
+        presentationAccountID: String? = nil
     ) {
         guard kind == .movie || kind == .series else { return nil }
         self.kind = kind
@@ -362,6 +387,7 @@ public struct WatchlistDestinationEntry: Codable, Hashable, Sendable {
         self.binding = binding
         self.corroboratedProviderBinding = corroboratedProviderBinding
         self.presentation = presentation?.sanitizedForSync()
+        self.presentationAccountID = presentationAccountID
     }
 
     /// Alias-ledger evidence produced by a successful destination read. Provider
@@ -435,11 +461,31 @@ public protocol WatchlistDestination: Sendable {
     var id: WatchlistDestinationID { get }
     var capabilities: WatchlistDestinationCapabilities { get }
     var routing: WatchlistDestinationRouting { get }
+    /// Stable identity of the account/user whose list this destination reads and
+    /// writes. Confirmations from another identity must never suppress or reverse
+    /// mutations for the current one.
+    var reconciliationScope: String { get }
+    /// Stable account/user identity used for cached native entries. This may be
+    /// broader than `reconciliationScope` when credentials can arrive or rotate
+    /// without changing the person whose list is being shown.
+    var cacheIdentityScope: String { get }
     func fetchEntries() async throws -> [WatchlistDestinationEntry]
     func resolve(_ target: WatchlistMutationTarget) async throws -> WatchlistDestinationBinding?
     func apply(
         _ desiredState: WatchlistDesiredState,
         to binding: WatchlistDestinationBinding
+    ) async throws
+}
+
+/// A destination whose credentials can change while it remains registered.
+///
+/// The reconciler passes the account scope captured with the queued mutation so
+/// the destination can snapshot matching credentials before issuing the write.
+public protocol WatchlistReconciliationScopedApplying: WatchlistDestination {
+    func apply(
+        _ desiredState: WatchlistDesiredState,
+        to binding: WatchlistDestinationBinding,
+        expectedReconciliationScope: String
     ) async throws
 }
 
@@ -451,14 +497,38 @@ public protocol WatchlistDestination: Sendable {
 /// you own. Asking the server directly is what removes the dependency on a
 /// complete, current, successfully-published client-side catalogue index just to
 /// decide whether a title is in the library.
+/// One title the media server proved it owns, with enough presentation to
+/// upgrade the card at the same time as its availability.
+///
+/// A source ref alone answers "can I play it?" but carries no artwork. Persisting
+/// only that ref made the "+" disappear while the Discover poster stayed put;
+/// Home could not switch to the library poster until some later rebuild happened
+/// to bring the full local `MediaItem` into its candidate set. Ownership is one
+/// answer, so its play target and presentation travel together.
+public struct WatchlistLibraryCopy: Codable, Hashable, Sendable {
+    public let source: MediaSourceRef
+    public let presentation: MediaAliasPresentation?
+
+    public init(
+        source: MediaSourceRef,
+        presentation: MediaAliasPresentation? = nil
+    ) {
+        self.source = source
+        self.presentation = presentation?.sanitizedForSync()
+    }
+}
+
 public protocol WatchlistLibraryResolving: WatchlistDestination {
     /// The owned copy of `entry`, or `nil` when this server doesn't have it.
     func resolveLibraryCopy(
         for entry: WatchlistDestinationEntry
-    ) async -> MediaSourceRef?
+    ) async -> WatchlistLibraryCopy?
 }
 
 public extension WatchlistDestination {
+    var reconciliationScope: String { id.rawValue }
+    var cacheIdentityScope: String { reconciliationScope }
+
     var routing: WatchlistDestinationRouting {
         WatchlistDestinationRouting(
             globalIdentityNamespaces:

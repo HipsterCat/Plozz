@@ -9,6 +9,7 @@ final class PlozziOSSettingsModel {
     let cardStyle: CardStyleSettingsModel
     let density: UIDensitySettingsModel
     let watchIndicator: WatchStatusIndicatorSettingsModel
+    let navigation: NavigationStyleSettingsModel
     let playback: PlaybackSettingsModel
     let subtitleBehavior: SubtitleBehaviorModel
     let subtitlePolicy: SubtitlePolicyModel
@@ -30,13 +31,24 @@ final class PlozziOSSettingsModel {
             store: TransparencyPreferenceStore(namespace: namespace)
         )
         cardStyle = CardStyleSettingsModel(
-            store: CardStyleSettingsStore(namespace: namespace)
+            store: CardStyleSettingsStore(namespace: namespace),
+            focusStore: CardFocusStyleSettingsStore(namespace: namespace)
         )
         density = UIDensitySettingsModel(
             store: UIDensitySettingsStore(namespace: namespace)
         )
         watchIndicator = WatchStatusIndicatorSettingsModel(
             store: WatchStatusIndicatorSettingsStore(namespace: namespace)
+        )
+        let navigationDefault = NavigationLibraryLayout(
+            hiddenKeys: [NavigationLibraryLayout.watchlistKey]
+        )
+        navigation = NavigationStyleSettingsModel(
+            store: NavigationStyleSettingsStore(namespace: namespace),
+            layoutStore: NavigationLibraryLayoutStore(
+                namespace: namespace,
+                defaultLayout: navigationDefault
+            )
         )
         playback = PlaybackSettingsModel(
             store: PlaybackSettingsStore(namespace: namespace)

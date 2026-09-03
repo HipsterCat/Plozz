@@ -126,10 +126,10 @@ final class AniListWatchlistDestinationTests: XCTestCase {
         {"data":{"Viewer":{"id":7,"name":"someone"}}}
         """)
         http.stub(pathSuffix: "", json: """
-        {"data":{"MediaListCollection":{"lists":[{"entries":[
+        {"data":{"Page":{"pageInfo":{"hasNextPage":false},"mediaList":[
           {"media":{"id":154587,"idMal":52991,"seasonYear":2023,
            "title":{"romaji":"Sousou no Frieren","english":"Frieren"}}}
-        ]}]}}}
+        ]}}}
         """)
 
         let entries = try await makeDestination(http: http).fetchEntries()
@@ -144,6 +144,123 @@ final class AniListWatchlistDestinationTests: XCTestCase {
         XCTAssertTrue(entries[0].externalIDs.contains {
             $0.namespace == .myAnimeList && $0.value == "52991"
         })
+    }
+
+    func testViewerIDCacheChangesWithAccountCredential() async throws {
+        let http = RecordingHTTPClient()
+        let tokenStore = InMemoryAniListTokenStore()
+        tokenStore.setNamespace("a")
+        try tokenStore.save(AniListTokens(accessToken: "account-a"))
+        tokenStore.setNamespace("b")
+        try tokenStore.save(AniListTokens(accessToken: "account-b"))
+        tokenStore.setNamespace("a")
+        http.stub(pathSuffix: "", json: """
+        {"data":{"Viewer":{"id":7,"name":"a"}}}
+        """)
+        http.stub(pathSuffix: "", json: """
+        {"data":{"Page":{"pageInfo":{"hasNextPage":false},"mediaList":[]}}}
+        """)
+        http.stub(pathSuffix: "", json: """
+        {"data":{"Viewer":{"id":8,"name":"b"}}}
+        """)
+        http.stub(pathSuffix: "", json: """
+        {"data":{"Page":{"pageInfo":{"hasNextPage":false},"mediaList":[]}}}
+        """)
+        let destination = AniListWatchlistDestination(
+            config: AniListConfig(clientID: "id", clientSecret: "secret"),
+            http: http,
+            tokenStore: tokenStore
+        )
+
+        _ = try await destination.fetchEntries()
+        tokenStore.setNamespace("b")
+        _ = try await destination.fetchEntries()
+
+        XCTAssertEqual(http.sent.count, 4)
+        let secondListVariables = try XCTUnwrap(
+            http.sent.last?.json?["variables"] as? [String: Any]
+        )
+        XCTAssertEqual(secondListVariables["userId"] as? Int, 8)
+    }
+
+    func testReadsEveryPageNewestFirstAndRequestsAddedTimeOrdering() async throws {
+        let http = RecordingHTTPClient()
+        http.stub(pathSuffix: "", json: """
+        {"data":{"Viewer":{"id":7,"name":"someone"}}}
+        """)
+        http.stub(pathSuffix: "", json: """
+        {"data":{"Page":{"pageInfo":{"hasNextPage":true},"mediaList":[
+          {"media":{"id":30,"title":{"english":"Newest"}}},
+          {"media":{"id":20,"title":{"english":"Middle"}}}
+        ]}}}
+        """)
+        http.stub(pathSuffix: "", json: """
+        {"data":{"Page":{"pageInfo":{"hasNextPage":false},"mediaList":[
+          {"media":{"id":10,"title":{"english":"Oldest"}}}
+        ]}}}
+        """)
+
+        let entries = try await makeDestination(http: http).fetchEntries()
+
+        XCTAssertEqual(
+            entries.map { $0.presentation?.title },
+            ["Newest", "Middle", "Oldest"]
+        )
+        let listRequests = http.sent.dropFirst()
+        XCTAssertEqual(listRequests.count, 2)
+        XCTAssertEqual(
+            listRequests.compactMap {
+                ($0.json?["variables"] as? [String: Any])?["page"] as? Int
+            },
+            [1, 2]
+        )
+        let query = try XCTUnwrap(listRequests.first?.json?["query"] as? String)
+        XCTAssertTrue(query.contains("ADDED_TIME_DESC"))
+        XCTAssertTrue(query.contains("MEDIA_ID_DESC"))
+    }
+
+    func testDuplicateMediaAcrossPagesFailsClosed() async throws {
+        let http = RecordingHTTPClient()
+        http.stub(pathSuffix: "", json: """
+        {"data":{"Viewer":{"id":7,"name":"someone"}}}
+        """)
+        http.stub(pathSuffix: "", json: """
+        {"data":{"Page":{"pageInfo":{"hasNextPage":true},"mediaList":[
+          {"media":{"id":20,"title":{"english":"First copy"}}}
+        ]}}}
+        """)
+        http.stub(pathSuffix: "", json: """
+        {"data":{"Page":{"pageInfo":{"hasNextPage":false},"mediaList":[
+          {"media":{"id":20,"title":{"english":"Later duplicate"}}},
+          {"media":{"id":10,"title":{"english":"Unique"}}}
+        ]}}}
+        """)
+
+        do {
+            _ = try await makeDestination(http: http).fetchEntries()
+            XCTFail("Expected overlapping pages to fail the authoritative read")
+        } catch let error as WatchlistDestinationError {
+            XCTAssertEqual(error, .transient)
+        }
+    }
+
+    func testMalformedPlanningEntryFailsClosed() async throws {
+        let http = RecordingHTTPClient()
+        http.stub(pathSuffix: "", json: """
+        {"data":{"Viewer":{"id":7,"name":"someone"}}}
+        """)
+        http.stub(pathSuffix: "", json: """
+        {"data":{"Page":{"pageInfo":{"hasNextPage":false},"mediaList":[
+          {"media":null}
+        ]}}}
+        """)
+
+        do {
+            _ = try await makeDestination(http: http).fetchEntries()
+            XCTFail("Expected malformed authoritative entry to fail the read")
+        } catch {
+            // Any failed read is safe; publishing an omission is not.
+        }
     }
 
     func testDisconnectedAccountAsksForSignInRatherThanRetrying() async {

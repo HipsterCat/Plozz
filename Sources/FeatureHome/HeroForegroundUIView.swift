@@ -104,11 +104,7 @@ final class HeroForegroundUIView: UIView {
     private let dotSpacing: CGFloat = 12
     /// Narrower cinematic text column (was 576; trimmed 80pt for a tighter column).
     private let contentMaxWidth: CGFloat = 496
-    /// Cap the logo to the same width as the description text column, so a wide
-    /// wordmark spans the full text width rather than a narrower box.
-    private let logoMaxWidth: CGFloat = 496
-    /// Nominal wordmark height; `HeroLogoFit` may exceed it for a tall logo.
-    private let logoMaxHeight: CGFloat = 160
+    // The wordmark's own box is shared with the detail hero — see `HeroLogoLayout`.
     private let dotsGlassHPad: CGFloat = 0
     private let dotsGlassVPad: CGFloat = 0
     private let bottomMargin: CGFloat = 24
@@ -352,21 +348,25 @@ final class HeroForegroundUIView: UIView {
             return
         }
         if logo.isDark {
-            // Light glow for a dark logo — unchanged across appearances.
-            logoImageView.layer.shadowColor = UIColor.white.cgColor
-            logoImageView.layer.shadowOpacity = 0.6
-            logoImageView.layer.shadowRadius = 9
+            // Was a white glow. It fired on any mid-to-dark logo and read as an
+            // effect stuck on the artwork rather than the logo sitting in front of
+            // it; a shadow reads as depth, which is what is actually happening.
+            // Matches `LogoLegibilityHalo` so a wordmark looks the same on both
+            // renderers and on iOS.
+            logoImageView.layer.shadowColor = UIColor.black.cgColor
+            logoImageView.layer.shadowOpacity = 0.42
+            logoImageView.layer.shadowRadius = 12
         } else if traitCollection.userInterfaceStyle == .light {
             // Softer, lighter dark glow in light mode (matches LogoLegibilityHalo):
             // the bright hero doesn't need a heavy black halo, so drop the opacity
             // and widen the radius for a gentle lift instead of a hard smudge.
             logoImageView.layer.shadowColor = UIColor.black.cgColor
-            logoImageView.layer.shadowOpacity = 0.28
-            logoImageView.layer.shadowRadius = 13
+            logoImageView.layer.shadowOpacity = 0.26
+            logoImageView.layer.shadowRadius = 15
         } else {
             logoImageView.layer.shadowColor = UIColor.black.cgColor
-            logoImageView.layer.shadowOpacity = 0.55
-            logoImageView.layer.shadowRadius = 9
+            logoImageView.layer.shadowOpacity = 0.42
+            logoImageView.layer.shadowRadius = 12
         }
         logoImageView.layer.shadowOffset = .zero
     }
@@ -626,17 +626,25 @@ final class HeroForegroundUIView: UIView {
 
         var logoTop = y
         if !logoImageView.isHidden, let image = logoImageView.image, image.size.width > 0 {
-            // Shared with the detail hero's `HeroLogoArtwork`, so one show's
-            // wordmark carries the same weight on both screens — and so a tall or
+            // Shared with the detail hero via `HeroLogoLayout`, so one show's
+            // wordmark is drawn at the same size on both screens — and so a tall or
             // very wide logo isn't shrunk for its shape.
+            //
+            // The box is PINNED to the text column: `HeroLogoFit` flexes a wide
+            // shape past its budget, so a wordmark was being drawn a quarter wider
+            // than the description beneath it. Pinning holds every wide logo to the
+            // same drawn width and gives the width back as height, so nothing
+            // shrinks — see `HeroLogoFit.pinnedBox`.
             //
             // The frame is the ACTUAL fitted image, not the slot: `.scaleAspectFit`
             // centres within its frame, so a frame wider than the drawn image would
             // push a tall/narrow wordmark right instead of leaving it left-aligned.
+            let box = HeroLogoLayout.box(fitting: maxWidth)
             let fitted = HeroLogoFit.fittedSize(
                 for: image.size,
-                maxWidth: min(maxWidth, logoMaxWidth),
-                maxHeight: logoMaxHeight
+                maxWidth: box.width,
+                maxHeight: box.height,
+                coverage: currentLogo?.coverage ?? 1
             )
             let (w, h) = (fitted.width, fitted.height)
             logoImageView.frame = CGRect(x: leading, y: y - h, width: w, height: h)

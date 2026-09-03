@@ -29,19 +29,34 @@ public actor ArtworkRouter {
     /// Bundled TheTVDB backdrop tier (hero art only). Nil-safe when unconfigured.
     private let tvdb = TVDBArtworkProvider(client: TVDBClient(config: .resolved()))
     private let cache: MetadataDiskCache
+    private let enrichmentBaseline: MetadataEnrichmentConfig
+    private let settingsStore: any MetadataProviderSettingsStoring
     /// Original language is show/movie-level metadata, so every episode in a
     /// series shares one answer. Keep positive and negative results separately:
     /// a plain `[String: String?]` cannot retain nil (assigning nil removes the
     /// entry), which would repeat the network lookup on every episode.
     private var originalLanguages: [String: String] = [:]
     private var missingOriginalLanguages = Set<String>()
+    /// Candidate lists, memoised for the process.
+    ///
+    /// Not the persistent cache: that stores one URL per key and a list has no
+    /// representation in it. A title's candidates are cheap to recompute once per
+    /// run, and holding them here is what makes returning to a page free. Capped
+    /// because a large library would otherwise grow this without bound; dropping
+    /// the lot costs one recomputation, which is far better than leaking.
+    private var heroCandidates: [String: [SourcedValue<URL>]] = [:]
+    private static let heroCandidatesCap = 600
 
     public init(
         config: MetadataProviderConfig = .resolved(),
-        cache: MetadataDiskCache = .shared
+        cache: MetadataDiskCache = .shared,
+        enrichmentBaseline: MetadataEnrichmentConfig = .resolved(),
+        settingsStore: any MetadataProviderSettingsStoring = MetadataProviderSettingsStore()
     ) {
         self.tmdb = TMDbMetadataProvider(access: config.tmdb)
         self.cache = cache
+        self.enrichmentBaseline = enrichmentBaseline
+        self.settingsStore = settingsStore
     }
 
     /// Reconfigures the TMDb tier at runtime (e.g. after the user sets a proxy).
@@ -118,33 +133,181 @@ public actor ArtworkRouter {
         _ kind: ArtworkKind,
         for query: MetadataQuery
     ) async -> SourcedValue<URL>? {
-        let key = query.cacheKey(for: kind)
-        if let hit = await cache.cached(key) {
-            guard let hit else { return nil }
-            // The pre-provenance URL cache does not retain which provider won.
-            return SourcedValue(value: hit, source: .legacyUnknown)
-        }
+        let providers = configuredProviders(for: query, kind: kind)
+        guard !providers.isEmpty else { return nil }
+        let cache = self.cache
 
-        for provider in chain(for: query.contentType, kind: kind) {
-            if let url = await provider.artworkURL(kind, for: query) {
-                await cache.store(url, for: key)
-                return SourcedValue(
-                    value: url,
-                    source: MetadataSource(rawValue: provider.id)
-                )
+        let answers = await withTaskGroup(
+            of: (Int, SourcedValue<URL>?).self,
+            returning: [(Int, SourcedValue<URL>?)].self
+        ) { group in
+            for (index, entry) in providers.enumerated() {
+                group.addTask {
+                    let key = Self.providerCacheKey(
+                        query: query,
+                        kind: kind,
+                        source: entry.source
+                    )
+                    if let hit = await cache.cached(key) {
+                        return (
+                            index,
+                            hit.map { SourcedValue(value: $0, source: entry.source) }
+                        )
+                    }
+                    let url = await entry.provider.artworkURL(kind, for: query)
+                    await cache.store(url, for: key)
+                    return (
+                        index,
+                        url.map { SourcedValue(value: $0, source: entry.source) }
+                    )
+                }
             }
+            var completed = Array<SourcedValue<URL>??>(
+                repeating: nil,
+                count: providers.count
+            )
+            var nextPriority = 0
+            while let (index, answer) = await group.next() {
+                completed[index] = .some(answer)
+                while nextPriority < completed.count,
+                      let priorityAnswer = completed[nextPriority] {
+                    if let priorityAnswer {
+                        group.cancelAll()
+                        return [(nextPriority, priorityAnswer)]
+                    }
+                    nextPriority += 1
+                }
+            }
+            return []
         }
-        await cache.store(nil, for: key)
-        return nil
+        return answers.sorted { $0.0 < $1.0 }.compactMap(\.1).first
     }
 
-    /// The ordered provider chain for a content type + artwork kind. Keyless,
-    /// per-IP providers come first (they scale infinitely and cover anime/episodes
-    /// best); the optional TMDb tier backs them up for heroes/logos/stills.
-    private func chain(for type: ContentType, kind: ArtworkKind) -> [any ArtworkProvider] {
-        CurrentMetadataPriority.artworkSources(for: type, kind: kind).compactMap {
-            provider(for: $0)
+    /// Ordered artwork candidates for `item`. See the ``MetadataQuery`` overload.
+    public func sourcedArtworkURLs(
+        _ kind: ArtworkKind,
+        for item: MediaItem,
+        limit: Int = 2
+    ) async -> [SourcedValue<URL>] {
+        await sourcedArtworkURLs(kind, for: MetadataQuery(item), limit: limit)
+    }
+
+    /// Ordered artwork candidates for `kind`, best first, across the provider chain.
+    ///
+    /// Deliberately a **separate** entry point rather than a change to
+    /// ``sourcedArtworkURL(_:for:)``. That one stops at the first provider which
+    /// answers, and Home depends on it doing exactly that — widening it to gather
+    /// candidates would ask providers that would never otherwise have been called,
+    /// on the browse path, which is precisely the wrong place to spend a request.
+    ///
+    /// This one also supplies the deterministic Home/detail pair. Enabled providers
+    /// race concurrently; results are put back into configured priority order before
+    /// selection, so a slow high-priority source cannot serialize the whole chain.
+    ///
+    /// Results are memoised for the process, so returning to a title is free.
+    public func sourcedArtworkURLs(
+        _ kind: ArtworkKind,
+        for query: MetadataQuery,
+        limit: Int = 2
+    ) async -> [SourcedValue<URL>] {
+        guard limit > 0 else { return [] }
+        let providers = configuredProviders(for: query, kind: kind)
+        let sourceFingerprint = providers.map(\.source.rawValue).joined(separator: ",")
+        let key = "\(query.cacheKey(for: kind))|candidates|\(sourceFingerprint)"
+        if let hit = heroCandidates[key] { return hit }
+
+        let batches = await withTaskGroup(
+            of: (Int, MetadataSource, [URL]).self,
+            returning: [(Int, MetadataSource, [URL])].self
+        ) { group in
+            for (index, entry) in providers.enumerated() {
+                group.addTask {
+                    let offered = await entry.provider.artworkURLs(kind, for: query, limit: limit)
+                    return (index, entry.source, offered)
+                }
+            }
+            var completed = Array<[URL]?>(repeating: nil, count: providers.count)
+            var nextPriority = 0
+            while let (index, _, offered) = await group.next() {
+                completed[index] = offered
+                while nextPriority < completed.count,
+                      let priorityAnswer = completed[nextPriority] {
+                    if !priorityAnswer.isEmpty {
+                        group.cancelAll()
+                        return completed.enumerated().compactMap { index, urls in
+                            urls.map { (index, providers[index].source, $0) }
+                        }
+                    }
+                    nextPriority += 1
+                }
+            }
+            return []
         }
+
+        var found: [SourcedValue<URL>] = []
+        var asked: [String] = []
+        for (_, source, offered) in batches.sorted(by: { $0.0 < $1.0 }) {
+            asked.append("\(source.rawValue):\(offered.count)")
+            for url in offered {
+                guard !found.contains(where: { $0.value == url }) else { continue }
+                found.append(SourcedValue(value: url, source: source))
+                if found.count >= limit { break }
+            }
+            if found.count >= limit { break }
+        }
+        HeroArtDiagnostics.emit(
+            "router candidates kind=\(kind) title=\(query.title) type=\(query.contentType) "
+            + "asked=[\(asked.joined(separator: " "))] got=\(found.count) "
+            + "urls=[\(found.map { HeroArtDiagnostics.brief($0.value) }.joined(separator: " , "))]"
+        )
+        if heroCandidates.count >= Self.heroCandidatesCap { heroCandidates.removeAll(keepingCapacity: true) }
+        heroCandidates[key] = found
+        return found
+    }
+
+    /// Deterministic Home/detail picks from one online candidate pool. Detail uses
+    /// the runner-up when available, preserving the deliberate two-hero design.
+    public func heroArtworkURL(
+        for item: MediaItem,
+        placement: ArtworkPlacement
+    ) async -> URL? {
+        let candidates = await sourcedArtworkURLs(.hero, for: item, limit: 4)
+        return Self.heroCandidate(from: candidates, placement: placement)
+    }
+
+    static func heroCandidate(
+        from candidates: [SourcedValue<URL>],
+        placement: ArtworkPlacement
+    ) -> URL? {
+        guard placement == .detailBackdrop else { return candidates.first?.value }
+        return candidates.dropFirst().first?.value ?? candidates.first?.value
+    }
+
+    private func configuredProviders(
+        for query: MetadataQuery,
+        kind: ArtworkKind
+    ) -> [(source: MetadataSource, provider: any ArtworkProvider)] {
+        let config = enrichmentBaseline.merged(withUserOverrides: settingsStore.load())
+        return config.orderedSources(for: Self.field(for: kind), query: query).compactMap { source in
+            provider(for: source).map { (source, $0) }
+        }
+    }
+
+    private static func field(for kind: ArtworkKind) -> MetadataField {
+        switch kind {
+        case .poster: .posterURL
+        case .hero: .backdropURL
+        case .thumbnail: .episodeThumbnail
+        case .logo: .logoURL
+        }
+    }
+
+    static func providerCacheKey(
+        query: MetadataQuery,
+        kind: ArtworkKind,
+        source: MetadataSource
+    ) -> String {
+        "\(query.cacheKey(for: kind))|provider:\(source.rawValue)"
     }
 
     private func provider(for source: MetadataSource) -> (any ArtworkProvider)? {

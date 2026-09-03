@@ -119,6 +119,78 @@ final class MALWatchlistDestinationTests: XCTestCase {
         XCTAssertEqual(entries[0].presentation?.title, "Sousou no Frieren")
         XCTAssertEqual(entries[0].presentation?.year, 2023)
         XCTAssertEqual(entries[0].externalIDs.first?.namespace, .myAnimeList)
+        XCTAssertEqual(
+            http.sent.first?.queryItems.first { $0.name == "sort" }?.value,
+            "list_updated_at"
+        )
+    }
+
+    func testReadsEveryPlanToWatchPage() async throws {
+        let http = RecordingHTTPClient()
+        http.stub(pathSuffix: "/users/@me/animelist", json: """
+        {"data":[{"node":{"id":1,"title":"First"}}],
+         "paging":{"next":"https://api.myanimelist.net/v2/users/@me/animelist?offset=1"}}
+        """)
+        http.stub(pathSuffix: "/users/@me/animelist", json: """
+        {"data":[{"node":{"id":2,"title":"Second"}}],"paging":{}}
+        """)
+
+        let entries = try await makeDestination(http: http).fetchEntries()
+
+        XCTAssertEqual(entries.map { $0.presentation?.title }, ["First", "Second"])
+        XCTAssertEqual(
+            http.sent.compactMap {
+                $0.queryItems.first { $0.name == "offset" }?.value
+            },
+            ["0", "1"]
+        )
+    }
+
+    func testRejectsDuplicateEntriesAcrossPages() async throws {
+        let http = RecordingHTTPClient()
+        http.stub(pathSuffix: "/users/@me/animelist", json: """
+        {"data":[{"node":{"id":1,"title":"First"}}],
+         "paging":{"next":"https://api.myanimelist.net/v2/users/@me/animelist?offset=1"}}
+        """)
+        http.stub(pathSuffix: "/users/@me/animelist", json: """
+        {"data":[{"node":{"id":1,"title":"Repeated"}}],"paging":{}}
+        """)
+
+        do {
+            _ = try await makeDestination(http: http).fetchEntries()
+            XCTFail("Expected overlapping pages to fail")
+        } catch let error as WatchlistDestinationError {
+            XCTAssertEqual(error, .transient)
+        }
+    }
+
+    func testRejectsPaginationGap() async throws {
+        let http = RecordingHTTPClient()
+        http.stub(pathSuffix: "/users/@me/animelist", json: """
+        {"data":[{"node":{"id":1,"title":"First"}}],
+         "paging":{"next":"https://api.myanimelist.net/v2/users/@me/animelist?offset=2"}}
+        """)
+
+        do {
+            _ = try await makeDestination(http: http).fetchEntries()
+            XCTFail("Expected a skipped offset to fail")
+        } catch let error as WatchlistDestinationError {
+            XCTAssertEqual(error, .transient)
+        }
+    }
+
+    func testFailsClosedWhenListRecordCannotMap() async throws {
+        let http = RecordingHTTPClient()
+        http.stub(pathSuffix: "/users/@me/animelist", json: """
+        {"data":[{"node":{"title":"Missing id"}}],"paging":{}}
+        """)
+
+        do {
+            _ = try await makeDestination(http: http).fetchEntries()
+            XCTFail("Expected malformed authoritative input to fail")
+        } catch let error as WatchlistDestinationError {
+            XCTAssertEqual(error, .transient)
+        }
     }
 
     func testDisconnectedAccountAsksForSignInRatherThanRetrying() async {
@@ -132,6 +204,44 @@ final class MALWatchlistDestinationTests: XCTestCase {
         } catch {
             XCTFail("unexpected error: \(error)")
         }
+    }
+
+    func testProfileSwitchCannotSaveRefreshedTokenIntoNewProfile() async throws {
+        let tokenStore = InMemoryMALTokenStore()
+        tokenStore.setNamespace("a")
+        try tokenStore.save(MALTokens(
+            accessToken: "expired-a",
+            refreshToken: "refresh-a",
+            expiresAt: .distantPast
+        ))
+        tokenStore.setNamespace("b")
+        let profileBTokens = MALTokens(
+            accessToken: "account-b",
+            refreshToken: "refresh-b",
+            expiresAt: Date().addingTimeInterval(3_600)
+        )
+        try tokenStore.save(profileBTokens)
+        tokenStore.setNamespace("a")
+        let generation = MALProfileGeneration()
+        let http = ProfileSwitchingMALHTTPClient {
+            generation.advance {
+                tokenStore.setNamespace("b")
+            }
+        }
+        let destination = MALWatchlistDestination(
+            config: MALConfig(clientID: "id"),
+            http: http,
+            tokenStore: tokenStore,
+            profileGeneration: generation
+        )
+
+        do {
+            _ = try await destination.fetchEntries()
+            XCTFail("expected stale refresh to be rejected")
+        } catch let error as WatchlistDestinationError {
+            XCTAssertEqual(error, .transient)
+        }
+        XCTAssertEqual(tokenStore.load(), profileBTokens)
     }
 
     /// The case that actually matters for real libraries: Jellyfin and Plex anime
@@ -150,6 +260,33 @@ final class MALWatchlistDestinationTests: XCTestCase {
             "an AniDB-tagged anime must not be silently skipped"
         )
         XCTAssertTrue(binding?.opaqueValue.contains("14758") == true)
+    }
+
+    private final class ProfileSwitchingMALHTTPClient:
+        HTTPClient, @unchecked Sendable {
+        private let switchProfile: @Sendable () -> Void
+
+        init(switchProfile: @escaping @Sendable () -> Void) {
+            self.switchProfile = switchProfile
+        }
+
+        func send(
+            _ endpoint: Endpoint,
+            baseURL: URL
+        ) async throws -> (Data, HTTPURLResponse) {
+            switchProfile()
+            let url = URL(string: "https://myanimelist.net/v1/oauth2/token")!
+            let response = HTTPURLResponse(
+                url: url,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let data = Data("""
+            {"access_token":"refreshed-a","refresh_token":"rotated-a","expires_in":3600}
+            """.utf8)
+            return (data, response)
+        }
     }
 
 }

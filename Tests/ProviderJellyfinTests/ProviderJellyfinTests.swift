@@ -32,11 +32,69 @@ final class JellyfinTicksTests: XCTestCase {
 }
 
 final class JellyfinProviderMappingTests: XCTestCase {
-    private func makeSession() -> UserSession {
+    private func makeSession(
+        baseURL: URL = URL(string: "http://host:8096")!,
+        token: String = "TOKEN"
+    ) -> UserSession {
         UserSession(
-            server: MediaServer(id: "s", name: "Home", baseURL: URL(string: "http://host:8096")!, provider: .jellyfin),
-            userID: "u1", userName: "Alice", deviceID: "d1", accessToken: "TOKEN"
+            server: MediaServer(
+                id: "s",
+                name: "Home",
+                baseURL: baseURL,
+                provider: .jellyfin
+            ),
+            userID: "u1",
+            userName: "Alice",
+            deviceID: "d1",
+            accessToken: token
         )
+    }
+
+    func testImageReauthenticationRejectsDescendantProxyPath() {
+        let provider = JellyfinProvider(
+            session: makeSession(
+                baseURL: URL(string: "https://host")!,
+                token: "ROOT-TOKEN"
+            )
+        )
+        let otherServerImage = URL(
+            string:
+                "https://host/jellyfin"
+                + "/Items/42/Images/Primary"
+        )!
+
+        XCTAssertNil(
+            provider.reauthenticatedImageURL(
+                otherServerImage,
+                maxWidth: 500
+            )
+        )
+    }
+
+    func testImageReauthenticationAcceptsItsOwnProxyBasePath() throws {
+        let provider = JellyfinProvider(
+            session: makeSession(
+                baseURL: URL(string: "https://host/jellyfin")!,
+                token: "JELLYFIN-TOKEN"
+            )
+        )
+        let persisted = URL(
+            string:
+                "https://host/jellyfin"
+                + "/Items/42/Images/Primary?maxWidth=400"
+        )!
+        let signed = try XCTUnwrap(
+            provider.reauthenticatedImageURL(
+                persisted,
+                maxWidth: 500
+            )
+        )
+
+        XCTAssertEqual(
+            signed.path,
+            "/jellyfin/Items/42/Images/Primary"
+        )
+        XCTAssertTrue(signed.absoluteString.contains("JELLYFIN-TOKEN"))
     }
 
     func testContinueWatchingMapsResumeFields() async throws {
@@ -326,6 +384,76 @@ final class JellyfinProviderMappingTests: XCTestCase {
         XCTAssertEqual(url?.absoluteString, "http://host:8096/Items/i1/Images/Primary?maxWidth=400")
     }
 
+    /// The first backdrop keeps the bare path it has always used, so every URL
+    /// already built — and anything cached under it — stays byte-identical.
+    func testFirstBackdropKeepsTheBarePath() async throws {
+        let items = try await backdropItems(tags: #"["tagA","tagB"]"#)
+        let home = items[0].artworkReferences(for: .homeHero)
+        guard case .remote(let url)? = home.first else {
+            return XCTFail("expected a home hero backdrop, got \(home)")
+        }
+        XCTAssertEqual(url.path, "/Items/m1/Images/Backdrop", "index 0 must not gain a path segment")
+    }
+
+    /// The second backdrop is addressed by INDEX in the path. `tag` alone does not
+    /// select it — the server reads the tag for cache validation and still returns
+    /// index 0, which is how both screens ended up drawing the same picture.
+    func testSecondBackdropIsAddressedByIndexInThePath() async throws {
+        let items = try await backdropItems(tags: #"["tagA","tagB"]"#)
+        let detail = items[0].artworkReferences(for: .detailBackdrop)
+        guard case .remote(let url)? = detail.first else {
+            return XCTFail("expected a distinct detail backdrop, got \(detail)")
+        }
+        XCTAssertEqual(url.path, "/Items/m1/Images/Backdrop/1")
+        XCTAssertTrue(url.absoluteString.contains("tag=tagB"), "got \(url)")
+    }
+
+    /// The whole point: the two screens no longer resolve to the same image.
+    func testHomeAndDetailResolveToDifferentBackdrops() async throws {
+        let items = try await backdropItems(tags: #"["tagA","tagB"]"#)
+        let home = items[0].artworkReferences(for: .homeHero).first
+        let detail = items[0].artworkReferences(for: .detailBackdrop).first
+        XCTAssertNotNil(home)
+        XCTAssertNotNil(detail)
+        XCTAssertNotEqual(home, detail)
+    }
+
+    /// One backdrop means there is no second image to show. The detail page falls
+    /// back to the shared one rather than being given an index that would 404.
+    func testASingleBackdropAddsNoDetailSelection() async throws {
+        let items = try await backdropItems(tags: #"["tagA"]"#)
+        XCTAssertTrue(
+            items[0].artworkSelections.isEmpty,
+            "a lone backdrop must not manufacture a second one"
+        )
+        let detail = items[0].artworkReferences(for: .detailBackdrop).first
+        guard case .remote(let url)? = detail else {
+            return XCTFail("expected the legacy backdrop, got \(String(describing: detail))")
+        }
+        XCTAssertEqual(url.path, "/Items/m1/Images/Backdrop")
+    }
+
+    /// An item with no backdrops at all is unaffected.
+    func testNoBackdropsAddsNoDetailSelection() async throws {
+        let items = try await backdropItems(tags: "[]")
+        XCTAssertTrue(items[0].artworkSelections.isEmpty)
+    }
+
+    private func backdropItems(tags: String) async throws -> [MediaItem] {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/Users/u1/Items", json: """
+        {"Items":[
+          {"Id":"m1","Name":"Alien","Type":"Movie","BackdropImageTags":\(tags)}
+        ],"TotalRecordCount":1}
+        """)
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+        return try await provider.items(
+            in: "lib1",
+            kind: .movie,
+            page: PageRequest(startIndex: 0, limit: 60)
+        ).items
+    }
+
     func testItemsPageMapsItemsAndTotalCount() async throws {
         let stub = StubHTTPClient()
         stub.stub(pathSuffix: "/Users/u1/Items", json: """
@@ -375,6 +503,72 @@ final class JellyfinProviderMappingTests: XCTestCase {
 
         let trailers = try await provider.trailers(for: "m1")
         XCTAssertTrue(trailers.isEmpty)
+    }
+
+    func testExtrasCombineLocalTrailersAndSpecialFeatures() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/Items/m1/LocalTrailers", json: """
+        [{"Id":"t1","Name":"Official Trailer","Type":"Trailer","SupportsResume":false}]
+        """)
+        stub.stub(pathSuffix: "/Items/m1/SpecialFeatures", json: """
+        [
+          {"Id":"f1","Name":"Making Of","Type":"Video","ExtraType":"BehindTheScenes","SupportsResume":true},
+          {"Id":"f2","Name":"Mystery","Type":"Video","ExtraType":"FutureType"}
+        ]
+        """)
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+
+        let extras = try await provider.extras(for: "m1")
+
+        XCTAssertEqual(extras.map(\.item.id), ["t1", "f1", "f2"])
+        XCTAssertEqual(extras.map(\.kind), [.trailer, .behindTheScenes, .unknown])
+        XCTAssertEqual(extras.map(\.supportsResume), [false, true, true])
+        XCTAssertTrue(stub.sentPaths.contains { $0.hasSuffix("/Users/u1/Items/m1/SpecialFeatures") })
+    }
+
+    func testExtrasKeepSpecialFeaturesWhenLocalTrailersEndpointFails() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/Items/m1/LocalTrailers", json: "{}", status: 404)
+        stub.stub(pathSuffix: "/Items/m1/SpecialFeatures", json: """
+        [{"Id":"f1","Name":"Making Of","Type":"Video","ExtraType":"Featurette"}]
+        """)
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+
+        let extras = try await provider.extras(for: "m1")
+
+        XCTAssertEqual(extras.map(\.item.id), ["f1"])
+        XCTAssertEqual(extras.map(\.kind), [.featurette])
+    }
+
+    func testExtrasExcludeAudioOnlySpecialFeatures() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/Items/m1/LocalTrailers", json: "[]")
+        stub.stub(pathSuffix: "/Items/m1/SpecialFeatures", json: """
+        [
+          {"Id":"a1","Name":"Commentary","Type":"Audio","ExtraType":"Interview"},
+          {"Id":"v1","Name":"Interview","Type":"Video","ExtraType":"Interview"}
+        ]
+        """)
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+
+        let extras = try await provider.extras(for: "m1")
+
+        XCTAssertEqual(extras.map(\.item.id), ["v1"])
+    }
+
+    func testExtrasThrowWhenBothNativeEndpointsFail() async {
+        let stub = StubHTTPClient()
+        stub.error = .serverUnreachable
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+
+        do {
+            _ = try await provider.extras(for: "m1")
+            XCTFail("Expected the provider failure to reach the Extras retry state")
+        } catch let error as AppError {
+            XCTAssertEqual(error, .serverUnreachable)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
     }
 
     func testItemsPageUsesSeriesTypeForTVLibrary() async throws {

@@ -34,6 +34,17 @@ settings:
     # when set (mirrors the CURRENT_PROJECT_VERSION bake). Kept OUT of git — the
     # DSN is supplied via the untracked .env.fastlane / environment, never here.
     PLOZZ_SENTRY_DSN: ""
+    # Release channel this binary was built for ("testflight" / "production").
+    # Empty for local/device builds, which fall back to runtime detection.
+    # tools/generate-project.sh bakes the PLOZZ_RELEASE_CHANNEL env var here; the
+    # fastlane `beta` and `release` lanes set it. This exists because the runtime
+    # fallback sniffs `Bundle.main.appStoreReceiptURL`, which on tvOS can be nil
+    # (a receipt is only written after a purchase) — so a TestFlight build could
+    # read as production and silently default crash reporting OFF.
+    PLOZZ_RELEASE_CHANNEL: ""
+    # Stable id of the release-notes catalog entry shipped in a TestFlight/App
+    # Store binary. Local builds leave it empty and never show update notes.
+    PLOZZ_RELEASE_ID: ""
 
 # Local Swift package providing all modular feature/code libraries.
 packages:
@@ -59,6 +70,7 @@ targets:
       # reach — the system reads them from a per-target InfoPlist table. This is
       # the FIRST copy a new user sees, so it has to be translated too.
       - path: App/Resources/InfoPlist.xcstrings
+      - path: App/Resources/ReleaseNotes.json
     info:
       path: App/Resources/Info.plist
       properties:
@@ -79,6 +91,10 @@ targets:
         # from the PLOZZ_SENTRY_DSN build setting (empty unless baked in), so
         # builds without a DSN never send anything.
         PlozzSentryDSN: "$(PLOZZ_SENTRY_DSN)"
+        # Build-time release channel, authoritative over receipt sniffing. Empty
+        # for local builds, which fall back to runtime detection.
+        PlozzReleaseChannel: "$(PLOZZ_RELEASE_CHANNEL)"
+        PlozzReleaseID: "$(PLOZZ_RELEASE_ID)"
         # Background audio keeps music playing while the user browses other
         # screens or the tvOS screensaver starts. Required for the music MVP's
         # background/Now-Playing behaviour (AVAudioSession .playback).
@@ -287,6 +303,7 @@ targets:
       - path: App/Resources/Fonts
       # Same shared catalog as the tvOS target — see the note there.
       - path: App/Resources/Localizable.xcstrings
+      - path: App/Resources/ReleaseNotes.json
     info:
       path: App/PlozziOS/Info.plist
       properties:
@@ -295,6 +312,8 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         ITSAppUsesNonExemptEncryption: false
         PlozzSentryDSN: "$(PLOZZ_SENTRY_DSN)"
+        PlozzReleaseChannel: "$(PLOZZ_RELEASE_CHANNEL)"
+        PlozzReleaseID: "$(PLOZZ_RELEASE_ID)"
         UILaunchScreen: {}
         UIRequiresFullScreen: false
         # remote-notification lets CloudKit (CKSyncEngine) wake the app to pull
@@ -424,4 +443,3 @@ schemes:
         PlozziOS: all
     run:
       config: Debug
-

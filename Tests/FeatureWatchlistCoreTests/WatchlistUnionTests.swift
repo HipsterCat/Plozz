@@ -147,6 +147,166 @@ final class WatchlistUnionTests: XCTestCase {
         XCTAssertNil(nativeView.bucket(for: plex))
     }
 
+    func testFailureUnderAnotherAccountDropsCachedDestinationEntries() {
+        let alias = MediaAliasID()
+        var nativeView = NativeWatchlistView()
+        nativeView.applySuccess(
+            destinationID: plex,
+            entries: [
+                NativeWatchlistEntry(
+                    aliasID: alias,
+                    kind: .movie,
+                    index: 0
+                )!
+            ],
+            identityScope: "account-a"
+        )
+
+        nativeView.applyFailure(
+            destinationID: plex,
+            identityScope: "account-b"
+        )
+
+        XCTAssertNil(nativeView.bucket(for: plex))
+    }
+
+    func testRejectedOldScopeReadDiscardsOnlyItsStaleBucket() {
+        let oldAlias = MediaAliasID()
+        let peerAlias = MediaAliasID()
+        var nativeView = NativeWatchlistView()
+        nativeView.applySuccess(
+            destinationID: plex,
+            entries: [
+                NativeWatchlistEntry(
+                    aliasID: oldAlias,
+                    kind: .movie,
+                    index: 0
+                )!
+            ],
+            identityScope: "account-a"
+        )
+        nativeView.applySuccess(
+            destinationID: jellyfin,
+            entries: [
+                NativeWatchlistEntry(
+                    aliasID: peerAlias,
+                    kind: .movie,
+                    index: 0
+                )!
+            ],
+            identityScope: "peer"
+        )
+
+        nativeView.discardCachedEntries(
+            for: plex,
+            unlessIdentityScopeMatches: "account-b"
+        )
+
+        XCTAssertNil(nativeView.bucket(for: plex))
+        XCTAssertEqual(
+            nativeView.bucket(for: jellyfin)?.entries.map(\.aliasID),
+            [peerAlias]
+        )
+    }
+
+    func testAggregateScopeChangePreservesBucketsForUnchangedAccounts() {
+        let plexAlias = MediaAliasID()
+        let trackerAlias = MediaAliasID()
+        let tracker = WatchlistDestinationID(rawValue: "trakt")!
+        var nativeView = NativeWatchlistView(identityScope: "old-aggregate")
+        nativeView.applySuccess(
+            destinationID: plex,
+            entries: [
+                NativeWatchlistEntry(
+                    aliasID: plexAlias,
+                    kind: .movie,
+                    index: 0
+                )!
+            ],
+            identityScope: "plex-user-a"
+        )
+        nativeView.applySuccess(
+            destinationID: tracker,
+            entries: [
+                NativeWatchlistEntry(
+                    aliasID: trackerAlias,
+                    kind: .movie,
+                    index: 0
+                )!
+            ],
+            identityScope: "trakt-user"
+        )
+
+        let switched = nativeView.scoped(
+            to: "new-aggregate",
+            destinationIdentityScopes: [
+                plex.rawValue: "plex-user-b",
+                tracker.rawValue: "trakt-user",
+            ]
+        )
+
+        XCTAssertNil(switched.bucket(for: plex))
+        XCTAssertEqual(
+            switched.bucket(for: tracker)?.entries.map(\.aliasID),
+            [trackerAlias]
+        )
+        XCTAssertEqual(
+            switched.bucket(for: tracker)?.identityScope,
+            "trakt-user"
+        )
+    }
+
+    func testValidatedLegacyBucketIsStampedBeforeAnOfflineRefresh() {
+        let alias = MediaAliasID()
+        var nativeView = NativeWatchlistView(identityScope: "aggregate")
+        nativeView.applySuccess(
+            destinationID: plex,
+            entries: [
+                NativeWatchlistEntry(
+                    aliasID: alias,
+                    kind: .movie,
+                    index: 0
+                )!
+            ]
+        )
+
+        var migrated = nativeView.scoped(
+            to: "aggregate",
+            destinationIdentityScopes: [plex.rawValue: "plex-user"],
+            legacyValidatedDestinationIDs: [plex.rawValue]
+        )
+        migrated.applyFailure(
+            destinationID: plex,
+            identityScope: "plex-user"
+        )
+
+        XCTAssertEqual(migrated.bucket(for: plex)?.entries.map(\.aliasID), [alias])
+        XCTAssertEqual(migrated.bucket(for: plex)?.identityScope, "plex-user")
+        XCTAssertTrue(migrated.bucket(for: plex)?.isStale ?? false)
+    }
+
+    func testUnverifiedLegacyTrackerBucketIsDropped() {
+        let tracker = WatchlistDestinationID(rawValue: "trakt")!
+        var nativeView = NativeWatchlistView(identityScope: "aggregate")
+        nativeView.applySuccess(
+            destinationID: tracker,
+            entries: [
+                NativeWatchlistEntry(
+                    aliasID: MediaAliasID(),
+                    kind: .movie,
+                    index: 0
+                )!
+            ]
+        )
+
+        let migrated = nativeView.scoped(
+            to: "aggregate",
+            destinationIdentityScopes: [tracker.rawValue: "trakt-user"]
+        )
+
+        XCTAssertNil(migrated.bucket(for: tracker))
+    }
+
     /// Two servers listing the same film is one row, not two.
     func testSameTitleOnTwoServersAppearsOnce() throws {
         let model = WatchlistModel()
@@ -182,6 +342,64 @@ final class WatchlistUnionTests: XCTestCase {
 
         XCTAssertEqual(union.orderedEntries.map(\.aliasID), [owned, other])
         XCTAssertEqual(union.orderedEntries.map(\.isExplicit), [true, false])
+    }
+
+    func testOwnershipEnrichmentDoesNotReorderAServersList() {
+        let first = MediaAliasID()
+        let second = MediaAliasID()
+        let ownedSource = MediaSourceRef(
+            accountID: "account",
+            itemID: "owned",
+            kind: .movie,
+            providerKind: .plex
+        )
+        var nativeView = NativeWatchlistView()
+        nativeView.applySuccess(
+            destinationID: plex,
+            entries: [
+                NativeWatchlistEntry(
+                    aliasID: first,
+                    kind: .movie,
+                    index: 0
+                )!,
+                NativeWatchlistEntry(
+                    aliasID: second,
+                    kind: .movie,
+                    index: 1,
+                    ownedSource: ownedSource
+                )!
+            ]
+        )
+
+        let union = WatchlistUnion(
+            snapshot: .empty,
+            nativeView: nativeView,
+            aliasSnapshot: .empty,
+            enabledDestinationIDs: [plex]
+        )
+
+        XCTAssertEqual(union.orderedEntries.map(\.aliasID), [first, second])
+        XCTAssertNil(union.orderedEntries.first?.ownedSource)
+        XCTAssertEqual(union.orderedEntries.last?.ownedSource, ownedSource)
+    }
+
+    func testRevisionChangesWhenMembershipChangesAtTheSameCount() {
+        let first = MediaAliasID()
+        let replacement = MediaAliasID()
+        let before = WatchlistUnion(
+            snapshot: .empty,
+            nativeView: view([(plex, [first])]),
+            aliasSnapshot: .empty,
+            enabledDestinationIDs: [plex]
+        )
+        let after = WatchlistUnion(
+            snapshot: .empty,
+            nativeView: view([(plex, [replacement])]),
+            aliasSnapshot: .empty,
+            enabledDestinationIDs: [plex]
+        )
+
+        XCTAssertNotEqual(before.revision, after.revision)
     }
 }
 
@@ -312,13 +530,22 @@ final class WatchlistPresentationRetargetTests: XCTestCase {
                 NativeWatchlistEntry(
                     aliasID: aliasID,
                     kind: .series,
-                    presentation: MediaAliasPresentation(title: "Your Honor", year: 2020),
+                    presentation: MediaAliasPresentation(
+                        title: "Your Honor",
+                        year: 2020,
+                        artworkURL: "https://discover.example/your-honor.jpg"
+                    ),
                     index: 0,
                     ownedSource: MediaSourceRef(
                         accountID: "plex-account",
                         itemID: "library-rating-key",
                         kind: .series,
                         providerKind: .plex
+                    ),
+                    ownedPresentation: MediaAliasPresentation(
+                        title: "Your Honor",
+                        year: 2020,
+                        artworkURL: "https://library.example/your-honor.jpg"
                     )
                 )!
             ]
@@ -334,6 +561,9 @@ final class WatchlistPresentationRetargetTests: XCTestCase {
             id: "discover-series",
             title: "Your Honor",
             kind: .series,
+            posterURL: URL(
+                string: "https://discover.example/your-honor.jpg"
+            ),
             locallyValidatedPlayableSource: false
         )
 
@@ -353,6 +583,12 @@ final class WatchlistPresentationRetargetTests: XCTestCase {
         )
         XCTAssertTrue(item.locallyValidatedPlayableSource)
         XCTAssertNil(item.availability)
+        XCTAssertEqual(
+            item.posterURL?.absoluteString,
+            "https://library.example/your-honor.jpg",
+            "The badge and owned artwork must upgrade in the same publication"
+        )
+        XCTAssertEqual(item.artworkSourceAccountID, "plex-account")
     }
 
     /// And with no live candidate either — a watchlisted title that appears in
@@ -367,13 +603,23 @@ final class WatchlistPresentationRetargetTests: XCTestCase {
                 NativeWatchlistEntry(
                     aliasID: aliasID,
                     kind: .movie,
-                    presentation: MediaAliasPresentation(title: "Coco", year: 2017),
+                    presentation: MediaAliasPresentation(
+                        title: "Coco",
+                        year: 2017,
+                        artworkURL: "https://discover.example/coco.jpg"
+                    ),
                     index: 0,
                     ownedSource: MediaSourceRef(
                         accountID: "plex-account",
                         itemID: "owned-42",
                         kind: .movie,
                         providerKind: .plex
+                    ),
+                    ownedPresentation: MediaAliasPresentation(
+                        title: "Coco",
+                        year: 2017,
+                        artworkURL: "https://library.example/coco.jpg",
+                        backdropURL: "https://library.example/coco-backdrop.jpg"
                     )
                 )!
             ]
@@ -395,6 +641,15 @@ final class WatchlistPresentationRetargetTests: XCTestCase {
         let item = try XCTUnwrap(resolved.first?.item)
         XCTAssertEqual(item.id, "owned-42")
         XCTAssertTrue(item.locallyValidatedPlayableSource)
+        XCTAssertEqual(
+            item.posterURL?.absoluteString,
+            "https://library.example/coco.jpg"
+        )
+        XCTAssertEqual(
+            item.heroBackdropURL?.absoluteString,
+            "https://library.example/coco-backdrop.jpg"
+        )
+        XCTAssertEqual(item.artworkSourceAccountID, "plex-account")
     }
 
     /// The upgrade must never invent a match. Retargeting on title+year alone
@@ -443,6 +698,193 @@ final class WatchlistPresentationRetargetTests: XCTestCase {
         let item = try XCTUnwrap(resolved.first?.item)
         XCTAssertFalse(item.locallyValidatedPlayableSource)
         XCTAssertEqual(item.availability, .unknown)
+    }
+
+    /// v1 native-view files already on devices have an owned source but no
+    /// `ownedPresentation` field. They must decode intact so the source keeps the
+    /// badge correct while the next refresh fills the local artwork once.
+    func testOwnedSourceWithoutOwnedPresentationStillDecodes() throws {
+        let entry = try XCTUnwrap(NativeWatchlistEntry(
+            aliasID: MediaAliasID(),
+            kind: .movie,
+            presentation: MediaAliasPresentation(
+                title: "Discover title",
+                year: 2024,
+                artworkURL: "https://discover.example/poster.jpg"
+            ),
+            index: 0,
+            ownedSource: MediaSourceRef(
+                accountID: "plex",
+                itemID: "42",
+                kind: .movie,
+                providerKind: .plex
+            )
+        ))
+
+        let decoded = try JSONDecoder().decode(
+            NativeWatchlistEntry.self,
+            from: JSONEncoder().encode(entry)
+        )
+
+        XCTAssertEqual(decoded.ownedSource?.itemID, "42")
+        XCTAssertNil(decoded.ownedPresentation)
+        XCTAssertEqual(
+            decoded.presentation?.artworkURL,
+            "https://discover.example/poster.jpg"
+        )
+        var nativeView = NativeWatchlistView()
+        let destination = WatchlistDestinationID(rawValue: "plex.plex")!
+        nativeView.applySuccess(
+            destinationID: destination,
+            entries: [decoded]
+        )
+        let union = WatchlistUnion(
+            snapshot: .empty,
+            nativeView: nativeView,
+            aliasSnapshot: .empty,
+            enabledDestinationIDs: [destination]
+        )
+        XCTAssertEqual(
+            union.orderedEntries.first?.artworkSourceAccountID,
+            "plex"
+        )
+    }
+
+    func testExplicitFallbackPresentationIsNotClaimedByOwnedSource() throws {
+        let aliasID = MediaAliasID()
+        let destination = WatchlistDestinationID(
+            rawValue: "plex.owned-account"
+        )!
+        let intent = WatchlistIntent(
+            aliasID: aliasID,
+            kind: .movie,
+            desiredState: .present,
+            rank: 0,
+            origin: .local,
+            presentation: MediaAliasPresentation(
+                title: "Fallback",
+                year: 2024,
+                artworkURL:
+                    "https://discover.provider.plex.tv"
+                    + "/library/metadata/fallback/thumb/1"
+            )
+        )!
+        var nativeView = NativeWatchlistView()
+        nativeView.applySuccess(
+            destinationID: destination,
+            entries: [
+                NativeWatchlistEntry(
+                    aliasID: aliasID,
+                    kind: .movie,
+                    presentation: MediaAliasPresentation(
+                        title: "Fallback",
+                        year: 2024
+                    ),
+                    index: 0,
+                    ownedSource: MediaSourceRef(
+                        accountID: "owned-account",
+                        itemID: "library-id",
+                        kind: .movie,
+                        providerKind: .plex
+                    )
+                )!
+            ]
+        )
+        let union = WatchlistUnion(
+            snapshot: WatchlistSnapshot(intents: [intent]),
+            nativeView: nativeView,
+            aliasSnapshot: .empty,
+            enabledDestinationIDs: [destination]
+        )
+        let resolved = WatchlistPresentationResolver.resolve(
+            union: union,
+            aliasSnapshot: .empty,
+            currentItemsByAliasID: [:]
+        )
+        let item = try XCTUnwrap(resolved.first?.item)
+        let poster = try XCTUnwrap(item.posterURL)
+
+        XCTAssertNil(item.artworkSourceAccountID(for: poster))
+    }
+
+    func testNativeStoreRewritesNestedPlexCredentialOnLoad() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let destination = WatchlistDestinationID(rawValue: "plex")!
+        var view = NativeWatchlistView(identityScope: "scope")
+        view.applySuccess(
+            destinationID: destination,
+            entries: [
+                NativeWatchlistEntry(
+                    aliasID: MediaAliasID(),
+                    kind: .series,
+                    presentation: MediaAliasPresentation(
+                        title: "Arcane",
+                        year: 2021
+                    ),
+                    index: 0,
+                    ownedSource: MediaSourceRef(
+                        accountID: "plex",
+                        itemID: "4407",
+                        kind: .series,
+                        providerKind: .plex
+                    ),
+                    ownedPresentation: MediaAliasPresentation(
+                        title: "Arcane",
+                        year: 2021,
+                        artworkURL: "https://plex.example/clean"
+                    )
+                )!
+            ]
+        )
+        let store = try AtomicNativeWatchlistViewStore(
+            directoryURL: directory,
+            profileID: "profile"
+        )
+        try store.save(view)
+
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: store.fileURL)
+            ) as? [String: Any]
+        )
+        var buckets = try XCTUnwrap(
+            object["bucketsByDestinationID"] as? [String: Any]
+        )
+        var bucket = try XCTUnwrap(
+            buckets[destination.rawValue] as? [String: Any]
+        )
+        var entries = try XCTUnwrap(bucket["entries"] as? [[String: Any]])
+        var entry = entries[0]
+        var owned = try XCTUnwrap(
+            entry["ownedPresentation"] as? [String: Any]
+        )
+        owned["artworkURL"] =
+            "https://plex.example/photo/:/transcode"
+            + "?url=/library/metadata/4407/thumb"
+            + "?X-Plex-Token=NESTED-SECRET"
+            + "&X-Plex-Token=OUTER-SECRET"
+        entry["ownedPresentation"] = owned
+        entries[0] = entry
+        bucket["entries"] = entries
+        buckets[destination.rawValue] = bucket
+        object["bucketsByDestinationID"] = buckets
+        try JSONSerialization.data(
+            withJSONObject: object,
+            options: [.sortedKeys]
+        ).write(to: store.fileURL, options: [.atomic])
+
+        _ = try store.load()
+        let rewritten = String(
+            decoding: try Data(contentsOf: store.fileURL),
+            as: UTF8.self
+        )
+        XCTAssertFalse(rewritten.contains("NESTED-SECRET"))
+        XCTAssertFalse(rewritten.contains("OUTER-SECRET"))
+        XCTAssertFalse(
+            rewritten.lowercased().contains("x-plex-token")
+        )
     }
 }
 

@@ -13,6 +13,7 @@ struct MusicLandingView: View {
     var layout: MusicLandingLayout = .default
 
     @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.plozzNavigationContentInset) private var navigationContentInset
 
     var body: some View {
         ContentStateView(state: viewModel.state, emptyMessage: "No music found in your libraries.", onRetry: { Task { await viewModel.load() } }) { content in
@@ -127,7 +128,11 @@ struct MusicLandingView: View {
             Spacer(minLength: metrics.cardSpacing)
             if let trailing { trailing }
         }
-        .padding(.horizontal, PlozzTheme.Metrics.screenPadding)
+        .padding(
+            .leading,
+            PlozzTheme.Metrics.screenPadding + navigationContentInset
+        )
+        .padding(.trailing, PlozzTheme.Metrics.screenPadding)
     }
 }
 
@@ -143,9 +148,14 @@ private struct BrowseButton: View {
     @FocusState private var isFocused: Bool
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
     @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.plozzCardFocusStyle) private var focusStyle
+
+    /// The glass lift is this button's focus outline, so with the outline off it
+    /// keeps its resting surface (and therefore its resting ink) on focus.
+    private var surfaceFocused: Bool { isFocused && focusStyle.drawsFocusOutline }
 
     private var titleColor: Color {
-        PlozzCardCaption.titleColor(isFocused: isFocused, reduceTransparency: reduceTransparency)
+        PlozzCardCaption.titleColor(isFocused: surfaceFocused, reduceTransparency: reduceTransparency)
     }
 
     var body: some View {
@@ -154,13 +164,16 @@ private struct BrowseButton: View {
             .foregroundStyle(titleColor)
             .padding(.horizontal, PlozzTheme.Spacing.xLarge)
             .frame(height: NowPlayingCard.nominalHeight)
-            .plozzGlassCard(cornerRadius: metrics.landscapeCardCornerRadius, isFocused: isFocused)
+            .plozzGlassCard(cornerRadius: metrics.landscapeCardCornerRadius, isFocused: surfaceFocused)
             .focusableCard(isFocused: $isFocused, cornerRadius: metrics.landscapeCardCornerRadius, action: action)
             .plozzCardRasterize(reduceTransparency: reduceTransparency)
             .shadow(color: .black.opacity(isFocused ? 0.36 : 0.15), radius: isFocused ? 20 : 8, y: isFocused ? 10 : 4)
-            .scaleEffect(isFocused ? PlozzTheme.Metrics.mediumFocusedCardScale : 1)
-            .zIndex(isFocused ? 2 : 0)
-            .animation(.easeOut(duration: 0.18), value: isFocused)
+            .plozzCardFocusLift(
+                isFocused: isFocused,
+                cornerRadius: metrics.landscapeCardCornerRadius,
+                outlineScale: PlozzTheme.Metrics.mediumFocusedCardScale
+            )
+            .plozzCardFocusTransition(isFocused: isFocused)
     }
 }
 
@@ -173,6 +186,8 @@ private struct MusicRow<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.plozzNavigationContentInset) private var navigationContentInset
+    @Environment(\.plozzPinnedSidebarActive) private var pinnedSidebarActive
 
     var body: some View {
         VStack(alignment: .leading, spacing: metrics.sectionTitleSpacing) {
@@ -181,29 +196,39 @@ private struct MusicRow<Content: View>: View {
                 Spacer()
                 if let trailing { trailing }
             }
-            .padding(.horizontal, PlozzTheme.Metrics.screenPadding)
+            .padding(
+                .leading,
+                PlozzTheme.Metrics.screenPadding + navigationContentInset
+            )
+            .padding(.trailing, PlozzTheme.Metrics.screenPadding)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                // Lazy so only on-screen cards build their Liquid Glass surface.
-                // The eager HStack kept every card's glass effect live, so fast
-                // focus moves recomputed every card's SDF and lagged navigation.
-                // Matches the lazy rails used elsewhere (MediaRowView/HomeView).
-                LazyHStack(alignment: .top, spacing: metrics.cardSpacing) {
-                    content()
+            PinnedSidebarLeadingFade(
+                isActive: pinnedSidebarActive,
+                inset: navigationContentInset,
+                verticalOverhang: metrics.railShadowClearance
+            ) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    // Lazy so only on-screen cards build their Liquid Glass surface.
+                    // The eager HStack kept every card's glass effect live, so fast
+                    // focus moves recomputed every card's SDF and lagged navigation.
+                    // Matches the lazy rails used elsewhere (MediaRowView/HomeView).
+                    LazyHStack(alignment: .top, spacing: metrics.cardSpacing) {
+                        content()
+                    }
+                    .padding(.horizontal, PlozzTheme.Metrics.screenPadding)
+                    // Keep the rail clipping (no `scrollClipDisabled`) so the focus
+                    // engine holds the first/last card at its inset, and reserve room
+                    // *inside* the clip for the focused card's lift + shadow. The
+                    // negative outer padding restores the original vertical inset, so
+                    // the row's height is unchanged — only the clip grows.
+                    .padding(.vertical, metrics.railShadowClearance)
                 }
-                .padding(.horizontal, PlozzTheme.Metrics.screenPadding)
-                // Keep the rail clipping (no `scrollClipDisabled`) so the focus
-                // engine holds the first/last card at its inset, and reserve room
-                // *inside* the clip for the focused card's lift + shadow. The
-                // negative outer padding restores the original vertical inset, so
-                // the row's height is unchanged — only the clip grows.
-                .padding(.vertical, metrics.railShadowClearance)
+                // Match the shared rails: a tight `railTopPadding`-based gap above the
+                // cards (not the wide `railVerticalPadding` used below the row), so the
+                // section header hugs the cards instead of floating far above them.
+                .padding(.top, metrics.railTopClearanceOffset)
+                .padding(.bottom, metrics.railBottomClearanceOffset)
             }
-            // Match the shared rails: a tight `railTopPadding`-based gap above the
-            // cards (not the wide `railVerticalPadding` used below the row), so the
-            // section header hugs the cards instead of floating far above them.
-            .padding(.top, metrics.railTopClearanceOffset)
-            .padding(.bottom, metrics.railBottomClearanceOffset)
         }
     }
 }
@@ -320,6 +345,12 @@ private struct GenreCard: View {
     let action: () -> Void
     @FocusState private var isFocused: Bool
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
+    @Environment(\.plozzCardFocusStyle) private var focusStyle
+
+    /// This tile's focus outline is its bright white rim, so with the outline
+    /// switched off it keeps the resting hairline and reads as focused through
+    /// the grow-and-glisten highlight instead.
+    private var showsFocusRim: Bool { isFocused && focusStyle.drawsFocusOutline }
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: PlozzTheme.Metrics.Radius.card, style: .continuous)
@@ -351,7 +382,7 @@ private struct GenreCard: View {
         .frame(width: 280, height: 160)
         .clipShape(shape)
         .overlay {
-            shape.strokeBorder(.white.opacity(isFocused ? 0.95 : 0.10), lineWidth: isFocused ? 4 : 1)
+            shape.strokeBorder(.white.opacity(showsFocusRim ? 0.95 : 0.10), lineWidth: showsFocusRim ? 4 : 1)
         }
         // Same proven modifier order as MusicCard (works in this exact grid):
         // visual → focusableCard → rasterize → shadow → scale. `plozzCardRasterize`
@@ -360,8 +391,12 @@ private struct GenreCard: View {
         .focusableCard(isFocused: $isFocused, cornerRadius: PlozzTheme.Metrics.Radius.card, action: action)
         .plozzCardRasterize(reduceTransparency: reduceTransparency)
         .shadow(color: .black.opacity(isFocused ? 0.4 : 0.15), radius: isFocused ? 22 : 8, y: isFocused ? 12 : 4)
-        .scaleEffect(isFocused ? PlozzTheme.Metrics.mediumFocusedCardScale : 1)
-        .animation(.easeOut(duration: 0.18), value: isFocused)
+        .plozzCardFocusLift(
+            isFocused: isFocused,
+            cornerRadius: PlozzTheme.Metrics.Radius.card,
+            outlineScale: PlozzTheme.Metrics.mediumFocusedCardScale
+        )
+        .plozzCardFocusTransition(isFocused: isFocused)
     }
 }
 
@@ -449,7 +484,8 @@ struct ArtistDetailView: View {
                         url: viewModel.artist.artworkURL,
                         systemPlaceholder: "music.mic",
                         cornerRadius: 130,
-                        asyncFallbackURL: MusicArtworkFallback.artistImage(name: viewModel.artist.name)
+                        asyncFallbackURL: MusicArtworkFallback.artistImage(name: viewModel.artist.name),
+                        pinIdentity: viewModel.artist.id
                     )
                         .clipShape(Circle())
                         .frame(width: 260, height: 260)
@@ -540,7 +576,8 @@ struct AlbumDetailView: View {
                 asyncFallbackURL: MusicArtworkFallback.albumCover(
                     title: viewModel.album.title,
                     artist: viewModel.album.artistName
-                )
+                ),
+                pinIdentity: viewModel.album.id
             )
                 .frame(width: columnWidth, height: columnWidth)
             Text(viewModel.album.title).font(.system(size: 40, weight: .bold)).lineLimit(3)
@@ -943,7 +980,8 @@ struct TrackListView: View {
                 url: track.artworkURL ?? artworkFallback,
                 systemPlaceholder: "music.note",
                 cornerRadius: 8,
-                variant: .musicThumbnail
+                variant: .musicThumbnail,
+                pinIdentity: track.id
             )
             .frame(width: 72, height: 72)
             .overlay {

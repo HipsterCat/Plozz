@@ -27,6 +27,9 @@ struct HomeSkeletonView: View {
     /// launch: once Home has loaded once, `HomeContentStore` paints the real hero +
     /// rows instantly from cache and this loading state is skipped entirely.
     var heroActive: Bool = false
+    /// Mirrors the profile's Continue Watching artwork choice, so the placeholder
+    /// reserves a caption only when the real card will draw one.
+    var continueWatchingShowsSeriesArtwork: Bool = true
     /// How long loading must persist before the skeleton fades in.
     var appearDelay: Duration = .milliseconds(150)
 
@@ -88,7 +91,10 @@ struct HomeSkeletonView: View {
     private var rowsStack: some View {
         VStack(alignment: .leading, spacing: metrics.rowSpacing) {
             ForEach(rows, id: \.kind) { row in
-                HomeSkeletonRowView(row: row)
+                HomeSkeletonRowView(
+                    row: row,
+                    continueWatchingShowsSeriesArtwork: continueWatchingShowsSeriesArtwork
+                )
             }
         }
     }
@@ -99,6 +105,13 @@ struct HomeSkeletonView: View {
 /// live server data while the cached hero and stable rows are already visible.
 struct HomeSkeletonRowView: View {
     let row: HomeRowLayout
+    /// Whether Continue Watching is in its caption-less series-artwork mode, so
+    /// the placeholder matches the card that is about to replace it.
+    var continueWatchingShowsSeriesArtwork: Bool = true
+    /// Mirrors `MediaRowView`: the navigation inset lives INSIDE the scroll
+    /// content, so the placeholder's first card lands exactly where the real one
+    /// will.
+    @Environment(\.plozzNavigationContentInset) private var navigationContentInset
 
     @State private var availableWidth: CGFloat = 0
     @Environment(\.plozzMetrics) private var metrics
@@ -125,7 +138,7 @@ struct HomeSkeletonRowView: View {
                     Capsule(style: .continuous)
                         .fill(palette.fill)
                         .frame(width: 220, height: 26)
-                        .padding(.leading, PlozzTheme.Metrics.screenPadding)
+                        .padding(.leading, PlozzTheme.Metrics.screenPadding + navigationContentInset)
                 }
                 .shimmering()
             
@@ -139,11 +152,15 @@ struct HomeSkeletonRowView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: metrics.cardSpacing) {
                     ForEach(0..<cardCount(for: row), id: \.self) { _ in
-                        SkeletonCardView(style: cardStyle(for: kind))
-                            .frame(width: cardWidth(for: kind))
+                        SkeletonCardView(
+                            style: cardStyle(for: kind),
+                            showsCaption: showsCaption(for: kind),
+                            showsSeriesArtwork: usesSeriesArtwork(kind)
+                        )
+                        .frame(width: cardWidth(for: kind))
                     }
                 }
-                .padding(.leading, PlozzTheme.Metrics.screenPadding)
+                .padding(.leading, PlozzTheme.Metrics.screenPadding + navigationContentInset)
                 .padding(.trailing, PlozzTheme.Metrics.screenPadding)
                 .padding(.top, metrics.railTopPadding)
                 .padding(.bottom, metrics.railVerticalPadding)
@@ -163,6 +180,12 @@ struct HomeSkeletonRowView: View {
         }
     }
 
+    /// Continue Watching's series-artwork cards carry their text on the artwork
+    /// and draw no caption, so their placeholders must not reserve one either.
+    private func showsCaption(for kind: HomeRowKind) -> Bool {
+        !(kind == .continueWatching && continueWatchingShowsSeriesArtwork)
+    }
+
     /// Continue Watching and the Libraries tiles use the wide landscape card;
     /// every other row uses portrait posters — matching the real Home.
     private func cardStyle(for kind: HomeRowKind) -> SkeletonCardView.Style {
@@ -179,8 +202,23 @@ struct HomeSkeletonRowView: View {
     /// (`landscapeCardSlotWidth`), so pinning to the bare `landscapeWidth` would
     /// make the placeholders 32 pt too narrow and bunch them closer than the real
     /// Continue Watching / Libraries cards.
+    ///
+    /// A series-artwork Continue Watching card is narrower still (it stands
+    /// taller instead — see ``ContinueWatchingCardShape``), so it has to be asked
+    /// for by name or the row visibly re-pitches the moment content lands.
     private func cardWidth(for kind: HomeRowKind) -> CGFloat {
-        cardStyle(for: kind) == .landscape ? metrics.landscapeCardSlotWidth : metrics.posterWidth
+        guard cardStyle(for: kind) == .landscape else { return metrics.posterWidth }
+        return metrics.cardSlotWidth(
+            for: .landscape,
+            cardStyle: .framed,
+            showsSeriesArtwork: usesSeriesArtwork(kind)
+        )
+    }
+
+    /// Whether this row's real cards will carry show art with a logo over it —
+    /// which is a different card *shape*, not just different contents.
+    private func usesSeriesArtwork(_ kind: HomeRowKind) -> Bool {
+        kind == .continueWatching && continueWatchingShowsSeriesArtwork
     }
 
     /// How many placeholder cards to render for a row. We show the count the row
@@ -221,6 +259,9 @@ struct HomeSkeletonRowView: View {
 /// title exists as a logo image or as text. Featured-only can bypass this from its
 /// curated cache; mixed/local heroes keep it until complete fresh curation.
 struct HomeHeroSkeletonView: View {
+    /// How far the navigation chrome insets page content, so the placeholder sits
+    /// exactly where the real hero column will.
+    @Environment(\.plozzNavigationContentInset) private var navigationContentInset
     @Environment(\.themePalette) private var palette
     /// Button pill footprint — mirrors `HomeHeroView.heroPill` (28pt label +
     /// 18pt vertical / 30pt horizontal padding, ~34pt icon box).
@@ -261,7 +302,10 @@ struct HomeHeroSkeletonView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, PlozzTheme.Metrics.screenVerticalPadding)
         .padding(.trailing, PlozzTheme.Metrics.screenPadding)
-        .padding(.leading, HomeHeroLayout.contentLeadingPadding)
+        // Mirrors the real hero's text column (`HomeHeroView`), which adds the same
+        // navigation inset — otherwise the hero's title/buttons visibly slide
+        // sideways the moment live content replaces the placeholder.
+        .padding(.leading, HomeHeroLayout.contentLeadingPadding + navigationContentInset)
         .padding(.bottom, HomeHeroLayout.contentBottomInset)
         // Shimmer stays on the small placeholder shapes only — never the backdrop.
         .shimmering()

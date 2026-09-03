@@ -36,6 +36,10 @@ public final class MediaItemActionCoordinator: MediaItemActionHandling {
     private let beginUniversalWatchlistFanOut:
         @MainActor (Bool, MediaItem) -> Void
     private let resolveDurableWatchlist: ([MediaItem]) -> [MediaItem]
+    private let durableWatchlistPresentationReady: () -> Bool
+    private let durableWatchlistLoadingTarget: () -> Int?
+    private let rehydratePersistedArtworkItems:
+        ([MediaItem]) -> [MediaItem]
     private let seedLegacyUniversalWatchlist: ([MediaItem]) async -> Void
     /// Current offline state for an item, or `nil` on a surface without download
     /// capability. Injected as a closure so AppRuntime needn't depend on
@@ -70,6 +74,52 @@ public final class MediaItemActionCoordinator: MediaItemActionHandling {
     /// changes, so a heart can never be answered from a stale world.
     private var membershipCache: [String: Bool] = [:]
     private var membershipRevision: UInt64?
+    private var watchlistChangeObserver: (any NSObjectProtocol)?
+
+    /// The watchlist state the viewer has most recently ASKED for, per title,
+    /// while the durable write catches up.
+    ///
+    /// The button has to answer the moment it is pressed, and the truth it would
+    /// otherwise read cannot: `performUniversalWatchlist` awaits the alias ledger,
+    /// which is an actor hop and a durable write, and only then announces. Brandon
+    /// measured the gap at 2-3 seconds — the toast said "Removed" while the button
+    /// still read Added.
+    ///
+    /// So membership answers from intent while one is recorded. This is not the
+    /// button lying: a press the app has accepted and is committed to completing
+    /// is part of the state, and the write below is what makes it true. The intent
+    /// is dropped the moment the durable read agrees, and reverted if the write
+    /// fails, so the two can never end up disagreeing silently.
+    private var watchlistIntents: [String: Bool] = [:]
+
+    /// Titles with a write in flight. One writer per title, so a burst of presses
+    /// cannot interleave: without this, two taps race two `resolveOrCreate` +
+    /// write sequences that can land out of order and leave the durable state on
+    /// the LOSING press. The writer re-reads ``watchlistIntents`` after each pass
+    /// and keeps going until it has written what the viewer last asked for.
+    private var watchlistWriters: Set<String> = []
+
+    /// Watchlist notifications this coordinator is itself about to cause.
+    ///
+    /// A successful local write posts `universalWatchlistDidChange`, and the
+    /// observer below answers that by discarding the whole membership memo. For
+    /// a change we made ourselves that is pure waste — we already patched the one
+    /// entry that moved — and it is expensive waste, because every remaining entry
+    /// then has to be resolved again from cold while the viewer waits for the
+    /// button to move. Our own echo is counted here and skipped; a change from
+    /// anywhere else still discards the memo, which is what that observer is for.
+    private var expectedSelfWatchlistNotifications = 0
+
+    /// The key both the read and the write use to talk about one title. Shared
+    /// deliberately: the last three watchlist defects were all one truth reached
+    /// by two paths that derived their key differently.
+    /// How long a written-and-confirmed intent may outlive a durable read that
+    /// still disagrees with it, before the read wins anyway.
+    private static let watchlistIntentGrace: TimeInterval = 5
+
+    private static func membershipKey(_ item: MediaItem) -> String {
+        "\(item.sourceAccountID ?? "-"):\(item.id)"
+    }
 
     private struct ProviderCapabilities {
         let supportsWatchState: Bool
@@ -108,6 +158,10 @@ public final class MediaItemActionCoordinator: MediaItemActionHandling {
         resolveDurableWatchlist: @escaping ([MediaItem]) -> [MediaItem] = {
             $0.filter(\.isFavorite)
         },
+        durableWatchlistPresentationReady: @escaping () -> Bool = { true },
+        durableWatchlistLoadingTarget: @escaping () -> Int? = { nil },
+        rehydratePersistedArtworkItems:
+            @escaping ([MediaItem]) -> [MediaItem] = { $0 },
         seedLegacyUniversalWatchlist: @escaping ([MediaItem]) async -> Void = { _ in },
         downloadState: @escaping (MediaItem) -> MediaItemDownloadState?? = { _ in nil },
         performDownloadAction: @escaping (MediaItemAction, MediaItem) -> Void = { _, _ in }
@@ -126,9 +180,66 @@ public final class MediaItemActionCoordinator: MediaItemActionHandling {
             presentUniversalWatchlistFeedback
         self.beginUniversalWatchlistFanOut = beginUniversalWatchlistFanOut
         self.resolveDurableWatchlist = resolveDurableWatchlist
+        self.durableWatchlistPresentationReady =
+            durableWatchlistPresentationReady
+        self.durableWatchlistLoadingTarget =
+            durableWatchlistLoadingTarget
+        self.rehydratePersistedArtworkItems =
+            rehydratePersistedArtworkItems
         self.seedLegacyUniversalWatchlist = seedLegacyUniversalWatchlist
         self.downloadState = downloadState
         self.performDownloadAction = performDownloadAction
+        // Every membership memo drops together, or none of them mean anything.
+        //
+        // `announceUniversalWatchlistDidChange` invalidates the process-wide
+        // membership set, but this per-item memo is keyed on the same O(1) count
+        // revision and so is blind to exactly the changes that set was: a removal
+        // of a title whose presence came from a destination's own list, or a
+        // remote sync that adds and drops the same number of titles. A local
+        // toggle clears it outright below; this covers every OTHER way the
+        // watchlist moves.
+        watchlistChangeObserver = NotificationCenter.default.addObserver(
+            forName: .universalWatchlistDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // Our own write, already accounted for entry by entry.
+                if self.expectedSelfWatchlistNotifications > 0 {
+                    self.expectedSelfWatchlistNotifications -= 1
+                    return
+                }
+                self.membershipCache.removeAll(keepingCapacity: true)
+                self.membershipRevision = nil
+            }
+        }
+    }
+
+    deinit {
+        if let watchlistChangeObserver {
+            NotificationCenter.default.removeObserver(watchlistChangeObserver)
+        }
+    }
+
+    /// Tell the watchlist controls to re-ask, and nothing else to do any work.
+    ///
+    /// The coordinator is not `@Observable` — deliberately, since `actions(for:)`
+    /// runs from view bodies and mutates the memo above — so changing intent moves
+    /// nothing on its own and the surfaces need telling.
+    ///
+    /// This deliberately does NOT raise `universalWatchlistDidChange`. Doing that
+    /// was the first attempt and it made the very thing it was fixing worse: that
+    /// notification runs Home's full identity re-resolve and a content-store save
+    /// on the main thread, so the frame carrying the button's new state couldn't
+    /// be drawn until it finished. Nothing durable has changed at this point
+    /// anyway — a press has been accepted, which is exactly what the cheap
+    /// notification means.
+    private func announceWatchlistIntentChanged() {
+        NotificationCenter.default.post(
+            name: .watchlistIntentDidChange,
+            object: nil
+        )
     }
 
     public func actions(for item: MediaItem, context: MediaItemActionContext) -> [MediaItemAction] {
@@ -176,6 +287,8 @@ public final class MediaItemActionCoordinator: MediaItemActionHandling {
             performWatchlist(adding: action == .addToWatchlist, on: item)
         case .refreshMetadata:
             performRefresh(on: item)
+        case .removeFromContinueWatching:
+            performRemoveFromContinueWatching(on: item)
         case .startDownload, .pauseDownload, .resumeDownload, .removeDownload:
             performDownloadAction(action, item)
         case .goToSeason, .goToMovie, .goToEpisode:
@@ -227,6 +340,38 @@ public final class MediaItemActionCoordinator: MediaItemActionHandling {
             played: played,
             resumePosition: played ? 0 : nil,
             playedPercentage: played ? 1 : nil
+        ).post()
+
+        enqueueWatchMutation(mutation)
+    }
+
+    /// Clears the title's saved position on every server holding it, taking it off
+    /// Continue Watching without claiming it was watched.
+    ///
+    /// The optimistic post carries `resumePosition: 0`, which every surface already
+    /// reads as "no longer in progress" — the card leaves the row at once and its
+    /// progress bar goes, with no refetch and no focus change. The durable write
+    /// then goes through the same outbox as every other watch action, so it
+    /// survives an asleep server or a kill mid-write.
+    ///
+    /// `played` is deliberately left `nil`: the viewer said take it off the row,
+    /// which is not a claim about having seen it.
+    private func performRemoveFromContinueWatching(on item: MediaItem) {
+        guard let mutation = WatchMutationFactory.removeFromContinueWatching(
+            item: item,
+            primaryAccountID: primaryAccountID(),
+            additionalSources: additionalSources(item),
+            crossServerSync: crossServerWatchSyncEnabled()
+        ) else { return }
+
+        var ids = Set(mutation.targets.map(\.itemID))
+        ids.insert(item.id)
+        let scoped = Set(mutation.targets.map(\.id))
+        MediaItemMutation(
+            itemIDs: ids,
+            scopedItemIDs: scoped,
+            resumePosition: 0,
+            playedPercentage: 0
         ).post()
 
         enqueueWatchMutation(mutation)
@@ -294,26 +439,94 @@ public final class MediaItemActionCoordinator: MediaItemActionHandling {
             // what the viewer expects: the confirmation belongs to the tap.
             let feedback = Self.universalWatchlistFeedback(adding: adding)
             presentFeedback(feedback.icon, feedback.text)
+
+            // Record the intent BEFORE any await, and tell the world at once, so
+            // the press is on screen this frame instead of after the ledger write.
+            let key = Self.membershipKey(item)
+            watchlistIntents[key] = adding
+            announceWatchlistIntentChanged()
+
+            // One writer per title. A second press while a write is in flight only
+            // updates the intent above; the running writer picks it up when it
+            // comes back round. That is what makes the button survive spamming —
+            // presses can't each spawn a racing write and land out of order.
+            guard !watchlistWriters.contains(key) else { return }
+            watchlistWriters.insert(key)
+
             Task { @MainActor in
-                guard await performUniversalWatchlist(adding, item) else {
-                    // Take the acknowledgement back rather than leaving a
-                    // confirmation standing for something that did not happen.
-                    presentFeedback(
-                        "exclamationmark.triangle.fill",
-                        LocalizedStringResource(
-                            "watchlist.feedback.failed",
-                            defaultValue: "Couldn't update Watchlist",
-                            comment: "Transient message shown when saving a title to, or removing it from, the Watchlist did not succeed."
+                defer {
+                    self.watchlistWriters.remove(key)
+                    self.announceWatchlistIntentChanged()
+                }
+                // Keep writing until what's on disk is what the viewer last asked
+                // for. Re-read each pass: they may have pressed again mid-write.
+                while let desired = self.watchlistIntents[key] {
+                    // A successful write posts exactly one notification; claim it
+                    // before it can be delivered.
+                    self.expectedSelfWatchlistNotifications += 1
+                    guard await performUniversalWatchlist(desired, item) else {
+                        // It failed, so nothing was posted — give the claim back
+                        // rather than swallow someone else's change later.
+                        self.expectedSelfWatchlistNotifications -= 1
+                        // Take the acknowledgement back rather than leaving a
+                        // confirmation standing for something that did not happen,
+                        // and drop the intent so the button falls back to the truth
+                        // instead of showing a state we failed to reach.
+                        self.watchlistIntents[key] = nil
+                        presentFeedback(
+                            "exclamationmark.triangle.fill",
+                            LocalizedStringResource(
+                                "watchlist.feedback.failed",
+                                defaultValue: "Couldn't update Watchlist",
+                                comment: "Transient message shown when saving a title to, or removing it from, the Watchlist did not succeed."
+                            )
                         )
-                    )
+                        return
+                    }
+                    // Patch the one title that changed; do NOT throw the memo away.
+                    //
+                    // Discarding it made the press expensive in proportion to how
+                    // much was on screen. Every entry had to be resolved again from
+                    // cold on the next body pass, and resolving one is the identity
+                    // graph walk this memo exists to avoid — on a series page, with
+                    // a hero and a full episode rail asking `actions(for:)`, that is
+                    // dozens of walks standing between the press and the frame that
+                    // would show its result. It was worst on the FIRST press, when
+                    // nothing was warm yet, which is exactly the shape Brandon saw:
+                    // five to ten seconds cold, quick every time after.
+                    //
+                    // Adopting the new revision alongside the patch is the point: the
+                    // count moved, so the next read would otherwise treat every entry
+                    // as stale and discard them all anyway. One local toggle changes
+                    // one title, and we know which and what to, so the rest of the
+                    // memo is still true.
+                    self.membershipRevision = self.watchlistMembershipRevision()
+                    self.membershipCache[key] = desired
+                    beginFanOut(desired, item)
+
+                    // Pressed again while that was in flight? Write the new answer.
+                    guard self.watchlistIntents[key] == desired else { continue }
+                    // Hand back to the durable read once it agrees.
+                    if self.watchlistMembership(item) == desired {
+                        self.watchlistIntents[key] = nil
+                        return
+                    }
+                    // It doesn't agree, even though the write succeeded. Keep
+                    // showing what we actually wrote — but only briefly. Holding
+                    // it indefinitely would be the stuck override this design
+                    // exists to avoid, so let the read win shortly and converge
+                    // on one answer either way.
+                    Task { @MainActor in
+                        try? await Task.sleep(
+                            for: .seconds(Self.watchlistIntentGrace)
+                        )
+                        if self.watchlistIntents[key] == desired {
+                            self.watchlistIntents[key] = nil
+                            self.announceWatchlistIntentChanged()
+                        }
+                    }
                     return
                 }
-                // The viewer just changed this; don't make the heart wait for a
-                // count to move. Clearing outright also covers a same-count swap,
-                // which is the one case the O(1) revision cannot see.
-                self.membershipCache.removeAll(keepingCapacity: true)
-                self.membershipRevision = nil
-                beginFanOut(adding, item)
             }
             return
         }
@@ -363,9 +576,9 @@ public final class MediaItemActionCoordinator: MediaItemActionHandling {
         return (
             "bookmark.slash",
             LocalizedStringResource(
-                "watchlist.feedback.removed",
-                defaultValue: "Removed from Watchlist",
-                comment: "Transient confirmation after a title is removed locally from the user's Watchlist."
+                "watchlist.feedback.removing",
+                defaultValue: "Removing from Watchlist…",
+                comment: "Transient acknowledgement shown when removal from the Watchlist begins."
             )
         )
     }
@@ -470,15 +683,19 @@ public final class MediaItemActionCoordinator: MediaItemActionHandling {
     /// Watchlist membership for `item`, resolved once per world rather than once per
     /// card body. See `membershipCache`.
     private func cachedWatchlistMembership(_ item: MediaItem) -> Bool {
+        // The item's own coordinates, not its identity: deriving the identity is the
+        // expensive thing being avoided. Two rows showing the same title on the same
+        // server share a key and an answer, which is correct — they are one copy.
+        let key = Self.membershipKey(item)
+        // An accepted press outranks the durable read until that read catches up.
+        // Checked before the revision bookkeeping so the answer is stable across
+        // the several world changes one write kicks off.
+        if let intent = watchlistIntents[key] { return intent }
         let revision = watchlistMembershipRevision()
         if membershipRevision != revision {
             membershipRevision = revision
             membershipCache.removeAll(keepingCapacity: true)
         }
-        // The item's own coordinates, not its identity: deriving the identity is the
-        // expensive thing being avoided. Two rows showing the same title on the same
-        // server share a key and an answer, which is correct — they are one copy.
-        let key = "\(item.sourceAccountID ?? "-"):\(item.id)"
         if let cached = membershipCache[key] { return cached }
         let resolved = watchlistMembership(item)
         membershipCache[key] = resolved
@@ -491,12 +708,31 @@ public final class MediaItemActionCoordinator: MediaItemActionHandling {
             : item.isFavorite
     }
 
+    public func isActivelyRemovingFromWatchlist(_ item: MediaItem) -> Bool {
+        watchlistIntents[Self.membershipKey(item)] == false
+    }
+
     public func durableWatchlistItems(
         from candidates: [MediaItem]
     ) -> [MediaItem] {
         universalWatchlistEnabled()
             ? resolveDurableWatchlist(candidates)
             : candidates.filter(\.isFavorite)
+    }
+
+    public func isDurableWatchlistPresentationReady() -> Bool {
+        !universalWatchlistEnabled() || durableWatchlistPresentationReady()
+    }
+
+    public func durableWatchlistLoadingTargetCount() -> Int? {
+        guard universalWatchlistEnabled() else { return nil }
+        return durableWatchlistLoadingTarget()
+    }
+
+    public func rehydratePersistedArtwork(
+        _ items: [MediaItem]
+    ) -> [MediaItem] {
+        rehydratePersistedArtworkItems(items)
     }
 
     public func seedLegacyWatchlist(_ items: [MediaItem]) async {

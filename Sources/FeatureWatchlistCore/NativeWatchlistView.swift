@@ -10,6 +10,7 @@ public struct NativeWatchlistEntry: Codable, Hashable, Sendable {
     public let aliasID: MediaAliasID
     public let kind: MediaItemKind
     public let presentation: MediaAliasPresentation?
+    public let presentationAccountID: String?
     /// Position in the destination's own list, preserved so the union can order
     /// entries the way the server does rather than by hash order.
     public let index: Int
@@ -22,20 +23,99 @@ public struct NativeWatchlistEntry: Codable, Hashable, Sendable {
     /// both of which correctly present as not-in-library rather than as a
     /// library title with nothing to play.
     public let ownedSource: MediaSourceRef?
+    /// Presentation supplied by that owned library copy.
+    ///
+    /// Separate from `presentation`, which is what the watchlist destination
+    /// itself supplied (Plex Discover, Trakt, and so on). Overloading that field
+    /// would make a v1 cache ambiguous: an entry with `ownedSource != nil` may
+    /// still carry Discover artwork because older builds persisted only the source
+    /// ref. Optional so those files decode and self-upgrade on the next refresh.
+    public let ownedPresentation: MediaAliasPresentation?
 
     public init?(
         aliasID: MediaAliasID,
         kind: MediaItemKind,
         presentation: MediaAliasPresentation? = nil,
+        presentationAccountID: String? = nil,
         index: Int,
-        ownedSource: MediaSourceRef? = nil
+        ownedSource: MediaSourceRef? = nil,
+        ownedPresentation: MediaAliasPresentation? = nil
     ) {
         guard kind == .movie || kind == .series else { return nil }
         self.aliasID = aliasID
         self.kind = kind
         self.presentation = presentation?.sanitizedForSync()
+        self.presentationAccountID = presentationAccountID
         self.index = index
         self.ownedSource = ownedSource
+        self.ownedPresentation = ownedPresentation?.sanitizedForSync()
+    }
+
+    /// Last-known owned copy, including the presentation the library supplied.
+    ///
+    /// Kept as a computed value so call sites cannot accidentally separate the
+    /// two halves. Older v1 files decode `ownedPresentation` as nil and the
+    /// runtime re-asks the server once to fill it.
+    public var ownedCopy: WatchlistLibraryCopy? {
+        ownedSource.map {
+            WatchlistLibraryCopy(source: $0, presentation: ownedPresentation)
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case aliasID, kind, presentation, presentationAccountID
+        case index, ownedSource, ownedPresentation
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        aliasID = try container.decode(MediaAliasID.self, forKey: .aliasID)
+        kind = try container.decode(MediaItemKind.self, forKey: .kind)
+        guard kind == .movie || kind == .series else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription:
+                    "Native watchlists support movies and series only."
+            )
+        }
+        presentation = try container.decodeIfPresent(
+            MediaAliasPresentation.self,
+            forKey: .presentation
+        )?.sanitizedForSync()
+        presentationAccountID = try container.decodeIfPresent(
+            String.self,
+            forKey: .presentationAccountID
+        )
+        index = try container.decode(Int.self, forKey: .index)
+        ownedSource = try container.decodeIfPresent(
+            MediaSourceRef.self,
+            forKey: .ownedSource
+        )
+        ownedPresentation = try container.decodeIfPresent(
+            MediaAliasPresentation.self,
+            forKey: .ownedPresentation
+        )?.sanitizedForSync()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(aliasID, forKey: .aliasID)
+        try container.encode(kind, forKey: .kind)
+        try container.encodeIfPresent(
+            presentation?.sanitizedForSync(),
+            forKey: .presentation
+        )
+        try container.encodeIfPresent(
+            presentationAccountID,
+            forKey: .presentationAccountID
+        )
+        try container.encode(index, forKey: .index)
+        try container.encodeIfPresent(ownedSource, forKey: .ownedSource)
+        try container.encodeIfPresent(
+            ownedPresentation?.sanitizedForSync(),
+            forKey: .ownedPresentation
+        )
     }
 }
 
@@ -43,6 +123,7 @@ public struct NativeWatchlistEntry: Codable, Hashable, Sendable {
 public struct NativeWatchlistBucket: Codable, Hashable, Sendable {
     public var entries: [NativeWatchlistEntry]
     public var lastSuccessfulReadAt: Date?
+    public var identityScope: String?
     /// True when the most recent read FAILED and these entries are being kept
     /// only so a briefly-unreachable server doesn't blank the watchlist.
     public var isStale: Bool
@@ -50,6 +131,7 @@ public struct NativeWatchlistBucket: Codable, Hashable, Sendable {
     public init(
         entries: [NativeWatchlistEntry] = [],
         lastSuccessfulReadAt: Date? = nil,
+        identityScope: String? = nil,
         isStale: Bool = false
     ) {
         self.entries = entries.sorted {
@@ -57,6 +139,7 @@ public struct NativeWatchlistBucket: Codable, Hashable, Sendable {
             return $0.aliasID < $1.aliasID
         }
         self.lastSuccessfulReadAt = lastSuccessfulReadAt
+        self.identityScope = identityScope
         self.isStale = isStale
     }
 }
@@ -105,6 +188,36 @@ public struct NativeWatchlistView: Codable, Hashable, Sendable {
         return self
     }
 
+    public func scoped(
+        to scope: String,
+        destinationIdentityScopes: [String: String],
+        legacyValidatedDestinationIDs: Set<String> = []
+    ) -> Self {
+        var result = self
+        let legacyAggregateScopeMatches = identityScope == scope
+        for (destinationID, bucket) in bucketsByDestinationID {
+            guard let expectedScope =
+                    destinationIdentityScopes[destinationID] else {
+                result.bucketsByDestinationID[destinationID] = nil
+                continue
+            }
+            if let bucketScope = bucket.identityScope {
+                if bucketScope != expectedScope {
+                    result.bucketsByDestinationID[destinationID] = nil
+                }
+            } else if !legacyAggregateScopeMatches
+                        || !legacyValidatedDestinationIDs.contains(destinationID) {
+                result.bucketsByDestinationID[destinationID] = nil
+            } else {
+                var migrated = bucket
+                migrated.identityScope = expectedScope
+                result.bucketsByDestinationID[destinationID] = migrated
+            }
+        }
+        result.identityScope = scope
+        return result
+    }
+
     public static let empty = Self()
 
     public func bucket(
@@ -123,11 +236,13 @@ public struct NativeWatchlistView: Codable, Hashable, Sendable {
     public mutating func applySuccess(
         destinationID: WatchlistDestinationID,
         entries: [NativeWatchlistEntry],
+        identityScope: String? = nil,
         at date: Date = Date()
     ) {
         bucketsByDestinationID[destinationID.rawValue] = NativeWatchlistBucket(
             entries: entries,
             lastSuccessfulReadAt: date,
+            identityScope: identityScope,
             isStale: false
         )
     }
@@ -138,13 +253,32 @@ public struct NativeWatchlistView: Codable, Hashable, Sendable {
     /// must not empty their watchlist. Nothing is written for a destination that
     /// has never been read successfully — inventing an empty bucket would claim
     /// knowledge we don't have.
-    public mutating func applyFailure(destinationID: WatchlistDestinationID) {
+    public mutating func applyFailure(
+        destinationID: WatchlistDestinationID,
+        identityScope: String? = nil
+    ) {
         guard var bucket = bucketsByDestinationID[destinationID.rawValue] else {
+            return
+        }
+        if let identityScope,
+           bucket.identityScope != identityScope {
+            bucketsByDestinationID[destinationID.rawValue] = nil
             return
         }
         guard !bucket.isStale else { return }
         bucket.isStale = true
         bucketsByDestinationID[destinationID.rawValue] = bucket
+    }
+
+    public mutating func discardCachedEntries(
+        for destinationID: WatchlistDestinationID,
+        unlessIdentityScopeMatches identityScope: String
+    ) {
+        guard let bucket = bucketsByDestinationID[destinationID.rawValue],
+              bucket.identityScope != identityScope else {
+            return
+        }
+        bucketsByDestinationID[destinationID.rawValue] = nil
     }
 
     /// Drops everything the given destinations contributed.
@@ -240,7 +374,24 @@ public final class AtomicNativeWatchlistViewStore:
             NativeWatchlistView.self,
             from: data
         ), value.version == NativeWatchlistView.currentVersion else {
+            try fileManager.removeItem(at: fileURL)
             return .empty
+        }
+        // Decoding sanitizes every presentation URL, including credentials nested
+        // inside Plex's transcoder `url=` parameter. Rewrite once when an older
+        // cache differs so the secret is removed from disk immediately rather
+        // than waiting for a successful network refresh to happen to save later.
+        if let cleaned = CanonicalJSON.encode(value), cleaned != data {
+            do {
+                try fileManager.createDirectory(
+                    at: fileURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try cleaned.write(to: fileURL, options: [.atomic])
+            } catch {
+                try? fileManager.removeItem(at: fileURL)
+                throw error
+            }
         }
         return value
     }

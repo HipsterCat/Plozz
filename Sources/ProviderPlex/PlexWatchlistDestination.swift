@@ -1,8 +1,17 @@
 import CoreModels
 import Foundation
 
-public struct PlexWatchlistDestination: WatchlistLibraryResolving {
+public struct PlexWatchlistDestination:
+    WatchlistLibraryResolving, WatchlistReconciliationScopedApplying {
     public let id: WatchlistDestinationID
+    public var reconciliationScope: String {
+        guard requiresHomeUserToken else { return baseReconciliationScope }
+        let credential = discoverToken().map {
+            WatchlistReconciliationIdentity.credential($0)
+        } ?? "pending"
+        return baseReconciliationScope + "#" + credential
+    }
+    public var cacheIdentityScope: String { baseReconciliationScope }
     public let capabilities = WatchlistDestinationCapabilities(
         readable: true,
         writable: true,
@@ -23,6 +32,7 @@ public struct PlexWatchlistDestination: WatchlistLibraryResolving {
     }
 
     private let provider: PlexProvider
+    private let baseReconciliationScope: String
     /// Resolves the account-level plex.tv token of whoever the profile plays as,
     /// **at the moment of use**.
     ///
@@ -35,16 +45,19 @@ public struct PlexWatchlistDestination: WatchlistLibraryResolving {
     /// Whether this profile plays as a Home user on this account, i.e. whether a
     /// missing token is a real problem rather than "no override needed".
     private let requiresHomeUserToken: Bool
+    private let operationGate = ConcurrencyLimiter(limit: 1)
 
     public init?(
         provider: PlexProvider,
         requiresHomeUserToken: Bool = false,
+        reconciliationScope: String? = nil,
         discoverToken: @escaping @Sendable () -> String? = { nil }
     ) {
         guard let id = WatchlistDestinationID(
             rawValue: "plex.\(provider.accountID)"
         ) else { return nil }
         self.id = id
+        baseReconciliationScope = reconciliationScope ?? id.rawValue
         self.provider = provider
         self.requiresHomeUserToken = requiresHomeUserToken
         self.discoverToken = discoverToken
@@ -66,6 +79,13 @@ public struct PlexWatchlistDestination: WatchlistLibraryResolving {
     }
 
     public func fetchEntries() async throws -> [WatchlistDestinationEntry] {
+        try await operationGate.run { [self] in
+            try await fetchEntriesUnserialized()
+        }
+    }
+
+    private func fetchEntriesUnserialized() async throws
+        -> [WatchlistDestinationEntry] {
         guard let discoverClient else {
             // THROW, don't return []. An empty success means "this list is
             // genuinely empty", and reconciliation would take entries sourced
@@ -73,7 +93,10 @@ public struct PlexWatchlistDestination: WatchlistLibraryResolving {
             // the truth, and the retry policy handles it.
             throw WatchlistDestinationError.transient
         }
-        return try await provider.watchlist(using: discoverClient).compactMap { item in
+        let items = try await provider.watchlist(using: discoverClient)
+        var entries: [WatchlistDestinationEntry] = []
+        entries.reserveCapacity(items.count)
+        for item in items {
             guard let guid = item.providerIDs["PlexGuid"],
                   let metadataID = PlexClient.watchlistMetadataID(fromGuid: guid),
                   let binding = WatchlistDestinationBinding(
@@ -84,8 +107,12 @@ public struct PlexWatchlistDestination: WatchlistLibraryResolving {
                     providerKind: .plex,
                     accountDescriptorID: provider.accountID,
                     providerItemID: metadataID
-                  ) else { return nil }
-            return WatchlistDestinationEntry(
+                  ) else {
+                // A partial Discover decode cannot be published as an
+                // authoritative list: the dropped title would look removed.
+                throw WatchlistDestinationError.transient
+            }
+            guard let entry = WatchlistDestinationEntry(
                 kind: item.kind,
                 externalIDs: Self.externalIDs(item, plexGuid: guid),
                 binding: binding,
@@ -95,9 +122,14 @@ public struct PlexWatchlistDestination: WatchlistLibraryResolving {
                     year: item.productionYear,
                     artworkURL: item.posterURL?.absoluteString,
                     backdropURL: item.backdropURL?.absoluteString
-                )
-            )
+                ),
+                presentationAccountID: provider.accountID
+            ) else {
+                throw WatchlistDestinationError.transient
+            }
+            entries.append(entry)
         }
+        return entries
     }
 
     /// Which item in the viewer's own library this watchlist entry is.
@@ -112,7 +144,7 @@ public struct PlexWatchlistDestination: WatchlistLibraryResolving {
     /// account-level list, but the LIBRARY belongs to the server.
     public func resolveLibraryCopy(
         for entry: WatchlistDestinationEntry
-    ) async -> MediaSourceRef? {
+    ) async -> WatchlistLibraryCopy? {
         // Plex's own id already carries its scheme (`plex://movie/…`), so
         // prefixing it again produced `plex://plex://movie/…` and matched
         // nothing. It is also the id most likely to match, because a library
@@ -132,11 +164,20 @@ public struct PlexWatchlistDestination: WatchlistLibraryResolving {
         guard let item = await provider.libraryItem(matchingAnyOf: guids) else {
             return nil
         }
-        return MediaSourceRef(
-            accountID: provider.accountID,
-            itemID: item.id,
-            kind: item.kind,
-            providerKind: .plex
+        return WatchlistLibraryCopy(
+            source: MediaSourceRef(
+                accountID: provider.accountID,
+                itemID: item.id,
+                kind: item.kind,
+                providerKind: .plex
+            ),
+            presentation: MediaAliasPresentation(
+                title: item.title,
+                year: item.productionYear,
+                artworkURL: item.posterURL?.absoluteString,
+                backdropURL:
+                    (item.heroBackdropURL ?? item.backdropURL)?.absoluteString
+            )
         )
     }
 
@@ -168,13 +209,45 @@ public struct PlexWatchlistDestination: WatchlistLibraryResolving {
         _ desiredState: WatchlistDesiredState,
         to binding: WatchlistDestinationBinding
     ) async throws {
+        try await apply(
+            desiredState,
+            to: binding,
+            expectedReconciliationScope: reconciliationScope
+        )
+    }
+
+    public func apply(
+        _ desiredState: WatchlistDesiredState,
+        to binding: WatchlistDestinationBinding,
+        expectedReconciliationScope: String
+    ) async throws {
+        try await operationGate.run { [self] in
+            try await applyUnserialized(
+                desiredState,
+                to: binding,
+                expectedReconciliationScope: expectedReconciliationScope
+            )
+        }
+    }
+
+    private func applyUnserialized(
+        _ desiredState: WatchlistDesiredState,
+        to binding: WatchlistDestinationBinding,
+        expectedReconciliationScope: String
+    ) async throws {
         guard binding.destinationID == id else {
             throw WatchlistDestinationError.permanent
+        }
+        guard reconciliationScope == expectedReconciliationScope else {
+            throw WatchlistDestinationError.authenticationRequired
         }
         guard let discoverClient else {
             // Transient by nature: the token is on its way. Retrying is right —
             // writing with the owner's token would put this on the WRONG list.
             throw WatchlistDestinationError.transient
+        }
+        guard reconciliationScope == expectedReconciliationScope else {
+            throw WatchlistDestinationError.authenticationRequired
         }
         try await discoverClient.setWatchlisted(
             desiredState == .present,

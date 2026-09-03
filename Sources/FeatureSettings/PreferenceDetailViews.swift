@@ -4,6 +4,12 @@ import CoreModels
 import CoreUI
 
 struct AppearanceDetailView: View {
+    /// The household's libraries + per-profile availability, needed by the
+    /// navigation-arrangement pane. Passed in (rather than reached for) so this
+    /// view stays a plain function of what Settings already resolved.
+    let librariesScope: ProfileLibrariesScope
+    /// Keeps the selected Appearance feature stable while navigation shell changes.
+    let settingsNavigation: SettingsNavigationModel
     @Bindable var theme: ThemeSettingsModel
     /// Circadian Mode (night-warming) settings, folded in as sections here — it's
     /// a display concern, so it no longer earns its own top-level row.
@@ -27,7 +33,12 @@ struct AppearanceDetailView: View {
     @Environment(AppLanguageSettingsModel.self) private var appLanguage
 
     var body: some View {
-        SettingsSplitLayout(title: "Appearance", rows: rows)
+        @Bindable var settingsNavigation = settingsNavigation
+        SettingsSplitLayout(
+            title: "Appearance",
+            rows: rows,
+            selection: $settingsNavigation.appearanceRowID
+        )
             // Circadian's day/night preview animates a model flag; make sure it
             // never keeps running once you leave Appearance or turn Circadian off.
             .onChange(of: nightShift.settings.isEnabled) { _, enabled in
@@ -71,10 +82,12 @@ struct AppearanceDetailView: View {
                 },
                 SettingsSplitRow(
                     id: "navigation",
-                    title: "Navigation",
-                    description: "Horizontal tabs across the top, or a collapsible left sidebar.",
+                    title: "Navigation"
                 ) {
-                    CompactNavigationPicker(selection: $navigation.style)
+                    NavigationAppearanceDetail(
+                        navigation: navigation,
+                        librariesScope: librariesScope
+                    )
                 },
                 SettingsSplitRow(
                     id: "music-player",
@@ -110,10 +123,47 @@ struct AppearanceDetailView: View {
         }
     }
 
-    /// The two media-card controls in one pane — style (framed vs poster) and the
-    /// watched indicator — since both are "how a card looks". Shorter swatches so
-    /// the two preview rows sit together without heavy scrolling; each headed by a
-    /// shared uppercase section header.
+    /// The media-card controls in one pane — style (framed vs poster), the
+    /// watched indicator, and what focus does to a card — since all three are
+    /// "how a card looks". Shorter swatches so the preview rows sit together
+    /// without heavy scrolling; each headed by a shared uppercase section header.
+
+    /// Everything controlled by the single Navigation master row.
+    ///
+    /// Style and its library arrangement belong together: changing to either
+    /// leading-edge style reveals the shared ordered/hidden list directly beneath
+    /// the picker. Top bar has no library destinations, so that section disappears.
+    private struct NavigationAppearanceDetail: View {
+        @Bindable var navigation: NavigationStyleSettingsModel
+        let librariesScope: ProfileLibrariesScope
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
+                CompactNavigationPicker(selection: $navigation.style)
+
+                SettingsDetailGroup(
+                    title: "Destinations",
+                    description: "Keep the essentials fixed and choose which media shortcuts appear."
+                ) {
+                    VStack(alignment: .leading, spacing: 24) {
+                        Toggle("Show Watchlist", isOn: $navigation.showsWatchlist)
+                        Toggle("Show Music", isOn: $navigation.showsMusic)
+                    }
+                    .toggleStyle(SettingsSwitchToggleStyle())
+                }
+
+                if navigation.style != .tabBar {
+                    SettingsDetailGroup(
+                        title: "Navigation Libraries",
+                        description: "Choose which libraries appear in the navigation, and the order they appear in."
+                    ) {
+                        NavigationLibrariesDetailView(scope: librariesScope)
+                    }
+                }
+            }
+        }
+    }
+
     @ViewBuilder private var cardsControls: some View {
         @Bindable var cardStyle = cardStyle
         @Bindable var watchStatusIndicator = watchStatusIndicator
@@ -123,6 +173,15 @@ struct AppearanceDetailView: View {
             }
             SettingsDetailGroup(title: "Watched Indicator") {
                 CompactWatchIndicatorPicker(selection: $watchStatusIndicator.indicator, swatchHeight: 150)
+            }
+            SettingsDetailGroup(
+                title: LocalizedStringResource(
+                    "settings.cards.focus",
+                    defaultValue: "Focus",
+                    comment: "Section header in tvOS Settings > Appearance > Cards, above the picker that chooses what a media card does when the remote's focus lands on it. Not camera focus and not a concentration/Focus mode — this is the on-screen selection highlight."
+                )
+            ) {
+                CompactCardFocusStylePicker(selection: $cardStyle.focusStyle, swatchHeight: 150)
             }
         }
     }
@@ -150,7 +209,11 @@ struct SpoilerRowsBuilder {
             SettingsSplitRow(
                 id: "spoilers",
                 title: "Spoilers",
-                description: "Hide unwatched episodes and ratings until you've seen them.",
+                description: LocalizedStringResource(
+                    "settings.spoilers.description",
+                    defaultValue: "Hide unwatched episodes and ratings until you've seen them. Blurred ratings reveal when you press them.",
+                    comment: "Description under the Spoilers heading in tvOS Settings, explaining what the switches below it do. 'Press' is the Apple TV remote's Select button."
+                ),
             ) {
                 VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
                     SettingsRevealSection(
@@ -609,8 +672,27 @@ struct PlaybackDetailView: View {
         ]
     }
 
+    /// Autoplay and the Up Next card, in that order: whether the next episode
+    /// starts, then whether you're told about it first. They're independent (see
+    /// ``PlaybackSettings/autoPlayNextEpisode``), so the card's own controls stay
+    /// available with autoplay off — the card is still a one-press shortcut.
     private var upNextRows: [SettingsSplitRow] {
         [
+            SettingsSplitRow(
+                id: "autoplay-next-episode",
+                title: "Autoplay",
+                description: "Play the next episode automatically.",
+            ) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Autoplay next episode", isOn: $playback.settings.autoPlayNextEpisode)
+                    Text(playback.settings.autoPlayNextEpisode
+                         ? "The next episode starts when one finishes."
+                         : "The player closes when an episode finishes.")
+                        .font(.callout)
+                        .plozzForeground(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            },
             SettingsSplitRow(
                 id: "show-up-next-card",
                 title: "Show Up Next card",

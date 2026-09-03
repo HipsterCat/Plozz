@@ -46,6 +46,7 @@ actor ShareCatalogStore {
     private var localRepo: LocalMetadataRepository { LocalMetadataRepository(connection: connection) }
     private var artworkRepo: LocalArtworkRepository { LocalArtworkRepository(connection: connection) }
     private var enrichmentRepo: EnrichmentRepository { EnrichmentRepository(connection: connection) }
+    private var extraRepo: ShareExtraRepository { ShareExtraRepository(connection: connection) }
     /// Pure, transaction-free read-query composition over the same actor-confined
     /// connection. A cheap value type constructed on demand; it holds no state of its
     /// own, opens no transaction, and only runs while the store's actor is executing.
@@ -63,6 +64,7 @@ actor ShareCatalogStore {
         )
     }
     private var normalizedMetadataReady = false
+    private var didEmitCatalogDiagnostics = false
     /// Cached "does ANY local (NFO/filename) metadata_values row exist" check —
     /// avoids a real query on every read-path call (`withLocalOverlay`/grid sort
     /// join) for the common no-NFO catalog, where it must add negligible
@@ -135,6 +137,27 @@ actor ShareCatalogStore {
             normalizedMetadataReady = true
             repairAllLocalMetadataProjections()
             repairFilenameProviderIDs()
+        }
+        emitCatalogDiagnosticsOnce()
+    }
+
+    /// One-shot catalog telemetry, emitted the first time anything opens this
+    /// store. Off unless the process was launched with `PLZXFAN_STDOUT=1`, so a
+    /// normal build pays nothing; `PLZXCATPROBE` adds `rel_path LIKE` probes for
+    /// diagnosing "my show isn't in the TV Shows library".
+    private func emitCatalogDiagnosticsOnce() {
+        guard FanoutDiagnostics.isEnabled, !didEmitCatalogDiagnostics else { return }
+        didEmitCatalogDiagnostics = true
+        FanoutDiagnostics.emit("SHARECAT " + readQueries.catalogSummary())
+        let needles = (ProcessInfo.processInfo.environment["PLZXCATPROBE"] ?? "")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        for row in readQueries.pathProbe(needles) {
+            FanoutDiagnostics.emit("SHARECAT " + row)
+        }
+        for row in readQueries.seriesKeySummary() {
+            FanoutDiagnostics.emit("SHARECAT series " + row)
         }
     }
 
@@ -240,6 +263,33 @@ actor ShareCatalogStore {
             PlozzLog.boot(
                 "share.catalog slow upsert files=\(assets.count) total=\(Int(Date().timeIntervalSince(started) * 1_000))ms maxChunk=\(slowestChunkMs)ms"
             )
+        }
+    }
+
+    /// Persist bonus-video inventory independently from catalog assets. Unresolved
+    /// owner candidates remain invisible and are retained only until a clean scan
+    /// has enough topology to prove their owner.
+    func upsertExtras(
+        _ extras: [CatalogExtraCandidate],
+        scanID: Int64,
+        scanGeneration: UUID? = nil
+    ) {
+        ensureOpen()
+        guard admits(scanGeneration), db != nil, !extras.isEmpty else { return }
+        if !extraRepo.upsert(extras, scanID: scanID) {
+            PlozzLog.boot("share.catalog extras upsert failed count=\(extras.count)")
+        }
+    }
+
+    /// A partial pass never prunes, but may safely expose newly found extras whose
+    /// owner is already proven by persisted asset topology.
+    func resolveExtraOwners(scanGeneration: UUID? = nil) {
+        ensureOpen()
+        guard admits(scanGeneration), db != nil else { return }
+        guard extraRepo.resolveOwners(deleteUnresolved: false),
+              extraRepo.removeResolvedAssetRows() else {
+            PlozzLog.boot("share.catalog extras partial reconciliation failed")
+            return
         }
     }
 
@@ -1276,10 +1326,14 @@ actor ShareCatalogStore {
     /// not treated as a change here. Its row is updated by the upsert either way,
     /// and everything the reconciliation derives — grouping, series keys,
     /// projections — comes from the path, which did not move.
-    func isMateriallyUnchanged(inScan scanID: Int64, priorAssetCount: Int) -> Bool {
+    func isMateriallyUnchanged(
+        inScan scanID: Int64,
+        priorAssetCount: Int,
+        priorExtraCount: Int
+    ) -> Bool {
         ensureOpen()
         guard db != nil else { return false }
-        for table in ["assets", "local_metadata_files", "local_artwork_files", "dir_state"] {
+        for table in ["assets", "extras", "local_metadata_files", "local_artwork_files", "dir_state"] {
             var stale = 0
             query(
                 "SELECT COUNT(*) FROM \(table) WHERE last_scan <> ?;",
@@ -1293,7 +1347,7 @@ actor ShareCatalogStore {
         query("SELECT COUNT(*) FROM assets;") { stmt in
             total = Int(sqlite3_column_int64(stmt, 0))
         }
-        return total == priorAssetCount
+        return total == priorAssetCount && extraRepo.count() == priorExtraCount
     }
 
     func finalizeCleanScan(
@@ -1319,6 +1373,11 @@ actor ShareCatalogStore {
         // resolution below reads the group representative, so this must precede it.
         guard scanWriter.regroupMoviesInTransaction(),
               failurePoint != .afterMovieRegroup else { return rollback() }
+
+        // Extras are scan-scoped but never assets. Resolve them only after movie
+        // grouping is stable so owner ids use the same canonical movie key as detail
+        // and playback; unresolved candidates are discarded rather than guessed.
+        guard extraRepo.finalizeCleanScan(scanID: scanID) else { return rollback() }
 
         // P3 — Delete orphan enrichment/metadata rows for every item id whose
         // backing asset just vanished (derived live ids via NOT EXISTS).
@@ -2297,7 +2356,8 @@ actor ShareCatalogStore {
 
     /// Per-library counts so `libraries()` can hide an indexed library with no content.
     func libraryCounts() -> (movies: Int, tvSeries: Int, animeSeries: Int) {
-        ensureOpen(); return readQueries.libraryCounts()
+        ensureOpen()
+        return readQueries.libraryCounts()
     }
 
     /// Per-source provenance-row counts (Step 6 diagnostics). Lazy/on-demand.
@@ -2389,6 +2449,26 @@ actor ShareCatalogStore {
     /// Whether a legacy/raw `f:` id still has a live catalog row.
     func containsFileAsset(id: String) -> Bool {
         ensureOpen(); return readQueries.containsFileAsset(id: id)
+    }
+
+    func extras(ownerID: String) async -> [MediaExtra] {
+        ensureOpen()
+        return extraRepo.extras(ownerID: ownerID)
+    }
+
+    func extra(fileID: String) async -> MediaExtra? {
+        ensureOpen()
+        return extraRepo.extra(fileID: fileID)
+    }
+
+    func extraResumeBehavior(fileID: String) async -> Bool? {
+        ensureOpen()
+        return extraRepo.extra(fileID: fileID)?.supportsResume
+    }
+
+    func extraCount() -> Int {
+        ensureOpen()
+        return extraRepo.count()
     }
 
     // MARK: - Small SQLite helpers
@@ -2507,6 +2587,51 @@ extension ShareCatalogStore {
     /// children, and an omitted child made its parent look like a leaf. The parent
     /// could then be skipped, and the child never walked and never stamped, so the
     /// prune deleted its media. Tree shape has to come from the full row set.
+    /// Directories we have actually recorded CONTENT for — at least one indexed
+    /// file sitting directly inside them.
+    ///
+    /// The incremental skip treats an unchanged directory with no recorded
+    /// subdirectories as a finished leaf and doesn't list it. That is only sound
+    /// when its contents were genuinely indexed. A directory recorded by a scan
+    /// that was then interrupted before its children were walked has neither
+    /// files nor subdirectories on record, so it reads as an empty leaf — and
+    /// because a folder's own mtime doesn't move when a grandchild changes, every
+    /// later scan skips it again. It is never indexed and never will be.
+    ///
+    /// Measured on the maintainer's share: 165 of 273 show folders were stuck
+    /// this way — every series that keeps its episodes in `Season N` subfolders,
+    /// while series with episodes flat in the show folder (whose files WERE
+    /// recorded) scanned fine.
+    ///
+    /// Paths come back without the trailing separator, matching `dir_state`.
+    func directoriesWithRecordedFiles() -> Set<String> {
+        ensureOpen()
+        guard db != nil else { return [] }
+        var out: Set<String> = []
+        // `rtrim(path, replace(path, '/', ''))` strips every trailing character
+        // that is NOT a slash, leaving the path up to and including the last one —
+        // SQLite has no `dirname`, and doing it here keeps the whole set to one
+        // scan instead of shipping every row's path back to be parsed.
+        query("""
+        SELECT DISTINCT parent_dir FROM (
+          SELECT rtrim(rel_path, replace(rel_path, '/', '')) AS parent_dir FROM assets
+          UNION ALL
+          SELECT parent_dir FROM extras
+        );
+        """) { stmt in
+            guard let path = self.columnText(stmt, 0) else { return }
+            // A file directly at the share root has no separator, so the trim
+            // leaves nothing — that empty string IS the root's own path, which is
+            // how `dir_state` spells it too.
+            if path.hasSuffix("/") {
+                out.insert(String(path.dropLast()))
+            } else {
+                out.insert(path)
+            }
+        }
+        return out
+    }
+
     func recordedDirectoryPaths() -> Set<String> {
         ensureOpen()
         guard db != nil,
@@ -2543,6 +2668,10 @@ extension ShareCatalogStore {
     }
 
     static let completedDirectoryStateScanKey = "dir_state_complete_scan"
+
+    func invalidateCompletedDirectoryState() {
+        setMeta(Self.completedDirectoryStateScanKey, "")
+    }
 
     /// Mark this scan's directory state as trustworthy. Called only after a clean,
     /// complete pass — the point at which every recorded directory is known to
@@ -2666,7 +2795,7 @@ extension ShareCatalogStore {
             "UPDATE assets SET last_scan=? WHERE substr(rel_path, 1, length(rel_path) - length(basename) - 1) IN (SELECT rel_path FROM skipped_dirs);",
             scanID: scanID
         )
-        for table in ["local_metadata_files", "local_artwork_files"] {
+        for table in ["extras", "local_metadata_files", "local_artwork_files"] {
             stampScan(
                 "UPDATE \(table) SET last_scan=? WHERE parent_dir IN (SELECT rel_path FROM skipped_dirs);",
                 scanID: scanID
@@ -2722,7 +2851,7 @@ extension ShareCatalogStore {
         guard admits(scanGeneration), db != nil else { return }
         // Every table pruned by `last_scan`, kept together so a future scan-scoped
         // table can't be forgotten here (which would delete its rows).
-        for table in ["assets", "local_metadata_files", "local_artwork_files"] {
+        for table in ["assets", "extras", "local_metadata_files", "local_artwork_files"] {
             touchDirectChildren(table: table, relPath: relPath, scanID: scanID)
         }
         var stmt: OpaquePointer?

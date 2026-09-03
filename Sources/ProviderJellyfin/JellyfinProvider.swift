@@ -105,7 +105,47 @@ public struct JellyfinProvider: MediaProvider {
         // being dropped merely because in-progress Resume items filled the limit
         // first (r6-jf-precap).
         let stamped = merged.map(map(item:)).map { stampingSeriesRecency($0, using: seriesDates) }
+        logContinueWatchingFeed(merged, endpoint: "Items/Resume + Shows/NextUp")
         return Array(orderedByEffectiveRecency(stamped).prefix(limit))
+    }
+
+    /// Records the resume feed exactly as Jellyfin returned it, before mapping.
+    ///
+    /// Continue Watching here is `Items/Resume` *plus* `Shows/NextUp`, so the row
+    /// deliberately contains titles that are not in progress at all — next-episode
+    /// suggestions with no playback position. That is by design, and it is also a
+    /// reason the row can look out of step with what another client shows. Only
+    /// the raw feed distinguishes "the server said so" from "we got it wrong".
+    /// Gated and free when off.
+    private func logContinueWatchingFeed(_ items: [BaseItemDto], endpoint: String) {
+        guard ContinueWatchingDiagnostics.isEnabled else { return }
+        let rows = items.map { item in
+            ContinueWatchingDiagnostics.ServerRow(
+                id: item.Id,
+                kind: item.Type ?? "nil",
+                title: [item.SeriesName, item.Name].compactMap { $0 }.joined(separator: " – "),
+                viewOffsetMS: item.UserData?.PlaybackPositionTicks.map { Int($0 / 10_000) },
+                durationMS: item.RunTimeTicks.map { Int($0 / 10_000) },
+                viewCount: item.UserData?.Played == true ? 1 : 0,
+                lastViewedAt: item.UserData?.LastPlayedDate.flatMap(Self.parseJellyfinDate)
+            )
+        }
+        ContinueWatchingDiagnostics.emit(
+            ContinueWatchingDiagnostics.serverFeedLine(
+                provider: "jellyfin",
+                accountID: accountID,
+                endpoint: endpoint,
+                rows: rows
+            )
+        )
+    }
+
+    private static func parseJellyfinDate(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: value)
     }
 
     /// Orders Continue Watching items by **effective recency** before any cap is
@@ -158,6 +198,19 @@ public struct JellyfinProvider: MediaProvider {
     /// merged Continue Watching row instead of inheriting a foreign timestamp or
     /// sinking to the bottom. In-progress Resume items (already timestamped) and
     /// non-series items are returned unchanged.
+    /// Stamps a Continue Watching item that carries no play timestamp of its own —
+    /// a next-episode suggestion whose `lastPlayedAt` is nil — with its series'
+    /// last-viewed date, so a just-finished show sorts by real recency in a merged
+    /// Continue Watching row instead of sinking to the bottom.
+    ///
+    /// The stamp is also what lets ``ContinueWatchingPolicy`` retire a suggestion
+    /// for a series left alone for months. Jellyfin bounds its own `Shows/NextUp`
+    /// with a server setting that defaults to a full year and is the viewer's to
+    /// choose, so Plozz deliberately does **not** override it with a
+    /// `NextUpDateCutoff` on the request; the shared policy applies the same
+    /// client-side rule here that it applies to every other backend. Removing this
+    /// stamp would silently exempt Jellyfin and Emby from that rule, because a
+    /// suggestion with no recency is kept fail-open.
     private func stampingSeriesRecency(_ item: MediaItem, using seriesDates: [String: Date]) -> MediaItem {
         guard item.lastPlayedAt == nil,
               let seriesID = item.seriesID,
@@ -273,6 +326,10 @@ public struct JellyfinProvider: MediaProvider {
                 result.append(stampingSeriesRecency(map(item: dto).taggingLibrary(libraryID), using: seriesDates))
             }
         }
+        logContinueWatchingFeed(
+            perLibrary.flatMap { $0 },
+            endpoint: "Items/Resume + Shows/NextUp (scoped to \(libraryIDs.count) libraries)"
+        )
         // Order by effective recency, then cap once — same rationale as the unscoped
         // path: a just-finished show's stamped next episode must survive the cut.
         return Array(orderedByEffectiveRecency(result).prefix(limit))
@@ -332,6 +389,60 @@ public struct JellyfinProvider: MediaProvider {
             return MediaItem.youTubeTrailer(fromURL: url, title: link.Name ?? "Trailer")
         }
         return local + remote
+    }
+
+    public func extras(for itemID: String) async throws -> [MediaExtra] {
+        @Sendable func capture(
+            _ operation: @escaping @Sendable () async throws -> [BaseItemDto]
+        ) async -> Result<[BaseItemDto], AppError> {
+            do {
+                return .success(try await operation())
+            } catch let error as AppError {
+                return .failure(error)
+            } catch is CancellationError {
+                return .failure(.cancelled)
+            } catch {
+                return .failure(.unknown(String(describing: error)))
+            }
+        }
+
+        async let trailersResult = capture {
+            try await client.localTrailers(userID: session.userID, id: itemID)
+        }
+        async let featuresResult = capture {
+            try await client.specialFeatures(userID: session.userID, id: itemID)
+        }
+        let (resolvedTrailers, resolvedFeatures) = await (trailersResult, featuresResult)
+        if case let .failure(trailersError) = resolvedTrailers,
+           case .failure = resolvedFeatures {
+            throw trailersError
+        }
+        let trailers = (try? resolvedTrailers.get()) ?? []
+        let features = (try? resolvedFeatures.get()) ?? []
+        let localTrailers = trailers.map { dto in
+            MediaExtra(
+                item: map(item: dto),
+                kind: .trailer,
+                rawProviderType: dto.ExtraType ?? "Trailer",
+                supportsResume: dto.SupportsResume ?? true
+            )
+        }
+        let specialFeatures = features
+            .filter { dto in
+                dto.`Type`?.caseInsensitiveCompare("Audio") != .orderedSame
+                    && dto.MediaType?.caseInsensitiveCompare("Audio") != .orderedSame
+            }
+            .map { dto in
+            let rawType = dto.ExtraType ?? dto.`Type`
+            let extraKind = MediaExtraKind(rawProviderValue: rawType)
+            return MediaExtra(
+                item: map(item: dto),
+                kind: extraKind,
+                rawProviderType: rawType,
+                supportsResume: dto.SupportsResume ?? true
+            )
+        }
+        return MediaExtra.ordered(localTrailers + specialFeatures)
     }
 
     public func themeMusic(for itemID: String) async throws -> ThemeMusic? {
@@ -1212,6 +1323,57 @@ public struct JellyfinProvider: MediaProvider {
         client.imageURL(itemID: itemID, kind: kind, maxWidth: maxWidth)
     }
 
+    public func reauthenticatedImageURL(
+        _ persistedURL: URL,
+        maxWidth: Int?
+    ) -> URL? {
+        guard let path = MediaProviderURLIdentity.relativeResourcePath(
+            of: persistedURL,
+            under: session.server.baseURL
+        ) else { return nil }
+        guard MediaProviderURLIdentity.isJellyfinArtworkResourcePath(path)
+        else { return nil }
+        guard var components = URLComponents(
+            url: session.server.baseURL,
+            resolvingAgainstBaseURL: false
+        ) else { return nil }
+        var basePath = components.path
+        while basePath.count > 1, basePath.hasSuffix("/") {
+            basePath.removeLast()
+        }
+        if basePath == "/" { basePath = "" }
+        components.path = basePath + path
+        var query = URLComponents(
+            url: persistedURL,
+            resolvingAgainstBaseURL: false
+        )?.queryItems?.filter {
+            ![
+                "api_key", "x-emby-token", "x-mediabrowser-token"
+            ].contains($0.name.lowercased())
+        } ?? []
+        if let maxWidth {
+            query.removeAll { $0.name.lowercased() == "maxwidth" }
+            query.append(URLQueryItem(
+                name: "maxWidth",
+                value: String(maxWidth)
+            ))
+        }
+        query.append(URLQueryItem(
+            name: "api_key",
+            value: session.accessToken
+        ))
+        components.queryItems = query
+        return components.url
+    }
+
+    public func ownsPersistedImageURL(_ persistedURL: URL) -> Bool {
+        guard let path = MediaProviderURLIdentity.relativeResourcePath(
+            of: persistedURL,
+            under: session.server.baseURL
+        ) else { return false }
+        return MediaProviderURLIdentity.isJellyfinArtworkResourcePath(path)
+    }
+
     // MARK: Subtitles
     public func remoteSubtitleSearch(itemID: String, language: String, preference: SubtitleSearchPreference) async throws -> [RemoteSubtitle] {
         // Jellyfin's RemoteSearch endpoint takes only a language; the SDH/Forced
@@ -1391,6 +1553,24 @@ public struct JellyfinProvider: MediaProvider {
         }()
         let hasContainerHistory = isContainer
             && ((playedPercentage ?? 0) > 0 || (watchedChildren ?? 0) > 0)
+        // Jellyfin computes a leaf's `PlayedPercentage` as position ÷ runtime, so
+        // a response carrying both a playback position and a percentage has
+        // already told us the runtime even when it omits `RunTimeTicks`. Recover
+        // it rather than dropping it: the card draws its progress bar from the
+        // percentage alone, so without this it shows a bar it cannot label — which
+        // is how a Continue Watching card ended up reading "S1, E2" with no
+        // duration beside a bar showing real progress.
+        //
+        // Containers are untouched by design. A series' percentage is a count of
+        // watched episodes and comes with no position, so nothing is inferred and
+        // a series goes on having no runtime, which is correct — it doesn't have
+        // one.
+        let runtime = JellyfinTicks.seconds(fromTicks: dto.RunTimeTicks)
+            .flatMap { $0 > 0 ? $0 : nil }
+            ?? Self.runtimeInferredFromProgress(
+                position: resumePosition,
+                fraction: playedPercentage
+            )
         return MediaItem(
             id: dto.Id,
             title: dto.Name ?? "Untitled",
@@ -1406,6 +1586,13 @@ public struct JellyfinProvider: MediaProvider {
             seasonNumber: kind == .season ? dto.IndexNumber : dto.ParentIndexNumber,
             episodeNumber: dto.IndexNumber,
             productionYear: dto.ProductionYear,
+            // Snapped, not taken at face value: Jellyfin transmits a bare premiere
+            // DAY as an instant already shifted by the server's own zone, so an
+            // eastern server's 14 April arrives as 13 April in UTC. See
+            // `MediaItem.calendarDayReleaseDate(snapping:)`.
+            releaseDate: MediaItem.calendarDayReleaseDate(
+                snapping: Self.parseDate(dto.PremiereDate)
+            ),
             officialRating: dto.OfficialRating,
             genres: dto.Genres ?? [],
             people: Self.people(from: dto, client: client),
@@ -1414,7 +1601,7 @@ public struct JellyfinProvider: MediaProvider {
             taglines: dto.Taglines ?? [],
             seriesID: dto.SeriesId ?? (kind == .season ? dto.ParentId : nil),
             seasonID: dto.SeasonId,
-            runtime: JellyfinTicks.seconds(fromTicks: dto.RunTimeTicks),
+            runtime: runtime,
             resumePosition: resumePosition,
             playedPercentage: playedPercentage,
             isPlayed: serverPlayed && !isRewatching,
@@ -1431,6 +1618,7 @@ public struct JellyfinProvider: MediaProvider {
             logoURL: Self.logoURL(for: dto, client: client),
             ratings: Self.ratings(from: dto),
             providerIDs: dto.ProviderIds ?? [:],
+            artworkSelections: Self.heroArtworkSelections(for: dto, client: client),
             mediaInfo: Self.sourceMetadata(
                 container: dto.MediaSources?.first?.Container,
                 streams: dto.MediaStreams ?? dto.MediaSources?.first?.MediaStreams ?? [],
@@ -1562,6 +1750,29 @@ public struct JellyfinProvider: MediaProvider {
         return iso8601Fractional.date(from: value) ?? iso8601Plain.date(from: value)
     }
 
+    /// Recovers a leaf's runtime from its own progress when the server omitted it.
+    ///
+    /// Only for items that report an actual playback position: that is what makes
+    /// the arithmetic exact rather than a guess, and it is also what keeps
+    /// containers out — a series' percentage counts watched episodes and carries
+    /// no position, so it infers nothing and correctly keeps no runtime.
+    ///
+    /// Bounded on both sides because dividing by a small fraction magnifies the
+    /// rounding in whatever the server rounded first, and a wildly wrong runtime
+    /// is worse than an absent one: a card that omits the duration looks
+    /// incomplete, but a card claiming "14h left" looks broken.
+    static func runtimeInferredFromProgress(
+        position: TimeInterval?,
+        fraction: Double?
+    ) -> TimeInterval? {
+        guard let position, position > 0,
+              let fraction, fraction >= 0.01, fraction < 1
+        else { return nil }
+        let inferred = position / fraction
+        guard inferred >= 30, inferred <= 24 * 60 * 60 else { return nil }
+        return inferred
+    }
+
 
     /// billing order. A headshot URL is built only when the person advertises a
     /// `PrimaryImageTag`, so we never point an avatar at a guaranteed 404.
@@ -1581,6 +1792,68 @@ public struct JellyfinProvider: MediaProvider {
                 imageURL: imageURL
             )
         }
+    }
+
+    /// This title's wide artwork, ranked and split between the two hero screens.
+    ///
+    /// `BackdropImageTags` is an array — most movies and series carry several — but
+    /// every URL this provider built pointed at index 0, so Home and the detail page
+    /// drew the identical picture. Note that a *listing* asks the server for one tag
+    /// per image type (`ImageTypeLimit=1`, which keeps a grid's payload small), so a
+    /// card-level item legitimately has a pool of one; the single-item detail fetch
+    /// raises the limit and is where the second picture actually comes from.
+    ///
+    /// The item's `Thumb` joins the pool last. It is landscape and is a genuinely
+    /// different frame, but it is a promo still rather than a chosen backdrop, so it
+    /// is only ever reached by a title that has no second backdrop at all.
+    ///
+    /// Ranking and the home/detail split are ``HeroArtworkPlanner``'s, shared with
+    /// Plex and the share so a title behaves the same way on every backend.
+    private static func heroArtworkSelections(
+        for dto: BaseItemDto,
+        client: JellyfinClient
+    ) -> [ArtworkSelection] {
+        var candidates: [HeroArtworkCandidate] = []
+        for (index, tag) in (dto.BackdropImageTags ?? []).enumerated() {
+            guard let url = client.imageURL(
+                itemID: dto.Id,
+                kind: .backdrop,
+                maxWidth: 3840,
+                tag: tag,
+                index: index
+            ) else { continue }
+            candidates.append(
+                HeroArtworkCandidate(
+                    reference: .remote(url),
+                    origin: .server,
+                    // Nothing has looked at the pixels, and the server does not say.
+                    text: .unknown,
+                    // The server's own order is its preference, so keep it.
+                    score: -Double(index)
+                )
+            )
+        }
+        if let thumb = dto.ImageTags?["Thumb"],
+           let url = client.imageURL(itemID: dto.Id, kind: .thumb, maxWidth: 3840, tag: thumb) {
+            candidates.append(
+                HeroArtworkCandidate(reference: .remote(url), origin: .server, text: .unknown, score: -1000)
+            )
+        }
+        // One picture is not a choice — say nothing and leave both heroes on the
+        // legacy ladder they already resolve, rather than restating it as an
+        // explicit selection.
+        guard candidates.count >= 2 else {
+            HeroArtDiagnostics.emitOnce(stage: "jf-pool", key: dto.Id) {
+                "jellyfin pool=\(candidates.count) backdropTags=\((dto.BackdropImageTags ?? []).count) "
+                + "thumb=\(dto.ImageTags?["Thumb"] != nil) title=\(dto.Name ?? "?") — NO SELECTION"
+            }
+            return []
+        }
+        HeroArtDiagnostics.emitOnce(stage: "jf-pool", key: dto.Id) {
+            "jellyfin pool=\(candidates.count) backdropTags=\((dto.BackdropImageTags ?? []).count) "
+            + "thumb=\(dto.ImageTags?["Thumb"] != nil) title=\(dto.Name ?? "?")"
+        }
+        return HeroArtworkPlanner.selections(for: candidates)
     }
 
     /// Builds an *item-owned* image URL only when the DTO actually advertises
@@ -1757,7 +2030,7 @@ public struct JellyfinProvider: MediaProvider {
         case "Series": return .series
         case "Season": return .season
         case "Episode": return .episode
-        case "Video": return .video
+        case "Video", "Trailer", "Audio": return .video
         case "CollectionFolder", "Folder": return .folder
         case "BoxSet": return .collection
         default: return .unknown

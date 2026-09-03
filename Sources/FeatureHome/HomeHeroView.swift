@@ -82,6 +82,10 @@ struct HomeHeroView: View {
     /// so Home can restore the full-screen hero and replay the enter transition.
     /// Not fired for interior button-to-button moves.
     var onFocusGained: () -> Void = {}
+    /// Reports the slides on screen, so a background curation can fold new media
+    /// in without ever displacing what the viewer is looking at (see
+    /// ``HeroLiveMerge``). Fires on appearance and on every page.
+    var onPinnedItemsChanged: (Set<String>) -> Void = { _ in }
     /// Leaf-owned recede state. Passing the model reference keeps the high-frequency
     /// animation state out of `HomeView`'s observation surface, so moving between
     /// the hero and Continue Watching no longer invalidates every Home row.
@@ -117,7 +121,11 @@ struct HomeHeroView: View {
     /// only when the item's provider supports it and its mutation fans out
     /// exactly like everywhere else.
     @Environment(\.mediaItemActionHandler) private var actionHandler
+    /// How far the navigation chrome has inset this page's content, so the hero's
+    /// full-bleed artwork can cancel it. `0` under the native tab styles.
+    @Environment(\.plozzNavigationContentInset) private var navigationContentInset
     @Environment(\.mediaItemActionContext) private var actionContext
+    @Environment(\.plozzPinnedSidebarInteraction) private var pinnedSidebarInteraction
 
     /// The index of the slide currently fronted.
     /// Internal (not private) so the artwork extension in a sibling file can center
@@ -222,6 +230,14 @@ struct HomeHeroView: View {
     /// than the buttons beneath it. `0` until first measured (overview falls back to
     /// its default cap). Varies per slide as the button set changes.
     @State private var actionButtonsWidth: CGFloat = 0
+
+    /// The nominal box handed to `HeroLogoArtwork`.
+    ///
+    /// A fixed shared box rather than the measured button-row width: the pill set
+    /// changes from slide to slide, so sizing the wordmark against it made the
+    /// same logo a different size on different slides, and made it a different
+    /// size again on the detail page. See ``HeroLogoLayout``.
+    private var heroLogoBox: CGSize { HeroLogoLayout.box }
     /// Bumped on every page so a late metadata fade-in from a *previous* page
     /// can't fire after a newer page has already started.
     @State private var slideToken = 0
@@ -533,21 +549,39 @@ struct HomeHeroView: View {
             artworkSetToken &+= 1
             let oldIdx = index
             let frontedID = oldIDs.indices.contains(index) ? oldIDs[index] : nil
+            let frontedSurvived: Bool
             if let frontedID, let newIdx = newIDs.firstIndex(of: frontedID) {
                 index = newIdx
+                frontedSurvived = true
             } else {
                 index = min(index, max(0, newIDs.count - 1))
+                frontedSurvived = false
             }
-            HeroFocusDiagnostics.emit("items SET-SWAP count \(oldIDs.count)->\(newIDs.count) index \(oldIdx)->\(index) frontedSurvived=\(frontedID.map { newIDs.contains($0) } ?? false) | \(hfState())")
+            HeroFocusDiagnostics.emit("items SET-SWAP count \(oldIDs.count)->\(newIDs.count) index \(oldIdx)->\(index) frontedSurvived=\(frontedSurvived) | \(hfState())")
             let present = Set(newIDs)
             resolvedBackdrop = resolvedBackdrop.filter { present.contains($0.key) }
             trailerSourceCache = trailerSourceCache.filter { present.contains($0.key) }
             noFastTrailerIDs.formIntersection(present)
+            // Clamp the logical selection to the fronted slide's button count so it
+            // can never point past the last pill — the slide's own CTA can change
+            // (Request → Downloading → Play) even when the slide itself did not.
+            // Pure `@State`, so this never touches (or drops) focus.
+            if items.indices.contains(index) {
+                selectedButton = min(selectedButton, max(0, buttons(for: items[index]).count - 1))
+            }
             // A set swap is not a page: cancel any pending metadata fade-in and
             // show the (possibly relocated) current item. The backdrop tracks
             // `current`'s id, so if the fronted item survived the swap its art is
             // unchanged (no wipe); if it was clamped to a different item the
             // backdrop wipes to it (with whatever direction was last recorded).
+            //
+            // Only when the fronted slide actually CHANGED, though. Curation folds
+            // new media into the live set while the viewer sits on Home (see
+            // `HeroLiveMerge`), so this now fires for updates that leave the fronted
+            // slide exactly where it was. Restarting the dwell for those would reset
+            // the auto-advance gauge every time — and a refresh arriving more often
+            // than the dwell is long would stop the carousel advancing at all.
+            guard !frontedSurvived else { return }
             slideToken &+= 1
             metadataVisible = true
             // The set swap re-seats the fronted slide, so start a fresh dwell for
@@ -561,20 +595,31 @@ struct HomeHeroView: View {
             // recede pause. Kept coupled to `pausedAt` (not a bare `!receded` task
             // guard) so `resumeFromRecede()` still resumes cleanly on focus return.
             if receded { pauseWhileReceded() }
-            // Clamp the logical selection to the new slide's button count so it
-            // can never point past the last pill after a set swap. Pure `@State`,
-            // so this never touches (or drops) focus.
-            if items.indices.contains(index) {
-                selectedButton = min(selectedButton, max(0, buttons(for: items[index]).count - 1))
-            }
         }
-        // Drop optimistic watchlist overrides once the authoritative loaded set
-        // agrees, so a stale override can't outlive the real data.
-        .onChange(of: watchlistedKeys) { _, keys in
-            guard !watchlistOverrides.isEmpty else { return }
-            watchlistOverrides = watchlistOverrides.filter { key, value in
-                value != keys.contains(key)
-            }
+        // Keep Home told which slide is on screen, so a curation landing in the
+        // background folds new media into a free slot rather than over this one.
+        .onChange(of: current?.id, initial: true) { _, id in
+            onPinnedItemsChanged(Set([id].compactMap { $0 }))
+        }
+        // Drop optimistic watchlist overrides once the AUTHORITY THE PILL FALLS
+        // BACK TO agrees — not merely once Home's loaded watchlist row does.
+        //
+        // Those are two different sources. `isWatchlistedForHero` falls back to
+        // `actionHandler.isWatchlisted`, which reads the ledger; `watchlistedKeys`
+        // is built from `content.watchlist`, the aggregator's fetched row. Dropping
+        // on the row's say-so handed the pill straight back to a source that had
+        // not necessarily caught up, and the button flipped back to not-added on
+        // the very add it had just confirmed. The row moving is a fine TRIGGER —
+        // it means the world changed — but the condition has to be the value the
+        // override is standing in for.
+        .onChange(of: watchlistedKeys) { _, _ in
+            reconcileWatchlistOverrides()
+        }
+        // The same reconcile when the slides themselves change, so an override set
+        // on a title that is still on screen can retire without waiting for the
+        // watchlist row to move.
+        .onChange(of: items.map(\.id)) { _, _ in
+            reconcileWatchlistOverrides()
         }
         // Drop optimistic request overrides once Home's in-place featured refresh
         // reports an authoritative status that reflects the landed request (the
@@ -775,6 +820,10 @@ struct HomeHeroView: View {
                 receded: receded,
                 trailerController: trailerController,
                 showsTrailer: trailerVisible,
+                // Gate on STYLE, not the live inset. The rail hides (and publishes
+                // inset 0) during a detail push while Home remains alive underneath;
+                // using the inset would recenter artwork mid-transition.
+                alignsArtworkToLeadingEdge: navigationStyle == .rail,
                 scrimOpacity: isFrontmost ? 1 : 0
             )
         } else {
@@ -790,8 +839,15 @@ struct HomeHeroView: View {
     /// the gauge stay in sync. Focus is deliberately NOT part of this — the
     /// carousel cycles whether or not the hero holds focus; only real remote input
     /// pauses it.
+    ///
+    /// `items.count` is in here for one specific reason: the fire returns
+    /// immediately while there is only one slide, and a curation folding a second
+    /// title in (see `HeroLiveMerge`) does not re-seat the fronted slide, so
+    /// nothing else in this key would move and the carousel would stay stationary
+    /// forever. Because the restart re-derives its sleep from `dwellStart`, an
+    /// ordinary set update resumes the countdown rather than restarting it.
     private var autoAdvanceKey: String {
-        "\(index)-\(advanceToken)-\(runEpoch)-\(slideToken)-\(activeTrailerDuration)"
+        "\(index)-\(advanceToken)-\(runEpoch)-\(slideToken)-\(activeTrailerDuration)-\(items.count)"
     }
 
     /// One continuous wall-clock timeline from initial still through trailer end.
@@ -911,11 +967,12 @@ struct HomeHeroView: View {
                     references: item.artworkReferences(for: .logo),
                     asyncFallbackURL: logoFallback(for: item),
                     backgroundSample: backgroundSample(for: item),
-                    // Cap the logo image to the action-button row width (measured
-                    // below) so it never runs wider than the buttons beneath it —
-                    // matching the title/overview. Falls back to the component's
-                    // default until first measured.
-                    maxWidth: actionButtonsWidth > 0 ? actionButtonsWidth : 620,
+                    // The logo is sized from a shared hero box, not from this
+                    // hero's own button row — the pill set changes per slide, and
+                    // the detail page's column is wider again. See
+                    // ``HeroLogoLayout``.
+                    maxWidth: heroLogoBox.width,
+                    maxHeight: heroLogoBox.height,
                     // The parent keeps metadata hidden for 280ms during a wipe. A
                     // cache-hot logo lands inside that window; a later result warms
                     // the next visit but never pops into an already-settled slide.
@@ -1003,7 +1060,7 @@ struct HomeHeroView: View {
         .frame(height: HomeHeroLayout.screenHeight - Self.contentBottomInset)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.trailing, PlozzTheme.Metrics.screenPadding)
-        .padding(.leading, PlozzTheme.Metrics.heroLeadingPadding)
+        .padding(.leading, PlozzTheme.Metrics.heroLeadingPadding + navigationContentInset)
         // Lift the content column off the very bottom of the full-screen hero so
         // the logo / metadata / buttons / dots sit near the lower third and the
         // Continue Watching row can peek in just beneath the dots. This inset is
@@ -1065,7 +1122,7 @@ struct HomeHeroView: View {
             .accessibilityHidden(true)
         }
         .padding(.trailing, PlozzTheme.Metrics.screenPadding)
-        .padding(.leading, PlozzTheme.Metrics.heroLeadingPadding)
+        .padding(.leading, PlozzTheme.Metrics.heroLeadingPadding + navigationContentInset)
         // Lower the whole UIKit column (visuals + focus overlay) by `uikitContentDrop`.
         .padding(.bottom, Self.contentBottomInset - Self.uikitContentDrop)
         .offset(y: receded ? -Self.recedeContentLift : 0)
@@ -1361,18 +1418,14 @@ struct HomeHeroView: View {
             // same focus section. Native focus movement preserves the familiar tvOS
             // click sound. The UIKit surface tracks physical press phases so only
             // the first move from one held press is handled; touch-surface swipes
-            // still pass through normally. It steps aside only at the one escape
-            // spot (first item, left-most button, sidebar nav).
+            // still pass through normally. It steps aside only at the native
+            // Sidebar escape spot; Pinned Sidebar opening stays explicit.
             //
             // Crucially the inactivation is gated on `focus == .row`, NOT on
-            // `allowsSidebarEscape` alone: `handleLeft()` moves `selectedButton`
-            // to 0 (or pages back to item 0) which flips `allowsSidebarEscape` to
-            // true in the very transaction that is bouncing focus guard→row. If the
-            // guard's focusability keyed on that flip alone, it would go
-            // non-focusable *while still holding focus*, and the focus engine could
-            // relocate to a Continue Watching card (scroll-down regression) or
-            // strand focus. Requiring `focus == .row` means the guard can only lose
-            // focusability once focus has already left it for the row — no race.
+            // `allowsNativeSidebarEscape` alone: `handleLeft()` can move to the
+            // native escape spot in the same transaction that bounces guard→row. If
+            // the guard became non-focusable while still focused, the focus engine
+            // could relocate to a lower row or strand focus.
             Color.clear
                 .frame(width: 1, height: 1)
                 .focusable(leftGuardActive)
@@ -1419,7 +1472,7 @@ struct HomeHeroView: View {
                 Color.clear
                     .background {
                         HeroDirectionalPressMonitor(
-                            capturesLeft: !allowsSidebarEscape,
+                            capturesLeft: !allowsNativeSidebarEscape,
                             gate: directionalPressGate,
                             // Reliable Select activation. Gated to when the hero holds
                             // focus (so a Select on a detail page / another tab is
@@ -1486,6 +1539,7 @@ struct HomeHeroView: View {
         // scroll in `HomeView` — not by this handler.
         .onMoveCommand { _ in handleMove() }
         .onChange(of: focus) { old, new in
+            pinnedSidebarInteraction?.setHeroFocused(new != nil)
             let oldName = old.map { "\($0)" } ?? "nil"
             let newName = new.map { "\($0)" } ?? "nil"
             HeroFocusDiagnostics.emit("focus \(oldName)->\(newName) | \(hfState())")
@@ -1537,13 +1591,14 @@ struct HomeHeroView: View {
         .onChange(of: receded) { _, isReceded in
             if isReceded { pauseWhileReceded() } else { resumeFromRecede() }
         }
+        .onDisappear {
+            pinnedSidebarInteraction?.setHeroFocused(false)
+        }
     }
 
-    /// Whether Left on the left-most button of the *current* slide should open
-    /// the side navigation instead of paging — the one case the reducer resolves
-    /// to `.escape`. Mirrors `HeroCarouselFocus`, and controls whether the left
-    /// focus guard steps aside so Left can reach the sidebar.
-    private var allowsSidebarEscape: Bool {
+    /// Whether Left should fall through to the system so the native Sidebar opens.
+    /// The custom Pinned Sidebar stays inside the guard and is opened explicitly.
+    private var allowsNativeSidebarEscape: Bool {
         HeroCarouselFocus.resolve(
             direction: .left,
             itemIndex: index,
@@ -1558,17 +1613,9 @@ struct HomeHeroView: View {
     /// a focus-engine move so the hero handles it internally instead of escaping
     /// to the sidebar. It steps aside (non-focusable) *only* at the escape spot AND
     /// while focus is resting on the row — never while the guard itself holds
-    /// focus. Gating on `focus == .row` is what makes the guard→row bounce
-    /// race-free: `handleLeft()` moves `selectedButton`/`index` (flipping
-    /// `allowsSidebarEscape` to true) in the same transaction that re-pins focus to
-    /// `.row`; if focusability keyed on `allowsSidebarEscape` alone, the guard would
-    /// go non-focusable *while focused*, and the engine could relocate focus to a
-    /// Continue Watching card (scroll-down) or strand it. Requiring `focus == .row`
-    /// means the guard can only lose focusability once focus has already moved off
-    /// it, so the escape only fires from a genuine at-rest Left on item 0's
-    /// left-most button.
+    /// focus. Gating on `focus == .row` keeps the guard→row bounce race-free.
     private var leftGuardActive: Bool {
-        !(allowsSidebarEscape && focus == .row)
+        !(allowsNativeSidebarEscape && focus == .row)
     }
 
     /// The container-level move handler. Its ONLY job is to pause the auto-advance
@@ -1589,7 +1636,7 @@ struct HomeHeroView: View {
         let focusName = focus.map { "\($0)" } ?? "nil"
         return "idx=\(index)/\(items.count) selBtn=\(selectedButton)/\(btnCount) "
             + "focus=\(focusName) leftGuardActive=\(leftGuardActive) "
-            + "sidebarEscape=\(allowsSidebarEscape) metaVisible=\(metadataVisible)"
+            + "sidebarEscape=\(allowsNativeSidebarEscape) metaVisible=\(metadataVisible)"
     }
 
     /// Resolves one discrete Left click from the UIKit surface or a swipe captured
@@ -1618,6 +1665,8 @@ struct HomeHeroView: View {
         case let .advance(toItem, keepButton):
             page(to: toItem, keepButton: keepButton, forward: false)
             // (Focus recovery is handled centrally in `page(to:)`.)
+        case .openPinnedSidebar:
+            pinnedSidebarInteraction?.requestOpen()
         case .escape, .blocked:
             break
         }
@@ -1679,7 +1728,7 @@ struct HomeHeroView: View {
         case let .advance(toItem, keepButton):
             page(to: toItem, keepButton: keepButton, forward: true)
             // (Focus recovery is handled centrally in `page(to:)`.)
-        case .escape, .blocked:
+        case .escape, .openPinnedSidebar, .blocked:
             break
         }
     }
@@ -1723,7 +1772,46 @@ struct HomeHeroView: View {
         // Flip the button instantly; the loaded row can lag (an added series from
         // an episode slide isn't an existing card).
         let key = Self.watchlistKey(accountID: target.sourceAccountID, itemID: target.id)
-        watchlistOverrides[key] = (action == .addToWatchlist)
+        let adding = action == .addToWatchlist
+        watchlistOverrides[key] = adding
+        // Bounded, because agreement is not guaranteed to arrive. A write that
+        // FAILS announces nothing and moves no row, so an override that only ever
+        // retires on agreement would stand until the view was recreated — the pill
+        // lying in the other direction, which is the same defect wearing the
+        // opposite sign. Mirrors `PlozziOSHomeView.heroRequestOverrideGrace`.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(Self.watchlistOverrideGrace))
+            // Only this press's override. A later tap replaces the value and
+            // brings its own timer.
+            if watchlistOverrides[key] == adding {
+                watchlistOverrides[key] = nil
+            }
+        }
+    }
+
+    /// How long an optimistic watchlist override may stand in for the
+    /// authoritative membership read before that read wins regardless.
+    private static let watchlistOverrideGrace: TimeInterval = 10
+
+    /// Retire every override the authoritative read now agrees with.
+    ///
+    /// Deliberately asks `actionHandler.isWatchlisted` — the exact value
+    /// `isWatchlistedForHero` falls back to — for the slide's own watchlist
+    /// target, so an override can never be handed back to a source that still
+    /// disagrees with it.
+    private func reconcileWatchlistOverrides() {
+        guard !watchlistOverrides.isEmpty, let actionHandler else { return }
+        for item in items {
+            let target = watchlistTarget(for: item)
+            let key = Self.watchlistKey(
+                accountID: target.sourceAccountID,
+                itemID: target.id
+            )
+            guard let override = watchlistOverrides[key] else { continue }
+            if actionHandler.isWatchlisted(target) == override {
+                watchlistOverrides[key] = nil
+            }
+        }
     }
 
     /// Sends a one-tap Seerr request for a not-owned featured title, flipping the
@@ -1878,8 +1966,7 @@ struct HomeHeroView: View {
                     progress: item.resumeProgressFraction,
                     remainingText: item.resumeRemainingText,
                     seasonEpisodeText: HeroForegroundModelBuilder.seasonEpisodeButtonText(for: item),
-                    onLight: selected || colorScheme == .light,
-                    barHeight: 10
+                    onLight: selected || colorScheme == .light
                 )
                 .font(.system(size: 28, weight: .semibold))
             }

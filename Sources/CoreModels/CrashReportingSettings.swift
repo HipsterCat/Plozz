@@ -13,10 +13,36 @@ public enum AppReleaseChannel: Sendable {
     case testflight
     case production
 
+    /// Info.plist key holding the channel baked in at build time by
+    /// `tools/generate-project.sh` (from `$PLOZZ_RELEASE_CHANNEL`, which the
+    /// fastlane `beta`/`release` lanes set). Empty for local builds.
+    static let bundleKey = "PlozzReleaseChannel"
+
+    /// The channel baked into this binary, or `nil` when none was (local builds,
+    /// or an unresolved `$(...)` build setting).
+    static func baked(
+        _ raw: String? = Bundle.main.object(forInfoDictionaryKey: bundleKey) as? String
+    ) -> AppReleaseChannel? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty,
+              !(trimmed.hasPrefix("$(") && trimmed.hasSuffix(")")) else { return nil }
+        switch trimmed.lowercased() {
+        case "testflight": return .testflight
+        case "production": return .production
+        case "debug": return .debug
+        default: return nil
+        }
+    }
+
     public static var current: AppReleaseChannel {
         #if DEBUG
         return .debug
         #else
+        // A baked answer beats sniffing. `appStoreReceiptURL` is only a *hint*:
+        // on tvOS it can be nil (a receipt is written after a purchase, not at
+        // install), which used to make a TestFlight build read as production and
+        // silently default crash reporting OFF for every tester.
+        if let baked = baked() { return baked }
         if let receiptURL = Bundle.main.appStoreReceiptURL,
            receiptURL.lastPathComponent == "sandboxReceipt" {
             return .testflight
@@ -28,6 +54,15 @@ public enum AppReleaseChannel: Sendable {
     /// Debug + TestFlight are "beta": builds still under active testing. The App
     /// Store / production build is not.
     public var isBeta: Bool { self != .production }
+
+    /// Stable Sentry environment name for this distribution channel.
+    public var crashReportEnvironment: String {
+        switch self {
+        case .debug: "debug"
+        case .testflight: "testflight"
+        case .production: "production"
+        }
+    }
 }
 
 /// Opt-in consent for sending anonymised crash reports off-device.
@@ -50,6 +85,13 @@ public struct CrashReportingSettings: Codable, Equatable, Sendable {
 
     public init(isEnabled: Bool = false) {
         self.isEnabled = isEnabled
+    }
+
+    /// Hand-written so older settings containing the retired manual device marker
+    /// continue to decode without affecting the user's crash-reporting choice.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
     }
 
     public static let `default` = CrashReportingSettings()

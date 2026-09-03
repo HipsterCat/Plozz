@@ -163,8 +163,14 @@ struct SimklListEntry: Decodable, Equatable {
 
     var movie: Title?
     var show: Title?
+    var addedToWatchlistAt: String?
 
     var title: Title? { movie ?? show }
+
+    enum CodingKeys: String, CodingKey {
+        case movie, show
+        case addedToWatchlistAt = "added_to_watchlist_at"
+    }
 }
 
 /// The id block Simkl returns. Deliberately separate from the `Encodable`
@@ -175,6 +181,9 @@ struct SimklResponseIDs: Decodable, Equatable {
     var imdb: String?
     var tmdb: StringOrInt?
     var tvdb: StringOrInt?
+    var mal: StringOrInt?
+    var anilist: StringOrInt?
+    var anidb: StringOrInt?
 }
 
 /// Simkl returns numeric ids as either a JSON number or a string depending on

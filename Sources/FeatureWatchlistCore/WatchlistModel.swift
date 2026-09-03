@@ -264,6 +264,7 @@ public final class WatchlistModel {
     public func markRemovalSuperseded(
         profileID: String,
         aliasID: MediaAliasID,
+        expectedChangedAt: Date? = nil,
         at date: Date = Date()
     ) throws -> Bool {
         try ensureHydrated(profileID)
@@ -271,7 +272,9 @@ public final class WatchlistModel {
         guard let index = state.intents.firstIndex(where: {
             $0.aliasID == aliasID
         }), state.intents[index].desiredState == .absent,
-            state.intents[index].metadata.suppressesNativePresence
+            state.intents[index].metadata.suppressesNativePresence,
+            expectedChangedAt == nil
+                || state.intents[index].changedAt == expectedChangedAt
         else { return false }
         state.intents[index].metadata.removalSupersededAt = date
         state.intents[index].changedAt = date
@@ -284,6 +287,18 @@ public final class WatchlistModel {
     ) throws -> WatchlistMigrationMetadata {
         try ensureHydrated(profileID)
         return statesByProfile[profileID]!.migration
+    }
+
+    public func markLegacyPresentationArtworkScrubbed(
+        profileID: String,
+        at date: Date = Date()
+    ) throws {
+        try ensureHydrated(profileID)
+        var state = statesByProfile[profileID]!
+        guard state.migration.legacyPresentationArtworkScrubbedAt == nil
+        else { return }
+        state.migration.legacyPresentationArtworkScrubbedAt = date
+        try persist(state, profileID: profileID)
     }
 
     /// Canonically rekeys redirected aliases. Duplicate intents merge with oldest
@@ -318,13 +333,32 @@ public final class WatchlistModel {
         capabilities: MediaCapabilities? = nil
     ) throws -> [WatchlistPresentationEntry] {
         try ensureHydrated(profileID)
-        return WatchlistPresentationResolver.resolve(
+        let entries = WatchlistPresentationResolver.resolve(
             union: union,
             aliasSnapshot: aliasSnapshot,
             currentItemsByAliasID: currentItemsByAliasID,
             indexedSources: indexedSources,
             capabilities: capabilities
         )
+        if ContinueWatchingDiagnostics.isEnabled {
+            var line = "watchlist presentation profile=\(profileID) count=\(entries.count)"
+            for (position, entry) in entries.prefix(30).enumerated() {
+                let item = entry.item
+                line += "\n  \(position). \"\(item.title)\""
+                if let poster = item.posterURL {
+                    line += "\n      art=\(poster.host ?? "?")\(poster.path)"
+                } else {
+                    line += "\n      art=none"
+                }
+                line += "\n      item=\(item.id)"
+                line += " validated=\(item.locallyValidatedPlayableSource)"
+                line += " availability=\(String(describing: item.availability))"
+                line.append(" alias=")
+                line.append(entry.id.description)
+            }
+            ContinueWatchingDiagnostics.emit(line)
+        }
+        return entries
     }
 
     /// The watchlist as the viewer sees it: durable intent, plus what the

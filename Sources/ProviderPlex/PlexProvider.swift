@@ -14,6 +14,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
     public let credentialRevision: CredentialRevision
     let client: PlexClient
     let themeArchiveResolver: @Sendable (String?) async -> URL?
+    private let artworkOriginHistoryKey: String
 
     public var authenticatedHTTPOrigin: URL { client.baseURL }
 
@@ -45,6 +46,9 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
         // server resolves on the first probe next launch instead of re-discovering
         // through stale/dead addresses (Docker bridges, old relay IPs).
         let reachableKey = "plex.reachable.\(session.server.id)"
+        let artworkOriginHistoryKey =
+            "plex.artwork-origins.\(session.server.id)"
+        self.artworkOriginHistoryKey = artworkOriginHistoryKey
         let reachableSeed = UserDefaults.standard.string(forKey: reachableKey).flatMap(URL.init(string:))
         let resolver = PlexConnectionResolver(
             candidates: candidates,
@@ -55,6 +59,16 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
             reachableSeed: reachableSeed,
             onReachable: { url in
                 UserDefaults.standard.set(url.absoluteString, forKey: reachableKey)
+                var origins = UserDefaults.standard.stringArray(
+                    forKey: artworkOriginHistoryKey
+                ) ?? []
+                if !origins.contains(url.absoluteString) {
+                    origins.append(url.absoluteString)
+                    UserDefaults.standard.set(
+                        origins,
+                        forKey: artworkOriginHistoryKey
+                    )
+                }
             }
         )
         self.client = PlexClient(
@@ -122,14 +136,123 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
         }
     }
 
+    /// Continue Watching, read from Plex's **own hub** wherever the server offers
+    /// it, falling back to the older `/library/onDeck` feed when it does not.
+    ///
+    /// The two disagree, and the hub is the one the Plex apps themselves render.
+    /// It honours "Remove from Continue Watching" — a dismissal records an
+    /// exclusion the hub applies and `onDeck` never sees, so a dismissed title
+    /// keeps its resume point and returns through `onDeck` indefinitely. It also
+    /// retires next-up suggestions for series left alone months ago, which
+    /// `onDeck` keeps offering forever. Reading the hub is therefore what makes
+    /// this row agree with Plex rather than merely resemble it.
+    ///
+    /// The fallback is not a formality: only newer servers route the `home`
+    /// variant, and a viewer on an older one must still get a row. The plain hub
+    /// is tried next, and `onDeck` last.
     public func continueWatching(limit: Int) async throws -> [MediaItem] {
-        // Fetch the recently-viewed-shows map concurrently with onDeck so stamping
-        // adds no latency to the common path.
-        async let onDeckTask = client.onDeck(limit: limit)
+        // The series-recency map is needed by every path and costs nothing next to
+        // the feed request, so it starts now regardless of which feed wins.
         async let seriesDatesTask = seriesLastPlayedDatesBestEffort(limit: limit)
-        let onDeck = try await onDeckTask
+        let (items, endpoint) = try await resumeFeed(limit: limit)
         let seriesDates = await seriesDatesTask
-        return onDeck.map(map(metadata:)).map { stampingSeriesRecency($0, using: seriesDates) }
+        logContinueWatchingFeed(items, endpoint: endpoint)
+        return items.map(map(metadata:)).map { stampingSeriesRecency($0, using: seriesDates) }
+    }
+
+    /// The best resume feed this server will give us, and which one it was.
+    ///
+    /// Only a *failure* falls through to the next candidate. An empty hub is a
+    /// real answer — a viewer genuinely part-way through nothing — and must not be
+    /// second-guessed by re-asking a feed that would happily invent a row out of
+    /// dismissed titles.
+    private func resumeFeed(limit: Int) async throws -> ([PlexMetadata], String) {
+        do {
+            return (try await client.continueWatchingHub(limit: limit, homeVariant: true), "/hubs/home/continueWatching")
+        } catch {
+            PlozzLog.networking.error("Plex home Continue Watching hub unavailable; trying the plain hub")
+        }
+        do {
+            return (try await client.continueWatchingHub(limit: limit, homeVariant: false), "/hubs/continueWatching")
+        } catch {
+            PlozzLog.networking.error("Plex Continue Watching hub unavailable; falling back to /library/onDeck")
+        }
+        return (try await client.onDeck(limit: limit), "/library/onDeck")
+    }
+
+    /// Records the resume feed exactly as Plex returned it, before any mapping.
+    ///
+    /// `/library/onDeck` is **not** the Continue Watching hub the Plex apps show.
+    /// It is the older "on deck" feed, it offers *next up* episodes alongside
+    /// genuinely in-progress ones, and it does not honour Plex's "Remove from
+    /// Continue Watching" action. So a row built from it can disagree with the
+    /// Plex app while every line of client code behaves correctly — and only the
+    /// raw feed can tell us that is what happened. Gated and free when off.
+    private func logContinueWatchingFeed(_ items: [PlexMetadata], endpoint: String) {
+        guard ContinueWatchingDiagnostics.isEnabled else { return }
+        let rows = items.map(Self.diagnosticRow)
+        ContinueWatchingDiagnostics.emit(
+            ContinueWatchingDiagnostics.serverFeedLine(
+                provider: "plex",
+                accountID: accountID,
+                endpoint: endpoint,
+                rows: rows
+            )
+        )
+        // Keep diffing against the legacy feed while the hub is what we serve, so
+        // the two can be compared on real servers rather than assumed equivalent.
+        // Skipped once we are already reading onDeck — there would be nothing to
+        // compare it against. Detached and read-only: nothing waits on it, and
+        // nothing but the log consumes it.
+        guard endpoint != "/library/onDeck" else { return }
+        let client = self.client
+        // Ask the legacy feed for materially more than the hub returned. Capping it
+        // at the hub's size makes anything past that cut look like a disagreement,
+        // which reads as a finding and is only an artefact of the request.
+        let limit = max(items.count * 2, 100)
+        Task.detached(priority: .utility) {
+            await Self.logHubVersusOnDeck(hub: rows, client: client, limit: limit)
+        }
+    }
+
+    /// Diffs what we now serve (the hub) against the legacy feed. Anything the old
+    /// feed carries that the hub does not is a title the previous implementation
+    /// showed and Plex does not — which is the reported symptom, measured.
+    private static func logHubVersusOnDeck(
+        hub: [ContinueWatchingDiagnostics.ServerRow],
+        client: PlexClient,
+        limit: Int
+    ) async {
+        var onDeck: [PlexMetadata]?
+        var failure: String?
+        do {
+            onDeck = try await client.onDeck(limit: limit)
+        } catch {
+            failure = String(describing: error)
+        }
+        // Argument order reads "feed vs hub": the legacy feed is the thing under
+        // suspicion, the hub is the reference.
+        ContinueWatchingDiagnostics.emit(
+            ContinueWatchingDiagnostics.feedVersusHubLine(
+                feed: onDeck.map { $0.map(diagnosticRow) } ?? [],
+                hub: failure == nil ? hub : nil,
+                hubEndpoint: "/library/onDeck vs hub",
+                hubError: failure
+            )
+        )
+    }
+
+    /// One Plex row in the diagnostics' server-facing vocabulary.
+    private static func diagnosticRow(_ meta: PlexMetadata) -> ContinueWatchingDiagnostics.ServerRow {
+        ContinueWatchingDiagnostics.ServerRow(
+            id: meta.ratingKey ?? "nil",
+            kind: meta.type ?? "nil",
+            title: [meta.grandparentTitle, meta.title].compactMap { $0 }.joined(separator: " – "),
+            viewOffsetMS: meta.viewOffset,
+            durationMS: meta.duration,
+            viewCount: meta.viewCount,
+            lastViewedAt: meta.lastViewedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+        )
     }
 
     /// Best-effort map of `series ratingKey → last-viewed date`, used to stamp
@@ -346,7 +469,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
         // watchlist toggle + cross-server discovery (which can still surface an
         // owned copy on another server) keep working.
         if let discoverID = PlexClient.discoverMetadataID(from: id) {
-            var item = map(
+            var item = mapDiscover(
                 metadata: try await client.discoverMetadata(
                     metadataID: discoverID
                 )
@@ -361,7 +484,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
             // global Discover id (defensive) — retry against Discover if derivable,
             // otherwise surface the original notFound.
             guard let discoverID = PlexClient.discoverMetadataID(from: id) else { throw error }
-            var item = map(
+            var item = mapDiscover(
                 metadata: try await client.discoverMetadata(
                     metadataID: discoverID
                 )
@@ -372,9 +495,38 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
     }
 
     public func trailers(for itemID: String) async throws -> [MediaItem] {
-        try await client.extras(ratingKey: itemID)
-            .filter { ($0.subtype ?? "").lowercased() == "trailer" }
-            .map(map(metadata:))
+        let trailers = try await client.extras(ratingKey: itemID)
+            .filter { Self.extraKind(for: $0) == .trailer }
+            .enumerated()
+            .sorted { left, right in
+                let leftLocal = Self.isLocalExtra(left.element)
+                let rightLocal = Self.isLocalExtra(right.element)
+                return leftLocal == rightLocal ? left.offset < right.offset : leftLocal
+            }
+        guard trailers.count > 1,
+              let parent = try? await client.metadata(ratingKey: itemID)
+        else { return trailers.map { map(metadata: $0.element) } }
+        guard let primary = Self.ratingKey(fromPrimaryExtraKey: parent.primaryExtraKey),
+              let preferred = trailers.first(where: { $0.element.ratingKey == primary })
+        else { return trailers.map { map(metadata: $0.element) } }
+        return [map(metadata: preferred.element)]
+            + trailers
+                .filter { $0.element.ratingKey != primary }
+                .map { map(metadata: $0.element) }
+    }
+
+    public func extras(for itemID: String) async throws -> [MediaExtra] {
+        try await client.extras(ratingKey: itemID, includeExternalMedia: false)
+            .filter(Self.isLocalExtra)
+            .map { dto in
+                let rawType = dto.subtype ?? dto.extraType.map(String.init)
+                return MediaExtra(
+                    item: map(metadata: dto),
+                    kind: Self.extraKind(for: dto),
+                    rawProviderType: rawType,
+                    supportsResume: true
+                )
+            }
     }
 
     public func themeMusic(for itemID: String) async throws -> ThemeMusic? {
@@ -550,9 +702,11 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
         }
         let media = mediaList[mediaIndex]
         let partIndex = 0
-        // A stable per-(device,item) session id ties the transcode m3u8 to its
-        // segments; deterministic so it's traceable and testable.
-        let transcodeSessionID = "plozz-\(session.deviceID)-\(itemID)"
+        // Plex identifies each active transcode by this value. Reusing an item-
+        // scoped identifier lets a retry or simultaneous playback tear down the
+        // rendition another request is still fetching.
+        let transcodeSessionID =
+            "plozz-\(session.deviceID)-\(itemID)-\(UUID().uuidString)"
         guard let resolved = client.playbackURL(
             ratingKey: itemID,
             media: media,
@@ -1058,18 +1212,211 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
         case .stop: state = "stopped"
         default: state = "playing"
         }
-        try await client.reportTimeline(
-            ratingKey: progress.itemID,
-            state: state,
-            timeMs: PlexTime.milliseconds(fromSeconds: progress.positionSeconds),
-            durationMs: nil
-        )
+        let timeMS = PlexTime.milliseconds(fromSeconds: progress.positionSeconds)
+        do {
+            try await client.reportTimeline(
+                ratingKey: progress.itemID,
+                state: state,
+                timeMs: timeMS,
+                // NOTE (diagnostics): Plex is told the position but never the
+                // runtime, so it cannot compute a completion percentage from this
+                // call alone and will not promote the title to "watched" on its
+                // own. Plozz relies on its own 90% threshold + `/:/scrobble`
+                // instead — which means a finish that never produces a scrobble
+                // leaves the title sitting in the resume feed forever.
+                durationMs: nil
+            )
+            ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.writeLine(
+                provider: "plex",
+                endpoint: "/:/timeline",
+                itemID: progress.itemID,
+                detail: "state=\(state) time=\(timeMS)ms duration=nil",
+                ok: true
+            ))
+        } catch {
+            ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.writeLine(
+                provider: "plex",
+                endpoint: "/:/timeline",
+                itemID: progress.itemID,
+                detail: "state=\(state) time=\(timeMS)ms duration=nil",
+                ok: false,
+                error: String(describing: error)
+            ))
+            throw error
+        }
     }
 
     public func imageURL(itemID: String, kind: ImageKind, maxWidth: Int?) -> URL? {
-        // Plex serves art by URL path, not by item id alone, so a standalone
-        // lookup isn't possible here — artwork URLs are resolved during mapping.
-        nil
+        // Plex accepts its canonical unversioned image endpoints; the timestamp
+        // suffix it reports in list payloads is a cache-busting revision, not a
+        // requirement. Building from `(item id, kind)` matters for durable
+        // presentation: saved URLs must not carry credentials, and on the next
+        // launch this recreates a valid URL with the CURRENT token without a
+        // metadata request.
+        // Plex logos are provider-supplied `clearLogo` paths, not an item-id
+        // endpoint. Without that metadata path there is nothing honest to build.
+        let segment: String
+        switch kind {
+        case .primary, .thumb: segment = "thumb"
+        case .backdrop: segment = "art"
+        case .logo: return nil
+        }
+        return client.imageURL(
+            path: "/library/metadata/\(itemID)/\(segment)",
+            maxWidth: maxWidth
+        )
+    }
+
+    public func reauthenticatedImageURL(
+        _ persistedURL: URL,
+        maxWidth: Int?
+    ) -> URL? {
+        guard let components = URLComponents(
+            url: persistedURL,
+            resolvingAgainstBaseURL: false
+        ), let resource = persistedArtworkResource(for: persistedURL)
+        else { return nil }
+
+        let storedWidth = components.queryItems?
+            .first { $0.name.lowercased() == "width" }?
+            .value.flatMap(Int.init)
+        let width = maxWidth ?? storedWidth
+
+        if resource.path.hasPrefix("/photo/:/transcode"),
+           let nested = components.queryItems?
+               .first(where: { $0.name.lowercased() == "url" })?
+               .value,
+           let nestedComponents = URLComponents(string: nested),
+           let nestedPath = localArtworkPath(
+               from: nestedComponents,
+               sourceBaseURL: resource.baseURL
+           ) {
+            // The nested path includes Plex's artwork revision suffix, which is
+            // the cache-busting identity we want to preserve. The sanitizer has
+            // removed its old token; `imageURL` attaches the current one at both
+            // levels.
+            return client.imageURL(
+               path: nestedPath,
+                maxWidth: width
+            )
+        }
+
+        if isLocalArtworkPath(resource.path) {
+            return client.imageURL(
+               path: resource.path,
+               maxWidth: width
+            )
+        }
+        return nil
+    }
+
+    public func ownsPersistedImageURL(_ persistedURL: URL) -> Bool {
+        guard let resource = persistedArtworkResource(for: persistedURL)
+        else { return false }
+        guard resource.path.hasPrefix("/photo/:/transcode") else {
+            return true
+        }
+        guard let components = URLComponents(
+            url: persistedURL,
+            resolvingAgainstBaseURL: false
+        ), let nested = components.queryItems?
+            .first(where: { $0.name.lowercased() == "url" })?
+            .value,
+           let nestedComponents = URLComponents(string: nested)
+        else { return false }
+        return localArtworkPath(
+            from: nestedComponents,
+            sourceBaseURL: resource.baseURL
+        ) != nil
+    }
+
+    /// Re-signs artwork hosted by plex.tv Discover with the active profile's
+    /// account-level token. Server artwork uses ``reauthenticatedImageURL``.
+    public func reauthenticatedDiscoverImageURL(
+        _ persistedURL: URL,
+        discoverToken: String?
+    ) -> URL? {
+        client.withDiscoverToken(discoverToken)
+            .reauthenticatedDiscoverImageURL(persistedURL)
+    }
+
+    /// Returns a provider-relative local path, stripping a reverse proxy's base
+    /// prefix when an older nested transcode URL retained it.
+    private func localArtworkPath(
+        from components: URLComponents,
+        sourceBaseURL: URL
+    ) -> String? {
+        let path: String?
+        if components.scheme != nil || components.host != nil {
+            path = components.url.flatMap { nestedURL in
+                knownImageBaseURLs.lazy.compactMap { baseURL in
+                    MediaProviderURLIdentity.relativeResourcePath(
+                        of: nestedURL,
+                        under: baseURL
+                    )
+                }.first(where: isLocalArtworkPath)
+            }
+        } else {
+            var candidate = components.path
+            if !isLocalArtworkPath(candidate) {
+               var basePath = sourceBaseURL.path
+               while basePath.count > 1, basePath.hasSuffix("/") {
+                   basePath.removeLast()
+               }
+               if basePath != "/", !basePath.isEmpty,
+                  candidate == basePath
+                   || candidate.hasPrefix(basePath + "/") {
+                   candidate = String(candidate.dropFirst(basePath.count))
+               }
+            }
+            path = candidate
+        }
+        guard let path, isLocalArtworkPath(path) else { return nil }
+        return path
+    }
+
+    private struct PersistedArtworkResource {
+        let path: String
+        let baseURL: URL
+    }
+
+    private var knownImageBaseURLs: [URL] {
+        var seen = Set<String>()
+        return (
+            client.knownBaseURLs
+            + (UserDefaults.standard.stringArray(
+                forKey: artworkOriginHistoryKey
+            ) ?? []).compactMap(URL.init(string:))
+            + [client.baseURL]
+            + (session.server.connectionURLs ?? [])
+            + [session.server.baseURL]
+        ).filter {
+            seen.insert($0.absoluteString).inserted
+        }
+    }
+
+    private func persistedArtworkResource(
+        for url: URL
+    ) -> PersistedArtworkResource? {
+        for baseURL in knownImageBaseURLs {
+            guard let path =
+                    MediaProviderURLIdentity.relativeResourcePath(
+                        of: url,
+                        under: baseURL
+                    ),
+                  path.hasPrefix("/photo/:/transcode")
+                    || isLocalArtworkPath(path)
+            else { continue }
+            return PersistedArtworkResource(
+                path: path,
+                baseURL: baseURL
+            )
+        }
+        return nil
+    }
+
+    private func isLocalArtworkPath(_ path: String) -> Bool {
+        MediaProviderURLIdentity.isPlexArtworkResourcePath(path)
     }
 
     // MARK: Remote subtitles
@@ -1171,6 +1518,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
             seasonNumber: isEpisode ? dto.parentIndex : (kind == .season ? dto.index : nil),
             episodeNumber: isEpisode ? dto.index : nil,
             productionYear: dto.year,
+            releaseDate: Self.releaseDate(from: dto.originallyAvailableAt),
             officialRating: dto.contentRating,
             genres: dto.Genre?.compactMap(\.tag) ?? [],
             people: people(from: dto),
@@ -1188,15 +1536,53 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
             seriesPosterURL: isEpisode ? client.imageURL(path: dto.grandparentThumb, maxWidth: 500) : nil,
             backdropURL: client.imageURL(path: dto.art, maxWidth: 1280),
             heroBackdropURL: client.imageURL(path: dto.art, maxWidth: 3840),
+            // Spoiler-safe parent art, mirroring the series backdrop Jellyfin puts
+            // in this field. Plex propagates the SHOW's `art` down onto episode
+            // nodes — an episode's own image is `thumb` (mapped into `posterURL`
+            // above) — so `art` is already series-level here and never the
+            // episode's own frame. Episodes only: for a movie or series `art` is
+            // the item's own backdrop, which already rides on `backdropURL`.
+            //
+            // Without this, spoiler `.placeholder` mode had no art to fall back to
+            // on Plex at all and rendered a blank placeholder for every hidden
+            // episode.
+            fallbackArtworkURL: isEpisode ? client.imageURL(path: dto.art, maxWidth: 1280) : nil,
             logoURL: logoURL(from: dto),
             ratings: Self.ratings(from: dto),
             providerIDs: Self.providerIDs(from: dto),
+            artworkSelections: heroArtworkSelections(from: dto),
             mediaInfo: Self.sourceMetadata(from: dto),
             libraryID: dto.librarySectionID.map(String.init),
             versions: Self.versions(from: dto.Media, edition: dto.editionTitle),
             isFavorite: false,
             lastPlayedAt: dto.lastViewedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
         )
+    }
+
+    /// Maps metadata returned by plex.tv Discover without routing its image paths
+    /// through the viewer's local Plex server.
+    private func mapDiscover(metadata dto: PlexMetadata) -> MediaItem {
+        var item = map(metadata: dto)
+        let isEpisode = item.kind == .episode
+        let posterPath = isEpisode
+            ? (dto.thumb ?? dto.grandparentThumb)
+            : dto.thumb
+        item.posterURL = client.discoverImageURL(path: posterPath)
+        item.seriesPosterURL = isEpisode
+            ? client.discoverImageURL(path: dto.grandparentThumb)
+            : nil
+        item.backdropURL = client.discoverImageURL(path: dto.art)
+        item.heroBackdropURL = item.backdropURL
+        item.fallbackArtworkURL = isEpisode
+            ? client.discoverImageURL(path: dto.art)
+            : nil
+        item.logoURL = logoURL(from: dto) {
+            client.discoverImageURL(path: $0)
+        }
+        item.artworkSelections = heroArtworkSelections(from: dto) {
+            client.discoverImageURL(path: $0)
+        }
+        return item
     }
 
     /// The item's title logo (Plex "clearLogo") from its `Image` array, or `nil`
@@ -1206,14 +1592,106 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
     /// a transparent PNG, so it's loaded raw (no `/photo/:/transcode`, which would
     /// flatten transparency) via the same http-vs-server-path handling as person
     /// headshots; the hero logo pipeline downsamples it on device.
-    private func logoURL(from dto: PlexMetadata) -> URL? {
+    private func logoURL(
+        from dto: PlexMetadata,
+        relativeURL: ((String) -> URL?)? = nil
+    ) -> URL? {
         guard let entry = dto.Image?.first(where: {
             $0.type?.lowercased() == "clearlogo"
         }), let path = entry.url, !path.isEmpty else { return nil }
         if path.hasPrefix("http://") || path.hasPrefix("https://") {
             return URL(string: path)
         }
+        if let relativeURL { return relativeURL(path) }
         return client.imageURL(path: path, maxWidth: nil)
+    }
+
+    /// This title's wide artwork, ranked and split between the two hero screens.
+    ///
+    /// Plex's `art` is one picture, and it was feeding both heroes — the same image
+    /// twice for every title. The metadata response *also* carries an `Image` array
+    /// (already decoded here for `clearLogo`) whose `background` entries are the
+    /// other art Plex holds for the title, so a second picture costs nothing: no
+    /// extra request, no extra round trip, it is already in hand.
+    ///
+    /// `art` leads, because it is the one Plex itself chose. Ranking and the
+    /// home/detail split are ``HeroArtworkPlanner``'s, shared with Jellyfin/Emby and
+    /// the share so a title behaves the same way on every backend.
+    private func heroArtworkSelections(
+        from dto: PlexMetadata,
+        relativeURL: ((String) -> URL?)? = nil
+    ) -> [ArtworkSelection] {
+        var candidates: [HeroArtworkCandidate] = []
+        if let art = artworkURL(
+            dto.art,
+            maxWidth: 3840,
+            relativeURL: relativeURL
+        ) {
+            candidates.append(
+                HeroArtworkCandidate(reference: .remote(art), origin: .server, text: .unknown, score: 0)
+            )
+        }
+        for (index, entry) in (dto.Image ?? []).enumerated()
+        where entry.type?.lowercased() == "background" {
+            guard let url = backgroundURL(
+                entry,
+                relativeURL: relativeURL
+            ) else { continue }
+            candidates.append(
+                HeroArtworkCandidate(
+                    reference: .remote(url),
+                    origin: .server,
+                    text: .unknown,
+                    // Behind `art`, and in the order Plex listed them.
+                    score: -Double(index + 1)
+                )
+            )
+        }
+        // One picture is not a choice — leave both heroes on the legacy ladder.
+        guard candidates.count >= 2 else {
+            HeroArtDiagnostics.emitOnce(stage: "plex-pool", key: dto.ratingKey ?? "?") {
+                "plex pool=\(candidates.count) art=\(dto.art != nil) "
+                + "images=\((dto.Image ?? []).count) "
+                + "types=[\((dto.Image ?? []).compactMap(\.type).joined(separator: ","))] "
+                + "title=\(dto.title ?? "?") — NO SELECTION"
+            }
+            return []
+        }
+        HeroArtDiagnostics.emitOnce(stage: "plex-pool", key: dto.ratingKey ?? "?") {
+            "plex pool=\(candidates.count) art=\(dto.art != nil) "
+            + "images=\((dto.Image ?? []).count) title=\(dto.title ?? "?")"
+        }
+        return HeroArtworkPlanner.selections(for: candidates)
+    }
+
+    /// An `Image` entry's URL, handling the absolute-vs-server-path split the same
+    /// way the logo and person headshots do.
+    private func backgroundURL(
+        _ entry: PlexImage,
+        relativeURL: ((String) -> URL?)? = nil
+    ) -> URL? {
+        guard let path = entry.url, !path.isEmpty else { return nil }
+        if path.hasPrefix("http://") || path.hasPrefix("https://") {
+            return URL(string: path)
+        }
+        return artworkURL(
+            path,
+            maxWidth: 3840,
+            relativeURL: relativeURL
+        )
+    }
+
+    private func artworkURL(
+        _ path: String?,
+        maxWidth: Int,
+        relativeURL: ((String) -> URL?)?
+    ) -> URL? {
+        guard let path, !path.isEmpty else { return nil }
+        if path.hasPrefix("http://") || path.hasPrefix("https://") {
+            return URL(string: path)
+        }
+        if let relativeURL { return relativeURL(path) }
+        return client.imageURL(path: path, maxWidth: maxWidth)
     }
 
     /// Maps Plex's `<Role>` (cast) plus `<Director>`/`<Writer>` (crew) elements
@@ -1711,6 +2189,12 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
         return ["srt", "subrip", "ass", "ssa", "webvtt", "vtt", "mov_text", "text", "ttml", "smi", "sami"].contains(codec)
     }
 
+    /// Anchored to UTC because Plex's `originallyAvailableAt` is a bare calendar
+    /// day with no zone; see ``MediaItem/calendarDayReleaseDate(from:)``.
+    static func releaseDate(from originallyAvailableAt: String?) -> Date? {
+        MediaItem.calendarDayReleaseDate(from: originallyAvailableAt)
+    }
+
     private static func kind(forItemType type: String?) -> MediaItemKind {
         switch type {
         case "movie": return .movie
@@ -1721,6 +2205,45 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
         case "collection": return .collection
         default: return .unknown
         }
+    }
+
+    private static func isLocalExtra(_ dto: PlexMetadata) -> Bool {
+        guard dto.type == "clip" || dto.type == "video",
+              dto.ratingKey?.isEmpty == false,
+              dto.Media?.contains(where: { media in
+                  media.Part?.contains(where: { $0.file?.isEmpty == false }) == true
+              }) == true
+        else { return false }
+        let guid = dto.guid?.lowercased() ?? ""
+        guard !guid.hasPrefix("iva://"), !guid.hasPrefix("provider://") else {
+            return false
+        }
+        return dto.Media?.flatMap { $0.Part ?? [] }.contains(where: {
+            $0.key?.lowercased().hasPrefix("/services/iva/") == true
+        }) != true
+    }
+
+    private static func extraKind(for dto: PlexMetadata) -> MediaExtraKind {
+        if let subtype = dto.subtype {
+            return MediaExtraKind(rawProviderValue: subtype)
+        }
+        switch dto.extraType {
+        case 1: return .trailer
+        case 2: return .deletedScene
+        case 3: return .interview
+        case 5: return .behindTheScenes
+        case 6: return .scene
+        case 10: return .featurette
+        case 11: return .short
+        default: return .unknown
+        }
+    }
+
+    private static func ratingKey(fromPrimaryExtraKey key: String?) -> String? {
+        guard let key = key?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !key.isEmpty
+        else { return nil }
+        return key.split(separator: "/").last.map(String.init)
     }
 
     private static func kind(forSectionType type: String?) -> MediaItemKind {
@@ -1748,7 +2271,54 @@ extension PlexProvider: WatchStateProviding {
     /// Toggles an item's watched state via Plex scrobble/unscrobble. Scrobbling a
     /// season or series ratingKey marks the contained episodes too.
     public func setPlayed(_ played: Bool, itemID: String) async throws {
-        try await client.setWatched(played, ratingKey: itemID)
+        do {
+            try await client.setWatched(played, ratingKey: itemID)
+            ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.writeLine(
+                provider: "plex",
+                endpoint: played ? "/:/scrobble" : "/:/unscrobble",
+                itemID: itemID,
+                detail: "played=\(played)",
+                ok: true
+            ))
+        } catch {
+            ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.writeLine(
+                provider: "plex",
+                endpoint: played ? "/:/scrobble" : "/:/unscrobble",
+                itemID: itemID,
+                detail: "played=\(played)",
+                ok: false,
+                error: String(describing: error)
+            ))
+            throw error
+        }
+    }
+}
+
+extension PlexProvider: ContinueWatchingRemovable {
+    /// Dismisses the title from Plex's Continue Watching hub, the same act its own
+    /// apps perform. Distinct from clearing the saved position: the hub honours the
+    /// exclusion, so the title does not come back as an untouched suggestion.
+    public func removeFromContinueWatching(itemID: String) async throws {
+        do {
+            try await client.removeFromContinueWatching(ratingKey: itemID)
+            ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.writeLine(
+                provider: "plex",
+                endpoint: "/actions/removeFromContinueWatching",
+                itemID: itemID,
+                detail: "dismiss",
+                ok: true
+            ))
+        } catch {
+            ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.writeLine(
+                provider: "plex",
+                endpoint: "/actions/removeFromContinueWatching",
+                itemID: itemID,
+                detail: "dismiss",
+                ok: false,
+                error: String(describing: error)
+            ))
+            throw error
+        }
     }
 }
 
@@ -1765,10 +2335,27 @@ extension PlexProvider: ResumeStateWriting {
     /// converges at the server's clock. (Jellyfin, which *does* accept a
     /// `LastPlayedDate`, honours `capturedAt` — see its `ResumeStateWriting`.)
     public func setResumePosition(_ seconds: TimeInterval, itemID: String, capturedAt: Date = Date()) async throws {
-        try await client.reportProgress(
-            ratingKey: itemID,
-            timeMs: PlexTime.milliseconds(fromSeconds: max(seconds, 0))
-        )
+        let timeMS = PlexTime.milliseconds(fromSeconds: max(seconds, 0))
+        do {
+            try await client.reportProgress(ratingKey: itemID, timeMs: timeMS)
+            ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.writeLine(
+                provider: "plex",
+                endpoint: "/:/progress",
+                itemID: itemID,
+                detail: "time=\(timeMS)ms",
+                ok: true
+            ))
+        } catch {
+            ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.writeLine(
+                provider: "plex",
+                endpoint: "/:/progress",
+                itemID: itemID,
+                detail: "time=\(timeMS)ms",
+                ok: false,
+                error: String(describing: error)
+            ))
+            throw error
+        }
     }
 }
 
@@ -1814,14 +2401,46 @@ extension PlexProvider: WatchlistProviding {
     /// Reads the watchlist through a specific client, so the caller can supply
     /// one scoped to the plex.tv identity the active profile plays as.
     public func watchlist(using client: PlexClient) async throws -> [MediaItem] {
-        try await client.watchlist()
-            .map(map(metadata:))
-            .map {
-                var copy = $0
+        let items =         try await client.watchlist()
+            .map { dto -> MediaItem in
+                var copy = mapDiscover(metadata: dto)
                 copy.isFavorite = true
                 copy.locallyValidatedPlayableSource = false
                 return copy
             }
+        logWatchlistOrder(items)
+        return items
+    }
+
+    /// Records the order the service actually returned.
+    ///
+    /// Everything downstream preserves this order faithfully, so if the row looks
+    /// shuffled the question is whether it arrived shuffled — and that is only
+    /// answerable by writing down what arrived. Asking for an order is not the same
+    /// as getting one: these endpoints are undocumented, and a sort they do not
+    /// recognise can be ignored as easily as honoured. Gated; free when off.
+    private func logWatchlistOrder(_ items: [MediaItem]) {
+        guard ContinueWatchingDiagnostics.isEnabled else { return }
+        var line = "watchlist provider=plex account=\(accountID) count=\(items.count) order=as-returned"
+        for (position, item) in items.prefix(30).enumerated() {
+            line += "\n  \(position). \"\(item.title)\"" + (item.productionYear.map { " (\($0))" } ?? "")
+            // The artwork each row will actually draw, host included.
+            //
+            // A whole watchlist wearing ONE show's poster while every caption
+            // stayed correct is a picture that cannot be reasoned about from the
+            // outside: the titles prove identity is fine, so the answer is in the
+            // URL, and the only question worth asking is whether two rows are
+            // asking for the same one. Printed as host + path so that is legible
+            // at a glance — a shared answer, a shared host that shouldn't be, or
+            // a path belonging to a server that has never heard of it.
+            if let poster = item.posterURL {
+                line += "\n      art=\(poster.host ?? "?")\(poster.path)"
+            } else {
+                line += "\n      art=none"
+            }
+        }
+        if items.count > 30 { line += "\n  … \(items.count - 30) more" }
+        ContinueWatchingDiagnostics.emit(line)
     }
 }
 

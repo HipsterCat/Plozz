@@ -1,3 +1,4 @@
+import CoreModels
 import Foundation
 
 // MARK: - Stored tokens
@@ -10,19 +11,38 @@ import Foundation
 public struct TraktTokens: Codable, Sendable, Equatable {
     public var accessToken: String
     public var refreshToken: String
+    public var accountIdentity: String?
     /// Absolute expiry instant (createdAt + expiresIn).
     public var expiresAt: Date
 
-    public init(accessToken: String, refreshToken: String, expiresAt: Date) {
+    public init(
+        accessToken: String,
+        refreshToken: String,
+        expiresAt: Date,
+        accountIdentity: String? = nil
+    ) {
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.expiresAt = expiresAt
+        self.accountIdentity = accountIdentity
     }
 
     /// Treated as expired a few minutes early so a scrobble never races the
     /// deadline with a token the server is about to reject.
     public var isExpired: Bool {
         Date() >= expiresAt.addingTimeInterval(-300)
+    }
+
+    public var stableAccountIdentity: String {
+        accountIdentity ?? WatchlistReconciliationIdentity.credential(
+            refreshToken.isEmpty ? accessToken : refreshToken
+        )
+    }
+
+    public func inheritingAccountIdentity(from previous: Self) -> Self {
+        var value = self
+        value.accountIdentity = previous.stableAccountIdentity
+        return value
     }
 }
 
@@ -169,11 +189,35 @@ public struct TraktWatchlistTitle: Codable, Hashable, Sendable {
 }
 
 struct TraktWatchlistMovieEntry: Decodable, Sendable {
+    let id: Int
+    let listedAt: String
     let movie: TraktWatchlistTitle
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case listedAt = "listed_at"
+        case movie
+    }
 }
 
 struct TraktWatchlistShowEntry: Decodable, Sendable {
+    let id: Int
+    let listedAt: String
     let show: TraktWatchlistTitle
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case listedAt = "listed_at"
+        case show
+    }
+}
+
+struct TraktWatchlistItem: Sendable {
+    let id: Int
+    let listedAt: Date
+    let kind: MediaItemKind
+    let title: TraktWatchlistTitle
+    let providerOrder: Int
 }
 
 struct TraktWatchlistMutationBody: Encodable, Sendable {

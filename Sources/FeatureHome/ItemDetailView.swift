@@ -674,7 +674,13 @@ public struct ItemDetailView: View {
                         relatedEntries: viewModel.relatedTitlesLoader?.entries ?? [],
                         relatedHasResolved: viewModel.relatedTitlesLoader?.hasResolved ?? true,
                         onSelectRelated: onSelectChild,
-                        externalAvailability: detail.externalAvailability
+                        extrasState: viewModel.extrasState,
+                        onSelectExtra: { onPlay($0.playbackItem) },
+                        onRetryExtras: {
+                            Task { await viewModel.retryExtras() }
+                        },
+                        externalAvailability: detail.externalAvailability,
+                        spoilerSettings: spoilerSettings
                     )
                 }
                 .padding(.bottom, PlozzTheme.Metrics.screenVerticalPadding)

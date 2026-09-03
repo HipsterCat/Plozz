@@ -51,6 +51,10 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
     /// Optional per-item trailers for `trailers(of:)`. Inherits the protocol's
     /// empty default when `nil`.
     var trailersByItem: [String: [MediaItem]]?
+    var extrasByItem: [String: [MediaExtra]]?
+    var extrasErrorsByItem: [String: AppError]?
+    private var _extrasCallCount: [String: Int] = [:]
+    var extrasCallCount: [String: Int] { withLock { _extrasCallCount } }
     /// Optional per-item async gate that runs before `item(id:)` returns.
     var itemGate: [String: @Sendable () async -> Void]?
     /// Optional start index at which `items(in:page:)` throws once.
@@ -60,6 +64,11 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
     var alwaysFail = false
     private var _requestedPages: [PageRequest] = []
     var requestedPages: [PageRequest] { withLock { _requestedPages } }
+    /// The `kind` each `items(in:kind:page:)` call asked for, in order. The
+    /// combined browse gives every source its OWN kind, so this is how a test
+    /// proves a movie library was never asked for series.
+    private var _requestedKinds: [MediaItemKind] = []
+    var requestedKinds: [MediaItemKind] { withLock { _requestedKinds } }
     private var _interactiveBrowseActivityCount = 0
     var interactiveBrowseActivityCount: Int { withLock { _interactiveBrowseActivityCount } }
     /// Optional hook called as soon as `items(in:page:)` is requested.
@@ -159,8 +168,20 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
         return trailersByItem[itemID] ?? []
     }
 
+    func extras(for itemID: String) async throws -> [MediaExtra] {
+        withLock { _extrasCallCount[itemID, default: 0] += 1 }
+        if let error = extrasErrorsByItem?[itemID] {
+            throw error
+        }
+        guard let extrasByItem else { return [] }
+        return extrasByItem[itemID] ?? []
+    }
+
     func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
-        withLock { _requestedPages.append(page) }
+        withLock {
+            _requestedPages.append(page)
+            _requestedKinds.append(kind)
+        }
         if alwaysFail { throw AppError.serverUnreachable }
         onItemsRequest?(page)
         do {

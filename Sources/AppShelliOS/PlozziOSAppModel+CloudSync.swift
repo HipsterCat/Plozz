@@ -3,6 +3,7 @@ import Foundation
 import Observation
 import AppRuntime
 import CoreModels
+import CoreUI
 import CoreSecureStore
 import CoreNetworking
 import FeatureSyncSetup
@@ -115,7 +116,17 @@ extension PlozziOSAppModel {
     /// Force an immediate two-way sync (manual "Sync Now").
     func syncCloudNow() {
         let config = cloudSync
-        guard let config else { return }
+        guard let config else {
+            transientStatusPresenter.present(
+                icon: "exclamationmark.triangle",
+                text: "iCloud sync is unavailable"
+            )
+            return
+        }
+        transientStatusPresenter.present(
+            icon: "icloud",
+            text: "Checking iCloud…"
+        )
         Task {
             await config.syncNow()
         }
@@ -811,10 +822,10 @@ extension PlozziOSAppModel {
             )
         }
         if appliedWatchlistCount > 0 {
-            NotificationCenter.default.post(
-                name: .universalWatchlistDidChange,
-                object: nil
-            )
+            // Through the host, so the memoized membership set is dropped with
+            // it: a remote removal that leaves the active count where it was is
+            // otherwise invisible to that memo's revision key.
+            announceUniversalWatchlistDidChange()
         }
     }
 

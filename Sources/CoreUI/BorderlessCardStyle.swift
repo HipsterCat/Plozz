@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import CoreModels
 
 /// Shared building blocks for the borderless ("Posters") `CardStyle` — the
 /// artwork-only look with **no** glass surface. Both the movie/show
@@ -20,6 +21,12 @@ public extension View {
     /// keeps hugging the artwork and stays `circleFocusPadding` wide at any tile
     /// size. Being a pure render treatment (`background` + `scaleEffect`), it never
     /// alters the tile's footprint, so focusing can't nudge the row or neighbours.
+    ///
+    /// When the profile has turned the focus outline **off**
+    /// (`CardFocusStyle.highlight`) there is no halo at all: the tile takes tvOS's
+    /// native treatment instead, growing by whatever the halo used to add to its
+    /// size and catching a specular sweep (see `plozzCardFocusLift`). Callers don't
+    /// choose — they keep asking for a halo and get whichever the profile wants.
     ///
     /// Pass `cornerRadius: side / 2` for a circular avatar (the band becomes a ring)
     /// or the artwork's outer radius for a rounded-rect card.
@@ -42,10 +49,51 @@ private struct FocusHaloModifier: ViewModifier {
     let isFocused: Bool
 
     @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.plozzCardFocusStyle) private var focusStyle
+    @Environment(\.themePalette) private var palette
 
     func body(content: Content) -> some View {
+        if focusStyle.drawsFocusOutline {
+            outlined(content)
+        } else {
+            // No halo: the tile grows into the space the halo occupied and
+            // glistens instead. It keeps the halo's drop shadow, though — that
+            // shadow is what lifted the tile off the page, and an artwork-only
+            // card with neither outline nor shadow reads as flat rather than
+            // focused.
+            //
+            // Cast by a shape BUILT ONLY WHEN FOCUSED, exactly as the halo below
+            // is, and for the same reason. A `.shadow` modifier carrying zero
+            // opacity at rest would sit on every tile in a poster wall — dozens
+            // of them — for the benefit of the one that has focus. The caster is
+            // the tile's own shape, so the opaque artwork hides it completely
+            // and only its shadow shows.
+            content
+                .background {
+                    // The caster is the tile's own shape in the theme's card
+                    // surface, so opaque artwork hides it completely and only its
+                    // shadow shows — and where artwork is transparent or still
+                    // loading, what shows through is a card surface rather than a
+                    // black plate.
+                    if isFocused {
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(palette.cardSurface)
+                            .shadow(color: .black.opacity(0.36), radius: 20, y: 10)
+                            .transition(.opacity)
+                    }
+                }
+                .plozzCardFocusLift(
+                    isFocused: isFocused,
+                    cornerRadius: cornerRadius,
+                    outlineScale: focusScale,
+                    outlineReach: metrics.circleFocusPadding
+                )
+        }
+    }
+
+    private func outlined(_ content: Content) -> some View {
         let pad = metrics.circleFocusPadding
-        content
+        return content
             .background {
                 // The shared liquid-glass focus surface, bloomed into a band around
                 // the artwork: sized to the artwork by `.background`, then grown
@@ -78,6 +126,9 @@ private struct FocusHaloModifier: ViewModifier {
 /// sits on the page (never on glass), so — unlike the framed caption — it doesn't
 /// flip to dark ink on focus.
 ///
+/// Both lines use `PlozzMarqueeText`: native one-line truncation on touch
+/// platforms, and a focus-driven fade/marquee on tvOS.
+///
 /// Callers constrain the width (the card slot / artwork width); this fills it and
 /// stays leading-aligned.
 public struct BorderlessCardCaption: View {
@@ -88,6 +139,7 @@ public struct BorderlessCardCaption: View {
     private let subtitle: String?   // l10n:content — media title/subtitle from the server
     private let horizontalInset: CGFloat
     private let reservesSubtitleSpace: Bool
+    private let isFocused: Bool
 
     @Environment(\.plozzMetrics) private var metrics
 
@@ -95,32 +147,39 @@ public struct BorderlessCardCaption: View {
         title: Text,
         subtitle: String?,   // l10n:content — media title/subtitle from the server
         horizontalInset: CGFloat,
-        reservesSubtitleSpace: Bool = true
+        reservesSubtitleSpace: Bool = true,
+        isFocused: Bool = false
     ) {
         self.title = title
         self.subtitle = subtitle
         self.horizontalInset = horizontalInset
         self.reservesSubtitleSpace = reservesSubtitleSpace
+        self.isFocused = isFocused
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            title
-                .font(.system(size: metrics.cardTitleFontSize, weight: .semibold))
-                .foregroundStyle(Color.primary)
-                .lineLimit(1)
+            PlozzMarqueeText(
+                text: title,
+                font: .system(size: metrics.cardTitleFontSize, weight: .semibold),
+                color: .primary,
+                inset: horizontalInset,
+                isFocused: isFocused
+            )
             if let subtitle {
-                Text(subtitle)
-                    .font(.system(size: metrics.cardSubtitleFontSize))
-                    .foregroundStyle(Color.secondary)
-                    .lineLimit(1)
+                PlozzMarqueeText(
+                    text: Text(subtitle),
+                    font: .system(size: metrics.cardSubtitleFontSize),
+                    color: .secondary,
+                    inset: horizontalInset,
+                    isFocused: isFocused
+                )
             } else if reservesSubtitleSpace {
                 Text(verbatim: " ")
                     .font(.system(size: metrics.cardSubtitleFontSize))
                     .hidden()
             }
         }
-        .padding(.horizontal, horizontalInset)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

@@ -222,7 +222,7 @@ final class ShareLocalArtworkTests: XCTestCase {
     }
 
     func testParserRecognizesCaseInsensitiveConventionsAndRejectsGIF() {
-        XCTAssertEqual(ShareMediaParser.localInventoryVersion, 2)
+        XCTAssertEqual(ShareMediaParser.localInventoryVersion, 3)
         XCTAssertEqual(ShareArtworkNameParser.parse("POSTER-2.EN.JPEG")?.role, .poster)
         XCTAssertEqual(ShareArtworkNameParser.parse("POSTER-2.EN.JPEG")?.numberedAlternative, 2)
         XCTAssertEqual(ShareArtworkNameParser.parse("POSTER-2.EN.JPEG")?.language, "en")
@@ -401,7 +401,8 @@ final class ShareLocalArtworkTests: XCTestCase {
 
         let projected = ShareCatalogReadProjection.applyLocalArtwork(
             item,
-            [ArtworkSelection(placement: .poster, references: [.remote(localURL)])]
+            [ArtworkSelection(placement: .poster, references: [.remote(localURL)])],
+            metadataConfig: MetadataEnrichmentConfig(preferOnlineArtwork: false)
         )
 
         XCTAssertEqual(projected.artworkReferences(for: .poster), [.remote(localURL), .remote(onlineURL)])
@@ -502,7 +503,7 @@ final class ShareLocalArtworkTests: XCTestCase {
     func testArtworkRoundTripIsPathFreeInProvenanceAndDoesNotTouchExternalLane() async throws {
         let fixture = ShareCatalogSQLiteFixture()
         defer { fixture.cleanup() }
-        let store = fixture.makeStore()
+        let store = fixture.makeStore(preferOnlineArtwork: false)
         await store.configureArtworkReferenceContext(
             accountID: "art-account",
             credentialRevision: CredentialRevision(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000123")!)
@@ -1045,7 +1046,7 @@ final class ShareLocalArtworkTests: XCTestCase {
     func testRejectingExactFingerprintResurfacesExternalFallbackUntilFileChanges() async throws {
         let fixture = ShareCatalogSQLiteFixture()
         defer { fixture.cleanup() }
-        let store = fixture.makeStore()
+        let store = fixture.makeStore(preferOnlineArtwork: false)
         await store.configureArtworkReferenceContext(
             accountID: "art-account",
             credentialRevision: CredentialRevision()

@@ -100,6 +100,72 @@ final class MediaAliasLedgerTests: XCTestCase {
         }
     }
 
+    func testAtomicFileLoadRewritesLegacyContaminationAndCredentials() throws {
+        let directory = testStorageDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let record = try XCTUnwrap(MediaAliasRecord(
+            kind: .series,
+            strongEvidence: [
+                strong(.series, .imdb, "tt9253284"),
+                strong(.series, .tmdb, "83867"),
+                strong(.series, .tvdb, "393189")
+            ],
+            presentation: MediaAliasPresentation(
+                title: "Andor",
+                year: 2022,
+                artworkURL: "https://art.example/clean.jpg"
+            )
+        ))
+        let store = try AtomicFileMediaAliasStore(
+            directoryURL: directory,
+            profileID: "rewrite"
+        )
+        try store.save(MediaAliasLedgerState(records: [record]))
+
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: store.fileURL)
+            ) as? [String: Any]
+        )
+        var records = try XCTUnwrap(object["records"] as? [[String: Any]])
+        var polluted = records[0]
+        var strongEvidence = try XCTUnwrap(
+            polluted["strongEvidence"] as? [[String: Any]]
+        )
+        strongEvidence.append([
+            "kind": "series",
+            "namespace": "aniList",
+            "value": "102451"
+        ])
+        polluted["strongEvidence"] = strongEvidence
+        var presentation = try XCTUnwrap(
+            polluted["presentation"] as? [String: Any]
+        )
+        presentation["artworkURL"] =
+            "https://art.example/wrong.jpg?X-Plex-Token=SECRET"
+        polluted["presentation"] = presentation
+        records[0] = polluted
+        object["records"] = records
+        try JSONSerialization.data(
+            withJSONObject: object,
+            options: [.sortedKeys]
+        ).write(to: store.fileURL, options: [.atomic])
+
+        let reloaded = try AtomicFileMediaAliasStore(
+            directoryURL: directory,
+            profileID: "rewrite"
+        )
+        let loaded = try XCTUnwrap(reloaded.load().records.first)
+
+        XCTAssertNil(loaded.presentation?.artworkURL)
+        XCTAssertFalse(
+            String(
+                decoding: try Data(contentsOf: store.fileURL),
+                as: UTF8.self
+            ).contains("SECRET")
+        )
+    }
+
     func testAtomicFileStoreRejectsStaleWriter() throws {
         let directory = testStorageDirectory()
         defer {
@@ -615,6 +681,52 @@ final class MediaAliasLedgerTests: XCTestCase {
             1,
             "an identical identity publication performs no durable write"
         )
+    }
+
+    func testResolutionWavePersistsAndPublishesOnceAtOneThousandItems() async throws {
+        let store = ControllableAliasStore()
+        let ledger = try MediaAliasLedger(profileID: "p", store: store)
+        let requests = (0..<1_000).map { index in
+            MediaAliasResolutionRequest(
+                evidence: MediaAliasEvidence(
+                    kind: .movie,
+                    strong: [strong(.movie, .tmdb, String(index))],
+                    presentation: MediaAliasPresentation(
+                        title: "Title \(index)",
+                        year: 2000
+                    )
+                )!
+            )
+        }
+
+        let ids = try await ledger.resolveOrCreate(requests)
+
+        XCTAssertEqual(ids.count, 1_000)
+        XCTAssertEqual(Set(ids).count, 1_000)
+        XCTAssertEqual(store.saveCount, 1)
+        let snapshot = await ledger.snapshot()
+        XCTAssertEqual(snapshot.recordCount, 1_000)
+    }
+
+    func testResolutionWaveReconcilesDuplicatesCreatedInSameBatch() async throws {
+        let store = ControllableAliasStore()
+        let ledger = try MediaAliasLedger(profileID: "p", store: store)
+        let evidence = MediaAliasEvidence(
+            kind: .series,
+            strong: [strong(.series, .tmdb, "42")],
+            presentation: MediaAliasPresentation(title: "Same", year: 2024)
+        )!
+
+        let ids = try await ledger.resolveOrCreate([
+            MediaAliasResolutionRequest(evidence: evidence),
+            MediaAliasResolutionRequest(evidence: evidence)
+        ])
+
+        XCTAssertEqual(ids.count, 2)
+        XCTAssertEqual(ids[0], ids[1])
+        XCTAssertEqual(store.saveCount, 1)
+        let snapshot = await ledger.snapshot()
+        XCTAssertEqual(snapshot.activeRecordCount, 1)
     }
 
     @MainActor

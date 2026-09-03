@@ -112,6 +112,10 @@ public struct RootView: View {
     /// consent in `appState.crashReportingModel` — nothing is sent unless the user
     /// has opted in AND a DSN is present.
     @State private var crashReporting = CrashReportingController()
+    private var releaseNotes: ReleaseNotesModel { .shared }
+    @State private var pendingFeatureIntroduction: FeatureIntroduction?
+    @State private var isDismissingFeatureIntroduction = false
+    private let featureIntroductionStore: any FeatureIntroductionStoring
 
     /// Maps the active content identity (profile + accounts + Plex Home-user
     /// generation) to one scoped detail-snapshot cache, memoized for the app's
@@ -120,24 +124,31 @@ public struct RootView: View {
     @State private var detailCacheFactory = DetailSnapshotCacheFactory()
 
     @MainActor
-    public init(appState: AppState? = nil) {
-        _appState = State(initialValue: appState ?? Self.makeAppState())
-    }
+public init(
+    appState: AppState? = nil,
+    featureIntroductionStore: (any FeatureIntroductionStoring)? = nil
+) {
+    _appState = State(initialValue: appState ?? Self.makeAppState())
+    self.featureIntroductionStore =
+        featureIntroductionStore ?? FeatureIntroductionStore()
+}
 
-    /// The demo swaps only the account store and the provider registry — every
-    /// other model, setting and screen is the real one, which is the point: what
-    /// you see is Plozz, not a mock of Plozz.
-    @MainActor
-    private static func makeAppState() -> AppState {
-        guard KinoPubDemo.isEnabled else { return AppState() }
-        if let account = KinoPubDemoAccountStore().loadAccounts().first {
-            let session = account.session(token: "demo")
-            Task { await KinoPubDemo.runSelfCheckIfRequested(session: session) }
-        }
-        return AppState(
-            accountStore: KinoPubDemoAccountStore(),
-            registry: KinoPubDemo.makeRegistry()
-        )
+/// The demo swaps only the account store and the provider registry — every
+/// other model, setting and screen is the real one, which is the point: what
+/// you see is Plozz, not a mock of Plozz.
+@MainActor
+private static func makeAppState() -> AppState {
+    guard KinoPubDemo.isEnabled else { return AppState() }
+    if let account = KinoPubDemoAccountStore().loadAccounts().first {
+        let session = account.session(token: "demo")
+        Task { await KinoPubDemo.runSelfCheckIfRequested(session: session) }
+    }
+    return AppState(
+        accountStore: KinoPubDemoAccountStore(),
+        registry: KinoPubDemo.makeRegistry()
+    )
+}
+
     }
 
     /// The name THIS device holds for the offer's requested account. Since a per-server
@@ -199,7 +210,8 @@ public struct RootView: View {
             bundleIdentifier: Bundle.main.bundleIdentifier ?? "com.thatcube.Plozz",
             version: AppInfo.version,
             build: AppInfo.build,
-            providers: providers
+            providers: providers,
+            environment: AppReleaseChannel.current.crashReportEnvironment
         )
     }
 
@@ -213,6 +225,32 @@ public struct RootView: View {
             profileID: profile.id,
             plexPlaybackIdentityKey: profile.plexPlaybackIdentityKey(for: accounts)
         )
+    }
+
+    private var startupPresentationReady: Bool {
+        guard appState.profileFlow.pendingSetupProfile == nil else { return false }
+        guard case .ready = appState.state else { return false }
+        return !appState.profileFlow.isChoosingProfile
+            && appState.profileFlow.pendingLockedProfile == nil
+            && appState.profileFlow.pendingParentalSwitch == nil
+            && appState.profileFlow.pendingIdentityAccountID == nil
+            && appState.profileFlow.pendingLockOfferProfile == nil
+            && !appState.profileFlow.isPickingAppearanceForNewProfile
+            && !appState.profileFlow.hasResumableSetup
+            && appState.plexHomeUsers.pendingPlexPINRequest == nil
+    }
+
+    private var featureIntroductionStartupReady: Bool {
+        startupPresentationReady
+            && pendingFeatureIntroduction == nil
+            && featureIntroductionStore.needsPresentation(.navigationStyles)
+    }
+
+    private var releaseNotesStartupReady: Bool {
+        startupPresentationReady
+            && pendingFeatureIntroduction == nil
+            && !isDismissingFeatureIntroduction
+            && !featureIntroductionStore.needsPresentation(.navigationStyles)
     }
 
     public var body: some View {
@@ -237,7 +275,10 @@ public struct RootView: View {
                     appState: appState,
                     profile: setupProfile,
                     librariesStore: setupLibraries,
-                    deviceColorScheme: systemColorScheme
+                    deviceColorScheme: systemColorScheme,
+                    onNavigationSelected: {
+                        featureIntroductionStore.markCompleted(.navigationStyles)
+                    }
                 )
             } else {
                 switch appState.state {
@@ -250,7 +291,10 @@ public struct RootView: View {
                     step: step,
                     canReturnToApp: canReturnToApp,
                     deviceColorScheme: systemColorScheme,
-                    onSetUpFromAnotherDevice: canReturnToApp ? nil : { showSyncReceive = true }
+                    onSetUpFromAnotherDevice: canReturnToApp ? nil : { showSyncReceive = true },
+                    onNavigationSelected: {
+                        featureIntroductionStore.markCompleted(.navigationStyles)
+                    }
                 )
                 .fullScreenCover(isPresented: $showSyncReceive) {
                     SyncSetupReceiveView(appState: appState) { showSyncReceive = false }
@@ -332,6 +376,7 @@ public struct RootView: View {
                         audioController: appState.audioController,
                         homeLayoutStore: HomeLayoutStore(namespace: appState.profilesModel.activeNamespace),
                         homeContentStore: HomeContentStore(namespace: appState.profilesModel.activeNamespace),
+                        navigationLibrariesSnapshotStore: NavigationLibrariesSnapshotStore(namespace: appState.profilesModel.activeNamespace),
                         mediaItemActionHandler: appState.mediaItemActionHandler,
                         enqueueWatchMutation: { appState.enqueueWatchMutation($0) },
                         // These bridge closures are `@Sendable` (the player may invoke
@@ -347,9 +392,9 @@ public struct RootView: View {
                                     appState.beginLiveWatchSession(accountID: accountID, itemID: itemID)
                                 }
                             },
-                            finishPlayback: { accountID, itemID, watchedPercent, mutation in
+                            finishPlayback: { accountID, itemID, watchedPercent, mutation, item in
                                 Task { @MainActor in
-                                    appState.finishLiveWatchSession(accountID: accountID, itemID: itemID, watchedPercent: watchedPercent, mutation: mutation)
+                                    appState.finishLiveWatchSession(accountID: accountID, itemID: itemID, watchedPercent: watchedPercent, mutation: mutation, item: item)
                                 }
                             },
                             checkpoint: { mutation in
@@ -426,6 +471,7 @@ public struct RootView: View {
                         onSetSeerrUser: { appState.setSeerrUserForProfile(profileID: $0, user: $1) },
                         metadataSettings: appState.makeMetadataSettingsDependencies(),
                         identitySources: appState.identityIndex.identitySourcesProvider,
+                        identityRevision: appState.identityIndex.identityRevisionProvider,
                         onWarmIdentityIndex: { appState.identityIndex.warmIdentityIndex() },
                         onSetUpAnotherDevice: { showSyncSend = true },
                         syncEnabled: appState.syncSetup.isEnabled,
@@ -435,7 +481,9 @@ public struct RootView: View {
                         // subscribed the ROOT of the app to a model that ticks
                         // through every sync, and a root re-render dirties every
                         // view below it — the widest possible invalidation.
-                        syncStatusSummary: SyncStatusProvider { Self.syncStatusText(appState.cloudSyncStatus) },
+                        syncStatusSummary: SyncStatusProvider {
+                            Self.syncStatusPresentation(appState.cloudSyncStatus)
+                        },
                         onSyncNow: { appState.syncCloudNow() },
                         syncRepair: syncRepairActions,
                         pendingSyncedServers: appState.cloudSyncUI.pendingSyncedServers,
@@ -470,6 +518,7 @@ public struct RootView: View {
             )
         )
         .environment(\.plozzCardStyle, appState.profileSettings.cardStyleModel.style)
+        .environment(\.plozzCardFocusStyle, appState.profileSettings.cardStyleModel.focusStyle)
         .environment(\.plozzWatchStatusIndicator, appState.profileSettings.watchStatusIndicatorModel.indicator)
         // Read by the corner mark on a card whose title isn't in the library:
         // connected turns "not yours" into "you can ask for this". Injected here
@@ -578,20 +627,65 @@ public struct RootView: View {
                 onSkip: { appState.profileFlow.dismissLockOffer() }
             )
         }
-        // One-time theme picker for a profile just created in-app (Settings →
-        // "Add Profile"). The app has already switched to the new profile, so
-        // this edits its per-profile theme; Continue dismisses into the app.
+        .task(id: featureIntroductionStartupReady) {
+            if featureIntroductionStartupReady {
+                pendingFeatureIntroduction = .navigationStyles
+            }
+        }
+        .fullScreenCover(
+            item: $pendingFeatureIntroduction,
+            onDismiss: { isDismissingFeatureIntroduction = false }
+        ) { introduction in
+            switch introduction {
+            case .navigationStyles:
+                SelectNavigationStyleView(
+                    appState: appState,
+                    onContinue: {
+                        featureIntroductionStore.markCompleted(introduction)
+                        isDismissingFeatureIntroduction = true
+                        pendingFeatureIntroduction = nil
+                    }
+                )
+            default:
+                EmptyView()
+            }
+        }
+        .task(id: releaseNotesStartupReady) {
+            if releaseNotesStartupReady {
+                releaseNotes.prepareForStartup()
+            }
+        }
         .fullScreenCover(
             isPresented: Binding(
-                get: { appState.profileFlow.isPickingThemeForNewProfile },
-                set: { newValue in if !newValue { appState.finishNewProfileThemeSelection() } }
+                get: { releaseNotes.hasPendingStartupNotes },
+                set: { presented in
+                    if !presented {
+                        releaseNotes.dismissStartupNotes()
+                    }
+                }
             ),
-            onDismiss: { appState.profileFlow.presentPostThemeStep() }
+            onDismiss: { releaseNotes.dismissStartupNotes() }
         ) {
-            SelectThemeView(
+            ReleaseNotesStartupView(model: releaseNotes)
+        }
+        // One-time appearance flow for a profile just created in-app. The app has
+        // already switched profiles, so both choices write to its namespace.
+        .fullScreenCover(
+            isPresented: Binding(
+                get: { appState.profileFlow.isPickingAppearanceForNewProfile },
+                set: { newValue in
+                    if !newValue { appState.finishNewProfileAppearanceSelection() }
+                }
+            ),
+            onDismiss: { appState.profileFlow.presentPostAppearanceStep() }
+        ) {
+            NewProfileAppearanceFlowView(
                 appState: appState,
-                onContinue: { appState.finishNewProfileThemeSelection() },
-                deviceColorScheme: systemColorScheme
+                deviceColorScheme: systemColorScheme,
+                onComplete: {
+                    featureIntroductionStore.markCompleted(.navigationStyles)
+                    appState.finishNewProfileAppearanceSelection()
+                }
             )
         }
         .fullScreenCover(isPresented: $showSyncSend) {
@@ -649,7 +743,10 @@ public struct RootView: View {
             appState.drainWatchOutbox()
             reconcileCrashReporting()
         }
-        .onChange(of: appState.crashReportingModel.settings.isEnabled) { _, _ in
+        .onChange(of: appState.crashReportingModel.settings) { _, _ in
+            // Watches the whole value, not just `isEnabled`: flipping the
+            // maintainer marker changes the reporter's environment, and that only
+            // takes effect on a restart the controller performs from here.
             reconcileCrashReporting()
         }
         // Scene-phase side effects live in a zero-size child, NOT here.
@@ -674,6 +771,7 @@ public struct RootView: View {
                     appState.mediaShare.setBackgroundWorkAllowed(allowed)
                 },
                 onBecameActive: {
+                    appState.retryUnconfirmedCredentials()
                     appState.drainWatchOutbox()
                     // Pull the latest synced config when the app comes to the
                     // foreground (tvOS push is best-effort), so profile/setting
@@ -709,19 +807,17 @@ public struct RootView: View {
         .installNightShiftOverlay(appState.profileSettings.nightShiftModel)
     }
 
-    /// Composes the sync status line as `Text` rather than a `String`. The
-    /// diagnostic is a raw CloudKit message, so it stays verbatim; the wording
-    /// around it stays a resource and is resolved at render time.
-    private static func syncStatusText(_ status: CloudSyncStatus) -> Text {
-        let parts = status.summaryLineParts
-        var text = Text(parts.summary)
-        if let diagnostic = parts.diagnostic {
-            text = text + Text(verbatim: " · \(diagnostic)")
-        }
-        if let detail = parts.detail {
-            text = text + Text(verbatim: "\n") + Text(detail)
-        }
-        return text
+    /// Keeps status reads inside the leaf view that renders them. Reading the
+    /// observable phase at the app root would invalidate the entire app per tick.
+    private static func syncStatusPresentation(
+        _ status: CloudSyncStatus
+    ) -> SyncStatusPresentation {
+        SyncStatusPresentation(
+            summary: status.summary,
+            isSyncing: status.phase == .syncing,
+            itemCount: status.syncedRecordCount,
+            accountTag: status.accountTag
+        )
     }
 }
 
@@ -733,6 +829,7 @@ private enum OnboardingPage: Equatable {
     case confirmProfile
     case selectSeerr
     case selectTheme
+    case selectNavigation
 
     init(
         step: OnboardingStep,
@@ -754,6 +851,8 @@ private enum OnboardingPage: Equatable {
             self = .selectSeerr
         case .selectTheme:
             self = .selectTheme
+        case .selectNavigation:
+            self = .selectNavigation
         }
     }
 
@@ -766,6 +865,7 @@ private enum OnboardingPage: Equatable {
         case .confirmProfile: 4
         case .selectSeerr: 5
         case .selectTheme: 6
+        case .selectNavigation: 7
         }
     }
 
@@ -785,6 +885,8 @@ private enum OnboardingPage: Equatable {
             "selectSeerr"
         case .selectTheme:
             "selectTheme"
+        case .selectNavigation:
+            "selectNavigation"
         }
     }
 }
@@ -795,6 +897,7 @@ private struct OnboardingFlowView: View {
     let canReturnToApp: Bool
     let deviceColorScheme: ColorScheme
     var onSetUpFromAnotherDevice: (() -> Void)?
+    var onNavigationSelected: (() -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var displayedPage: OnboardingPage
@@ -807,13 +910,15 @@ private struct OnboardingFlowView: View {
         step: OnboardingStep,
         canReturnToApp: Bool,
         deviceColorScheme: ColorScheme,
-        onSetUpFromAnotherDevice: (() -> Void)? = nil
+        onSetUpFromAnotherDevice: (() -> Void)? = nil,
+        onNavigationSelected: (() -> Void)? = nil
     ) {
         self.appState = appState
         self.step = step
         self.canReturnToApp = canReturnToApp
         self.deviceColorScheme = deviceColorScheme
         self.onSetUpFromAnotherDevice = onSetUpFromAnotherDevice
+        self.onNavigationSelected = onNavigationSelected
         _displayedPage = State(initialValue: OnboardingPage(
             step: step,
             canReturnToApp: canReturnToApp,
@@ -827,7 +932,8 @@ private struct OnboardingFlowView: View {
                 page: displayedPage,
                 appState: appState,
                 deviceColorScheme: deviceColorScheme,
-                onSetUpFromAnotherDevice: onSetUpFromAnotherDevice
+                onSetUpFromAnotherDevice: onSetUpFromAnotherDevice,
+                onNavigationSelected: onNavigationSelected
             )
             .id(displayedPage.transitionID)
             .geometryGroup()
@@ -900,6 +1006,7 @@ private struct OnboardingPageContent: View {
     let appState: AppState
     let deviceColorScheme: ColorScheme
     var onSetUpFromAnotherDevice: (() -> Void)?
+    var onNavigationSelected: (() -> Void)?
 
     @ViewBuilder
     var body: some View {
@@ -920,7 +1027,8 @@ private struct OnboardingPageContent: View {
                         share: draft.share,
                         username: draft.username,
                         password: draft.password,
-                        displayName: draft.displayName
+                        displayName: draft.displayName,
+                        subpath: draft.subpath
                     )
                 },
                 onWebDAVShareConfigured: { config in
@@ -938,6 +1046,7 @@ private struct OnboardingPageContent: View {
                             host: config.host,
                             port: config.port,
                             exportPath: config.exportPath,
+                            subpath: config.subpath,
                             displayName: config.displayName
                         )
                     case let .sftp(config):
@@ -1013,6 +1122,14 @@ private struct OnboardingPageContent: View {
                 onContinue: { appState.finishThemeSelection() },
                 deviceColorScheme: deviceColorScheme
             )
+        case .selectNavigation:
+            SelectNavigationStyleView(
+                appState: appState,
+                onContinue: {
+                    onNavigationSelected?()
+                    appState.finishNavigationSelection()
+                }
+            )
         }
     }
 }
@@ -1029,6 +1146,7 @@ private struct ProfileSetupFlowView: View {
     let profile: Profile
     let librariesStore: ProfileSetupLibrariesLoader
     let deviceColorScheme: ColorScheme
+    let onNavigationSelected: () -> Void
     @State private var stage: ProfileSetupStage = .libraries
     @StateObject private var librariesNavigation = ProfileSetupNavigationState()
 
@@ -1113,8 +1231,17 @@ private struct ProfileSetupFlowView: View {
         case .theme:
             SelectThemeView(
                 appState: appState,
-                onContinue: { stage = .lock },
+                onContinue: { stage = .navigation },
                 deviceColorScheme: deviceColorScheme
+            )
+        case .navigation:
+            SelectNavigationStyleView(
+                appState: appState,
+                onContinue: {
+                    appState.completeProfileAppearanceSetup(for: profile.id)
+                    onNavigationSelected()
+                    stage = .lock
+                }
             )
         case .lock:
             ProfileLockOfferView(
@@ -1140,6 +1267,7 @@ private enum ProfileSetupStage {
     case libraries
     case seerr
     case theme
+    case navigation
     case lock
 }
 

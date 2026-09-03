@@ -54,7 +54,7 @@ struct CustomizeHomeDetailView: View {
     }
 
     private var rows: [SettingsSplitRow] {
-        homeRowsRows + heroRows
+        homeRowsRows + continueWatchingRows + heroRows
     }
 
     // MARK: - Rows on Home (one entry, grouped detail — leads with the Combine switch)
@@ -197,6 +197,34 @@ struct CustomizeHomeDetailView: View {
     private struct GlobalRowOption: Identifiable, Hashable {
         let row: HomeGlobalRow
         var id: String { row.rawValue }
+    }
+
+    // MARK: - Continue Watching (its own entry — a row's LOOK, not its presence)
+
+    /// Continue Watching's card style gets its own pane rather than riding in the
+    /// "Rows on Home" checklist, which answers a different question — which rows
+    /// appear — and whose every control is a checkmark against a row name.
+    private var continueWatchingRows: [SettingsSplitRow] {
+        [
+            SettingsSplitRow(
+                id: "continue-watching",
+                title: "Continue Watching",
+                description: "What the cards in this row show.",
+            ) {
+                ContinueWatchingArtworkPicker(
+                    style: Binding(
+                        get: {
+                            homeVisibility.continueWatchingShowsSeriesArtwork
+                                ? .logoAndArtwork
+                                : .thumbnail
+                        },
+                        set: {
+                            homeVisibility.setContinueWatchingShowsSeriesArtwork($0 == .logoAndArtwork)
+                        }
+                    )
+                )
+            }
+        ]
     }
 
     // MARK: - Hero (a single feature row: the whole hero form in one pane)

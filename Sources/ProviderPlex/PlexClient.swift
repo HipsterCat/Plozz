@@ -2,6 +2,120 @@ import Foundation
 import CoreModels
 import CoreNetworking
 
+public enum PlexOfflineTranscodeURLBuilder {
+    private static let hlsEndpoint =
+        "/video/:/transcode/universal/start.m3u8"
+    private static let progressiveEndpoint =
+        "/video/:/transcode/universal/start.mp4"
+
+    public static func makeURL(
+        from hlsURL: URL,
+        maximumVideoBitrateBps: Int,
+        maximumHeight: Int,
+        audioStreamID: Int?,
+        textSubtitleStreamID: Int?,
+        includesTextSubtitle: Bool
+    ) -> URL? {
+        guard var components = URLComponents(
+            url: hlsURL,
+            resolvingAgainstBaseURL: false
+        ) else {
+            return nil
+        }
+        guard components.path.hasSuffix(hlsEndpoint) else { return nil }
+        components.path = String(
+            components.path.dropLast(hlsEndpoint.count)
+        ) + progressiveEndpoint
+
+        var items = components.queryItems ?? []
+        func setQueryItem(_ name: String, _ value: String) {
+            items.removeAll {
+                $0.name.caseInsensitiveCompare(name) == .orderedSame
+            }
+            items.append(URLQueryItem(name: name, value: value))
+        }
+        let sessionID = items.first {
+            $0.name.caseInsensitiveCompare("session") == .orderedSame
+        }?.value.flatMap { $0.isEmpty ? nil : $0 } ?? UUID().uuidString
+
+        let approximateWidth = Int(
+            (Double(maximumHeight) * 16.0 / 9.0).rounded()
+        )
+        let maximumWidth = approximateWidth.isMultiple(of: 2)
+            ? approximateWidth
+            : approximateWidth + 1
+        setQueryItem(
+            "maxVideoBitrate",
+            String(maximumVideoBitrateBps / 1_000)
+        )
+        setQueryItem(
+            "videoResolution",
+            "\(maximumWidth)x\(maximumHeight)"
+        )
+        setQueryItem("session", sessionID)
+        setQueryItem("transcodeSessionId", sessionID)
+        setQueryItem("X-Plex-Session-Identifier", sessionID)
+        setQueryItem("hasMDE", "1")
+        setQueryItem("protocol", "http")
+        setQueryItem("context", "static")
+        setQueryItem("offlineTranscode", "1")
+        setQueryItem("directPlay", "0")
+        setQueryItem("directStream", "1")
+        setQueryItem("directStreamAudio", "1")
+        setQueryItem(
+            "videoBitrate",
+            String(maximumVideoBitrateBps / 1_000)
+        )
+        setQueryItem("transcodeType", "video")
+        setQueryItem("videoQuality", "100")
+        setQueryItem("offset", "0")
+        setQueryItem("fastSeek", "1")
+        setQueryItem("copyts", "1")
+        setQueryItem("X-Plex-Client-Profile-Name", "Generic")
+        setQueryItem(
+            "X-Plex-Client-Profile-Extra",
+            "add-transcode-target(type=videoProfile&context=static&protocol=http&container=mp4&videoCodec=h264&audioCodec=aac&subtitleCodec=mov_text&replace=true)"
+        )
+        if let audioStreamID {
+            setQueryItem("audioStreamID", String(audioStreamID))
+        }
+        if includesTextSubtitle, let textSubtitleStreamID {
+            setQueryItem("subtitleStreamID", String(textSubtitleStreamID))
+            setQueryItem("subtitles", "auto")
+        } else if !includesTextSubtitle {
+            items.removeAll {
+                $0.name.caseInsensitiveCompare("subtitleStreamID")
+                    == .orderedSame
+            }
+            setQueryItem("subtitles", "none")
+        }
+        components.queryItems = items
+        return components.url
+    }
+
+    public static func makeDownloadQueueURL(from progressiveURL: URL) -> URL? {
+        guard var components = URLComponents(
+            url: progressiveURL,
+            resolvingAgainstBaseURL: false
+        ), components.path.hasSuffix(progressiveEndpoint) else {
+            return nil
+        }
+        components.path = String(
+            components.path.dropLast(progressiveEndpoint.count)
+        ) + "/downloadQueue"
+        let excludedNames = [
+            "x-plex-session-identifier",
+            "x-plex-client-profile-name",
+            "x-plex-client-profile-extra"
+        ]
+        components.queryItems = components.queryItems?.filter {
+            $0.name.lowercased().hasPrefix("x-plex-")
+                && !excludedNames.contains($0.name.lowercased())
+        }
+        return components.url
+    }
+}
+
 /// Low-level Plex Media Server REST client.
 ///
 /// One instance is bound to a single server `baseURL` + `token`. It deals only
@@ -58,6 +172,8 @@ public struct PlexClient: Sendable {
     /// Resolved lazily on the first request; this is the synchronous best guess
     /// used by URL builders after a request has settled it.
     public var baseURL: URL { resolver.current }
+
+    var knownBaseURLs: [URL] { resolver.knownBaseURLs }
 
     /// Whether the resolver has a confirmed-reachable (or persisted last-known-good)
     /// connection, so `baseURL`'s locality can be trusted for best-source selection.
@@ -385,9 +501,18 @@ public struct PlexClient: Sendable {
     /// `GET /library/metadata/{ratingKey}/extras` — trailers and other extras
     /// (behind-the-scenes, deleted scenes, …) attached to an item. Each extra is
     /// a `clip` with its own ratingKey that streams through the normal playback
-    /// path. Callers filter by `subtype` to keep only trailers.
-    func extras(ratingKey: String) async throws -> [PlexMetadata] {
-        let endpoint = Endpoint(path: "/library/metadata/\(ratingKey)/extras", headers: headers)
+    /// path.
+    func extras(
+        ratingKey: String,
+        includeExternalMedia: Bool = true
+    ) async throws -> [PlexMetadata] {
+        let endpoint = Endpoint(
+            path: "/library/metadata/\(ratingKey)/extras",
+            queryItems: includeExternalMedia
+                ? []
+                : [URLQueryItem(name: "includeExternalMedia", value: "0")],
+            headers: headers
+        )
         return try await decode(PlexMediaContainerResponse.self, endpoint)
             .MediaContainer.Metadata ?? []
     }
@@ -430,6 +555,39 @@ public struct PlexClient: Sendable {
             path: "/hubs/sections/\(sectionID)",
             query: query
         ).MediaContainer.Hub ?? []
+    }
+
+    /// `GET /hubs/home/continueWatching` — the **actual** Continue Watching hub
+    /// the Plex apps render, as opposed to the older `/library/onDeck` feed this
+    /// client reads for the row.
+    ///
+    /// The two are not the same list and are not meant to be. The hub is the one
+    /// that honours Plex's "Remove from Continue Watching": dismissing a title
+    /// records an exclusion the hub applies and `onDeck` knows nothing about, so a
+    /// dismissed title keeps its `viewOffset` and keeps coming back through
+    /// `onDeck` forever. The hub also excludes next-up suggestions that `onDeck`
+    /// happily volunteers.
+    ///
+    /// Read **only** by the diagnostics path, to diff the two lists and prove
+    /// which of them a wrong row came from. Nothing user-facing consumes it, so
+    /// this cannot change what the row shows. Older servers may not route the
+    /// `home` variant; the caller falls back.
+    func continueWatchingHub(limit: Int, homeVariant: Bool = true) async throws -> [PlexMetadata] {
+        let container = try await decode(
+            PlexMediaContainerResponse.self,
+            Endpoint(
+                path: homeVariant ? "/hubs/home/continueWatching" : "/hubs/continueWatching",
+                queryItems: containerQuery(start: 0, size: limit),
+                headers: headers
+            )
+        ).MediaContainer
+        // The payload is a MediaContainer of Hubs; some servers inline the items
+        // directly instead. Accept both so a shape difference doesn't read as an
+        // empty hub, which would look exactly like "everything was dismissed".
+        if let hubs = container.Hub, !hubs.isEmpty {
+            return hubs.flatMap { $0.Metadata ?? [] }
+        }
+        return container.Metadata ?? []
     }
 
     /// `GET /library/sections/{id}/firstCharacter` — the section's title
@@ -626,6 +784,30 @@ public struct PlexClient: Sendable {
         _ = try await send(endpoint)
     }
 
+    /// `PUT /actions/removeFromContinueWatching` — dismisses a title from the
+    /// Continue Watching hub without touching its watched state.
+    ///
+    /// This is the same action the Plex apps offer, and it records an exclusion
+    /// the hub honours. Clearing the saved position via `/:/progress` does not do
+    /// the same job: the title stops being *in progress* but the server may still
+    /// surface it — an unwatched next episode being the usual reason — so it comes
+    /// back looking untouched.
+    ///
+    /// Undocumented but long-standing, and used by Plex's own clients. Treated as
+    /// best-effort by the caller for exactly that reason.
+    func removeFromContinueWatching(ratingKey: String) async throws {
+        let endpoint = Endpoint(
+            method: .put,
+            path: "/actions/removeFromContinueWatching",
+            queryItems: [
+                URLQueryItem(name: "ratingKey", value: ratingKey),
+                URLQueryItem(name: "X-Plex-Token", value: token)
+            ],
+            headers: headers
+        )
+        _ = try await send(endpoint)
+    }
+
     /// `GET /:/scrobble` (watched) or `GET /:/unscrobble` (unwatched) — toggles
     /// an item's watched state. Scrobbling a season/series ratingKey marks the
     /// contained episodes too.
@@ -666,6 +848,59 @@ public struct PlexClient: Sendable {
     // Failures surface to the caller, which reverts the optimistic UI.
 
     private static let watchlistBase = URL(string: "https://discover.provider.plex.tv")!
+
+    /// An absolute artwork URL on the plex.tv Discover host.
+    ///
+    /// Watchlist entries are Discover rows: their `thumb`/`art` are paths on
+    /// `discover.provider.plex.tv`, which is where this read asked for them (see
+    /// `includeFields` on `watchlistPage`). They are NOT paths on the viewer's
+    /// server, and handing them to ``imageURL(path:maxWidth:)`` asked that server
+    /// to fetch something it has never heard of — which it answered with a
+    /// placeholder rather than an error, the same placeholder every time, so a
+    /// row of different titles all wore one picture.
+    ///
+    /// Served directly rather than through a photo transcoder: the transcoder is
+    /// a per-server facility and this is not that server. `ArtworkImageVariant`
+    /// already caps what a card decodes, so an untranscoded poster costs a little
+    /// bandwidth and nothing else — and a poster that is merely larger than it
+    /// needs to be is still the right poster.
+    func discoverImageURL(path: String?) -> URL? {
+        guard let path, !path.isEmpty else { return nil }
+        // Discover sometimes answers with a fully-qualified URL of its own.
+        if let absolute = URL(string: path), absolute.scheme != nil { return absolute }
+        guard var components = URLComponents(
+            url: Self.watchlistBase,
+            resolvingAgainstBaseURL: false
+        ) else { return nil }
+        components.path = path.hasPrefix("/") ? path : "/" + path
+        components.queryItems = [URLQueryItem(name: "X-Plex-Token", value: plexTVToken)]
+        return components.url
+    }
+
+    /// Restores the current Discover credential on an exact saved Discover
+    /// resource. Plex CDN URLs are intentionally not accepted: those are already
+    /// public and must never be rewritten onto this host.
+    func reauthenticatedDiscoverImageURL(
+        _ persistedURL: URL
+    ) -> URL? {
+        guard persistedURL.host?.lowercased()
+                == Self.watchlistBase.host else { return nil }
+        let sanitized = SyncURLSanitizer.sanitize(persistedURL)
+        guard let path = MediaProviderURLIdentity.relativeResourcePath(
+            of: sanitized,
+            under: Self.watchlistBase
+        ), path.hasPrefix("/library/metadata/"),
+              !plexTVToken.isEmpty,
+              var components = URLComponents(
+                  url: sanitized,
+                  resolvingAgainstBaseURL: false
+              )
+        else { return nil }
+        components.queryItems = (components.queryItems ?? []) + [
+            URLQueryItem(name: "X-Plex-Token", value: plexTVToken)
+        ]
+        return components.url
+    }
 
     /// The Discover metadata id for a `plex://<type>/<id>` guid — the trailing
     /// path component the watchlist endpoints key on. `nil` for a non-`plex://`
@@ -843,31 +1078,115 @@ public struct PlexClient: Sendable {
     /// simply did not exist as far as Plozz was concerned. Nothing surfaced the
     /// shortfall either: a short page is indistinguishable from a short list.
     ///
-    /// Stops on the first short page, on a page that returns nothing, or once
-    /// `totalSize` is reached, and refuses to loop forever if a server keeps
-    /// handing back full pages.
+    /// Stops once `totalSize` is reached, on a short page only when the service
+    /// omitted `totalSize`, or when the service confirms an empty list. A short
+    /// page with a larger reported total is not complete: Discover occasionally
+    /// returns a partial window during startup, and accepting it would replace a
+    /// full cached watchlist with only those few titles.
+    /// How the watchlist is asked to be ordered.
+    ///
+    /// Without this the endpoint returns its own default, which is not the order
+    /// anything was added in and is not stable between reads — the reported
+    /// "seemingly random when I open the app". Everything downstream preserves the
+    /// order the server gave faithfully, so an unordered read is an unordered row.
+    ///
+    /// `watchlistedAt` is when the title was put on the watchlist, which is the
+    /// question being asked. `addedAt` looks similar and answers a different one:
+    /// when the title appeared in a library. Newest first, matching where Plex's
+    /// own clients put a fresh addition.
+    private static let watchlistSort = "watchlistedAt:desc"
+
+    private enum WatchlistPageError: Error {
+        case unsupportedSort
+    }
+
     func watchlist() async throws -> [PlexMetadata] {
+        do {
+            return try await readWatchlist(sort: Self.watchlistSort)
+        } catch WatchlistPageError.unsupportedSort {
+            // Restart from zero because an offset only has meaning within one
+            // ordering. A mixed sorted/unsorted read can repeat and omit titles.
+            PlozzLog.networking.error(
+                "Plex refused the watchlist sort; re-reading in the service's own order"
+            )
+            return try await readWatchlist(sort: nil)
+        }
+    }
+
+    private func readWatchlist(sort: String?) async throws -> [PlexMetadata] {
         let pageSize = 100
         // 10k titles. Far past any real watchlist, and the only purpose is to
         // stop a misbehaving server turning this into an unbounded loop.
         let hardCap = 100
         var collected: [PlexMetadata] = []
+        var seenIdentifiers: Set<String> = []
         var start = 0
+        var expectedTotal: Int?
 
         for _ in 0..<hardCap {
-            let container = try await watchlistPage(start: start, size: pageSize)
+            let container = try await watchlistPage(
+                start: start,
+                size: pageSize,
+                sort: sort
+            )
             let page = container.Metadata ?? []
+            if let total = container.totalSize {
+                guard total >= 0 else { throw AppError.invalidResponse }
+                if let expectedTotal {
+                    guard total == expectedTotal else {
+                        throw AppError.invalidResponse
+                    }
+                } else {
+                    expectedTotal = total
+                }
+            }
+            if let size = container.size, size != page.count {
+                throw AppError.invalidResponse
+            }
+            if let offset = container.offset, offset != start {
+                throw AppError.invalidResponse
+            }
+
+            guard !page.isEmpty else {
+                // A successful-looking response that says more titles exist but
+                // supplies none is incomplete. Throw so the native-view cache marks
+                // this refresh stale and keeps its last-known complete bucket.
+                if let expectedTotal, start < expectedTotal {
+                    throw AppError.invalidResponse
+                }
+                return collected
+            }
+
+            for item in page {
+                let identifiers = Set(
+                    [item.guid, item.ratingKey]
+                        .compactMap { $0 }
+                        .filter { !$0.isEmpty }
+                )
+                guard !identifiers.isEmpty,
+                      seenIdentifiers.isDisjoint(with: identifiers) else {
+                    throw AppError.invalidResponse
+                }
+                seenIdentifiers.formUnion(identifiers)
+            }
             collected.append(contentsOf: page)
-            if page.count < pageSize { break }
             start += page.count
-            if let total = container.totalSize, start >= total { break }
+            if let expectedTotal {
+                guard start <= expectedTotal else {
+                    throw AppError.invalidResponse
+                }
+                if start == expectedTotal { return collected }
+            } else if page.count < pageSize {
+                return collected
+            }
         }
-        return collected
+        throw AppError.invalidResponse
     }
 
     private func watchlistPage(
         start: Int,
-        size: Int
+        size: Int,
+        sort: String?
     ) async throws -> PlexMediaContainer {
         let endpoint = Endpoint(
             path: "/library/sections/watchlist/all",
@@ -875,6 +1194,9 @@ public struct PlexClient: Sendable {
                 URLQueryItem(name: "X-Plex-Token", value: plexTVToken),
                 URLQueryItem(name: "X-Plex-Container-Start", value: String(start)),
                 URLQueryItem(name: "X-Plex-Container-Size", value: String(size)),
+                // Omitted entirely when `nil` — an empty value is not the same as
+                // no preference, and some services treat it as a parse error.
+            ] + (sort.map { [URLQueryItem(name: "sort", value: $0)] } ?? []) + [
                 // `includeGuids=1` inlines each entry's external ids
                 // (imdb/tmdb/tvdb). Without it Plex returns only its own
                 // `plex://` guid, which identifies a title inside Plex and
@@ -896,7 +1218,35 @@ public struct PlexClient: Sendable {
             ],
             headers: plexTVHeaders
         )
-        let (data, _) = try await http.send(endpoint, baseURL: Self.watchlistBase)
+        let (data, response) = try await http.sendRaw(
+            endpoint,
+            baseURL: Self.watchlistBase
+        )
+        guard (200...299).contains(response.statusCode) else {
+            // A 400 from a request carrying `sort` is Plex's explicit rejection
+            // of that query. Only this response may discard ordering and retry;
+            // auth, transport, decoding, rate-limit, and server failures must
+            // propagate unchanged.
+            if sort != nil, response.statusCode == 400 {
+                throw WatchlistPageError.unsupportedSort
+            }
+            switch response.statusCode {
+            case 401, 403:
+                throw AppError.unauthorized
+            case 404:
+                throw AppError.notFound
+            case 409:
+                throw AppError.conflict
+            case 429:
+                throw AppError.rateLimited(
+                    retryAfter: response.value(
+                        forHTTPHeaderField: "Retry-After"
+                    ).flatMap(Double.init)
+                )
+            default:
+                throw AppError.invalidResponse
+            }
+        }
         do {
             return try JSONDecoder.plozz.decode(
                 PlexMediaContainerResponse.self,
@@ -1031,8 +1381,20 @@ public struct PlexClient: Sendable {
     /// Builds an absolute, token-bearing image URL for a server-relative art
     /// path (`thumb`/`art`), routed through Plex's photo transcoder so tvOS gets
     /// an appropriately sized image.
+    ///
+    /// A path that is **already absolute** is returned untouched. It belongs to
+    /// somebody else's host — a plex.tv Discover thumb, say, which is what every
+    /// watchlist entry carries — and wrapping one in this server's transcoder
+    /// asks the server to go and fetch a URL it has no business fetching, signed
+    /// with a token that means nothing there. The request doesn't fail visibly:
+    /// the server answers with a placeholder, the same placeholder every time,
+    /// so a whole watchlist row drew one show's poster under everybody else's
+    /// title while the captions stayed perfectly correct. Being unable to size
+    /// a remote image is a far smaller problem — `ArtworkImageVariant` already
+    /// caps what any card decodes.
     func imageURL(path: String?, maxWidth: Int?) -> URL? {
         guard let path, !path.isEmpty else { return nil }
+        if let absolute = URL(string: path), absolute.scheme != nil { return absolute }
         guard let width = maxWidth else {
             return absoluteURL(serverPath: path, extraQuery: [URLQueryItem(name: "X-Plex-Token", value: token)])
         }

@@ -1,9 +1,40 @@
-import AppRuntime
+@testable import AppRuntime
 import CoreModels
 import XCTest
 
 @MainActor
 final class UniversalWatchlistActionTests: XCTestCase {
+    func testPersistedArtworkRehydratesEvenWhenUniversalWatchlistIsOff() {
+        let signed = URL(
+            string: "https://plex.example/poster?token=current"
+        )!
+        let coordinator = MediaItemActionCoordinator(
+            providerResolver: { _ in nil },
+            primaryAccountID: { nil },
+            crossServerWatchSyncEnabled: { false },
+            enqueueWatchMutation: { _ in },
+            universalWatchlistEnabled: { false },
+            rehydratePersistedArtworkItems: { items in
+                items.map { item in
+                    var item = item
+                    item.posterURL = signed
+                    return item
+                }
+            }
+        )
+        let item = MediaItem(
+            id: "item",
+            title: "Item",
+            kind: .movie
+        )
+
+        XCTAssertEqual(
+            coordinator.rehydratePersistedArtwork([item])
+                .first?.posterURL,
+            signed
+        )
+    }
+
     func testExternalDiscoveryGetsLocalWatchlistWithoutProviderActions() {
         var providerResolutions = 0
         let coordinator = MediaItemActionCoordinator(
@@ -161,7 +192,7 @@ final class UniversalWatchlistActionTests: XCTestCase {
 
         XCTAssertEqual(
             feedback,
-            ["Added to Watchlist", "Removed from Watchlist"]
+            ["Added to Watchlist", "Removing from Watchlist…"]
         )
         XCTAssertEqual(
             events,
@@ -217,7 +248,7 @@ final class UniversalWatchlistActionTests: XCTestCase {
             feedback,
             [
                 "Added to Watchlist",
-                "Removed from Watchlist",
+                "Removing from Watchlist…",
                 "Couldn't update Watchlist",
             ]
         )
@@ -399,4 +430,25 @@ final class UniversalWatchlistActionTests: XCTestCase {
         XCTAssertEqual(asked, ["plex", "jellyfin"])
     }
 
+    /// The process-wide membership memo has to be droppable, not just re-keyed.
+    ///
+    /// Its key is a hash of COUNTS, and a removal of a title whose presence came
+    /// from a destination's own list moves none of them — only a tombstone lands.
+    /// Without an explicit drop the pre-removal set is served back under the same
+    /// key and the bookmark keeps rendering "on the watchlist". Every local
+    /// mutation calls `invalidate()` through `announceUniversalWatchlistDidChange`.
+    func testMembershipMemoCanBeDroppedUnderAnUnchangedRevision() {
+        let cache = UniversalWatchlistMembershipCache.shared
+        let series = MediaAliasID()
+        let revision: UInt64 = 4_242
+        let generation = cache.generation
+
+        cache.store([series], revision: revision)
+        XCTAssertEqual(cache.ids(for: revision), [series])
+
+        cache.invalidate()
+
+        XCTAssertNil(cache.ids(for: revision))
+        XCTAssertEqual(cache.generation, generation &+ 1)
+    }
 }

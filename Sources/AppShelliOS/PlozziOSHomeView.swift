@@ -3,8 +3,10 @@ import AppRuntime
 import CoreModels
 import CoreUI
 import FeatureHomeCore
+import HeroUI
 import MediaDownloads
 import Observation
+import RatingsService
 import SwiftUI
 import UIKit
 
@@ -19,13 +21,42 @@ private final class PlozziOSHomeHeroPullModel {
     }
 }
 
+struct PlozziOSHomeLoadID: Equatable {
+    let visibility: HomeLibraryVisibility
+    let viewModelID: ObjectIdentifier
+
+    init(
+        visibility: HomeLibraryVisibility,
+        viewModel: HomeViewModel
+    ) {
+        self.visibility = visibility
+        viewModelID = ObjectIdentifier(viewModel)
+    }
+}
+
 struct PlozziOSHomeView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.plozziOSHeroContainerHeight) private var heroContainerHeight
     @Environment(HeroTrailerController.self) private var trailerController
-    @State private var viewModel: HomeViewModel
+    private let viewModel: HomeViewModel
     @State private var featuredItems: [MediaItem] = []
     @State private var heroItems: [MediaItem] = []
+    /// The slides on screen — the fronted one, plus whatever a committed swipe is
+    /// landing on — so a background curation folds new media into a free slot
+    /// instead of over one of them.
+    @State private var heroPinnedItemIDs: Set<String> = []
+    /// Which hero configuration `heroItems` was curated for. A change to it is a
+    /// direct instruction from the viewer, so the carousel restarts from the fresh
+    /// curation instead of folding into the old one.
+    @State private var heroCuratedConfiguration: HeroConfigurationKey?
+    /// How many consecutive curations have failed to offer each retained title,
+    /// so a deleted or un-watchlisted one eventually leaves. See `HeroLiveMerge`.
+    @State private var heroRetainedMisses: [String: Int] = [:]
+    /// The Random source's retained draw, so a background recomputation reuses the
+    /// titles already on screen instead of re-shuffling every library on every
+    /// connected server. See ``HeroRandomRollStore``.
+    @State private var heroRandomRolls = HeroRandomRollStore()
     @State private var playbackRequest: PlozziOSPlaybackRequest?
     @State private var isRequestingHero = false
     @State private var heroRequestStatuses: [String: MediaAvailabilityStatus] = [:]
@@ -42,37 +73,47 @@ struct PlozziOSHomeView: View {
     @State private var heroRequestConfirmItem: MediaItem?
     @State private var heroRequestConfirmSeasons: [Int]?
     @State private var heroRequestError: LocalizedStringResource?
+    @State private var watchlistIntentRevision = 0
     private let appModel: PlozziOSAppModel
     private let onAddServer: () -> Void
     private let onShowSettings: () -> Void
+    private let heroMetadataEnricher: HeroMetadataEnricher
 
     init(
         appModel: PlozziOSAppModel,
+        viewModel: HomeViewModel,
         onAddServer: @escaping () -> Void,
         onShowSettings: @escaping () -> Void
     ) {
         self.appModel = appModel
         self.onAddServer = onAddServer
         self.onShowSettings = onShowSettings
-        _viewModel = State(
-            initialValue: HomeViewModel(
-                accounts: appModel.accountsProviders.homeAccounts,
-                contentStore: HomeContentStore(
-                    namespace: appModel.profiles.activeNamespace
-                ),
-                identitySources: appModel.identityIndex.identitySourcesProvider,
-                currentVisibility: { [weak appModel] in
-                    appModel?.settings.homeVisibility.visibility ?? .default
-                },
-                pendingWatchMutations: { [weak appModel] in
-                    await appModel?.pendingWatchMutations() ?? []
-                },
-                recentlyAppliedRecency: { [weak appModel] in
-                    await appModel?.appliedWatchRecency() ?? [:]
-                },
-                mediaItemActionHandler: appModel.mediaItemActionHandler
-            )
+        let heroAccounts = appModel.accountsProviders.resolvedActiveAccounts
+        let identitySources = appModel.identityIndex.identitySourcesProvider
+        heroMetadataEnricher = HeroMetadataEnricher(
+            accounts: heroAccounts,
+            targetSelector: {
+                PlaybackSourceSelection.bestPlayItem(
+                    $0,
+                    accounts: heroAccounts,
+                    identitySources: identitySources
+                )
+            },
+            ratingsProvider: RatingsServiceFactory.make()
         )
+        self.viewModel = viewModel
+        // Paint last session's hero in the first frame instead of a skeleton. It
+        // holds no Continue Watching slides (see `HeroCurationResult.durableItems`),
+        // and the fresh curation folds into it rather than replacing it, so the
+        // slides on screen keep their slots when it lands. Same policy as tvOS.
+        let settings = appModel.settings.hero.settings
+        if settings.isActive,
+           let seed = viewModel.cachedHeroItems(for: settings) {
+            _heroItems = State(initialValue: seed)
+            _heroCuratedConfiguration = State(
+                initialValue: HeroConfigurationKey(settings: settings)
+            )
+        }
     }
 
     var body: some View {
@@ -111,6 +152,10 @@ struct PlozziOSHomeView: View {
                 loadedContent(content)
             }
         }
+        // The portrait hero is sized to the phone, not to a constant — see
+        // `HeroStageMetrics`. Published here so the loading skeleton reserves the
+        // same height the real hero will take, rather than reflowing when it lands.
+        .plozziOSTracksHeroContainerHeight()
         .navigationTitle(Text(verbatim: ""))
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
@@ -127,7 +172,12 @@ struct PlozziOSHomeView: View {
                 PlozziOSSettingsAvatarButton(size: 36, action: onShowSettings)
             }
         }
-        .task(id: appModel.settings.homeVisibility.visibility) {
+        .task(
+            id: PlozziOSHomeLoadID(
+                visibility: appModel.settings.homeVisibility.visibility,
+                viewModel: viewModel
+            )
+        ) {
             await viewModel.loadIfNeeded(
                 for: appModel.settings.homeVisibility.visibility
             )
@@ -158,7 +208,31 @@ struct PlozziOSHomeView: View {
                 for: .universalWatchlistDidChange
             )
         ) { _ in
+            viewModel.scheduleDurableWatchlistRefresh()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: .watchlistIntentDidChange
+            )
+        ) { _ in
+            watchlistIntentRevision &+= 1
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: .universalWatchlistCacheDidLoad
+            )
+        ) { _ in
+            // The cache is already in memory, and nobody is waiting for a press
+            // acknowledgement. Fold last-known ownership immediately rather than
+            // waiting for the interaction debounce used above.
             viewModel.refreshDurableWatchlist()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: .universalWatchlistLoadingProgressDidChange
+            )
+        ) { _ in
+            viewModel.refreshWatchlistLoadingProgress()
         }
         .onReceive(NotificationCenter.default.publisher(for: .identityIndexDidUpdate)) { _ in
             viewModel.scheduleReenrich()
@@ -233,7 +307,9 @@ struct PlozziOSHomeView: View {
         let rows = HomeRow.rows(
             for: content,
             isLibraryVisible: visibility.isVisibleOnHome,
-            isGlobalRowEnabled: visibility.isGlobalRowEnabled
+            isGlobalRowEnabled: visibility.isGlobalRowEnabled,
+            includesEmptyWatchlist:
+                viewModel.watchlistLoadingPlaceholderCount > 0
         )
         let heroStyle: HeroArtworkStyle = horizontalSizeClass == .compact
             ? .compactPortrait
@@ -241,7 +317,8 @@ struct PlozziOSHomeView: View {
         let trailerPauseThreshold = PlozziOSHeroMetrics.height(
             style: heroStyle,
             surfaceRole: .home,
-            dynamicTypeSize: dynamicTypeSize
+            dynamicTypeSize: dynamicTypeSize,
+            containerHeight: heroContainerHeight
         ) / 2
         let scroll = ScrollView {
             // NOT lazy, deliberately. Each row is itself a horizontal ScrollView
@@ -253,7 +330,14 @@ struct PlozziOSHomeView: View {
             // per-card laziness that actually matters (artwork loading) lives in
             // the inner LazyHStacks, which are untouched.
             VStack(alignment: .leading, spacing: 30) {
-                if heroItems.isEmpty {
+                // Retire a carousel the viewer's own settings just invalidated
+                // WITHOUT waiting for the async re-curation, exactly as tvOS's
+                // `HomeHeroDisplayResolver` does. Otherwise sources they just
+                // switched off keep rendering for the whole refresh.
+                let heroConfiguration = HeroConfigurationKey(
+                    settings: appModel.settings.hero.settings
+                )
+                if heroItems.isEmpty || heroCuratedConfiguration != heroConfiguration {
                     // Reserve the hero's height while it resolves, so the rows
                     // below don't get shoved down when it lands (tvOS has had
                     // HomeHeroSkeletonView for this).
@@ -269,8 +353,26 @@ struct PlozziOSHomeView: View {
                         requestStatus: { heroRequestStatuses[$0.id] },
                         onRequest: beginHeroRequest,
                         onRequestSeasons: beginHeroSeasonRequest,
+                        onPinnedItemsChanged: { heroPinnedItemIDs = $0 },
                         pullModel: heroPullModel
                     )
+                    // Warm every slide's logo as soon as the carousel exists.
+                    //
+                    // `HeroLogoArtwork` shows the styled title while the logo
+                    // resolves, so a cold logo reads as the show's name flashing
+                    // and then being replaced — the artwork arriving looks like a
+                    // glitch rather than like loading. tvOS has warmed logos on its
+                    // hero for a while (`HeroLogoPreloader` on the carousel's
+                    // lookahead); iOS never did, so it paid the swap on every
+                    // slide.
+                    //
+                    // Deliberately NOT paired with `.onArrival`, which is how tvOS
+                    // suppresses a late swap: that keeps the *text* when a logo
+                    // misses the window, and the ask here is to see the logo. This
+                    // wins the race instead of hiding the loser.
+                    .task(id: heroItems.map(\.id).joined(separator: "|")) {
+                        await warmHeroLogos(for: heroItems)
+                    }
                 }
 
                 // Trending row intentionally NOT shown on iOS/iPadOS (2026-07-25).
@@ -286,14 +388,22 @@ struct PlozziOSHomeView: View {
                     ForEach(rows) { row in
                         PlozziOSHomeRowView(
                             row: row,
-                            appModel: appModel
+                            appModel: appModel,
+                            viewModel: viewModel,
+                            watchlistIntentRevision: watchlistIntentRevision,
+                            watchlistLoadingPlaceholderCount:
+                                viewModel.watchlistLoadingPlaceholderCount
                         )
                     }
                 } else {
                     ForEach(rows.filter { $0.kind != .libraries }) { row in
                         PlozziOSHomeRowView(
                             row: row,
-                            appModel: appModel
+                            appModel: appModel,
+                            viewModel: viewModel,
+                            watchlistIntentRevision: watchlistIntentRevision,
+                            watchlistLoadingPlaceholderCount:
+                                viewModel.watchlistLoadingPlaceholderCount
                         )
                     }
                     if content.librarySections.isEmpty {
@@ -324,7 +434,9 @@ struct PlozziOSHomeView: View {
                                     style: section.style == .landscape
                                         ? .landscape
                                         : .poster,
-                                    appModel: appModel
+                                    appModel: appModel,
+                                    onNavigationInteraction:
+                                        viewModel.noteHomeNavigationInteraction
                                 )
                             }
                         }
@@ -334,7 +446,10 @@ struct PlozziOSHomeView: View {
                     }) {
                         PlozziOSHomeRowView(
                             row: libraries,
-                            appModel: appModel
+                            appModel: appModel,
+                            viewModel: viewModel,
+                            watchlistIntentRevision: watchlistIntentRevision,
+                            watchlistLoadingPlaceholderCount: 0
                         )
                     }
                 }
@@ -505,6 +620,24 @@ struct PlozziOSHomeView: View {
         }
     }
 
+    /// Decodes each hero slide's logo into the shared cache before the slide is
+    /// looked at, so `HeroLogoArtwork` resolves from memory and the styled title
+    /// it falls back to is never seen.
+    ///
+    /// Ordered rather than concurrent, and at background priority: this is work
+    /// for slides the viewer has not reached yet, so it must not compete with the
+    /// artwork and metadata the first slide is waiting on. `HeroLogoPipeline`
+    /// de-duplicates by URL, so a slide that resolves on its own first costs
+    /// nothing here.
+    private func warmHeroLogos(for items: [MediaItem]) async {
+        for item in items {
+            guard !Task.isCancelled else { return }
+            let references = item.artworkReferences(for: .logo)
+            guard !references.isEmpty else { continue }
+            await HeroLogoPreloader.warm(references: references)
+        }
+    }
+
     private func play(_ item: MediaItem) {
         trailerController.stop()
         // A series or season can't be played directly (see `playbackTarget`), so
@@ -667,7 +800,18 @@ struct PlozziOSHomeView: View {
         }
         let featured = featuredItems
         let pendingMutations = await viewModel.pendingHeroWatchMutations()
-        let curated = await HeroCurator().curate(
+        let rolls = heroRandomRolls
+        let rollKey = HeroRandomRollStore.Key(
+            libraries: randomLibraries,
+            limit: settings.maxItems,
+            hideWatched: settings.hideWatched,
+            // The draw belongs to one profile's servers. Without this, switching
+            // profile could keep serving the previous one's titles for the rest of
+            // the lifetime whenever the resolved library set happened to match.
+            scope: appModel.profiles.activeNamespace ?? ""
+        )
+        let curator = HeroCurator()
+        let result = await curator.curateResult(
             settings: settings,
             continueWatching: content.continueWatching,
             watchlist: content.watchlist,
@@ -677,10 +821,72 @@ struct PlozziOSHomeView: View {
             featuredProvider: { limit in
                 Array(featured.prefix(limit))
             },
-            randomProvider: randomProvider
+            randomProvider: { libraries, limit in
+                await rolls.items(for: rollKey) {
+                    await randomProvider(libraries, limit)
+                }
+            }
         )
         guard !Task.isCancelled else { return }
-        heroItems = curated
+        // List records can carry an overview but omit their tagline. Publish only
+        // after the full hero metadata is ready, otherwise selecting a slide starts
+        // a detail fetch that visibly replaces the overview with the tagline.
+        let enriched = await heroMetadataEnricher.enrich(result.items)
+        guard !Task.isCancelled else { return }
+        let curated = curator.deduplicating(enriched)
+        // Fold the fresh curation into what is already on screen rather than
+        // replacing it, so a background refresh cannot reshuffle the carousel or
+        // move the slide the viewer is looking at. Identical policy to tvOS,
+        // including starting fresh when the viewer changed the hero's own
+        // configuration rather than reshaping the old set, and re-applying the
+        // current watched intent so a finished title can't be retained.
+        let configuration = HeroConfigurationKey(settings: settings)
+        let freshIsAuthoritative = HeroEmptyCuration.isAuthoritative(
+            settings: settings,
+            continueWatching: content.continueWatching,
+            watchlist: content.watchlist,
+            recentlyAdded: content.latest,
+            randomLibraries: randomLibraries,
+            seerConnected: appModel.seerService.isConfigured
+        )
+        let foldsIntoLoadedSet = heroCuratedConfiguration == configuration
+        let showing = foldsIntoLoadedSet
+            ? curator.reconcile(
+                heroItems,
+                settings: settings,
+                watchMutations: pendingMutations
+            )
+            : []
+        let merge = HeroLiveMerge.merge(
+            showing: showing,
+            fresh: curated,
+            limit: settings.maxItems,
+            pinnedItemIDs: heroPinnedItemIDs,
+            misses: foldsIntoLoadedSet ? heroRetainedMisses : [:],
+            freshIsAuthoritative: freshIsAuthoritative
+        )
+        heroCuratedConfiguration = configuration
+        heroRetainedMisses = merge.misses
+        if merge.items != heroItems { heroItems = merge.items }
+        // What the next launch may repaint instead of a skeleton, re-checked
+        // against the final payload (see `HeroDurableSnapshot`).
+        // Gated on authority, not on the carousel being empty. `merge.items` is
+        // empty whenever nothing was showing and the curation returned nothing —
+        // including a transient failure right after a settings change, when
+        // `showing` is deliberately empty — and deleting the snapshot there is the
+        // very thing `saveHero`'s empty-write refusal exists to prevent.
+        let enrichedByID = Dictionary(
+            curated.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let durable = HeroDurableSnapshot.filter(
+            result.durableItems.map { enrichedByID[$0.id] ?? $0 }
+        )
+        if durable.isEmpty, freshIsAuthoritative {
+            viewModel.clearCachedHeroItems()
+        } else {
+            viewModel.cacheHeroItems(durable, for: settings)
+        }
     }
 }
 
@@ -718,9 +924,16 @@ private struct PlozziOSHeroLoadID: Equatable {
 private struct PlozziOSHomeHeroCarousel: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.plozziOSHeroContainerHeight) private var heroContainerHeight
     @Environment(HeroTrailerController.self) private var trailerController
     @State private var selectedItemID: String?
     @State private var dwellStart = Date()
+    /// Seconds of this slide's dwell spent showing a trailer, which the countdown
+    /// does not charge for. Everything else is derived from `dwellStart` — the
+    /// same clock the paging gauge reads — so the two can never disagree, and
+    /// restarting the countdown task (which a changed item set requires) resumes
+    /// it rather than discarding the seconds already served.
+    @State private var dwellTrailerSeconds = 0.0
     /// The slide `dwellStart` was set for. `selectedItemID` and the dwell reset
     /// on separate passes, so the id is the only reliable way to tell whether
     /// the clock on screen actually belongs to the slide being shown.
@@ -746,6 +959,9 @@ private struct PlozziOSHomeHeroCarousel: View {
     /// Per-season request handler for a featured **series** (item, chosen season
     /// numbers). When set, the series Request CTA becomes a season-picker menu.
     var onRequestSeasons: ((MediaItem, [Int]) -> Void)?
+    /// Reports the slides on screen, so a background curation can fold new media
+    /// in without displacing what the viewer is looking at (see `HeroLiveMerge`).
+    var onPinnedItemsChanged: (Set<String>) -> Void = { _ in }
     let pullModel: PlozziOSHomeHeroPullModel
 
     /// Loaded Seerr season-request availability for featured discovery series,
@@ -762,7 +978,12 @@ private struct PlozziOSHomeHeroCarousel: View {
         let heroHeight = PlozziOSHeroMetrics.height(
             style: style,
             surfaceRole: .home,
-            dynamicTypeSize: dynamicTypeSize
+            dynamicTypeSize: dynamicTypeSize,
+            containerHeight: heroContainerHeight
+        )
+        let extendsArtwork = PlozziOSHeroMetrics.extendsArtwork(
+            style: style,
+            surfaceRole: .home
         )
         GeometryReader { proxy in
             let swipeDistance = max(proxy.size.width, 1)
@@ -782,10 +1003,24 @@ private struct PlozziOSHomeHeroCarousel: View {
                     PlozziOSPullResponsiveHomeBackdrop(
                         model: pullModel,
                         style: style,
-                        heroHeight: heroHeight
+                        heroHeight: heroHeight,
+                        extendsArtwork: extendsArtwork
                     ) { pullScale in
                         ZStack {
                             if let dragTargetItem {
+                                let _ = HeroArtDiagnostics.emitOnce(
+                                    stage: "slide-layers",
+                                    key: "\(currentItem.id)|\(dragTargetItem.id)"
+                                ) {
+                                    // The incoming layer sits BENEATH at full
+                                    // opacity while the outgoing fades over it, so
+                                    // an outgoing layer that is still loading shows
+                                    // the incoming picture through.
+                                    "slide LAYERS under=\(dragTargetItem.title) "
+                                    + "over=\(currentItem.title) "
+                                    + "underResident=\(backdropIsResident(dragTargetItem)) "
+                                    + "overResident=\(backdropIsResident(currentItem))"
+                                }
                                 PlozziOSHomeStaticBackdrop(
                                     item: dragTargetItem,
                                     style: style,
@@ -793,7 +1028,8 @@ private struct PlozziOSHomeHeroCarousel: View {
                                     contentOffsetX: incomingX,
                                     showsTrailer: false,
                                     usesSlidingArtwork: true,
-                                    ancestorScale: pullScale
+                                    ancestorScale: pullScale,
+                                    extendsArtwork: extendsArtwork
                                 )
 
                                 PlozziOSHomeStaticBackdrop(
@@ -803,7 +1039,8 @@ private struct PlozziOSHomeHeroCarousel: View {
                                     contentOffsetX: outgoingX,
                                     showsTrailer: false,
                                     usesSlidingArtwork: true,
-                                    ancestorScale: pullScale
+                                    ancestorScale: pullScale,
+                                    extendsArtwork: extendsArtwork
                                 )
                                 .opacity(1 - progress)
                             } else {
@@ -811,7 +1048,8 @@ private struct PlozziOSHomeHeroCarousel: View {
                                     item: currentItem,
                                     style: style,
                                     height: heroHeight,
-                                    ancestorScale: pullScale
+                                    ancestorScale: pullScale,
+                                    extendsArtwork: extendsArtwork
                                 )
                                 .id(currentItem.id)
                             }
@@ -909,12 +1147,20 @@ private struct PlozziOSHomeHeroCarousel: View {
                 .offset(y: 10)
             }
         }
-        .onChange(of: items.map(\.id), initial: true) { _, itemIDs in
-            if selectedItemID == nil || !itemIDs.contains(selectedItemID ?? "") {
-                selectedItemID = itemIDs.first
-                dwellStart = .now
-                dwellItemID = itemIDs.first
+        .onChange(of: items.map(\.id), initial: true) { oldIDs, itemIDs in
+            guard selectedItemID == nil || !itemIDs.contains(selectedItemID ?? "") else {
+                return
             }
+            // Re-seat by POSITION, not to the front. A curation folding into the
+            // live set keeps every slot where it was (see `HeroLiveMerge`), so the
+            // slide at the same index is the one the viewer was on — jumping to
+            // the first slide would throw away their place in the carousel.
+            let slot = oldIDs.firstIndex(of: selectedItemID ?? "") ?? 0
+            let seated = itemIDs.indices.contains(slot) ? itemIDs[slot] : itemIDs.first
+            selectedItemID = seated
+            dwellStart = .now
+            dwellTrailerSeconds = 0
+            dwellItemID = seated
         }
         .task(
             id: PlozziOSHeroTimerID(
@@ -924,7 +1170,6 @@ private struct PlozziOSHomeHeroCarousel: View {
             )
         ) {
             guard autoAdvance, items.count > 1 else { return }
-            var elapsed = 0
             var countdownItemID = selectedItemID
             while !Task.isCancelled {
                 do {
@@ -934,24 +1179,32 @@ private struct PlozziOSHomeHeroCarousel: View {
                 }
                 if countdownItemID != selectedItemID {
                     countdownItemID = selectedItemID
-                    elapsed = 0
+                    dwellTrailerSeconds = 0
                 }
                 if let selectedItemID,
                    trailerController.isShowing(selectedItemID) {
+                    dwellTrailerSeconds += 1
                     continue
                 }
-                elapsed += 1
-                if elapsed >= autoAdvanceSeconds {
+                let elapsed = Date().timeIntervalSince(dwellStart)
+                    - dwellTrailerSeconds
+                if elapsed >= Double(autoAdvanceSeconds) {
                     page(forward: true)
                     countdownItemID = selectedItemID
-                    elapsed = 0
+                    dwellTrailerSeconds = 0
                 }
             }
         }
         .onChange(of: selectedItemID, initial: true) {
             dwellStart = .now
+            dwellTrailerSeconds = 0
             dwellItemID = selectedItemID
             installTrailerEndHandler()
+        }
+        // Both slides a committed swipe involves are on screen at once, so both
+        // are off-limits to a curation folding new media in.
+        .onChange(of: PlozziOSHeroPinnedIDs(selectedItemID, transitionTargetID), initial: true) { _, pinned in
+            onPinnedItemsChanged(pinned.ids)
         }
         .task(id: selectedItemID) {
             guard let currentItem else { return }
@@ -978,6 +1231,11 @@ private struct PlozziOSHomeHeroCarousel: View {
         // returning viewer's badge is there on the first frame.
         .task(id: items.map(\.id).joined(separator: "|")) {
             await schedules.loadCached(items)
+        }
+        // Keyed on the curated set rather than the slide: this warms the whole
+        // carousel once, and must not restart on every swipe.
+        .task(id: items.map(\.id).joined(separator: "|")) {
+            await warmHeroPreviews()
         }
         // Only the slide on screen is fetched; the rest fill in as they front
         // rather than firing a burst of requests at first paint.
@@ -1020,6 +1278,26 @@ private struct PlozziOSHomeHeroCarousel: View {
         }
         guard dragOffset != 0, items.count > 1 else { return nil }
         return adjacentItem(forward: dragOffset < 0)
+    }
+
+    /// Whether this item's hero backdrop is already decoded and resident.
+    ///
+    /// The decisive fact for the transition flash. Every transition swaps the
+    /// backdrop between two different view TYPES (`PlozziOSHeroBackdrop` when
+    /// idle, `PlozziOSSlidingHeroArtwork` while sliding), which SwiftUI cannot
+    /// reuse across — so each one is rebuilt and reloads through
+    /// `FallbackAsyncImage`. A rebuild whose image is already in this cache is
+    /// invisible; a rebuild that misses leaves the layer blank for a moment, and
+    /// the incoming slide is drawn directly beneath it at full opacity.
+    private func backdropIsResident(_ item: MediaItem) -> Bool {
+        let references = HeroPresentation(
+            item: item,
+            artworkStyle: horizontalSizeClass == .compact ? .compactPortrait : .landscape,
+            surface: .home
+        ).artworkReferences
+        return references.contains {
+            ArtworkImageCache.shared.cachedImage(for: $0, variant: .heroBackdrop) != nil
+        }
     }
 
     private func provider(for item: MediaItem) -> (any MediaProvider)? {
@@ -1211,6 +1489,15 @@ private struct PlozziOSHomeHeroCarousel: View {
         transitionInProgress = true
         transitionDirection = forward ? -1 : 1
         transitionTargetID = target.id
+        HeroArtDiagnostics.emit(
+            "slide BEGIN from=\(currentItem?.title ?? "?") to=\(target.title) "
+            + "forward=\(forward) "
+            + "fromResident=\(currentItem.map(backdropIsResident) ?? false) "
+            + "toResident=\(backdropIsResident(target)) "
+            + "trailerShowing=\(currentItem.map { trailerController.isShowing($0.id) } ?? false) "
+            + "trailerPlaying=\(trailerController.isPlaying) "
+            + "dragOffset=\(Int(dragOffset))"
+        )
         let distance = max(stageWidth, 1)
         let currentProgress = min(abs(dragOffset) / distance, 1)
         let remainingProgress = max(1 - currentProgress, 0)
@@ -1242,6 +1529,13 @@ private struct PlozziOSHomeHeroCarousel: View {
                 dragOffset = 0
                 foregroundVisible = false
             }
+            HeroArtDiagnostics.emit(
+                "slide COMMIT now=\(target.title) "
+                // The idle backdrop is a different view TYPE from the sliding one,
+                // so it is built fresh here. A miss means it paints blank for a
+                // moment at the very end of the transition.
+                + "nowResident=\(backdropIsResident(target))"
+            )
             withAnimation(.easeInOut(duration: 0.24)) {
                 foregroundVisible = true
             }
@@ -1249,29 +1543,105 @@ private struct PlozziOSHomeHeroCarousel: View {
         }
     }
 
+    /// Current slide index, clamped. The warm helpers below both key off this.
+    private var currentIndex: Int {
+        items.firstIndex { $0.id == selectedItemID } ?? 0
+    }
+
+    private func heroReferences(for item: MediaItem) -> [ArtworkReference] {
+        let style: HeroArtworkStyle = horizontalSizeClass == .compact
+            ? .compactPortrait
+            : .landscape
+        return HeroPresentation(
+            item: item,
+            artworkStyle: style,
+            surface: .home
+        ).artworkReferences
+    }
+
+    /// Decodes the full-size artwork for the slides either side of this one.
+    ///
+    /// Deliberately skips the slide on screen: the view is already downloading
+    /// that one, and this used to warm it *first*, serially, so on a cold start
+    /// the neighbours did not begin until the current slide's own 2000px pass
+    /// had finished — which is exactly when they were needed. The neighbours are
+    /// warmed concurrently for the same reason, through the shared artwork
+    /// limiter so they queue behind visible work rather than competing with it.
     private func warmAdjacentArtwork() async {
-        let targets = [currentItem, adjacentItem(forward: true),
-                       adjacentItem(forward: false)]
-            .compactMap { $0 }
-        for target in targets {
-            let style: HeroArtworkStyle = horizontalSizeClass == .compact
-                ? .compactPortrait
-                : .landscape
-            let references = HeroPresentation(
-                item: target,
-                artworkStyle: style,
-                surface: .home
-            ).artworkReferences
-            for reference in references {
-                guard !Task.isCancelled else { return }
-                if await ArtworkImageCache.shared.image(
-                    for: reference,
-                    variant: .heroBackdrop,
-                    background: true
-                ) != nil {
-                    break
+        guard !items.isEmpty else { return }
+        let neighbours = HeroArtworkWindow
+            .indices(count: items.count, centeredAt: currentIndex)
+            .dropFirst()
+            .map { items[$0] }
+        guard !neighbours.isEmpty else { return }
+
+        await withTaskGroup(of: Void.self) { group in
+            for target in neighbours {
+                let references = heroReferences(for: target)
+                guard !references.isEmpty else { continue }
+                group.addTask(priority: .utility) {
+                    for reference in references {
+                        guard !Task.isCancelled else { return }
+                        await ArtworkSession.warmLimiter.run {
+                            guard !Task.isCancelled else { return }
+                            _ = await ArtworkImageCache.shared.image(
+                                for: reference,
+                                variant: .heroBackdrop,
+                                background: true
+                            )
+                        }
+                        // One usable decode per slide is the whole job; the rest
+                        // of the list is fallbacks for when that one is missing.
+                        if HeroBackdropArtworkPolicy
+                            .hasUsableCachedArtwork(for: [reference]) {
+                            return
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    /// Warms one lightweight 768px frame for every slide in the carousel.
+    ///
+    /// The reason a cold start used to make every early swipe wait: nothing
+    /// touched a slide's artwork until that slide was selected, so the first few
+    /// pages were always a network round trip. tvOS has warmed its whole set on
+    /// load for a long time; this is the iPhone catching up. Small batches at
+    /// utility priority, in likely paging order, so it never competes with the
+    /// picture actually on screen — and `previewVariant` on the hero's image is
+    /// what turns these into an instant frame rather than dead cache.
+    private func warmHeroPreviews() async {
+        guard items.count > 1 else { return }
+        let ordered = HeroPreviewWarmOrder
+            .indices(count: items.count, centeredAt: currentIndex)
+            .map { items[$0] }
+        let pending = ordered
+            .map { (item: $0, references: heroReferences(for: $0)) }
+            .filter { candidate in
+                !candidate.references.isEmpty
+                    && !HeroBackdropArtworkPolicy
+                        .hasUsableCachedArtwork(for: candidate.references)
+            }
+
+        let batchSize = 4
+        var start = 0
+        while start < pending.count {
+            guard !Task.isCancelled else { return }
+            let end = min(start + batchSize, pending.count)
+            await withTaskGroup(of: Void.self) { group in
+                for candidate in pending[start..<end] {
+                    group.addTask(priority: .utility) {
+                        guard !Task.isCancelled else { return }
+                        await ArtworkSession.warmLimiter.run {
+                            guard !Task.isCancelled else { return }
+                            _ = await HeroBackdropArtworkPolicy
+                                .warmFirstUsablePreview(for: candidate.references)
+                        }
+                    }
+                }
+            }
+            start = end
         }
     }
 }
@@ -1283,6 +1653,7 @@ private struct PlozziOSPullResponsiveHomeBackdrop<Backdrop: View>: View {
     let model: PlozziOSHomeHeroPullModel
     let style: HeroArtworkStyle
     let heroHeight: CGFloat
+    var extendsArtwork: Bool = false
     @ViewBuilder let backdrop: (CGFloat) -> Backdrop
 
     var body: some View {
@@ -1310,13 +1681,22 @@ private struct PlozziOSPullResponsiveHomeBackdrop<Backdrop: View>: View {
                 .scaleEffect(pullScale, anchor: .center)
                 .offset(y: -(pullOffset - pullDistance))
 
-            PlozziOSStationaryHeroScrim(style: style, height: heroHeight)
+            PlozziOSStationaryHeroScrim(
+                style: style,
+                height: heroHeight,
+                extendsArtwork: extendsArtwork
+            )
         }
         // Masked BEFORE the pull offset, exactly as tvOS masks before its recede
         // lift. Applied after, the mask sits in the fixed parent space: the hero
         // slid under a stationary fade, so pulling down exposed the page
         // background above the image and left a hard unfaded edge below.
-        .mask { PlozziOSHeroFadeMask() }
+        .mask {
+            PlozziOSHeroFadeMask(
+                extendsArtwork: extendsArtwork,
+                upwardExtension: 0.20
+            )
+        }
         .offset(y: -pullDistance)
     }
 }
@@ -1387,12 +1767,43 @@ private struct PlozziOSHorizontalHeroDragGesture:
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer:
                 UIGestureRecognizer
         ) -> Bool {
-            true
+            // A scrolling ancestor is the one recognizer this must NOT share with.
+            //
+            // `gestureRecognizerShouldBegin` already refuses anything that is not
+            // decisively horizontal, but recognizing simultaneously meant the
+            // scroll view kept its own pan as well — so a swipe that had passed
+            // that test still scrolled the page under it by whatever vertical
+            // component the finger carried. Almost no real swipe is perfectly
+            // level, so this happened constantly.
+            //
+            // Excluding it makes the two mutually exclusive: a gesture this one
+            // has claimed is a page turn and nothing else. Every other recognizer
+            // still runs alongside, so taps and the system's edge gestures are
+            // unaffected.
+            !(otherGestureRecognizer.view is UIScrollView)
         }
     }
 }
 
+/// The slides on screen at once: the fronted one, and the one a committed swipe
+/// is landing on. Equatable so the hero only reports a change when the pair
+/// genuinely moves.
+private struct PlozziOSHeroPinnedIDs: Equatable {
+    let ids: Set<String>
+
+    init(_ selected: String?, _ transitionTarget: String?) {
+        ids = Set([selected, transitionTarget].compactMap { $0 })
+    }
+}
+
 private struct PlozziOSHeroTimerID: Equatable {
+    /// The countdown task calls `page(forward:)`, which reads the `items` captured
+    /// when the task started — so it MUST restart when the set changes, or
+    /// auto-advance would keep cycling a stale array and could never reach a
+    /// newly admitted slide. The countdown itself is derived from `dwellStart`
+    /// rather than accumulated inside the task, so a restart resumes it instead of
+    /// resetting it: a curation folding new media in (see `HeroLiveMerge`) must
+    /// not keep the carousel from ever advancing.
     let itemIDs: [String]
     let autoAdvance: Bool
     let seconds: Int
@@ -1415,7 +1826,13 @@ private struct PlozziOSFeaturedRow: View {
                 )
 
             ScrollView(.horizontal) {
-                LazyHStack(alignment: .top, spacing: 14) {
+                LazyHStack(
+                    alignment: .top,
+                    spacing: PlozziOSMediaRailLayout.stackSpacing(
+                        metrics: metrics,
+                        cardStyle: cardStyle
+                    )
+                ) {
                     ForEach(items, id: \.stablePresentationID) { item in
                         PlozziOSHomeMediaCard(
                             item: item,
@@ -1446,6 +1863,9 @@ private struct PlozziOSHomeRowView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let row: HomeRow
     let appModel: PlozziOSAppModel
+    let viewModel: HomeViewModel
+    let watchlistIntentRevision: Int
+    let watchlistLoadingPlaceholderCount: Int
 
     var body: some View {
         Group {
@@ -1468,7 +1888,11 @@ private struct PlozziOSHomeRowView: View {
                 // page shifting.
                 PlozziOSHomeSkeletonRail(
                     title: Text(row.title),
-                    style: row.style == .landscape ? .landscape : .poster
+                    style: row.style == .landscape ? .landscape : .poster,
+                    showsCaption: !(row.kind == .continueWatching
+                        && appModel.settings.homeVisibility.continueWatchingShowsSeriesArtwork),
+                    showsSeriesArtwork: row.kind == .continueWatching
+                        && appModel.settings.homeVisibility.continueWatchingShowsSeriesArtwork
                 )
             } else {
                 PlozziOSHomeMediaRail(
@@ -1479,15 +1903,39 @@ private struct PlozziOSHomeRowView: View {
                     // Continue Watching is a resume affordance: pressing it should
                     // carry on watching, which is what tvOS already did. The
                     // context menu still reaches the detail page.
-                    interaction: row.kind == .continueWatching ? .play : .openDetail
+                    interaction: row.kind == .continueWatching ? .play : .openDetail,
+                    prefetchesArtwork: row.kind == .continueWatching,
+                    pendingRemovalIDs: pendingWatchlistRemovalIDs,
+                    loadingPlaceholderCount: row.kind == .watchlist
+                        ? watchlistLoadingPlaceholderCount
+                        : 0,
+                    // Continue Watching identifies cards by show art + logo unless
+                    // the user has turned that off in Customize Home.
+                    showsSeriesArtwork: row.kind == .continueWatching
+                        && appModel.settings.homeVisibility.continueWatchingShowsSeriesArtwork,
+                    onNavigationInteraction:
+                        viewModel.noteHomeNavigationInteraction
                 )
             }
         }
     }
 
+    private var pendingWatchlistRemovalIDs: Set<String> {
+        _ = watchlistIntentRevision
+        guard row.kind == .watchlist else { return [] }
+        return Set(
+            row.items.lazy
+                .filter {
+                    appModel.mediaItemActionHandler
+                        .isActivelyRemovingFromWatchlist($0)
+                }
+                .map(\.stablePresentationID)
+        )
+    }
+
     private var libraryRow: some View {
         ScrollView(.horizontal) {
-            LazyHStack(spacing: 14) {
+            LazyHStack(spacing: PlozziOSMediaRailLayout.visibleSpacing) {
                 ForEach(row.libraries) { library in
                     // Still gated on the account having a live provider; the route
                     // resolves it again at push time so this row holds no reference.
@@ -1539,6 +1987,21 @@ private struct PlozziOSHomeMediaRail: View {
     /// from the card's shape — a landscape rail is a presentation choice, not a
     /// promise that the row is Continue Watching.
     var interaction: PlozziOSRailInteraction = .openDetail
+    /// Continue Watching opts in because its backdrop + logo composition costs
+    /// more than an ordinary card. Keeping this scoped avoids warming every Home
+    /// rail at launch when per-library rows are enabled.
+    var prefetchesArtwork: Bool = false
+    var pendingRemovalIDs: Set<String> = []
+    var loadingPlaceholderCount = 0
+    /// Identify each card by its show — artwork plus logo — instead of by the
+    /// item's own thumbnail.
+    var showsSeriesArtwork: Bool = false
+    var onNavigationInteraction: () -> Void = {}
+    @State private var prefetchedIDs: Set<String> = []
+    @State private var prefetchedPreviewIDs: Set<String> = []
+    @State private var lastArtworkPrefetchIndex: Int?
+    @State private var artworkPrefetchDirection = 1
+    @State private var artworkPrefetchTasks = PlozziOSArtworkPrefetchTasks()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1550,20 +2013,55 @@ private struct PlozziOSHomeMediaRail: View {
                 )
 
             ScrollView(.horizontal) {
-                LazyHStack(alignment: .top, spacing: 14) {
-                    ForEach(items, id: \.stablePresentationID) { item in
-                        PlozziOSHomeMediaCard(
-                            item: item,
-                            isLandscape: style == .landscape,
-                            interaction: interaction,
-                            provider: provider(for: item)
-                        )
-                        .frame(
-                            width: metrics.cardSlotWidth(
-                                for: style,
-                                cardStyle: cardStyle
+                LazyHStack(
+                    alignment: .top,
+                    spacing: PlozziOSMediaRailLayout.stackSpacing(
+                        metrics: metrics,
+                        cardStyle: cardStyle
+                    )
+                ) {
+                    ForEach(MediaRowView.presentationElements(
+                        items: items,
+                        loadingPlaceholderCount: loadingPlaceholderCount
+                    )) { element in
+                        switch element {
+                        case .item(let item):
+                            PlozziOSHomeMediaCard(
+                                item: item,
+                                isLandscape: style == .landscape,
+                                interaction: interaction,
+                                showsSeriesArtwork: showsSeriesArtwork,
+                                isPendingRemoval: pendingRemovalIDs.contains(
+                                    item.stablePresentationID
+                                ),
+                                provider: provider(for: item)
                             )
-                        )
+                            .frame(
+                                width: metrics.cardSlotWidth(
+                                    for: style,
+                                    cardStyle: cardStyle,
+                                    showsSeriesArtwork: showsSeriesArtwork
+                                )
+                            )
+                            .onAppear {
+                                if prefetchesArtwork {
+                                    prefetchArtwork(around: item)
+                                }
+                            }
+                        case .loadingPlaceholder:
+                            PlozziOSPosterCard(
+                                item: nil,
+                                style: style,
+                                showsSeriesArtwork: showsSeriesArtwork
+                            )
+                            .frame(
+                                width: metrics.cardSlotWidth(
+                                    for: style,
+                                    cardStyle: cardStyle,
+                                    showsSeriesArtwork: showsSeriesArtwork
+                                )
+                            )
+                        }
                     }
                 }
             }
@@ -1574,6 +2072,22 @@ private struct PlozziOSHomeMediaRail: View {
             )
             .contentMargins(.vertical, 10, for: .scrollContent)
             .scrollIndicators(.hidden)
+            .onScrollGeometryChange(for: CGFloat.self) {
+                $0.contentOffset.x
+            } action: { oldOffset, newOffset in
+                guard oldOffset != newOffset else { return }
+                onNavigationInteraction()
+            }
+        }
+        .task(id: artworkPrefetchIdentity) {
+            guard prefetchesArtwork else { return }
+            resetArtworkPrefetch()
+            if let first = MediaRowView.uniqued(items).first {
+                prefetchArtwork(around: first)
+            }
+        }
+        .onDisappear {
+            artworkPrefetchTasks.cancelAll()
         }
     }
 
@@ -1583,6 +2097,143 @@ private struct PlozziOSHomeMediaRail: View {
         }
         return appModel.accountsProviders.primaryProvider
     }
+
+    private var artworkPrefetchIdentity: String {
+        [
+            style == .poster ? "poster" : "landscape",
+            showsSeriesArtwork ? "series" : "item",
+            prefetchesArtwork ? "prefetch" : "on-demand",
+            appModel.settings.spoilers.settings.isEnabled ? "spoilers" : "visible",
+            appModel.settings.spoilers.settings.mode.rawValue,
+            MediaRowView.uniqued(items)
+                .map(\.stablePresentationID)
+                .joined(separator: "|"),
+        ].joined(separator: "\n")
+    }
+
+    private func resetArtworkPrefetch() {
+        artworkPrefetchTasks.cancelAll()
+        prefetchedIDs.removeAll(keepingCapacity: true)
+        prefetchedPreviewIDs.removeAll(keepingCapacity: true)
+        lastArtworkPrefetchIndex = nil
+        artworkPrefetchDirection = 1
+    }
+
+    /// Mirrors tvOS rail look-ahead. UIKit's lazy stack only creates nearby cards;
+    /// this warms the next window before touch scrolling realizes those views.
+    private func prefetchArtwork(around item: MediaItem) {
+        let items = MediaRowView.uniqued(self.items)
+        guard let index = items.firstIndex(where: {
+            $0.stablePresentationID == item.stablePresentationID
+        }) else {
+            return
+        }
+        let direction = MediaRowPrefetchWindow.direction(
+            from: lastArtworkPrefetchIndex,
+            to: index,
+            fallback: artworkPrefetchDirection
+        )
+        if direction != artworkPrefetchDirection {
+            artworkPrefetchTasks.cancelAll()
+            prefetchedIDs.removeAll(keepingCapacity: true)
+            prefetchedPreviewIDs.removeAll(keepingCapacity: true)
+        }
+        artworkPrefetchDirection = direction
+        lastArtworkPrefetchIndex = index
+
+        let variant: ArtworkImageVariant = style == .poster
+            ? .posterCard
+            : .landscapeCard
+        let fullIndices = MediaRowPrefetchWindow.indices(
+            from: index,
+            direction: direction,
+            count: items.count,
+            lookahead: MediaRowPrefetchWindow.fullArtworkLookahead
+        )
+        for candidateIndex in fullIndices {
+            let candidate = items[candidateIndex]
+            let candidates = MediaArtworkPrefetchPolicy.candidates(
+                for: candidate,
+                style: style,
+                spoilerSettings: appModel.settings.spoilers.settings,
+                showsSeriesArtwork: showsSeriesArtwork
+            )
+            if style == .poster,
+               let preview = candidates.first,
+               ArtworkImageVariant.posterPreview.hasDistinctRequestURL(
+                   from: variant,
+                   for: preview
+               ),
+               prefetchedPreviewIDs.insert(
+                   candidate.stablePresentationID
+               ).inserted {
+                trackPrefetch(preview, variant: .posterPreview)
+            }
+            if prefetchedIDs.insert(candidate.stablePresentationID).inserted {
+                for url in candidates.prefix(2) {
+                    trackPrefetch(url, variant: variant)
+                }
+            }
+            if showsSeriesArtwork {
+                MediaArtworkPrefetchPolicy.warmSeriesPresentation(
+                    for: candidate,
+                    variant: variant
+                )
+            }
+        }
+
+        guard style == .poster else { return }
+        let near = Set(fullIndices)
+        for candidateIndex in MediaRowPrefetchWindow.indices(
+            from: index,
+            direction: direction,
+            count: items.count,
+            lookahead: MediaRowPrefetchWindow.previewArtworkLookahead
+        ) where !near.contains(candidateIndex) {
+            let candidate = items[candidateIndex]
+            guard let preview = MediaArtworkPrefetchPolicy.candidates(
+                      for: candidate,
+                      style: style,
+                      spoilerSettings: appModel.settings.spoilers.settings,
+                      showsSeriesArtwork: showsSeriesArtwork
+                  ).first,
+                  ArtworkImageVariant.posterPreview.hasDistinctRequestURL(
+                      from: .posterCard,
+                      for: preview
+                  ),
+                  prefetchedPreviewIDs.insert(
+                      candidate.stablePresentationID
+                  ).inserted
+            else { continue }
+            trackPrefetch(preview, variant: .posterPreview)
+        }
+    }
+
+    private func trackPrefetch(
+        _ url: URL,
+        variant: ArtworkImageVariant
+    ) {
+        if let task = ArtworkImageCache.shared.prefetch(url, variant: variant) {
+            artworkPrefetchTasks.track(task)
+        }
+    }
+}
+
+private final class PlozziOSArtworkPrefetchTasks {
+    private var tasks: [Task<Void, Never>] = []
+
+    func track(_ task: Task<Void, Never>) {
+        tasks.append(task)
+    }
+
+    func cancelAll() {
+        tasks.forEach { $0.cancel() }
+        tasks.removeAll(keepingCapacity: true)
+    }
+
+    deinit {
+        tasks.forEach { $0.cancel() }
+    }
 }
 
 private struct PlozziOSHomeMediaCard: View {
@@ -1590,6 +2241,8 @@ private struct PlozziOSHomeMediaCard: View {
     let item: MediaItem
     let isLandscape: Bool
     var interaction: PlozziOSRailInteraction = .openDetail
+    var showsSeriesArtwork: Bool = false
+    var isPendingRemoval: Bool = false
     let provider: (any MediaProvider)?
     @State private var downloadRecord: DownloadedMediaRecord?
     @Environment(\.plozziOSRailPlay) private var railPlay
@@ -1633,6 +2286,16 @@ private struct PlozziOSHomeMediaCard: View {
         PlozziOSPosterCard(
             item: item,
             style: isLandscape ? .landscape : .poster,
+            showsSeriesArtwork: showsSeriesArtwork,
+            // Home rails can surface unwatched episodes (Continue Watching's
+            // next-up entries, Recently Added), so they have to honour spoiler
+            // protection. They were passing nothing at all, which meant the
+            // defaulted `.default` — protection off — no matter what the profile
+            // had chosen. That went unnoticed while every rail showed the episode
+            // thumbnail regardless; it stops being invisible the moment the
+            // artwork toggle below is turned off and the row hands itself back to
+            // these settings.
+            spoilerSettings: appModel.settings.spoilers.settings,
             // The chip is requested explicitly rather than riding an implicit
             // "landscape means playable" rule, so presentation and behaviour stay
             // independently controlled.
@@ -1643,7 +2306,8 @@ private struct PlozziOSHomeMediaCard: View {
             // glyph on artwork. Press-and-hold still opens the menu here. The
             // episode cards on a show's page keep their explicit menu, where the
             // per-episode actions have nowhere else to live.
-            showsActionsMenu: false
+            showsActionsMenu: false,
+            isPendingRemoval: isPendingRemoval
         )
         .task(id: "\(item.id)|\(item.selectedVersionID ?? "")") {
             downloadRecord = await appModel.downloads.record(forSelectedVersionOf: item)

@@ -677,13 +677,20 @@ public final class PlayerViewModel {
     }
 
     /// Called when the active engine reports a clean playthrough to the end of the
-    /// stream. Auto-advances to the next episode when one is queued, otherwise
-    /// dismisses so the player never freezes on the final frame: trailers/movies
-    /// return to detail, a season finale returns to the series page.
+    /// stream. Auto-advances to the next episode when one is queued and the
+    /// profile allows it, otherwise dismisses so the player never freezes on the
+    /// final frame — closing the full-screen cover back onto whatever presented
+    /// it (a detail page, Home, search), which is where "returns to detail" in the
+    /// older note here actually came from.
+    ///
+    /// This path used to advance unconditionally, which is what made "turn the Up
+    /// Next card off and the next episode still plays" (#22) — the card was the
+    /// only thing that looked like it governed advancing, and it never reached
+    /// here. Autoplay is its own setting now, and this is the path it governs.
     private func handlePlaybackEnded() {
-        PlaybackTrace.note("handlePlaybackEnded curr=\(String(format: "%.2f", engine.currentTime)) furthest=\(String(format: "%.2f", engine.furthestObservedPosition)) dur=\(String(format: "%.2f", engine.duration)) hasNext=\(nextEpisode != nil) isSeeking=\(controls.isSeeking) isScrubbing=\(controls.isScrubbing) intendsPlayback=\(intendsPlayback)")
+        PlaybackTrace.note("handlePlaybackEnded curr=\(String(format: "%.2f", engine.currentTime)) furthest=\(String(format: "%.2f", engine.furthestObservedPosition)) dur=\(String(format: "%.2f", engine.duration)) hasNext=\(nextEpisode != nil) autoPlay=\(playbackSettings.autoPlayNextEpisode) isSeeking=\(controls.isSeeking) isScrubbing=\(controls.isScrubbing) intendsPlayback=\(intendsPlayback)")
         didReachNaturalEnd = true
-        if let next = nextEpisode {
+        if let next = nextEpisode, playbackSettings.autoPlayNextEpisode {
             pendingNextEpisode = next
         } else {
             shouldDismiss = true
@@ -1311,6 +1318,10 @@ public final class PlayerViewModel {
     /// failures degrade silently to no markers (older/marker-less servers). Runs
     /// once per load.
     private func loadSkipSegmentsIfEnabled() {
+        // Mirrored before the marker guard, not after: it describes the profile,
+        // not the segments, and a viewer with both Skip Intros and the Up Next
+        // card off would otherwise leave the container reading a stale default.
+        controls.upNextCard.autoPlayEnabled = playbackSettings.autoPlayNextEpisode
         let wantsMarkers = playbackSettings.skipIntros.fetchesMarkers || playbackSettings.showUpNextCard
         guard wantsMarkers else { return }
         controls.skipMode = playbackSettings.skipIntros
@@ -1580,6 +1591,11 @@ public final class PlayerViewModel {
         let finalDuration = progressReporter.knownPlaybackDuration()
         let percent = progressReporter.watchedPercent(at: finalPosition)
         engine.stop(preserveDisplayMode: preserveDisplayMode)
+        // Network-file engines retain their resolved source so teardown can await
+        // every SMB cursor/session close. Without this, leaving playback releases
+        // the source only when the engine deinitializes; a quick second playback
+        // can race that asynchronous cleanup and fail until the app restarts.
+        await engine.drainTransport()
         // Release any prefetched next-episode session that was never adopted, and
         // an adopted-but-never-committed session (a hand-off torn down before the
         // incoming player took ownership), so a Jellyfin session isn't orphaned.
@@ -1713,6 +1729,7 @@ public final class PlayerViewModel {
         controls.infoCard.sourceAccountID = request.item.sourceAccountID
         controls.infoCard.sourceItemID = request.item.id
         controls.infoCard.episodeTag = Self.episodeTag(for: request.item)
+        controls.infoCard.releaseLabel = request.item.releaseDateLabel ?? ""
         controls.infoCard.badges = request.item.technicalBadges
         controls.infoCard.artworkURLs = [request.item.backdropURL, request.item.heroBackdropURL, request.item.fallbackArtworkURL, request.item.posterURL].compactMap { $0 }
         controls.infoCard.runtimeLabel = request.item.runtime?.runtimeBadgeText ?? ""

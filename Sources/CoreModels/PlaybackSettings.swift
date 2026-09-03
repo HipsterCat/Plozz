@@ -40,6 +40,25 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
     /// accidental seeks impossible while playing.
     public var seekWithoutPausing: Bool
 
+    /// Whether finishing an episode automatically starts the next one.
+    ///
+    /// ON by default — that is what the player has always done, and it is what
+    /// most people want from a series. OFF stops **every** automatic advance: the
+    /// player simply closes at the end of an episode, returning you to whatever
+    /// you launched it from (Home, a series page, search — the player is a
+    /// full-screen cover over that screen, not a destination of its own). The Up
+    /// Next card's Play Next button, and the next-episode control in the info
+    /// panel, still work, because those are you asking rather than the player
+    /// deciding.
+    ///
+    /// Independent of ``showUpNextCard`` on purpose. The two were tangled before:
+    /// the card was the only visible thing about advancing, so turning it off read
+    /// as "stop advancing" — but the natural-end path never consulted it and the
+    /// next episode started anyway (#22). One switch now answers "does it
+    /// advance", the other "does it tell me first", and either can be set without
+    /// disturbing the other.
+    public var autoPlayNextEpisode: Bool
+
     /// Whether the "Up Next" card is offered during an episode's closing credits
     /// when a next episode is queued. ON (default) shows a spoiler-safe card with
     /// the next episode's thumbnail so you can advance with one press (and it
@@ -101,6 +120,7 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
         resumeRewindInterval: ResumeRewindInterval = .five,
         syncWatchAcrossServers: Bool = true,
         seekWithoutPausing: Bool = true,
+        autoPlayNextEpisode: Bool = true,
         showUpNextCard: Bool = true,
         upNextLeadSeconds: Int = 30,
         audioLanguagePreference: AudioLanguagePreference = .original,
@@ -115,6 +135,7 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
         self.resumeRewindInterval = resumeRewindInterval
         self.syncWatchAcrossServers = syncWatchAcrossServers
         self.seekWithoutPausing = seekWithoutPausing
+        self.autoPlayNextEpisode = autoPlayNextEpisode
         self.showUpNextCard = showUpNextCard
         self.upNextLeadSeconds = upNextLeadSeconds
         self.audioLanguagePreference = audioLanguagePreference
@@ -142,6 +163,7 @@ public extension PlaybackSettings {
         case resumeRewindInterval
         case syncWatchAcrossServers
         case seekWithoutPausing
+        case autoPlayNextEpisode
         case showUpNextCard
         case upNextLeadSeconds
         case audioLanguagePreference
@@ -193,6 +215,11 @@ public extension PlaybackSettings {
         self.seekWithoutPausing =
             (try? container.decodeIfPresent(Bool.self, forKey: .seekWithoutPausing))
             .flatMap { $0 } ?? defaults.seekWithoutPausing
+        // Defaults ON for upgrading installs, which is the behaviour they already
+        // had — this setting only ever takes something away.
+        self.autoPlayNextEpisode =
+            (try? container.decodeIfPresent(Bool.self, forKey: .autoPlayNextEpisode))
+            .flatMap { $0 } ?? defaults.autoPlayNextEpisode
         self.showUpNextCard =
             (try? container.decodeIfPresent(Bool.self, forKey: .showUpNextCard))
             .flatMap { $0 } ?? defaults.showUpNextCard
@@ -237,6 +264,7 @@ public extension PlaybackSettings {
         try container.encode(resumeRewindInterval, forKey: .resumeRewindInterval)
         try container.encode(syncWatchAcrossServers, forKey: .syncWatchAcrossServers)
         try container.encode(seekWithoutPausing, forKey: .seekWithoutPausing)
+        try container.encode(autoPlayNextEpisode, forKey: .autoPlayNextEpisode)
         try container.encode(showUpNextCard, forKey: .showUpNextCard)
         try container.encode(upNextLeadSeconds, forKey: .upNextLeadSeconds)
         try container.encode(audioLanguagePreference, forKey: .audioLanguagePreference)

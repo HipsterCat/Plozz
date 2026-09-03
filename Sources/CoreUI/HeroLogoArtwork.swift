@@ -1,6 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
+import MetadataKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -10,7 +11,7 @@ import UIKit
 /// legibility halo — the decision weighs both brightness *and* colour, so a
 /// vibrant logo (e.g. a saturated red wordmark) isn't haloed just because its
 /// luminance happens to sit near the backdrop's.
-public struct HeroBackgroundSample: Sendable {
+public struct HeroBackgroundSample: Equatable, Sendable {
     public let red: Double
     public let green: Double
     public let blue: Double
@@ -63,6 +64,61 @@ public enum HeroLogoPresentationPolicy: Sendable, Equatable {
 /// opt into `.center`. By default it crossfades over the readable title once
 /// decoded; arrival-sensitive callers can suppress a late replacement.
 /// Unlike poster art there is no aspect-ratio guard — logos are legitimately wide.
+/// What a resolved logo turned out to look like, reported to hosts that adapt
+/// their backdrop to it.
+///
+/// Both numbers come free from the pixel pass that already trims and tones every
+/// logo (``PreparedLogo``), so a host can react to the actual artwork without
+/// commissioning any analysis of its own.
+public struct ResolvedLogoTone: Equatable, Sendable {
+    /// Mean luminance of the logo's own ink, 0…1.
+    public let luminance: Double
+    /// Share of its bounding box the logo actually paints, 0…1.
+    public let coverage: Double
+    /// Mean colour of the ink, so a host can compare it to what sits behind —
+    /// two things can share a luminance and still separate perfectly well by hue.
+    public let red: Double
+    public let green: Double
+    public let blue: Double
+    /// Share of the ink bright enough to carry its own contrast — a white keyline,
+    /// a pale highlight. A logo with plenty of it reads on almost any picture,
+    /// whatever its mean tone says.
+    public let brightInk: Double
+
+    public init(luminance: Double, coverage: Double, red: Double = 0, green: Double = 0, blue: Double = 0, brightInk: Double = 0) {
+        self.luminance = luminance
+        self.coverage = coverage
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.brightInk = brightInk
+    }
+}
+
+/// Which contrast halo a logo gets.
+public enum HeroLogoHaloStyle: Sendable {
+    /// A dark shadow at hero strength.
+    ///
+    /// Never a light one. A white glow behind a dark logo was the old behaviour
+    /// here, and it was the most conspicuous thing on the screen whenever it fired
+    /// — it reads as an effect stuck on the artwork rather than as the logo
+    /// sitting on it. A shadow reads as depth, which is what the logo is actually
+    /// doing: sitting in front of a picture.
+    ///
+    /// Drawn only when the artwork behind has been sampled and found too close in
+    /// tone to the ink (see ``HeroLogoAnalysis``); a surface that never samples
+    /// cannot prove a logo is safe and so draws it always.
+    case standard
+    /// The same dark shadow, much softer.
+    ///
+    /// For a surface that lays an even dim over its own artwork
+    /// (``ContinueWatchingCardShape/artworkDim``), so the halo is not carrying
+    /// legibility on its own — it only has to keep the letterforms from touching
+    /// the picture. At full strength it instead read as a hard outline, worst on
+    /// pale artwork where a tight black edge has the most to contrast against.
+    case gentle
+}
+
 public struct HeroLogoArtwork<TextFallback: View>: View {
     private let references: [ArtworkReference]
     private let asyncFallbackURL: (@Sendable () async -> URL?)?
@@ -71,6 +127,9 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
     private let maxHeight: CGFloat
     private let presentationPolicy: HeroLogoPresentationPolicy
     private let alignment: Alignment
+    private let haloStyle: HeroLogoHaloStyle
+    private let logoNeedsHelp: Double?
+    private let onResolve: ((ResolvedLogoTone) -> Void)?
     private let textFallback: () -> TextFallback
 
     public init(
@@ -81,6 +140,9 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
         maxHeight: CGFloat = 200,
         presentationPolicy: HeroLogoPresentationPolicy = .whenReady,
         alignment: Alignment = .leading,
+        haloStyle: HeroLogoHaloStyle = .standard,
+        logoNeedsHelp: Double? = nil,
+        onResolve: ((ResolvedLogoTone) -> Void)? = nil,
         @ViewBuilder textFallback: @escaping () -> TextFallback
     ) {
         self.references = primaryURL.map { [.remote($0)] } ?? []
@@ -90,6 +152,9 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
         self.maxHeight = maxHeight
         self.presentationPolicy = presentationPolicy
         self.alignment = alignment
+        self.haloStyle = haloStyle
+        self.logoNeedsHelp = logoNeedsHelp
+        self.onResolve = onResolve
         self.textFallback = textFallback
     }
 
@@ -104,6 +169,9 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
         maxHeight: CGFloat = 200,
         presentationPolicy: HeroLogoPresentationPolicy = .whenReady,
         alignment: Alignment = .leading,
+        haloStyle: HeroLogoHaloStyle = .standard,
+        logoNeedsHelp: Double? = nil,
+        onResolve: ((ResolvedLogoTone) -> Void)? = nil,
         @ViewBuilder textFallback: @escaping () -> TextFallback
     ) {
         self.references = references
@@ -113,6 +181,9 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
         self.maxHeight = maxHeight
         self.presentationPolicy = presentationPolicy
         self.alignment = alignment
+        self.haloStyle = haloStyle
+        self.logoNeedsHelp = logoNeedsHelp
+        self.onResolve = onResolve
         self.textFallback = textFallback
     }
 
@@ -126,11 +197,46 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
             maxHeight: maxHeight,
             presentationPolicy: presentationPolicy,
             alignment: alignment,
+            haloStyle: haloStyle,
+            logoNeedsHelp: logoNeedsHelp,
+            onResolve: onResolve,
             textFallback: textFallback
         )
         #else
         textFallback()
         #endif
+    }
+}
+
+/// Processed logos held for synchronous reuse, so a rebuilt view paints a warmed
+/// logo on its FIRST frame.
+///
+/// `HeroLogoPipeline` is an actor, so reading it always costs a suspension — even
+/// on a hit. That is one frame with no logo, which draws the styled title: the
+/// text appearing *after* a logo had already loaded. The pipeline stays the
+/// source of truth and does all the work; this only makes an already-resolved
+/// answer readable without awaiting.
+///
+/// Main-actor isolated, so it needs no lock and can be read during `body`.
+@MainActor
+enum HeroLogoMemo {
+    private static var entries: [String: ProcessedLogo] = [:]
+    private static var order: [String] = []
+    /// Enough for a hero carousel plus the pages reached from it. Evicting
+    /// oldest-first costs one await on the next look, not a re-decode.
+    private static let capacity = 60
+
+    static func value(for key: String) -> ProcessedLogo? { entries[key] }
+
+    static func store(_ value: ProcessedLogo, for key: String) {
+        if entries[key] == nil {
+            order.append(key)
+            if order.count > capacity, let oldest = order.first {
+                order.removeFirst()
+                entries[oldest] = nil
+            }
+        }
+        entries[key] = value
     }
 }
 
@@ -143,16 +249,27 @@ private struct LoadedLogo<TextFallback: View>: View {
     let maxHeight: CGFloat
     let presentationPolicy: HeroLogoPresentationPolicy
     let alignment: Alignment
+    let haloStyle: HeroLogoHaloStyle
+    let logoNeedsHelp: Double?
+    let onResolve: ((ResolvedLogoTone) -> Void)?
     let textFallback: () -> TextFallback
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var image: ProcessedLogo?
+    /// The `taskKey` the current `image` was resolved for, so a re-resolve for the
+    /// SAME subject can keep it on screen while a different subject clears it.
+    @State private var resolvedKey: String?
 
     var body: some View {
+        // Falls back to the synchronous memo, so a logo this view has already
+        // resolved once paints on the FIRST frame of a rebuild. Without it every
+        // rebuild drew the styled title for at least one frame, because the
+        // pipeline is an actor and even a cache hit costs a suspension.
+        let shown = image ?? HeroLogoMemo.value(for: taskKey)
         Group {
-            if let processed = image {
+            if let processed = shown {
                 logo(processed)
                     .transition(.opacity)
             } else {
@@ -167,7 +284,7 @@ private struct LoadedLogo<TextFallback: View>: View {
             reduceMotion || !presentationPolicy.animatesResolvedLogo
                 ? nil
                 : .easeIn(duration: 0.25),
-            value: image != nil
+            value: shown != nil
         )
         .task(id: taskKey) { await resolve() }
     }
@@ -182,19 +299,22 @@ private struct LoadedLogo<TextFallback: View>: View {
     /// ~89pt of empty frame sat around it — and because the leftover depends on each
     /// logo's aspect ratio, the gap above and below the logo changed from title to
     /// title. Sizing the frame from the image's own ratio removes the slack.
-    private func fittedSize(for image: UIImage) -> CGSize {
+    private func fittedSize(for processed: ProcessedLogo) -> CGSize {
         HeroLogoFit.fittedSize(
-            for: image.size,
+            for: processed.image.size,
             maxWidth: maxWidth,
-            maxHeight: maxHeight
+            maxHeight: maxHeight,
+            coverage: processed.coverage
         )
     }
 
-    /// Renders the resolved logo. Most logos draw as-is with an adaptive contrast
-    /// halo, applied *only* to logos that need it (`needsHalo`): a soft light glow
-    /// behind dark logos, a soft dark shadow behind light ones — used only when the
-    /// measured logo/background contrast is low, so logos that already stand out
-    /// stay clean.
+    /// Renders the resolved logo. Most logos draw as-is with a contrast halo,
+    /// applied *only* to logos that need it (`needsHalo`). Under
+    /// ``HeroLogoHaloStyle/adaptive`` that's a soft light glow behind dark logos
+    /// and a soft dark shadow behind light ones, used only when the measured
+    /// logo/background contrast is low, so logos that already stand out stay
+    /// clean; under ``HeroLogoHaloStyle/alwaysDark`` it is always the dark
+    /// shadow.
     ///
     /// A *monochrome* logo (a single near-grayscale tone, e.g. an all-black or
     /// all-white wordmark) is instead recoloured to the foreground tone of the
@@ -207,7 +327,7 @@ private struct LoadedLogo<TextFallback: View>: View {
     /// so it is guaranteed to contrast with what sits behind it.
     @ViewBuilder
     private func logo(_ processed: ProcessedLogo) -> some View {
-        let fitted = fittedSize(for: processed.image)
+        let fitted = fittedSize(for: processed)
         if processed.isMonochrome {
             let tintLight = colorScheme == .dark   // dark mode → light (white) logo
             Image(uiImage: processed.image)
@@ -223,7 +343,16 @@ private struct LoadedLogo<TextFallback: View>: View {
                 .aspectRatio(contentMode: .fit)
                 .frame(width: fitted.width, height: fitted.height)
                 .frame(maxWidth: maxWidth, alignment: alignment)
-                .modifier(LogoLegibilityHalo(isDark: processed.isDark, active: processed.needsHalo))
+                .modifier(LogoToneLift(
+                    needsHelp: logoNeedsHelp,
+                    luminance: processed.luminance,
+                    active: haloStyle == .gentle
+                ))
+                .modifier(LogoLegibilityHalo(
+                    active: processed.needsHalo,
+                    scale: LogoLegibilityHalo.scale(forLogoHeight: fitted.height),
+                    isGentle: haloStyle == .gentle
+                ))
         }
     }
 
@@ -235,7 +364,21 @@ private struct LoadedLogo<TextFallback: View>: View {
 
     private func resolve() async {
         let startedAt = ProcessInfo.processInfo.systemUptime
-        image = nil
+        // Deliberately NOT cleared here.
+        //
+        // Blanking first meant every re-resolve dropped a logo that was already on
+        // screen back to the styled title, and then restored it — the text
+        // reappearing *after* the logo had loaded. A re-resolve is common: the
+        // reference list changes as a title is enriched, and a hero carousel
+        // rebuilds its slides as it pages.
+        //
+        // Keeping the old logo is safe because a logo is only ever REPLACED by one
+        // that has finished decoding, so there is no window where the wrong art is
+        // shown as final. The one case that must still clear is a change of
+        // subject: `.task(id:)` re-runs when `taskKey` changes, and a slide reused
+        // for a different title must not keep the previous show's wordmark.
+        if resolvedKey != taskKey { image = nil }
+        let key = taskKey
         // `HeroLogoPipeline` caches the processed result by URL and runs the heavy
         // pixel work off the main actor, so re-appears / scheme changes / fast
         // scrolling reuse the prepared logo instead of reprocessing it.
@@ -244,24 +387,53 @@ private struct LoadedLogo<TextFallback: View>: View {
             asyncFallbackURL: asyncFallbackURL,
             priority: .userInitiated
         ) else { return }
-        let processed = await finalize(prepared)
         guard !Task.isCancelled else { return }
         let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
         guard presentationPolicy.shouldAdopt(elapsed: elapsed) else { return }
-        image = processed
+        resolvedKey = key
+
+        // Draw the logo the moment it is decoded, BEFORE the backdrop is sampled.
+        //
+        // The sample is a second image fetched and analysed, and waiting on it
+        // held a logo that was already in hand — so the styled title sat on screen
+        // for the duration and was then replaced, which reads as a flash rather
+        // than as loading. Nothing about the halo decision is worth that: the
+        // logo is the content, the halo is a refinement to it.
+        //
+        // Unmeasured means no halo *when a measurement is actually coming*. A
+        // caller with no sampler at all (a rail of cards, where per-card analysis
+        // would be one image pass per card while scrolling) keeps the conservative
+        // always-on halo, because for that caller "unmeasured" is permanent rather
+        // than momentary.
+        let awaitsSample = backgroundSample != nil
+        adopt(HeroLogoAnalysis.analyze(
+            prepared,
+            backgroundSample: nil,
+            halosWhenUnmeasured: !awaitsSample
+        ))
+        guard awaitsSample else { return }
+
+        // Then refine in place. A halo appearing a beat late is a soft shadow
+        // fading in under artwork the viewer is already reading; a logo appearing
+        // a beat late is the title of the show changing shape. A sample that fails
+        // to resolve falls back to the halo, since an unmeasured logo still cannot
+        // be proven safe.
+        let sample = await backgroundSample?()
+        guard !Task.isCancelled else { return }
+        adopt(HeroLogoAnalysis.analyze(prepared, backgroundSample: sample))
     }
 
-    /// Combines the prepared logo with a colour sample of the background to decide
-    /// whether the legibility halo is needed. With no sample available we keep the
-    /// halo on, since we can't prove the logo is safe without it.
-    ///
-    /// A logo is legible when it separates from the artwork behind it by *either*
-    /// brightness or colour, so the halo is reserved for the cases where it does
-    /// neither: the luminance gap is small **and** the colours are close. That
-    /// keeps vibrant wordmarks (e.g. a saturated red logo on near-black) clean,
-    /// even though their luminance sits close to the dark backdrop's.
-    private func finalize(_ prepared: PreparedLogo) async -> ProcessedLogo {
-        HeroLogoAnalysis.analyze(prepared, backgroundSample: await backgroundSample?())
+    private func adopt(_ processed: ProcessedLogo) {
+        image = processed
+        HeroLogoMemo.store(processed, for: taskKey)
+        onResolve?(ResolvedLogoTone(
+            luminance: processed.luminance,
+            coverage: processed.coverage,
+            red: processed.red,
+            green: processed.green,
+            blue: processed.blue,
+            brightInk: processed.brightInk
+        ))
     }
 }
 
@@ -292,7 +464,11 @@ enum HeroLogoAnalysis {
     /// near-grayscale tone at one luminance extreme — an all-black or all-white
     /// wordmark that can be safely recoloured to the scheme foreground via its
     /// alpha mask (the coverage guard excludes never-stripped solid rectangles).
-    static func analyze(_ prepared: PreparedLogo, backgroundSample: HeroBackgroundSample?) -> ProcessedLogo {
+    static func analyze(
+        _ prepared: PreparedLogo,
+        backgroundSample: HeroBackgroundSample?,
+        halosWhenUnmeasured: Bool = true
+    ) -> ProcessedLogo {
         let isDark = prepared.luminance < 0.5
         let chroma = max(prepared.red, prepared.green, prepared.blue)
             - min(prepared.red, prepared.green, prepared.blue)
@@ -300,7 +476,7 @@ enum HeroLogoAnalysis {
             && chroma < 0.10
             && (prepared.luminance < 0.22 || prepared.luminance > 0.85)
 
-        var needsHalo = true
+        var needsHalo = halosWhenUnmeasured
         if let bg = backgroundSample {
             let lumaGap = abs(prepared.luminance - bg.luminance)
             let colorGap = perceptualDistance(
@@ -313,7 +489,13 @@ enum HeroLogoAnalysis {
             image: prepared.image,
             isDark: isDark,
             needsHalo: needsHalo,
-            isMonochrome: isMonochrome
+            isMonochrome: isMonochrome,
+            coverage: prepared.coverage,
+            luminance: prepared.luminance,
+            red: prepared.red,
+            green: prepared.green,
+            blue: prepared.blue,
+            brightInk: prepared.brightInk
         )
     }
 
@@ -354,6 +536,10 @@ public struct HeroUIKitLogo: @unchecked Sendable {
     /// Whether the logo reads dark (picks the halo colour: light glow for a dark
     /// logo, dark glow for a light one).
     public let isDark: Bool
+    /// Measured ink coverage, so this hero sizes the logo through the same
+    /// ink-corrected fit the SwiftUI one uses and a show's wordmark carries the
+    /// same weight on both screens — see ``HeroLogoFit/inkScale(coverage:)``.
+    public let coverage: Double
 }
 
 /// Loads and analyses a hero logo through the exact same shared pipeline the
@@ -377,7 +563,8 @@ public enum HeroUIKitLogoRenderer {
             image: processed.image,
             isMonochrome: processed.isMonochrome,
             needsHalo: processed.needsHalo,
-            isDark: processed.isDark
+            isDark: processed.isDark,
+            coverage: processed.coverage
         )
     }
 
@@ -424,23 +611,45 @@ private func loadPreparedHeroLogo(
     priority: TaskPriority
 ) async -> PreparedLogo? {
     guard !Task.isCancelled else { return nil }
-    for reference in references {
-       guard !Task.isCancelled else { return nil }
-       if let prepared = await HeroLogoPipeline.shared.preparedLogo(
-           for: reference,
-           priority: priority
-       ) {
-           return prepared
-       }
+    let prefersOnline = MetadataProviderSettingsStore().load().preferOnlineArtwork
+    guard let firstPaint = await ArtworkFirstPaintResolver.resolve(
+        references: references,
+        variant: .original,
+        maxAspectRatio: nil,
+        asyncOnlineURL: asyncFallbackURL,
+        maximumOnlineWait: ArtworkFirstPaintResolver.focalArtworkWait,
+        prefersOnlineArtwork: prefersOnline
+    ), !Task.isCancelled else { return nil }
+    if let prepared = await HeroLogoPipeline.shared.preparedLogo(
+        for: firstPaint.reference,
+        priority: priority
+    ) {
+        return prepared
     }
+
+    for reference in references where reference != firstPaint.reference {
+        guard !Task.isCancelled else { return nil }
+        if let prepared = await HeroLogoPipeline.shared.preparedLogo(
+            for: reference,
+            priority: priority
+        ) {
+            return prepared
+        }
+    }
+
     guard !Task.isCancelled,
           let asyncFallbackURL,
-          let url = await asyncFallbackURL(),
+          let onlineURL = await asyncFallbackURL(),
           !Task.isCancelled
-    else {
-        return nil
-    }
-    return await HeroLogoPipeline.shared.preparedLogo(for: .remote(url), priority: priority)
+    else { return nil }
+    let onlineReference = ArtworkReference.remote(onlineURL)
+    guard onlineReference != firstPaint.reference,
+          !references.contains(onlineReference)
+    else { return nil }
+    return await HeroLogoPipeline.shared.preparedLogo(
+        for: onlineReference,
+        priority: priority
+    )
 }
 
 /// A logo after background removal/trim, carrying the mean luminance *and* mean
@@ -461,6 +670,13 @@ struct PreparedLogo: @unchecked Sendable {
     /// normal wordmark surrounded by transparency; ~1 for a logo whose background
     /// was never removed (a near-solid rectangle), which must not be recoloured.
     let coverage: Double
+    /// Share of the logo's ink that is bright enough to read against almost
+    /// anything (0…1) — a white keyline, a pale highlight. Distinct from
+    /// ``luminance``, which is the mean and so misses exactly this.
+    let brightInk: Double
+
+    /// Luminance above which ink counts as carrying its own contrast.
+    static let brightInkLuminance = 0.72
 
     init(
         image: UIImage,
@@ -468,7 +684,8 @@ struct PreparedLogo: @unchecked Sendable {
         red: Double = 0,
         green: Double = 0,
         blue: Double = 0,
-        coverage: Double = 1.0
+        coverage: Double = 1.0,
+        brightInk: Double = 0
     ) {
         self.image = image
         self.luminance = luminance
@@ -476,6 +693,7 @@ struct PreparedLogo: @unchecked Sendable {
         self.green = green
         self.blue = blue
         self.coverage = coverage
+        self.brightInk = brightInk
     }
 }
 
@@ -488,6 +706,17 @@ struct ProcessedLogo {
     let isDark: Bool
     let needsHalo: Bool
     let isMonochrome: Bool
+    /// Carried through from ``PreparedLogo/coverage`` so the fit can correct a
+    /// logo's drawn size for how much ink it actually carries — see
+    /// ``HeroLogoFit/inkScale(coverage:)``.
+    let coverage: Double
+    /// The logo's own mean tone, reported to hosts that adapt their backdrop to
+    /// it — see ``HeroLogoArtwork``'s `onResolve`.
+    let luminance: Double
+    let red: Double
+    let green: Double
+    let blue: Double
+    let brightInk: Double
 }
 
 /// Decodes, background-strips, trims, and measures hero logos, caching the
@@ -505,6 +734,26 @@ struct ProcessedLogo {
 /// A small LRU bound keeps memory flat across a large library.
 actor HeroLogoPipeline {
     static let shared = HeroLogoPipeline()
+
+    /// Warms the cache for a card that has not scrolled into view yet.
+    ///
+    /// A logo resolves asynchronously, so a card that appears before its logo does
+    /// shows the styled title first and swaps once the artwork lands. On a row the
+    /// viewer is scrolling that swap is visible — the card changes under them,
+    /// which is exactly what a rail should never do. Artwork was already warmed
+    /// ahead of the scroll; this does the same for the logo (and, because the
+    /// prepared result carries the tone the card's backdrop reacts to, for the
+    /// dim as well) so both are resident before the card is reached.
+    ///
+    /// Fire-and-forget and at background priority: it must never compete with the
+    /// cards actually on screen. Requests coalesce and results are cached, so a
+    /// rail scrolled back and forth pays once.
+    nonisolated func prefetch(references: [ArtworkReference]) {
+        guard let first = references.first else { return }
+        Task.detached(priority: .background) {
+            _ = await self.preparedLogo(for: first, priority: .background)
+        }
+    }
 
     private struct CacheEntry {
         let logo: PreparedLogo
@@ -675,30 +924,138 @@ actor HeroLogoPipeline {
 /// regardless of the artwork behind it. Two stacked shadows build a stronger,
 /// evenly-spread glow than one. `active == false` is a clean pass-through, so a
 /// logo that already contrasts with its background renders with no halo at all.
-private struct LogoLegibilityHalo: ViewModifier {
-    let isDark: Bool
+///
+/// The radii are proportional to the logo, not absolute. They were calibrated
+/// against the hero's 200pt slot, and a shadow is a property of the thing casting
+/// it: reused unscaled on a card — where the logo is nearer 30pt — a 14pt blur is
+/// half the logo's height, and the "halo" closes over the glyphs instead of
+/// sitting behind them. On an iPad Continue Watching card that read as a layer of
+/// dirt on every logo: gold wordmarks came out brown, and the effect was most
+/// obvious on exactly the bright logos that needed no help.
+/// Lifts a **dark logo on a dark picture** toward legibility without bleaching it.
+///
+/// The card's other lever is dimming the artwork, and that only works in one
+/// direction: it helps a logo that is brighter than its backdrop. When both are
+/// dark there is nothing left to take — House of the Dragon's bronze serif over
+/// near-black fire sits at a tenth of the card's brightness range with its
+/// backdrop, and darkening that backdrop further buys nothing while draining the
+/// picture. The only remaining lever is the logo itself.
+///
+/// Recolouring it white would work and is what the monochrome path already does
+/// for single-tone wordmarks — but it throws away the thing that makes a logo
+/// *that show's* logo, so it is reserved for art that was greyscale to begin
+/// with. Instead this raises the logo's brightness and pushes its saturation up
+/// to compensate: additive brightness alone drifts toward white, so restoring the
+/// chroma it costs is what keeps a bronze wordmark bronze. Measured on House of
+/// the Dragon's palette the ink goes from luminance 0.34 to 0.47 while its chroma
+/// *rises* from 0.40 to 0.51 — brighter and more itself, not washed out.
+struct LogoToneLift: ViewModifier {
+    /// How badly this logo needs help, 0…1 — see
+    /// ``ContinueWatchingCardShape/separation(logo:background:)``. `nil` while the
+    /// artwork behind is still unmeasured, which means no lift: the difference
+    /// between a logo that needs one and a logo that does not is precisely the
+    /// thing that has not been measured yet.
+    let needsHelp: Double?
+    let luminance: Double
     let active: Bool
 
+    /// Ceiling on the added brightness, and the cap that keeps even the worst case
+    /// from washing the ink out.
+    static let maximumLift: Double = 0.45
+    static let liftCap: Double = 0.20
+    /// Saturation restored per unit of brightness added. Tuned so the lift climbs
+    /// in vividness rather than toward white.
+    static let saturationPerLift: Double = 2.2
+
+    /// The brightness to add for a logo in this much trouble at this tone.
+    ///
+    /// Two factors, and both matter. **Need** comes from the shared separation
+    /// measure, not from the logo's tone: an earlier version lifted anything dark
+    /// on a dark picture, which is the right instinct but the wrong test — it
+    /// would have brightened Lilo & Stitch's red wordmark, which is dark by
+    /// luminance and yet perfectly readable on open sky, while ignoring Boba
+    /// Fett's metallic type, which is not dark at all and still disappears into
+    /// its own warm scene.
+    ///
+    /// **Headroom** is how much brighter the ink can actually get. A near-white
+    /// logo has nowhere to go and lifting it only greys the picture around it;
+    /// a dark one has the whole range. This is what makes the lift and the dim
+    /// complementary rather than redundant — the dim works by pulling the backdrop
+    /// down and runs out when the backdrop is already black, exactly where a dark
+    /// logo has the most room to be pulled up.
+    static func lift(needsHelp: Double?, luminance: Double) -> Double {
+        guard let needsHelp, needsHelp > 0 else { return 0 }
+        let headroom = max(0, 1 - luminance)
+        return min(liftCap, maximumLift * needsHelp * headroom)
+    }
+
+    func body(content: Content) -> some View {
+        let lift = active ? Self.lift(needsHelp: needsHelp, luminance: luminance) : 0
+        if lift <= 0.002 {
+            content
+        } else {
+            content
+                .brightness(lift)
+                .saturation(1 + lift * Self.saturationPerLift)
+        }
+    }
+}
+
+struct LogoLegibilityHalo: ViewModifier {
+    let active: Bool
+    /// 1 at hero size, proportionally smaller for a card-sized logo.
+    var scale: CGFloat = 1
+    /// Whether the host already dims its artwork, so the halo only has to keep
+    /// the letterforms off the picture rather than carry legibility itself.
+    var isGentle: Bool = false
+
     @Environment(\.colorScheme) private var colorScheme
+
+    /// The hero logo slot the radii below were tuned against.
+    private static let referenceHeight: CGFloat = 200
+
+    /// Halo scale for a logo of `height` points. Floored rather than left linear:
+    /// below about a quarter of hero size the shadow stops reading as depth and
+    /// starts disappearing entirely, and a small logo on busy artwork still needs
+    /// an edge.
+    static func scale(forLogoHeight height: CGFloat) -> CGFloat {
+        guard height > 0 else { return 1 }
+        return min(1, max(0.25, height / referenceHeight))
+    }
 
     func body(content: Content) -> some View {
         if !active {
             content
-        } else if isDark {
+        } else if isGentle {
+            // Barely a halo at all, and deliberately so: a halo is a visible thing
+            // drawn around the letterforms, and past a certain strength it reads
+            // as an outline stuck on the logo rather than as the logo sitting on
+            // the picture. Legibility here is the *backdrop's* job — the host
+            // deepens its dim for exactly the logos at risk of vanishing (see
+            // ``ContinueWatchingCardShape/artworkDim(forLogoLuminance:)``), which
+            // separates the two by darkening what is behind rather than by adding
+            // anything in front. What is left for this to do is soften the edge
+            // where ink meets picture, so it is wide, faint, and closer to a
+            // shadow than a halo.
             content
-                .shadow(color: .white.opacity(0.6), radius: 5)
-                .shadow(color: .white.opacity(0.35), radius: 14)
+                .shadow(color: .black.opacity(0.16), radius: 14 * scale)
+                .shadow(color: .black.opacity(0.10), radius: 30 * scale)
         } else if colorScheme == .light {
             // Softer, lighter dark glow in light mode: the light-mode hero is
             // already bright, so a heavy black halo reads as a hard smudge. Lower
             // opacity + a wider radius keeps the logo legible with a gentle lift.
             content
-                .shadow(color: .black.opacity(0.30), radius: 7)
-                .shadow(color: .black.opacity(0.22), radius: 18)
+                .shadow(color: .black.opacity(0.26), radius: 9 * scale)
+                .shadow(color: .black.opacity(0.18), radius: 22 * scale)
         } else {
+            // Softened from 0.55/0.45 at 5/14. The old pair was tuned as the
+            // counterpart to a white glow that no longer exists, and read as a
+            // dark rim once it was the only treatment; widening the radii and
+            // dropping the opacity keeps the letterforms off the picture while
+            // looking like depth rather than an edge.
             content
-                .shadow(color: .black.opacity(0.55), radius: 5)
-                .shadow(color: .black.opacity(0.45), radius: 14)
+                .shadow(color: .black.opacity(0.42), radius: 8 * scale)
+                .shadow(color: .black.opacity(0.30), radius: 20 * scale)
         }
     }
 }
@@ -767,18 +1124,20 @@ private extension UIImage {
         // wordmark surrounded by — and pierced by — transparency.
         let cropArea = Double((stats.maxX - stats.minX + 1) * (stats.maxY - stats.minY + 1))
         let coverage = cropArea > 0 ? min(1.0, weight / cropArea) : 1.0
+        let brightInk = weight > 0 ? min(1.0, stats.brightWeight / weight) : 0
         guard let processedFull = Self.makeImage(&data, width: width, height: height, bytesPerRow: bytesPerRow) else {
             return nil
         }
         let cropRect = CGRect(x: stats.minX, y: stats.minY, width: stats.maxX - stats.minX + 1, height: stats.maxY - stats.minY + 1)
         guard let cropped = processedFull.cropping(to: cropRect) else {
-            return PreparedLogo(image: UIImage(cgImage: processedFull, scale: scale, orientation: imageOrientation), luminance: luminance, red: meanR, green: meanG, blue: meanB, coverage: coverage)
+            return PreparedLogo(image: UIImage(cgImage: processedFull, scale: scale, orientation: imageOrientation), luminance: luminance, red: meanR, green: meanG, blue: meanB, coverage: coverage, brightInk: brightInk)
         }
         return PreparedLogo(
             image: UIImage(cgImage: cropped, scale: scale, orientation: imageOrientation),
             luminance: luminance,
             red: meanR, green: meanG, blue: meanB,
-            coverage: coverage
+            coverage: coverage,
+            brightInk: brightInk
         )
     }
 
@@ -944,6 +1303,14 @@ private extension UIImage {
                     stats.gSum += g * af
                     stats.bSum += b * af
                     stats.weight += af
+                    // A logo's MEAN tone hides its most legible feature: the white
+                    // keyline around a pastel wordmark, or the highlights on a
+                    // metallic one, are what actually make it readable, and
+                    // averaging them into the fill erases them. Counted separately
+                    // in the same pass so a logo that carries its own contrast can
+                    // be left alone rather than treated as the mid-tone its mean
+                    // claims it is.
+                    if luma > PreparedLogo.brightInkLuminance { stats.brightWeight += af }
                 }
             }
         }
@@ -972,6 +1339,9 @@ private struct LogoStats {
     var gSum = 0.0
     var bSum = 0.0
     var weight = 0.0
+    /// Ink bright enough to carry its own contrast — see
+    /// ``PreparedLogo/brightInk``.
+    var brightWeight = 0.0
 }
 
 /// Samples the effective colour of the hero artwork behind the logo, so the
@@ -995,12 +1365,19 @@ public enum HeroBackgroundSampler {
 
     /// Samples ordered references through the same decoded-art cache used by the
     /// hero. Network reference keys remain path-free.
+    /// - Parameter variant: which decoded size to sample. Defaults to the hero
+    ///   backdrop. A **card** should pass the variant it is already displaying, so
+    ///   the sample reads an image that is by definition already decoded and
+    ///   resident rather than commissioning a larger one.
     public static func sample(
         references: [ArtworkReference],
-        region: CGRect = CGRect(x: 0.0, y: 0.28, width: 0.5, height: 0.40)
+        region: CGRect = CGRect(x: 0.0, y: 0.28, width: 0.5, height: 0.40),
+        variant: ArtworkImageVariant = .heroBackdrop
     ) async -> HeroBackgroundSample? {
         for reference in references {
-            if let sample = await Cache.shared.sample(reference, region: region) { return sample }
+            if let sample = await Cache.shared.sample(reference, region: region, variant: variant) {
+                return sample
+            }
         }
         return nil
     }
@@ -1020,8 +1397,12 @@ public enum HeroBackgroundSampler {
         private var inFlight: [String: Task<HeroBackgroundSample?, Never>] = [:]
         private let capacity = 32
 
-        func sample(_ reference: ArtworkReference, region: CGRect) async -> HeroBackgroundSample? {
-            let key = "\(reference.privacySafeIdentity)|\(region.minX),\(region.minY),\(region.width),\(region.height)"
+        func sample(
+            _ reference: ArtworkReference,
+            region: CGRect,
+            variant: ArtworkImageVariant
+        ) async -> HeroBackgroundSample? {
+            let key = "\(reference.privacySafeIdentity)|\(region.minX),\(region.minY),\(region.width),\(region.height)|\(variant.rawValue)"
             if let hit = entries[key] {
                 promote(key)
                 return hit
@@ -1030,7 +1411,7 @@ public enum HeroBackgroundSampler {
                 return await running.value
             }
             let task = Task.detached(priority: .utility) {
-                await HeroBackgroundSampler.sampleOne(reference, region: region)
+                await HeroBackgroundSampler.sampleOne(reference, region: region, variant: variant)
             }
             inFlight[key] = task
             let result = await task.value
@@ -1057,8 +1438,12 @@ public enum HeroBackgroundSampler {
         }
     }
 
-    private static func sampleOne(_ reference: ArtworkReference, region: CGRect) async -> HeroBackgroundSample? {
-        guard let image = await ArtworkImageCache.shared.image(for: reference, variant: .heroBackdrop),
+    private static func sampleOne(
+        _ reference: ArtworkReference,
+        region: CGRect,
+        variant: ArtworkImageVariant
+    ) async -> HeroBackgroundSample? {
+        guard let image = await ArtworkImageCache.shared.image(for: reference, variant: variant),
               let cg = image.cgImage,
               cg.width > 0,
               cg.height > 0 else {

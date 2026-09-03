@@ -3,6 +3,7 @@ import Foundation
 import AVFoundation
 import Combine
 import CoreModels
+import CoreNetworking
 import FeaturePlayback
 #if canImport(UIKit)
 import UIKit
@@ -48,6 +49,13 @@ public final class PlozzigenVideoEngine: VideoEngine {
 
     public var currentTime: TimeInterval { engine.currentTime }
     public var duration: TimeInterval { engine.duration }
+
+    public var videoAspectRatio: Double? {
+        let width = Double(engine.sourceVideoWidth)
+        let height = Double(engine.sourceVideoHeight)
+        guard width > 0, height > 0 else { return nil }
+        return width / height
+    }
 
     /// Ground truth for the menu's "selected audio" indicator: the AVStream index
     /// AetherEngine is actually decoding (its resolved `activeAudioTrackIndex`),
@@ -182,8 +190,9 @@ public final class PlozzigenVideoEngine: VideoEngine {
     private var suppressFailureCallbackForForegroundReload = false
     /// The leased network source backing the current load (SMB/network-file path
     /// only). Retained so ``drainTransport()`` can await its full shutdown before a
-    /// stall-recovery retry re-opens, instead of letting deinit release it
-    /// asynchronously and racing the fresh open. `nil` for URL-backed loads.
+    /// later playback or a stall-recovery retry re-opens, instead of letting deinit
+    /// release it asynchronously and racing the fresh open. `nil` for URL-backed
+    /// loads.
     private var activeResolvedSource: MediaTransportResolvedSource?
     #if canImport(UIKit)
     private let videoView: UIView
@@ -331,6 +340,10 @@ public final class PlozzigenVideoEngine: VideoEngine {
                 guard let url = resolvedURL else {
                     throw MediaTransportError.invalidInput(reason: "missing playback source")
                 }
+                options.declaredDurationSeconds = Self.declaredDuration(
+                    for: request,
+                    sourceURL: url
+                )
                 stage = "engine.load"
                 try await engine.load(
                     url: url,
@@ -370,6 +383,10 @@ public final class PlozzigenVideoEngine: VideoEngine {
                 "aether LOAD_FAILED stage=\(stage) "
                     + "detail=\(HandoffDiagnostics.redactedDetail(detail))"
             )
+            PlozzLog.playback.error(
+                "Plozzigen load failed at \(stage): "
+                    + HandoffDiagnostics.redactedDetail(detail)
+            )
             let err: AppError = .unknown(detail)
             status = .failed(err)
             onFailure?(err)
@@ -388,6 +405,19 @@ public final class PlozzigenVideoEngine: VideoEngine {
         case "avi":                 return "avi"
         default:                    return nil
         }
+    }
+
+    static func declaredDuration(
+        for request: PlaybackRequest,
+        sourceURL: URL
+    ) -> TimeInterval? {
+        guard sourceURL.isFileURL,
+              let runtime = request.item.runtime,
+              runtime.isFinite,
+              runtime > 0 else {
+            return nil
+        }
+        return runtime
     }
 
     public func play() {
@@ -481,9 +511,10 @@ public final class PlozzigenVideoEngine: VideoEngine {
     }
 
     /// Awaits the full shutdown of the leased network source (if any) before
-    /// returning, so a stall-recovery retry re-opens against a fully drained
-    /// session/cursor rather than racing the old one's asynchronous deinit
-    /// release. No-op for URL-backed loads (nothing leased). Call after `stop()`.
+    /// returning, so later playback and stall-recovery retries re-open against a
+    /// fully drained session/cursor rather than racing the old one's asynchronous
+    /// deinit release. No-op for URL-backed loads (nothing leased). Call after
+    /// `stop()`.
     public func drainTransport() async {
         let source = activeResolvedSource
         activeResolvedSource = nil
@@ -689,6 +720,10 @@ public final class PlozzigenVideoEngine: VideoEngine {
                         "aether STATE_ERROR detail="
                             + HandoffDiagnostics.redactedDetail(msg)
                     )
+                    PlozzLog.playback.error(
+                        "Plozzigen playback failed: "
+                            + HandoffDiagnostics.redactedDetail(msg)
+                    )
                     let err: AppError = .unknown(msg)
                     self.status = .failed(err)
                     if !self.suppressFailureCallbackForForegroundReload {
@@ -757,7 +792,8 @@ public final class PlozzigenVideoEngine: VideoEngine {
                     case .image(let image):
                         body = .image(CoreModels.SubtitleImage(
                             cgImage: image.cgImage,
-                            normalizedRect: image.position
+                            normalizedRect: image.position,
+                            canvasSize: image.canvasSize
                         ))
                     }
                     return CoreModels.SubtitleCue(
@@ -792,7 +828,8 @@ public final class PlozzigenVideoEngine: VideoEngine {
                     case .image(let image):
                         body = .image(CoreModels.SubtitleImage(
                             cgImage: image.cgImage,
-                            normalizedRect: image.position
+                            normalizedRect: image.position,
+                            canvasSize: image.canvasSize
                         ))
                     }
                     return CoreModels.SubtitleCue(

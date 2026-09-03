@@ -21,6 +21,23 @@ private actor FailOnceDownloadEngine: MediaDownloadEngine {
     private struct Failure: Error {}
 }
 
+private actor BlockingThenCompletingEngine: MediaDownloadEngine {
+    private var attempt = 0
+
+    func download(
+        record: DownloadedMediaRecord,
+        to destination: URL,
+        onProgress: @escaping @Sendable (Int64, Int64) async -> Void
+    ) async throws -> Int64 {
+        attempt += 1
+        if attempt == 1 {
+            try await Task.sleep(for: .seconds(30))
+        }
+        await onProgress(64, 64)
+        return 64
+    }
+}
+
 final class DownloadQueueTests: XCTestCase {
 
     private func makeQueue(
@@ -69,6 +86,54 @@ final class DownloadQueueTests: XCTestCase {
         XCTAssertEqual(count, 1)
     }
 
+    func testFailedQualityReplacementKeepsCompletedCopyPlayable() async throws {
+        struct ReplacementFailure: Error {}
+
+        let registry = DownloadedMediaRegistry(
+            store: InMemoryDownloadedMediaStore()
+        )
+        let (queue, dir) = makeQueue(
+            registry: registry,
+            engine: FakeDownloadEngine.failing(with: ReplacementFailure())
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let storage = FixedDownloadStorageLocator(root: dir)
+        let completed = try DownloadTestFactory.record(status: .completed)
+        _ = try await registry.beginDownload(completed)
+        try await registry.markCompleted(
+            identityKey: completed.identityKey,
+            totalBytes: 100
+        )
+        let originalURL = try storage.pinnedFileURL(for: completed)
+        try FileManager.default.createDirectory(
+            at: originalURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("offline-copy".utf8).write(to: originalURL)
+
+        _ = try await queue.enqueue(
+            try DownloadTestFactory.request(quality: .hd720)
+        )
+        await queue.drainForTesting()
+
+        let replacement = await registry.record(forKey: completed.identityKey)
+        XCTAssertEqual(replacement?.status, .failed)
+        let resolver = RegistryOfflinePlaybackResolver(
+            registry: registry,
+            storage: storage
+        )
+        let playbackURL = await resolver.localPlaybackURL(
+            for: DownloadTestFactory.movie(),
+            versionID: nil
+        )
+        XCTAssertEqual(
+            playbackURL,
+            try storage.replacementBackupFolderURL(
+                forKey: completed.identityKey
+            ).appendingPathComponent(completed.localFileName)
+        )
+    }
+
     func testNetworkGatePausesWhenPolicyDisallows() async throws {
         let registry = DownloadedMediaRegistry(store: InMemoryDownloadedMediaStore())
         // Wi‑Fi‑only policy + an expensive (cellular) path -> must not download.
@@ -103,8 +168,55 @@ final class DownloadQueueTests: XCTestCase {
         XCTAssertEqual(final?.status, .paused)
     }
 
+    func testImmediateResumeWaitsForCancelledAttemptToFinish() async throws {
+        let registry = DownloadedMediaRegistry(
+            store: InMemoryDownloadedMediaStore()
+        )
+        let (queue, dir) = makeQueue(
+            registry: registry,
+            engine: BlockingThenCompletingEngine()
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let record = try await queue.enqueue(try DownloadTestFactory.request())
+        try await Task.sleep(for: .milliseconds(50))
+        await queue.pause(identityKey: record.identityKey)
+        await queue.resume(identityKey: record.identityKey)
+        await queue.drainForTesting()
+
+        let final = await registry.record(forKey: record.identityKey)
+        XCTAssertEqual(final?.status, .completed)
+        XCTAssertEqual(final?.bytesDownloaded, 64)
+    }
+
+    func testSuspendedSchedulingDoesNotStartOrResumeWork() async throws {
+        let registry = DownloadedMediaRegistry(
+            store: InMemoryDownloadedMediaStore()
+        )
+        let (queue, dir) = makeQueue(
+            registry: registry,
+            engine: FakeDownloadEngine.completing(at: 100)
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        await queue.suspendScheduling()
+        let record = try await queue.enqueue(
+            try DownloadTestFactory.request()
+        )
+        await queue.resume(identityKey: record.identityKey)
+        await queue.drainForTesting()
+
+        let final = await registry.record(forKey: record.identityKey)
+        XCTAssertEqual(final?.status, .queued)
+        XCTAssertEqual(final?.bytesDownloaded, 0)
+    }
+
     func testFatalErrorMarksFailed() async throws {
-        struct Boom: Error {}
+        struct Boom: LocalizedError {
+            var errorDescription: String? {
+                "The media server rejected the download."
+            }
+        }
         let registry = DownloadedMediaRegistry(store: InMemoryDownloadedMediaStore())
         let (queue, dir) = makeQueue(
             registry: registry, engine: FakeDownloadEngine.failing(with: Boom())
@@ -116,6 +228,10 @@ final class DownloadQueueTests: XCTestCase {
 
         let final = await registry.record(forKey: record.identityKey)
         XCTAssertEqual(final?.status, .failed)
+        XCTAssertEqual(
+            final?.failureReason,
+            "The media server rejected the download."
+        )
     }
 
     func testResumeRetriesFailedDownload() async throws {
@@ -139,6 +255,47 @@ final class DownloadQueueTests: XCTestCase {
         XCTAssertEqual(completed?.bytesDownloaded, 42)
     }
 
+    func testRestartFailedReplacesStaleFileAndSourceMetadata() async throws {
+        struct Failure: Error {}
+        let registry = DownloadedMediaRegistry(
+            store: InMemoryDownloadedMediaStore()
+        )
+        let (failingQueue, dir) = makeQueue(
+            registry: registry,
+            engine: FakeDownloadEngine.failing(with: Failure())
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let failed = try await failingQueue.enqueue(
+            try DownloadTestFactory.request(quality: .hd720)
+        )
+        await failingQueue.drainForTesting()
+        let storage = FixedDownloadStorageLocator(root: dir)
+        let staleURL = try storage.pinnedFileURL(for: failed)
+        try FileManager.default.createDirectory(
+            at: staleURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("stale".utf8).write(to: staleURL)
+
+        let replacementQueue = DownloadQueue(
+            registry: registry,
+            storage: storage,
+            engine: FakeDownloadEngine.completing(at: 100),
+            maxAttempts: 1,
+            backoff: { _ in }
+        )
+        var request = try DownloadTestFactory.request(quality: .hd720)
+        request.fileExtension = "mkv"
+        let restarted = try await replacementQueue.restartFailed(request)
+        await replacementQueue.drainForTesting()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staleURL.path))
+        XCTAssertEqual(restarted.localFileName, "media.mkv")
+        let completed = await registry.record(forKey: restarted.identityKey)
+        XCTAssertEqual(completed?.status, .completed)
+        XCTAssertEqual(completed?.localFileName, "media.mkv")
+    }
+
     func testManagedRequestPersistsSecretFreeReopenSource() async throws {
         let registry = DownloadedMediaRegistry(store: InMemoryDownloadedMediaStore())
         let (queue, dir) = makeQueue(
@@ -150,7 +307,8 @@ final class DownloadQueueTests: XCTestCase {
             provider: .jellyfin,
             accountID: "account-1",
             itemID: "movie-1",
-            mediaSourceID: "source-1"
+            mediaSourceID: "source-1",
+            preferredAudioLanguages: ["ja", "en"]
         )
         let request = DownloadRequest.managedHTTP(
             identity: DownloadTestFactory.imdbIdentity(),
@@ -171,6 +329,57 @@ final class DownloadQueueTests: XCTestCase {
         XCTAssertNil(stored?.directShareSource)
     }
 
+    func testManagedPreparationReferenceCanBePersistedDuringDownload() async throws {
+        let registry = DownloadedMediaRegistry(
+            store: InMemoryDownloadedMediaStore()
+        )
+        let (queue, dir) = makeQueue(
+            registry: registry,
+            engine: FakeDownloadEngine.completing(at: 100)
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = ManagedHTTPDownloadSource(
+            provider: .plex,
+            accountID: "account-1",
+            itemID: "episode-1",
+            quality: .constrained(
+                .init(
+                    maximumHeight: 720,
+                    maximumVideoBitrateBps: 4_000_000
+                )
+            )
+        )
+        let record = try await queue.enqueue(
+            .managedHTTP(
+                identity: DownloadTestFactory.imdbIdentity(),
+                source: source,
+                snapshot: PinnedMediaSnapshot(
+                    title: "Episode",
+                    kind: .episode
+                ),
+                fileExtension: "mp4"
+            )
+        )
+        let updated = ManagedHTTPDownloadSource(
+            provider: source.provider,
+            accountID: source.accountID,
+            itemID: source.itemID,
+            quality: source.quality,
+            preparationReference: .init(
+                queueIdentifier: "12",
+                itemIdentifier: "34"
+            )
+        )
+
+        try await registry.setManagedHTTPSource(
+            identityKey: record.identityKey,
+            source: updated
+        )
+
+        let stored = await registry.record(forKey: record.identityKey)
+        XCTAssertEqual(stored?.managedHTTPSource, updated)
+    }
+
     func testEnqueueGroupSharesGroupID() async throws {
         let registry = DownloadedMediaRegistry(store: InMemoryDownloadedMediaStore())
         let (queue, dir) = makeQueue(registry: registry, engine: FakeDownloadEngine.completing(at: 10))
@@ -187,10 +396,16 @@ final class DownloadQueueTests: XCTestCase {
         XCTAssertTrue(members.allSatisfy { $0.status == .completed })
     }
 
-    func testResumeInterruptedRestartsPausedRecords() async throws {
+    func testResumeInterruptedLeavesManualPauseAlone() async throws {
         let registry = DownloadedMediaRegistry(store: InMemoryDownloadedMediaStore())
-        // Seed a paused record directly.
-        _ = try await registry.beginDownload(try DownloadTestFactory.record(status: .paused))
+        let seeded = try DownloadTestFactory.record(status: .paused)
+        _ = try await registry.beginDownload(seeded)
+        try await registry.setStatus(
+            identityKey: seeded.identityKey,
+            .paused,
+            failureReason: "Paused",
+            pauseReason: .manual
+        )
         let (queue, dir) = makeQueue(registry: registry, engine: FakeDownloadEngine.completing(at: 70))
         defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -199,6 +414,25 @@ final class DownloadQueueTests: XCTestCase {
 
         let all = await registry.all()
         XCTAssertEqual(all.count, 1)
+        XCTAssertEqual(all.first?.status, .paused)
+        XCTAssertEqual(all.first?.pauseReason, .manual)
+    }
+
+    func testResumeInterruptedRestartsDownloadingRecords() async throws {
+        let registry = DownloadedMediaRegistry(store: InMemoryDownloadedMediaStore())
+        _ = try await registry.beginDownload(
+            try DownloadTestFactory.record(status: .downloading)
+        )
+        let (queue, dir) = makeQueue(
+            registry: registry,
+            engine: FakeDownloadEngine.completing(at: 70)
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        await queue.resumeInterrupted()
+        await queue.drainForTesting()
+
+        let all = await registry.all()
         XCTAssertEqual(all.first?.status, .completed)
     }
 

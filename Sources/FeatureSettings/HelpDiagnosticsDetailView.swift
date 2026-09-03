@@ -69,6 +69,10 @@ struct HelpDiagnosticsDetailView: View {
         crashReportingConfigured && crashReporting.settings.isEnabled
     }
 
+    private var crashReportingFooter: LocalizedStringResource {
+        "Anonymous crash and freeze reports. No servers, logins, credentials, or viewing activity."
+    }
+
     // MARK: - Report a Problem
 
     private var reportPanel: some View {
@@ -113,8 +117,8 @@ struct HelpDiagnosticsDetailView: View {
     private var sendDiagnosticsPanel: some View {
         SendDiagnosticsCard(
             canSend: canSendDiagnostics,
-            idleDescription: "Something not working? Send your recent activity straight to the developer — the quickest way to help track down a bug. Sent anonymously: no logins, tokens, servers, or titles.",
-            disabledDescription: "Turn on Share Crash Reports below to enable this. Your recent activity is then sent anonymously — no logins, tokens, servers, or titles."
+            idleDescription: "Send recent app logs to help diagnose a problem. Logins, servers, and media titles are excluded.",
+            disabledDescription: "Turn on Share Crash Reports below to send recent app logs."
         )
     }
 
@@ -125,7 +129,7 @@ struct HelpDiagnosticsDetailView: View {
         if crashReportingConfigured {
             SettingsPanel(
                 title: "Crash Reports",
-                footer: "When on, Plozz sends an anonymous report if it crashes or freezes, so bugs can be fixed faster. Reports include only the crash itself plus your app version, tvOS version and device model — never your servers, logins, tokens, or what you were watching. On by default during the beta; you can turn it off any time. Applies to this Apple TV."
+                footer: crashReportingFooter
             ) {
                 Toggle("Share Crash Reports", isOn: $crashReporting.settings.isEnabled)
                     .toggleStyle(SettingsSwitchToggleStyle())
@@ -150,15 +154,25 @@ struct HelpDiagnosticsDetailView: View {
     // MARK: - Diagnostics controls
 
     private var diagnosticsPanel: some View {
-        SettingsPanel(
-            title: "Diagnostics",
-            footer: "Playback Diagnostics overlays live playback stats (codec, bitrate, buffer, memory) on top of the video. Home Performance Overlay shows a live Home rendering HUD. Both are power-user aids — leave them off for normal watching. Saved on this profile."
-        ) {
-            Toggle("Playback Diagnostics Overlay", isOn: $diagnostics.settings.isEnabled)
-                .toggleStyle(SettingsSwitchToggleStyle())
+        SettingsPanel(title: "Diagnostics") {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Playback Diagnostics Overlay", isOn: $diagnostics.settings.isEnabled)
+                    .toggleStyle(SettingsSwitchToggleStyle())
+                Text("Shows codec, bitrate, buffer, and memory during playback.")
+                    .font(.footnote)
+                    .plozzForeground(.secondary)
+            }
 
-            Toggle("Home Performance Overlay", isOn: $diagnostics.settings.homePerformanceOverlayEnabled)
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle(
+                    "Home Performance Overlay",
+                    isOn: $diagnostics.settings.homePerformanceOverlayEnabled
+                )
                 .toggleStyle(SettingsSwitchToggleStyle())
+                Text("Shows FPS, hitches, and thermal state on Home.")
+                    .font(.footnote)
+                    .plozzForeground(.secondary)
+            }
         }
     }
 

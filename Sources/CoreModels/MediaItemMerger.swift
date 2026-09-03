@@ -243,6 +243,76 @@ public enum MediaItemMerger {
             }
         }
 
+        // Rescue an episode that carries NO identity at all onto its identified
+        // twin.
+        //
+        // Every episode key in ``MediaItemIdentity/identities(for:)`` is built from
+        // an external id, and the title fallback there is movie-only. An episode
+        // whose backend supplied no ids — a plain file share derives everything
+        // from the filename — therefore produces ZERO merge keys and can never
+        // join anything, so a show held on both a managed server and a share
+        // showed twice in Continue Watching: the server's card carrying the
+        // progress, and the share's carrying none.
+        //
+        // Matching is on `(season, episode)` plus a series title the two sides
+        // agree on. It has to tolerate a differing series NAME, because servers
+        // genuinely disagree about it — one library's "Bodies (2023)" is another's
+        // "Bodies", and "Arcane: League of Legends" is elsewhere just "Arcane".
+        // Requiring the names to be equal is what left those two duplicated while
+        // Cobra Kai, which every server spells the same, collapsed correctly. So
+        // the same word-boundary-prefix rule the rest of the merge uses
+        // (``MediaItemIdentity/normalizedTitlesCompatible(_:_:)``) decides it.
+        //
+        // Deliberately one-directional and unambiguous:
+        //   * only an episode with no identity of its own is ever moved, so two
+        //     id-bearing episodes that stayed apart (because their ids genuinely
+        //     disagree) are never forced together here;
+        //   * the season and episode numbers must agree exactly, so the loose
+        //     title rule can only ever bridge the SAME slot of a show;
+        //   * and only when every compatible identified episode is ALREADY one
+        //     component. Two different shows sharing a title ("The Office" UK vs
+        //     US), or a prefix pair like "Star Trek" and "Star Trek Discovery",
+        //     both carry ids and sit in separate components, so the orphan is left
+        //     alone rather than guessed into one of them.
+        var episodesBySlot: [String: [Int]] = [:]
+        var identityLessEpisodes: Set<Int> = []
+        for index in items.indices {
+            let item = items[index]
+            guard item.kind == .episode,
+                  let season = item.seasonNumber,
+                  let number = item.episodeNumber,
+                  normalizedSeriesTitle(for: item) != nil else { continue }
+            if MediaItemIdentity.identities(for: item).isEmpty {
+                identityLessEpisodes.insert(index)
+            }
+            episodesBySlot["s\(season)e\(number)", default: []].append(index)
+        }
+        // Sorted so the unions are order-independent rather than following the
+        // dictionary's hash order.
+        for slot in episodesBySlot.keys.sorted() {
+            let group = episodesBySlot[slot] ?? []
+            let orphans = group.filter { identityLessEpisodes.contains($0) }
+            guard !orphans.isEmpty else { continue }
+            let identified = group.filter { !identityLessEpisodes.contains($0) }
+            for orphan in orphans {
+                guard let title = normalizedSeriesTitle(for: items[orphan]) else { continue }
+                func namesTheSameShow(_ index: Int) -> Bool {
+                    guard let other = normalizedSeriesTitle(for: items[index]) else { return false }
+                    return MediaItemIdentity.normalizedTitlesCompatible(title, other)
+                }
+                // Two id-less copies of one episode are each other's only
+                // evidence; collapsing them is what stops a second share adding
+                // a third card.
+                for other in orphans where other != orphan && namesTheSameShow(other) {
+                    union(orphan, other)
+                }
+                let candidates = identified.filter(namesTheSameShow)
+                guard let anchor = candidates.first,
+                      Set(candidates.map { find($0) }).count == 1 else { continue }
+                union(anchor, orphan)
+            }
+        }
+
         var membersByRoot: [Int: [Int]] = [:]
         for index in items.indices {
             membersByRoot[find(index), default: []].append(index)
@@ -268,6 +338,42 @@ public enum MediaItemMerger {
             }
         }
         return output
+    }
+
+    /// The series name an episode is rescued under, normalized — `nil` when the
+    /// episode names no show, so a sparse row is never keyed on a guess.
+    ///
+    /// Taken from ``MediaItem/parentTitle``, which every backend fills for an
+    /// episode: Jellyfin's `SeriesName`, Plex's `grandparentTitle`, and the share
+    /// parser's folder-derived series name. A trailing release year is dropped
+    /// because a disambiguating year belongs to the FOLDER, not the show — one
+    /// server reports "Bodies (2023)" where another reports "Bodies", and they are
+    /// the same programme.
+    public static func normalizedSeriesTitle(for item: MediaItem) -> String? {
+        guard item.kind == .episode, let series = item.parentTitle else { return nil }
+        var normalized = MediaItemIdentity.normalizedTitle(series)
+        // `normalizedTitle` has already turned "Bodies (2023)" into "bodies 2023",
+        // so the year is a plain trailing token by this point.
+        if let separator = normalized.lastIndex(of: " ") {
+            let trailing = normalized[normalized.index(after: separator)...]
+            if trailing.count == 4, trailing.allSatisfy(\.isNumber),
+               let year = Int(trailing), (1900...2999).contains(year) {
+                normalized = String(normalized[..<separator])
+            }
+        }
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    /// The `(series title, season, episode)` key an id-less episode is rescued on,
+    /// or `nil` when any part is missing. Exposed for diagnostics; the merge itself
+    /// compares series titles with ``MediaItemIdentity/normalizedTitlesCompatible(_:_:)``
+    /// rather than by this key's exact equality, because servers disagree about a
+    /// show's name.
+    public static func episodeTitleKey(for item: MediaItem) -> String? {
+        guard let season = item.seasonNumber,
+              let episode = item.episodeNumber,
+              let series = normalizedSeriesTitle(for: item) else { return nil }
+        return "\(series)\u{1F}s\(season)e\(episode)"
     }
 
     /// Partitions one union component into sub-groups of mutually-plausible items,

@@ -6,6 +6,68 @@ import CoreNetworking
 public typealias HomeContentPublishing =
     @Sendable (_ continueWatching: [MediaItem], _ latest: [MediaItem]) async -> Void
 
+private actor HomeSnapshotPersistence {
+    static let shared = HomeSnapshotPersistence()
+
+    private var newestGenerationByScope: [String: UInt64] = [:]
+
+    func save(
+        _ content: HomeViewModel.Content,
+        generation: UInt64,
+        to store: any HomeContentStoring,
+        preservePreviousWatchlist: Bool,
+        excludingUnconfirmedContinueWatchingIDs unconfirmedIDs: Set<String>
+    ) {
+        let scope = store.persistenceScope
+        guard generation > newestGenerationByScope[scope, default: 0] else {
+            return
+        }
+        newestGenerationByScope[scope] = generation
+        var durable = content
+        if preservePreviousWatchlist {
+            durable.watchlist = overlay(
+                content.watchlist,
+                on: store.load()?.watchlist ?? []
+            )
+        }
+        if !unconfirmedIDs.isEmpty {
+            durable.continueWatching.removeAll {
+                unconfirmedIDs.contains($0.id)
+            }
+        }
+        store.save(durable)
+    }
+
+    func clear(
+        generation: UInt64,
+        store: any HomeContentStoring
+    ) {
+        let scope = store.persistenceScope
+        guard generation > newestGenerationByScope[scope, default: 0] else {
+            return
+        }
+        newestGenerationByScope[scope] = generation
+        store.clear()
+    }
+
+    private func overlay(
+        _ updates: [MediaItem],
+        on previous: [MediaItem]
+    ) -> [MediaItem] {
+        var updatesByID = Dictionary(
+            updates.map { ($0.stablePresentationID, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var result = previous.map { item in
+            updatesByID.removeValue(forKey: item.stablePresentationID) ?? item
+        }
+        result.append(contentsOf: updates.filter {
+            updatesByID.removeValue(forKey: $0.stablePresentationID) != nil
+        })
+        return result
+    }
+}
+
 /// Loads and holds the unified Home screen's content rows, merged across every
 /// active account/provider. Home-visibility filtering of the Libraries row is
 /// applied reactively in the view (against the shared visibility model) so the
@@ -60,16 +122,15 @@ public final class HomeViewModel {
                 && libraries.isEmpty && librarySections.isEmpty
         }
 
-        /// A copy bounded to at most `perRow` items in each media row (libraries
-        /// kept whole — they're few and cheap). Used before persisting a snapshot so
-        /// the on-disk cache stays small; the first launch paint only needs enough
-        /// to fill the hero + the top of each row anyway. Preserves the merge flag
-        /// and per-library blocks so an unmerged snapshot paints in the right layout.
-        func bounded(perRow: Int) -> Content {
+        /// A copy bounded for launch persistence. Ordinary Home preview rows keep
+        /// only enough cards for the first paint, while Watchlist keeps its complete
+        /// presentation: unlike the previews, that same snapshot backs a dedicated
+        /// browse destination and must not strand navigation at 30 items.
+        func bounded(perRow: Int, watchlistLimit: Int) -> Content {
             Content(
                 continueWatching: Array(continueWatching.prefix(perRow)),
                 latest: Array(latest.prefix(perRow)),
-                watchlist: Array(watchlist.prefix(perRow)),
+                watchlist: Array(watchlist.prefix(watchlistLimit)),
                 libraries: libraries,
                 mergeLibraries: mergeLibraries,
                 librarySections: librarySections.map {
@@ -83,6 +144,40 @@ public final class HomeViewModel {
                 }
             )
         }
+
+        /// Removes credentials from every URL that crosses the Home-snapshot
+        /// persistence boundary.
+        func sanitizedForPersistence() -> Content {
+            var libraries = libraries
+            for index in libraries.indices {
+                libraries[index].library.imageURL = SyncURLSanitizer.sanitize(
+                    libraries[index].library.imageURL
+                )
+            }
+            return Content(
+                continueWatching:
+                    continueWatching.map {
+                        $0.sanitizingArtworkCredentials()
+                    },
+                latest:
+                    latest.map { $0.sanitizingArtworkCredentials() },
+                watchlist:
+                    watchlist.map { $0.sanitizingArtworkCredentials() },
+                libraries: libraries,
+                mergeLibraries: mergeLibraries,
+                librarySections: librarySections.map { group in
+                    var group = group
+                    group.sections = group.sections.map { section in
+                        var section = section
+                        section.items = section.items.map {
+                            $0.sanitizingArtworkCredentials()
+                        }
+                        return section
+                    }
+                    return group
+                }
+            )
+        }
     }
 
     public private(set) var state: LoadState<Content> = .idle
@@ -93,6 +188,13 @@ public final class HomeViewModel {
     /// cached rows remain visible; Continue Watching uses a row placeholder until
     /// fresh content publishes once.
     public private(set) var isShowingCachedSnapshot = false
+    /// A network aggregation is replacing the visible snapshot. Unlike `state`,
+    /// this remains true during stale-while-revalidate so cached rows can explain
+    /// that their complete live contents are still arriving.
+    public private(set) var isRefreshing = false
+    /// Exact unresolved Watchlist slots. Resolved cards remain fixed while these
+    /// placeholders are replaced, matching ordinary paged library browsing.
+    public private(set) var watchlistLoadingPlaceholderCount = 0
     /// Prevents a restarted SwiftUI task from starting the launch refresh twice
     /// while the cached rows remain visible.
     @ObservationIgnored private var cachedSnapshotRefreshStarted = false
@@ -141,6 +243,10 @@ public final class HomeViewModel {
     /// client). Defaults to none so existing callers/tests are unaffected. (h2-cw-clamp)
     private let recentlyAppliedRecency: @Sendable () async -> [String: AppliedResumeRecord]
     private let contentPublisher: HomeContentPublishing
+    /// What belongs on the Continue Watching row and how long a loaded row may be
+    /// trusted. Shared with the aggregator so the limit, the staleness cutoff and
+    /// the refresh window are one set of rules rather than three.
+    private let policy: ContinueWatchingPolicy
     private let mediaItemActionHandler: (any MediaItemActionHandling)?
 
     /// In-flight content aggregation (run off the main actor) and the fire-and-
@@ -169,6 +275,7 @@ public final class HomeViewModel {
     /// How long to wait for the warm burst to settle before re-folding. Short
     /// enough to feel immediate, long enough to swallow a multi-server burst.
     private static let reenrichDebounce: Duration = .milliseconds(200)
+    private static let watchlistInteractionSettleInterval: TimeInterval = 0.35
 
     /// The full visibility snapshot the currently-loaded content was aggregated
     /// for — Home-hidden **and** app-wide-disabled sets **and** the merge switch.
@@ -181,6 +288,16 @@ public final class HomeViewModel {
     /// disable/enable or a merged↔unmerged flip correctly forces a re-aggregation,
     /// since both change what Home fetches and renders.
     private var lastLoadedVisibility: HomeLibraryVisibility?
+    /// When the currently-loaded content was aggregated.
+    ///
+    /// Home has no way to hear that a title was watched, finished or dismissed on
+    /// another device: there is no push, and every in-app signal it does have
+    /// describes something the viewer did *here*. Left alone it will therefore
+    /// keep showing the row it built at launch for as long as the app stays open,
+    /// which is the reported "Continue Watching isn't in sync" — the row was right
+    /// when it was built and nothing ever asked again. Recording the time lets a
+    /// reappearance tell ordinary navigation apart from a genuine absence.
+    private var lastLoadedAt: Date?
     /// A load is running right now. See ``load(showLoadingState:)``.
     @ObservationIgnored private var isLoading = false
     /// A load was requested while one was already running; run once more after.
@@ -196,6 +313,7 @@ public final class HomeViewModel {
         pendingWatchMutations: @escaping @Sendable () async -> [WatchMutation] = { [] },
         recentlyAppliedRecency: @escaping @Sendable () async -> [String: AppliedResumeRecord] = { [:] },
         mediaItemActionHandler: (any MediaItemActionHandling)? = nil,
+        policy: ContinueWatchingPolicy = .default,
         contentPublisher: @escaping HomeContentPublishing = { _, _ in }
     ) {
         self.accounts = accounts
@@ -206,6 +324,7 @@ public final class HomeViewModel {
         self.currentVisibility = currentVisibility
         self.pendingWatchMutations = pendingWatchMutations
         self.recentlyAppliedRecency = recentlyAppliedRecency
+        self.policy = policy
         self.contentPublisher = contentPublisher
         self.mediaItemActionHandler = mediaItemActionHandler
         let persisted = layoutStore.load()
@@ -216,14 +335,49 @@ public final class HomeViewModel {
         // snapshot is used; anything else leaves
         // `state == .idle` so a genuine first launch shows the normal loading state.
         if var cached = contentStore.load() {
+            cached.libraries = Self.rehydratedLibraries(
+                cached.libraries,
+                accounts: accounts
+            )
             if let mediaItemActionHandler {
-                let resolved = mediaItemActionHandler.durableWatchlistItems(
-                    from: cached.watchlist + cached.latest
-                )
-                if !resolved.isEmpty || cached.watchlist.isEmpty {
-                    cached.watchlist = resolved
+                // Every managed-server URL was stripped before persistence. Put
+                // current credentials back before any cached row is visible —
+                // not just Watchlist. The operation is synchronous URL building;
+                // no server is contacted.
+                cached.continueWatching =
+                    mediaItemActionHandler.rehydratePersistedArtwork(
+                        cached.continueWatching
+                    )
+                cached.latest =
+                    mediaItemActionHandler.rehydratePersistedArtwork(
+                        cached.latest
+                    )
+                cached.librarySections = cached.librarySections.map { group in
+                    var group = group
+                    group.sections = group.sections.map { section in
+                        var section = section
+                        section.items =
+                            mediaItemActionHandler.rehydratePersistedArtwork(
+                                section.items
+                            )
+                        return section
+                    }
+                    return group
                 }
             }
+            let cachedWatchlist = cached.watchlist
+            cached.watchlist = Self.resolvedWatchlist(
+                candidates: cached.watchlist + cached.latest,
+                fetched: cached.watchlist,
+                lastKnown: cached.watchlist,
+                handler: mediaItemActionHandler
+            )
+            watchlistLoadingPlaceholderCount = Self.watchlistPlaceholderCount(
+                fetched: cachedWatchlist,
+                lastKnown: cachedWatchlist,
+                visible: cached.watchlist,
+                handler: mediaItemActionHandler
+            )
             // With NO servers to watch, every SERVER-derived row in the snapshot
             // belongs to a library this profile no longer sees. Repainting them
             // is what made turning every server off appear to do nothing —
@@ -237,6 +391,13 @@ public final class HomeViewModel {
                 cached.libraries = []
                 cached.librarySections = []
                 contentStore.clear()
+                let generation = Self.nextSnapshotPersistenceGeneration()
+                Task {
+                    await HomeSnapshotPersistence.shared.clear(
+                        generation: generation,
+                        store: contentStore
+                    )
+                }
             }
             if !cached.isEmpty {
                 self.state = .loaded(cached)
@@ -250,6 +411,8 @@ public final class HomeViewModel {
         unmergedTask?.cancel()
         topShelfPublishTask?.cancel()
         reenrichTask?.cancel()
+        durableWatchlistSaveTask?.cancel()
+        durableWatchlistRefreshTask?.cancel()
     }
 
     /// User-facing name for the greeting header — the primary (first) account.
@@ -290,11 +453,36 @@ public final class HomeViewModel {
         switch state {
         case .loaded, .empty:
             if lastLoadedVisibility == visibility {
+                // Nothing the viewer chose has changed — but the world may have.
+                // A row older than the policy's window is refreshed **silently**:
+                // the current rows stay on screen until fresh content swaps in, so
+                // there is no skeleton flash and no focus reset, exactly as for the
+                // launch-snapshot and post-playback refreshes. Inside the window a
+                // reappearance stays the no-op it has always been, because stepping
+                // into a title and back out is navigation, not new information, and
+                // reloading there would reshuffle the row under the viewer for
+                // nothing.
+                let age = lastLoadedAt.map { Date().timeIntervalSince($0) }
+                let isStale = (age ?? .infinity) > policy.refreshAfter
+                ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.refreshLine(
+                    trigger: "appear",
+                    willReload: isStale,
+                    reason: isStale
+                        ? "stale age=\(age.map { String(format: "%.0fs", $0) } ?? "never") > \(Int(policy.refreshAfter))s"
+                        : "fresh age=\(age.map { String(format: "%.0fs", $0) } ?? "never")"
+                ))
+                guard isStale else { return }
+                await load(showLoadingState: false)
                 return
             }
         default:
             break
         }
+        ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.refreshLine(
+            trigger: "appear",
+            willReload: true,
+            reason: "visibility-changed-or-not-loaded"
+        ))
         await load()
     }
 
@@ -320,19 +508,28 @@ public final class HomeViewModel {
             return
         }
         isLoading = true
+        isRefreshing = true
         defer {
             isLoading = false
             if wantsReloadAfterCurrent {
                 wantsReloadAfterCurrent = false
                 Task { await load(showLoadingState: false) }
+            } else {
+                isRefreshing = false
             }
         }
         PlozzLog.boot("HomeVM.load START vm=\(UInt(bitPattern: ObjectIdentifier(self).hashValue)) accounts=\(accounts.count) state=\(String(describing: state)) silent=\(!showLoadingState)")
+        let onScreenWatchlist = state.value?.watchlist ?? []
         if showLoadingState { state = .loading }
 
         let aggregator = self.aggregator
         let accounts = self.accounts
         let identitySources = self.identitySources
+        let policy = self.policy
+        // What the viewer is looking at right now. A just-played card lives here and
+        // nowhere else until the servers catch up, so it has to be offered to the
+        // reconciler — which decides, on evidence, whether it has earned its place.
+        let onScreenContinueWatching = state.value?.continueWatching ?? []
         let visibility = currentVisibility()
 
         // Watchlist policy: an explicit user save is dropped only when its
@@ -353,7 +550,7 @@ public final class HomeViewModel {
         let content: Content
         if visibility.mergeLibrariesOnHome {
             let aggregationTask = Task.detached(priority: .userInitiated) {
-                await aggregator.content(from: accounts, visibility: visibility, identitySources: identitySources)
+                await aggregator.content(from: accounts, policy: policy, visibility: visibility, identitySources: identitySources)
             }
             self.aggregationTask = aggregationTask
             let merged = await aggregationTask.value
@@ -365,15 +562,37 @@ public final class HomeViewModel {
             guard !aggregationTask.isCancelled else { return }
             let pending = await pendingWatchMutations()
             let appliedRecency = await recentlyAppliedRecency()
-            let reconciledCW = Self.reconcileContinueWatching(merged.continueWatching, pending: pending, appliedRecency: appliedRecency)
-            let durableWatchlist = mediaItemActionHandler?
-                .durableWatchlistItems(
-                    from: reconciledCW + merged.latest + merged.watchlist
-                ) ?? merged.watchlist
+            noteServerConfirmed(merged.continueWatching)
+            let reconciledCW = Self.reconcileContinueWatching(
+                merged.continueWatching,
+                pending: pending,
+                appliedRecency: appliedRecency,
+                carryForward: onScreenContinueWatching,
+                serverConfirmed: serverConfirmedTargets
+            )
+            noteUnconfirmed(reconciled: reconciledCW, fetched: merged.continueWatching)
+            Self.logOverlay(fetched: merged.continueWatching, reconciled: reconciledCW, pending: pending)
+            let resolvedWatchlist = Self.resolvedWatchlist(
+                candidates:
+                    reconciledCW + merged.latest + merged.watchlist,
+                fetched: merged.watchlist,
+                lastKnown: onScreenWatchlist,
+                handler: mediaItemActionHandler
+            ).filter(keepWatchlisted)
+            let durableWatchlist = watchlistForPublication(
+                authoritative: resolvedWatchlist,
+                current: onScreenWatchlist
+            )
+            watchlistLoadingPlaceholderCount = Self.watchlistPlaceholderCount(
+                fetched: merged.watchlist,
+                lastKnown: onScreenWatchlist,
+                visible: durableWatchlist,
+                handler: mediaItemActionHandler
+            )
             content = Content(
                 continueWatching: reconciledCW,
                 latest: merged.latest,
-                watchlist: durableWatchlist.filter(keepWatchlisted),
+                watchlist: durableWatchlist,
                 libraries: merged.libraries
             )
         } else {
@@ -381,22 +600,44 @@ public final class HomeViewModel {
             // full library inventory feeds the Libraries tiles, and each library the
             // user opted rows into contributes a block below.
             let unmergedTask = Task.detached(priority: .userInitiated) {
-                await aggregator.unmergedContent(from: accounts, visibility: visibility, identitySources: identitySources)
+                await aggregator.unmergedContent(from: accounts, policy: policy, visibility: visibility, identitySources: identitySources)
             }
             self.unmergedTask = unmergedTask
             let unmerged = await unmergedTask.value
             guard !unmergedTask.isCancelled else { return }
             let pending = await pendingWatchMutations()
             let appliedRecency = await recentlyAppliedRecency()
-            let reconciledCW = Self.reconcileContinueWatching(unmerged.continueWatching, pending: pending, appliedRecency: appliedRecency)
-            let durableWatchlist = mediaItemActionHandler?
-                .durableWatchlistItems(
-                    from: reconciledCW + unmerged.latest + unmerged.watchlist
-                ) ?? unmerged.watchlist
+            noteServerConfirmed(unmerged.continueWatching)
+            let reconciledCW = Self.reconcileContinueWatching(
+                unmerged.continueWatching,
+                pending: pending,
+                appliedRecency: appliedRecency,
+                carryForward: onScreenContinueWatching,
+                serverConfirmed: serverConfirmedTargets
+            )
+            noteUnconfirmed(reconciled: reconciledCW, fetched: unmerged.continueWatching)
+            Self.logOverlay(fetched: unmerged.continueWatching, reconciled: reconciledCW, pending: pending)
+            let resolvedWatchlist = Self.resolvedWatchlist(
+                candidates:
+                    reconciledCW + unmerged.latest + unmerged.watchlist,
+                fetched: unmerged.watchlist,
+                lastKnown: onScreenWatchlist,
+                handler: mediaItemActionHandler
+            ).filter(keepWatchlisted)
+            let durableWatchlist = watchlistForPublication(
+                authoritative: resolvedWatchlist,
+                current: onScreenWatchlist
+            )
+            watchlistLoadingPlaceholderCount = Self.watchlistPlaceholderCount(
+                fetched: unmerged.watchlist,
+                lastKnown: onScreenWatchlist,
+                visible: durableWatchlist,
+                handler: mediaItemActionHandler
+            )
             content = Content(
                 continueWatching: reconciledCW,
                 latest: unmerged.latest,
-                watchlist: durableWatchlist.filter(keepWatchlisted),
+                watchlist: durableWatchlist,
                 libraries: unmerged.libraries,
                 mergeLibraries: false,
                 librarySections: unmerged.librarySections
@@ -420,26 +661,33 @@ public final class HomeViewModel {
         // the emptiness IS the answer, so fall through and let it stand (which
         // also republishes the Top Shelf, rather than leaving it on the old rows).
         if content.isEmpty, accounts.isEmpty {
-            contentStore.clear()
+            await HomeSnapshotPersistence.shared.clear(
+                generation: Self.nextSnapshotPersistenceGeneration(),
+                store: contentStore
+            )
         } else if content.isEmpty, !showLoadingState, case .loaded = state {
             PlozzLog.boot("HomeVM.load KEEP-CACHED silent-empty vm=\(UInt(bitPattern: ObjectIdentifier(self).hashValue))")
             lastLoadedVisibility = visibility
+            lastLoadedAt = Date()
             // The live sources were unavailable. Reveal the cached row rather than
             // leaving a permanent loading placeholder with no refresh in flight.
             isShowingCachedSnapshot = false
             return
         }
         isShowingCachedSnapshot = false
-        state = content.isEmpty ? .empty : .loaded(content)
+        state = content.isEmpty && watchlistLoadingPlaceholderCount == 0
+            ? .empty
+            : .loaded(content)
         // Record what this content was aggregated for so a later reappearance with
         // an unchanged visibility snapshot is recognised as a no-op (see
         // `loadIfNeeded(for:)`).
         lastLoadedVisibility = visibility
+        lastLoadedAt = Date()
         // Persist a bounded snapshot of the fresh content so the next launch paints
         // Home instantly (see `HomeContentStore`). Only meaningful, non-empty
         // content is cached — a transient empty aggregate (e.g. server briefly
         // unreachable) must not overwrite a good snapshot with nothing.
-        if !content.isEmpty { contentStore.save(content) }
+        if !content.isEmpty { saveSnapshot(content) }
         PlozzLog.boot("HomeVM.load DONE vm=\(UInt(bitPattern: ObjectIdentifier(self).hashValue)) empty=\(content.isEmpty) merged=\(content.mergeLibraries) cw=\(content.continueWatching.count) latest=\(content.latest.count) wl=\(content.watchlist.count) libs=\(content.libraries.count) sections=\(content.librarySections.count)")
         guard !Task.isCancelled else { return }
 
@@ -470,7 +718,20 @@ public final class HomeViewModel {
     /// flip its badge without a refetch. A watchlist add/remove also inserts/removes
     /// the title from the Watchlist row.
     public func applyWatchedState(_ mutation: MediaItemMutation) {
-        guard case var .loaded(content) = state else { return }
+        guard case var .loaded(content) = state else {
+            // A play that arrives before Home has any content to update is
+            // discarded outright — there is no row to change and nothing here
+            // schedules a look later. Worth seeing, because from the outside it is
+            // indistinguishable from the play never happening.
+            ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.homeMutationLine(
+                played: mutation.played,
+                resumePosition: mutation.resumePosition,
+                onRow: false,
+                reloadScheduled: false,
+                state: String(describing: state)
+            ))
+            return
+        }
         // A resume/progress change — or a *completed* play — means the user
         // actually played the title just now, so bump its recency and re-sort
         // Continue Watching to float it to the front without a full reload. A bare
@@ -495,12 +756,58 @@ public final class HomeViewModel {
         // loaded, so a normal re-watch or mark-watched never forces a reload.
         let isInProgressResume = (mutation.resumePosition ?? 0) > 0 && !(mutation.played ?? false)
         let alreadyOnHome = content.continueWatching.contains { mutation.targets($0) }
+        // A title played for the first time has never been on this row, so there is
+        // nothing to update in place. The card is right here on the mutation — the
+        // player was holding it the whole time — so put it on the row now rather
+        // than asking a server which may not have recorded the play yet. Measured on
+        // device, that question is asked before our own write arrives and comes back
+        // "no", which is why a title started from Search stayed missing until the
+        // app was relaunched.
+        var placedCard = false
+        if isInProgressResume, !alreadyOnHome, let played = mutation.item {
+            var card = played
+            card.resumePosition = mutation.resumePosition
+            card.playedPercentage = mutation.playedPercentage
+            card.lastPlayedAt = Date()
+            content.continueWatching.insert(card, at: 0)
+            unconfirmedContinueWatchingIDs.insert(card.id)
+            placedCard = true
+        }
+        if isInProgressResume {
+            // A new play is a new prediction, so it needs a new acknowledgement:
+            // whatever the servers told us about this title before this moment no
+            // longer settles anything. Without this a title played, removed, and
+            // then played again would be treated as already-confirmed and dropped
+            // on the next refresh, even though the fresh play genuinely belongs.
+            for target in Self.mutationScopeKeys(mutation, card: mutation.item) {
+                serverConfirmedTargets.remove(target)
+            }
+        }
         if isInProgressResume && !alreadyOnHome {
+            // Still refresh, so the placed card is reconciled with the server's own
+            // view — cross-server sources, episode linkage, artwork it may know
+            // better — once that view catches up.
             scheduleNewResumeReload()
         }
+        ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.homeMutationLine(
+            played: mutation.played,
+            resumePosition: mutation.resumePosition,
+            onRow: alreadyOnHome || placedCard,
+            reloadScheduled: isInProgressResume && !alreadyOnHome,
+            state: placedCard ? "loaded placed-card" : "loaded"
+        ))
 
-        if mutation.played == true {
+        // A cleared resume point means the title has nowhere left to continue from,
+        // so it leaves the row — whether that came from finishing it or from the
+        // viewer taking it off deliberately. Distinguished from "unchanged" by the
+        // value being explicitly 0 rather than absent: `nil` means this mutation
+        // says nothing about position, while 0 says there is no longer one.
+        let clearedResume = mutation.resumePosition == 0 && mutation.played != false
+        if mutation.played == true || clearedResume {
             content.continueWatching.removeAll { mutation.targets($0) }
+            unconfirmedContinueWatchingIDs.subtract(
+                content.continueWatching.map(\.id)
+            )
         } else if reflectsPlayback {
             let now = Date()
             let stamped = content.continueWatching.map { item -> MediaItem in
@@ -558,11 +865,59 @@ public final class HomeViewModel {
         // Keep the next launch snapshot in lockstep with in-session watch actions.
         // Without this, quitting after playback resurrects the pre-play Continue
         // Watching order until the next live refresh completes.
-        contentStore.save(content)
+        saveSnapshot(content)
     }
 
     /// Re-resolves the durable alias-ordered Watchlist against already-loaded
     /// presentation candidates. No provider creation, disk read, or network work.
+    @ObservationIgnored private var durableWatchlistSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var durableWatchlistSaveGeneration: UInt64 = 0
+    private static var globalSnapshotSaveGeneration: UInt64 = 0
+    @ObservationIgnored private var durableWatchlistRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var durableWatchlistRefreshPending = false
+    @ObservationIgnored private var lastWatchlistNavigationInteractionAt: Date?
+    @ObservationIgnored private var pendingAuthoritativeWatchlist: [MediaItem]?
+
+    /// Re-folds Home's watchlist row shortly after a change, rather than during it.
+    ///
+    /// `refreshDurableWatchlist` re-resolves universal identity for every loaded
+    /// card, which is the expensive graph walk the membership memo exists to avoid
+    /// — and it ran synchronously the moment a watchlist notification arrived.
+    /// Home stays mounted behind a pushed detail page, so pressing the watchlist
+    /// button on a show ran all of that on the main thread before the frame that
+    /// would show the button's new state could be drawn.
+    ///
+    /// Nothing here is urgent: it refreshes a row the viewer is not looking at,
+    /// and the control they ARE looking at already answers from intent. Deferring
+    /// lets the press paint first, and coalescing means a burst re-folds once.
+    /// Navigation input re-arms the same delay, so the O(row × identity) fold
+    /// cannot land during an active horizontal browse.
+    public func scheduleDurableWatchlistRefresh() {
+        pendingAuthoritativeWatchlist = nil
+        durableWatchlistRefreshPending = true
+        armDurableWatchlistRefresh()
+    }
+
+    /// Keeps a pending durable fold off the left/right scrolling hot path.
+    public func noteHomeNavigationInteraction() {
+        lastWatchlistNavigationInteractionAt = Date()
+        guard durableWatchlistRefreshPending
+                || pendingAuthoritativeWatchlist != nil
+        else { return }
+        armDurableWatchlistRefresh()
+    }
+
+    private func armDurableWatchlistRefresh() {
+        durableWatchlistRefreshTask?.cancel()
+        durableWatchlistRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled, let self else { return }
+            self.durableWatchlistRefreshPending = false
+            if self.applyPendingAuthoritativeWatchlist() { return }
+            self.refreshDurableWatchlist()
+        }
+    }
+
     public func refreshDurableWatchlist() {
         guard case var .loaded(content) = state,
               let mediaItemActionHandler else { return }
@@ -572,33 +927,341 @@ public final class HomeViewModel {
         candidates += content.librarySections.flatMap {
             $0.sections.flatMap(\.items)
         }
-        content.watchlist = mediaItemActionHandler.durableWatchlistItems(
-            from: candidates
+
+        let authoritative = Self.resolvedWatchlist(
+            candidates: candidates,
+            fetched: content.watchlist,
+            lastKnown: content.watchlist,
+            handler: mediaItemActionHandler
         )
-        state = content.isEmpty ? .empty : .loaded(content)
-        if !content.isEmpty { contentStore.save(content) }
+        content.watchlist = watchlistForPublication(
+            authoritative: authoritative,
+            current: content.watchlist
+        )
+        refreshWatchlistLoadingProgress()
+        state = content.isEmpty && watchlistLoadingPlaceholderCount == 0
+            ? .empty
+            : .loaded(content)
+        if !content.isEmpty { scheduleDurableWatchlistSave(content) }
     }
 
+    private func watchlistForPublication(
+        authoritative: [MediaItem],
+        current: [MediaItem]
+    ) -> [MediaItem] {
+        guard let lastInteraction = lastWatchlistNavigationInteractionAt,
+              Date().timeIntervalSince(lastInteraction)
+                < Self.watchlistInteractionSettleInterval
+        else {
+            pendingAuthoritativeWatchlist = nil
+            return authoritative
+        }
+        pendingAuthoritativeWatchlist = authoritative
+        durableWatchlistRefreshPending = true
+        armDurableWatchlistRefresh()
+        return current
+    }
+
+    private func applyPendingAuthoritativeWatchlist() -> Bool {
+        guard let authoritative = pendingAuthoritativeWatchlist,
+              case var .loaded(content) = state
+        else {
+            pendingAuthoritativeWatchlist = nil
+            return false
+        }
+        pendingAuthoritativeWatchlist = nil
+        content.watchlist = authoritative
+        state = .loaded(content)
+        refreshWatchlistLoadingProgress()
+        if content.isEmpty && watchlistLoadingPlaceholderCount == 0 {
+            state = .empty
+        }
+        if !content.isEmpty { scheduleDurableWatchlistSave(content) }
+        return true
+    }
+
+    public func refreshWatchlistLoadingProgress() {
+        guard case let .loaded(content) = state else { return }
+        watchlistLoadingPlaceholderCount = Self.watchlistPlaceholderCount(
+            fetched: content.watchlist,
+            lastKnown: content.watchlist,
+            visible: content.watchlist,
+            handler: mediaItemActionHandler
+        )
+    }
+
+    /// The one policy for folding the durable watchlist into Home.
+    ///
+    /// Before the native view has loaded, the runtime contains only explicit
+    /// Plozz intents. It is not an authoritative partial result: resolving
+    /// against it downgraded 181 last-known titles to 78 unknown ones in both the
+    /// constructor AND the first background aggregation, which is why gating the
+    /// constructor alone still painted "+" on every launch.
+    ///
+    /// A saved Home row remains the visible truth during that startup window.
+    /// Provider entries not yet reconciled against library ownership are represented
+    /// by skeleton slots instead of cards with guessed ownership.
+    static func resolvedWatchlist(
+        candidates: [MediaItem],
+        fetched: [MediaItem],
+        lastKnown: [MediaItem],
+        handler: (any MediaItemActionHandling)?
+    ) -> [MediaItem] {
+        guard let handler else { return fetched }
+        guard handler.isDurableWatchlistPresentationReady() else {
+            return handler.rehydratePersistedArtwork(
+                lastKnown.filter {
+                    !TitleClassifier.isNotOwnedForBadge($0)
+                }
+            )
+        }
+        let authoritative = handler.rehydratePersistedArtwork(
+            handler.durableWatchlistItems(from: candidates)
+        )
+        return stabilizedWatchlist(
+            current: lastKnown,
+            authoritative: authoritative
+        )
+    }
+
+    static func stabilizedWatchlist(
+        current _: [MediaItem],
+        authoritative: [MediaItem]
+    ) -> [MediaItem] {
+        var authoritativeIDs = Set<String>()
+        return authoritative.filter {
+            authoritativeIDs.insert($0.stablePresentationID).inserted
+        }
+    }
+
+    private static func watchlistPlaceholderCount(
+        fetched: [MediaItem],
+        lastKnown: [MediaItem],
+        visible: [MediaItem],
+        handler: (any MediaItemActionHandling)?
+    ) -> Int {
+        guard let handler else { return 0 }
+        if let target = handler.durableWatchlistLoadingTargetCount() {
+            return max(
+                target - Set(visible.map(\.stablePresentationID)).count,
+                0
+            )
+        }
+        guard !handler.isDurableWatchlistPresentationReady() else { return 0 }
+        let unresolvedTotal = MediaItemMerger.merge(fetched + lastKnown).count
+        return max(unresolvedTotal - visible.count, 0)
+    }
+
+    /// Restores credentials on cached library-tile art before first paint.
+    ///
+    /// Libraries carry the account that supplied them and the provider is already
+    /// alive in `accounts`; this is URL reconstruction only, never a metadata
+    /// request. A provider that does not recognise the saved URL leaves it alone.
+    private static func rehydratedLibraries(
+        _ libraries: [AggregatedLibrary],
+        accounts: [ResolvedAccount]
+    ) -> [AggregatedLibrary] {
+        let providers = Dictionary(
+            uniqueKeysWithValues: accounts.map {
+                ($0.account.id, $0.provider)
+            }
+        )
+        return libraries.map { library in
+            guard let provider = providers[library.accountID],
+                  let current = library.library.imageURL,
+                  let signed = provider.reauthenticatedImageURL(
+                      current,
+                      maxWidth: 400
+                  )
+            else { return library }
+            var library = library
+            library.library.imageURL = signed
+            return library
+        }
+    }
+
+    /// Persists Home's snapshot after a watchlist change, off the press.
+    ///
+    /// `contentStore.save` JSON-encodes every row and writes the file, on the
+    /// main thread. Doing that inline meant one watchlist toggle paid for a full
+    /// encode of Home before the next frame could be drawn, and a burst of
+    /// presses paid for one per press — the interaction visibly stalled.
+    ///
+    /// The snapshot is only a warm start for next launch, so it does not have to
+    /// be written during the gesture. Coalescing to the last change also means a
+    /// burst writes once instead of once per press.
+    private func scheduleDurableWatchlistSave(_ content: Content) {
+        durableWatchlistSaveGeneration &+= 1
+        let localGeneration = durableWatchlistSaveGeneration
+        let storeGeneration = Self.nextSnapshotPersistenceGeneration()
+        durableWatchlistSaveTask?.cancel()
+        durableWatchlistSaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1200))
+            guard !Task.isCancelled,
+                  let self,
+                  self.durableWatchlistSaveGeneration == localGeneration else {
+                return
+            }
+            self.durableWatchlistSaveTask = nil
+            let preservePreviousWatchlist =
+                self.mediaItemActionHandler != nil
+                && self.mediaItemActionHandler?
+                    .isDurableWatchlistPresentationReady() == false
+            await HomeSnapshotPersistence.shared.save(
+                content,
+                generation: storeGeneration,
+                to: self.contentStore,
+                preservePreviousWatchlist: preservePreviousWatchlist,
+                excludingUnconfirmedContinueWatchingIDs:
+                    self.unconfirmedContinueWatchingIDs
+            )
+        }
+    }
+
+    /// Last session's curated hero, ready to paint in the first frame.
+    ///
+    /// Deliberately unconditional on which sources are enabled: a hero that starts
+    /// as a skeleton on every launch is the thing this exists to prevent. What
+    /// makes it safe is ``HeroDurableSnapshot`` — re-applied here on the way out,
+    /// not just on the way in, so a file written by a build that predates the rule
+    /// (or by one whose enrichment added a resumable source ref afterwards) cannot
+    /// repaint a stale playback position either.
     public func cachedHeroItems(for settings: HeroSettings) -> [MediaItem]? {
-        guard settings.isActive, settings.sources == [.featured] else { return nil }
-        return contentStore.loadHero(for: HomeHeroCacheKey(settings: settings))
+        guard settings.isActive else { return nil }
+        guard let stored = contentStore.loadHero(
+            for: HeroConfigurationKey(settings: settings)
+        ) else { return nil }
+        let durable = HeroDurableSnapshot.filter(stored)
+        let rehydrated = mediaItemActionHandler?
+            .rehydratePersistedArtwork(durable) ?? durable
+        return rehydrated.isEmpty ? nil : rehydrated
     }
 
     public func cacheHeroItems(_ items: [MediaItem], for settings: HeroSettings) {
-        guard settings.isActive, settings.isEnabled(.featured), !items.isEmpty else {
-            return
-        }
-        contentStore.saveHero(items, for: HomeHeroCacheKey(settings: settings))
+        guard settings.isActive, !items.isEmpty else { return }
+        contentStore.saveHero(items, for: HeroConfigurationKey(settings: settings))
     }
+
+    /// Discards the launch snapshot, for a curation that authoritatively found
+    /// nothing. ``cacheHeroItems(_:for:)`` deliberately refuses to write an empty
+    /// set — otherwise a failed refresh would erase a good snapshot — so running
+    /// out of content needs to say so explicitly rather than by omission.
+    public func clearCachedHeroItems() {
+        contentStore.clearHero()
+    }
+
+    /// Targets a server has shown us since we last wrote to them, keyed like
+    /// ``MediaSourceRef/id``.
+    ///
+    /// Turns "absent from the feed" — which on its own is ambiguous — into two
+    /// distinguishable things. Before a server has acknowledged our write, absence
+    /// means it has not caught up and the just-played card deserves to be carried.
+    /// Once it has returned that card even once, the prediction is fulfilled, and a
+    /// later absence is the server saying the title is gone: watched elsewhere, or
+    /// dismissed in its own app. Without this distinction a title removed moments
+    /// after being played stayed on the row until the carry window expired, which is
+    /// the mirror of the bug the window exists to prevent.
+    ///
+    /// A fresh play removes its targets again, because that is a new prediction
+    /// awaiting a new acknowledgement.
+    private var serverConfirmedTargets: Set<String> = []
+
+    /// Cards on the row that no server has returned yet — placed from a play we
+    /// just made, or carried while a server catches up.
+    ///
+    /// They are shown, but never **persisted**. The launch snapshot exists to
+    /// repaint what the servers last said, and writing a prediction into it makes
+    /// the prediction self-sustaining: the next launch paints it, that painted row
+    /// is what carry-forward inspects, and the durable write record it cites is
+    /// still on disk — so the card re-carries itself indefinitely and survives even
+    /// a force restart. Bounded prediction, unbounded persistence, and the
+    /// persistence wins. Keeping them out of the snapshot is what bounds it.
+    private var unconfirmedContinueWatchingIDs: Set<String> = []
 
     /// In-flight guard so a burst of resume ticks for a not-yet-loaded title
     /// coalesces into a single silent re-aggregation instead of stacking reloads.
     private var newResumeReloadInFlight = false
 
-    /// Silently re-aggregates Home to surface a brand-new resume that couldn't be
-    /// updated in place (see ``applyWatchedState(_:)``). No-op while a reload is
-    /// already running, and only ever runs against currently-loaded content so it
-    /// can't fight the initial load or a visibility-driven reload.
+    /// The scope keys a mutation addresses. `scopedItemIDs` already carries the
+    /// exact `(account, item)` pairs the fan-out targeted; the played card
+    /// contributes its own servers so a merged title is fully covered.
+    nonisolated static func mutationScopeKeys(_ mutation: MediaItemMutation, card: MediaItem?) -> Set<String> {
+        // `scopedItemIDs` joins with ":", and an item id may itself contain one, so
+        // split on the FIRST separator only — the account id never does.
+        var keys = Set(mutation.scopedItemIDs.compactMap { scoped -> String? in
+            guard let separator = scoped.firstIndex(of: ":") else { return nil }
+            return String(scoped[scoped.startIndex..<separator])
+                + "\u{1}"
+                + String(scoped[scoped.index(after: separator)...])
+        })
+        if let card { keys.formUnion(scopeKeys(of: card)) }
+        return keys
+    }
+
+    /// The scope keys a card answers to: every server that holds it, plus its own
+    /// account-and-id pair for an unmerged single-source card.
+    nonisolated static func scopeKeys(of item: MediaItem) -> Set<String> {
+        var keys = Set(item.sources.map { $0.accountID + "\u{1}" + $0.itemID })
+        if let account = item.sourceAccountID { keys.insert(account + "\u{1}" + item.id) }
+        return keys
+    }
+
+    /// Persists the launch snapshot with predictions stripped out.
+    ///
+    /// What is on screen and what is worth repainting next launch are different
+    /// questions. A card no server has confirmed is shown because we have good
+    /// reason to expect it; it is not something to repaint from disk days later,
+    /// when the reason has long since expired and no server ever agreed.
+    private func saveSnapshot(_ content: Content) {
+        durableWatchlistSaveGeneration &+= 1
+        let storeGeneration = Self.nextSnapshotPersistenceGeneration()
+        durableWatchlistSaveTask?.cancel()
+        let preservePreviousWatchlist =
+            mediaItemActionHandler != nil
+            && mediaItemActionHandler?
+                .isDurableWatchlistPresentationReady() == false
+        let unconfirmedIDs = unconfirmedContinueWatchingIDs
+        let contentStore = contentStore
+        durableWatchlistSaveTask = Task {
+            await HomeSnapshotPersistence.shared.save(
+                content,
+                generation: storeGeneration,
+                to: contentStore,
+                preservePreviousWatchlist: preservePreviousWatchlist,
+                excludingUnconfirmedContinueWatchingIDs: unconfirmedIDs
+            )
+        }
+    }
+
+    private static func nextSnapshotPersistenceGeneration() -> UInt64 {
+        globalSnapshotSaveGeneration &+= 1
+        return globalSnapshotSaveGeneration
+    }
+
+    /// Recomputes which cards are on the row without any server having returned
+    /// them, so the launch snapshot can leave them out. Replaces the set outright:
+    /// a card the feed now carries has stopped being a prediction.
+    private func noteUnconfirmed(reconciled: [MediaItem], fetched: [MediaItem]) {
+        let confirmed = Set(fetched.map(\.id))
+        unconfirmedContinueWatchingIDs = Set(
+            reconciled.lazy.map(\.id).filter { !confirmed.contains($0) }
+        )
+    }
+
+    /// Records that the servers have acknowledged these cards, so a later absence
+    /// reads as a removal rather than as lag. See ``serverConfirmedTargets``.
+    private func noteServerConfirmed(_ fetched: [MediaItem]) {
+        for item in fetched { serverConfirmedTargets.formUnion(Self.scopeKeys(of: item)) }
+    }
+
+    /// Silently re-aggregates Home so a brand-new resume is backed by real server
+    /// data as soon as the servers have it.
+    ///
+    /// This is now a follow-up rather than the way the title appears: the played
+    /// card is placed on the row immediately by ``applyWatchedState(_:)``, because
+    /// the app already has it and does not need to ask anyone. The reload exists so
+    /// the placed card is reconciled with the server's own view (artwork, episode
+    /// linkage, cross-server sources) once that view catches up.
     private func scheduleNewResumeReload() {
         guard !newResumeReloadInFlight, case .loaded = state else { return }
         newResumeReloadInFlight = true
@@ -627,7 +1290,31 @@ public final class HomeViewModel {
     ///    matching source refs) with the play's `capturedAt` recency + resume, so it
     ///    floats to the correct spot;
     ///  - anything else (e.g. a bare mark-*unwatched*) is left untouched — we never
-    ///    fabricate recency for a non-play, nor invent a card the feed didn't return.
+    ///    fabricate recency for a non-play, nor invent a card out of nothing.
+    ///
+    /// **Carrying a just-played card (`carryForward`).** The server owns watch
+    /// state and wins every disagreement — but only once it has actually heard us.
+    /// A play produces two independent pieces of work, telling the server where the
+    /// viewer stopped and asking it what is in progress, and nothing orders them;
+    /// measured on device, the ask routinely wins and the server answers about a
+    /// moment before the play. Dropping the card on that answer is how a title
+    /// started from Search vanished until the app was relaunched.
+    ///
+    /// So a card already on screen is kept when the feed omits it, and **only**
+    /// while there is concrete evidence the server has not caught up yet: a write
+    /// still queued for it, or one applied within `carryForwardWindow`. Outside
+    /// that the card goes, without exception — which is what stops this becoming
+    /// the mirror bug, a title removed on another client that Plozz keeps showing
+    /// forever. It is a short-lived prediction of what the server is about to say,
+    /// never a second opinion about what is true.
+    ///
+    /// `carryForwardWindow` is deliberately **seconds**. It covers exactly one
+    /// thing: the gap between a server accepting our write and reflecting it in
+    /// its own resume feed, which takes a moment, not minutes. Being offline is a
+    /// different condition and is already covered by the write still being queued.
+    /// Anything longer is not patience, it is a licence to keep showing a title
+    /// the viewer has removed — and someone will always reach for the server's own
+    /// app, so that removal has to land whatever Plozz happens to be doing.
     ///
     /// The row is then re-sorted with the aggregator's exact recency comparator so
     /// the overlaid stamps take effect. Pure and side-effect-free for testability.
@@ -646,8 +1333,11 @@ public final class HomeViewModel {
         _ items: [MediaItem],
         pending: [WatchMutation],
         appliedRecency: [String: AppliedResumeRecord] = [:],
+        carryForward: [MediaItem] = [],
+        serverConfirmed: Set<String> = [],
         now: Date = Date(),
-        clampFreshness: TimeInterval = 30 * 60
+        clampFreshness: TimeInterval = 30 * 60,
+        carryForwardWindow: TimeInterval = 20
     ) -> [MediaItem] {
         guard !pending.isEmpty || !appliedRecency.isEmpty else { return items }
 
@@ -704,7 +1394,132 @@ public final class HomeViewModel {
             }
             overlaid.append(updated)
         }
+        overlaid.append(contentsOf: carriedForward(
+            carryForward,
+            fetched: items,
+            pending: pending,
+            appliedRecency: appliedRecency,
+            serverConfirmed: serverConfirmed,
+            now: now,
+            window: carryForwardWindow
+        ))
         return HomeAggregator.sortedByRecency(overlaid)
+    }
+
+    /// Cards on screen that the fresh feed left out, kept only while a write for
+    /// them is still queued or landed within `window`.
+    ///
+    /// The window is what keeps the server authoritative. Our write is accepted in
+    /// well under a second, so a feed that still omits the title minutes later is
+    /// not lagging — it is telling us something (watched elsewhere, dismissed on
+    /// another client) and it gets to be right.
+    private nonisolated static func carriedForward(
+        _ candidates: [MediaItem],
+        fetched: [MediaItem],
+        pending: [WatchMutation],
+        appliedRecency: [String: AppliedResumeRecord],
+        serverConfirmed: Set<String>,
+        now: Date,
+        window: TimeInterval
+    ) -> [MediaItem] {
+        guard !candidates.isEmpty else { return [] }
+        func scopeKey(_ accountID: String, _ itemID: String) -> String { accountID + "\u{1}" + itemID }
+
+        var present = Set<String>()
+        for item in fetched {
+            for source in item.sources { present.insert(scopeKey(source.accountID, source.itemID)) }
+            if let account = item.sourceAccountID { present.insert(scopeKey(account, item.id)) }
+        }
+        // Writes still queued for a title — the server demonstrably has not seen it.
+        var queued = Set<String>()
+        for mutation in pending where (mutation.resumePosition ?? 0) > 0 && mutation.played != true {
+            for target in mutation.targets { queued.insert(scopeKey(target.accountID, target.itemID)) }
+        }
+        // Writes that landed recently enough that the feed may not show them yet.
+        var recentlyWritten = Set<String>()
+        for (key, record) in appliedRecency where now.timeIntervalSince(record.appliedAt) <= window {
+            // `appliedRecency` keys on "accountID:itemID"; re-key to the scoped form.
+            guard let separator = key.firstIndex(of: ":") else { continue }
+            recentlyWritten.insert(
+                scopeKey(String(key[key.startIndex..<separator]), String(key[key.index(after: separator)...]))
+            )
+        }
+
+        var carried: [MediaItem] = []
+        for candidate in candidates {
+            // Only ever carry something genuinely in progress. A finish is supposed
+            // to leave the row, so its absence is the intended outcome.
+            guard (candidate.resumePosition ?? 0) > 0 else { continue }
+            var keys = Set(candidate.sources.map { scopeKey($0.accountID, $0.itemID) })
+            if let account = candidate.sourceAccountID { keys.insert(scopeKey(account, candidate.id)) }
+            guard !keys.isDisjoint(with: queued) || !keys.isDisjoint(with: recentlyWritten) else { continue }
+            guard keys.isDisjoint(with: present) else { continue }
+            // The server already acknowledged this write once. Its absence now is an
+            // answer, not a lag, and it outranks anything we predicted.
+            guard keys.isDisjoint(with: serverConfirmed) else { continue }
+            carried.append(candidate)
+        }
+        if !carried.isEmpty {
+            ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.carryForwardLine(
+                titles: carried.map(\.title)
+            ))
+        }
+        return carried
+    }
+
+    /// Pending in-progress plays that matched **no card** in the freshly fetched
+    /// feed.
+    ///
+    /// ``reconcileContinueWatching`` may drop a card or restamp one, but it
+    /// deliberately never invents one — it will not fabricate a row the feed did
+    /// not return. That is the right call for correctness and it leaves a real
+    /// gap: a title the viewer just started, which the server has not yet listed,
+    /// has nowhere to be put. The row then stays silently wrong until some later
+    /// refresh happens to catch the server up, which in practice is the next
+    /// launch. Starting something from Search is the everyday way to hit this,
+    /// because a title reached from Search is precisely one that was not already
+    /// on the row.
+    ///
+    /// Naming those plays turns "nothing appeared" into an observation. Pure, so
+    /// it is testable and costs nothing when diagnostics are off.
+    public nonisolated static func unmatchedPendingTargets(
+        in items: [MediaItem],
+        pending: [WatchMutation]
+    ) -> [String] {
+        guard !pending.isEmpty else { return [] }
+        func key(_ accountID: String, _ itemID: String) -> String { accountID + "\u{1}" + itemID }
+        var present = Set<String>()
+        for item in items {
+            for source in item.sources { present.insert(key(source.accountID, source.itemID)) }
+            if let account = item.sourceAccountID { present.insert(key(account, item.id)) }
+        }
+        var unmatched: [String] = []
+        var seen = Set<String>()
+        // Only in-progress plays: a finished one is *supposed* to be absent from
+        // the row, so its absence is the correct outcome rather than a gap.
+        for mutation in pending where (mutation.resumePosition ?? 0) > 0 && mutation.played != true {
+            for target in mutation.targets {
+                let target_key = key(target.accountID, target.itemID)
+                guard !present.contains(target_key), seen.insert(target_key).inserted else { continue }
+                unmatched.append("\(target.accountID):\(target.itemID)")
+            }
+        }
+        return unmatched
+    }
+
+    /// Emits what the overlay did to one fetched feed. Gated; free when off.
+    private nonisolated static func logOverlay(
+        fetched: [MediaItem],
+        reconciled: [MediaItem],
+        pending: [WatchMutation]
+    ) {
+        guard ContinueWatchingDiagnostics.isEnabled else { return }
+        ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.overlayLine(
+            fetched: fetched.count,
+            reconciled: reconciled.count,
+            pending: pending.count,
+            unmatched: unmatchedPendingTargets(in: fetched, pending: pending)
+        ))
     }
 
     /// Clamps a card's server-reported recency **down** to the real play time for any

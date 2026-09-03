@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import CoreModels
 
 /// Centralised design tokens so spacing/sizing stay consistent and tweakable
 /// in one place across all features. Think of this as the app's design-token
@@ -60,6 +61,32 @@ public enum PlozzTheme {
         public static let landscapeWidth: CGFloat = 480
         public static let landscapeHeight: CGFloat = 270
 
+        // MARK: Continue Watching (logo & artwork) card shape
+
+        /// How much reflection a Continue Watching card shows, as a fraction of
+        /// the picture's own height.
+        ///
+        /// This — not an aspect ratio — is the number worth choosing, because it
+        /// is the thing you actually see: the card's shape falls out of it (see
+        /// ``ContinueWatchingCardShape/aspectRatio``). The card is taller than its
+        /// 16:9 art so the chrome along the bottom — play glyph, progress bar,
+        /// "S1, E12 · 17m" — sits in a band of its own rather than on top of the
+        /// subject, and this says how deep that band is.
+        ///
+        /// Kept modest. Height is what a rail spends, and past a point the
+        /// reflection stops reading as the picture having a soft bottom and
+        /// starts being a feature of its own that the chip then sits on top of.
+        public static let continueWatchingReflectionShare: CGFloat = 0.135
+        /// Fraction of the artwork's width trimmed from **each** side of a
+        /// Continue Watching card.
+        ///
+        /// The picture keeps its own 16:9 shape and is never squashed. Trimming a
+        /// sliver off each side scales it up, so it stands taller in the card and
+        /// less of the card is left to fill underneath it — 3% a side costs
+        /// nothing anyone can see on a backdrop (whose subject is centred) and
+        /// buys back roughly a fifth of the fill band.
+        public static let continueWatchingArtworkSideCrop: CGFloat = 0.03
+    
         // MARK: Circular tile sizes (round avatars: artists, cast)
 
         /// Diameter of an artist's circular tile — kept close to a music card's
@@ -218,14 +245,20 @@ public enum PlozzTheme {
         /// Base (standard-density) point size for a card's subtitle/metadata line.
         /// Density-scaled in `PlozzMetrics` so caption text grows with the card.
         public static let cardSubtitleFontSize: CGFloat = 20
-        /// Search-only status cue painted on media artwork. It scales with the card
-        /// but is floored in `PlozzMetrics` so micro density remains TV-readable.
+        /// Status cue painted on media artwork. tvOS uses these 10-foot values;
+        /// touch platforms derive the font from native caption typography and use
+        /// the smaller touch insets below.
         public static let cardStatusCueFontSize: CGFloat = 18
         public static let cardStatusCueMinFontSize: CGFloat = 16
         public static let cardStatusCueHorizontalPadding: CGFloat = 10
         public static let cardStatusCueMinHorizontalPadding: CGFloat = 8
         public static let cardStatusCueVerticalPadding: CGFloat = 6
         public static let cardStatusCueMinVerticalPadding: CGFloat = 5
+        public static let cardStatusCueTouchMinFontSize: CGFloat = 10
+        public static let cardStatusCueTouchHorizontalPadding: CGFloat = 7
+        public static let cardStatusCueTouchMinHorizontalPadding: CGFloat = 6
+        public static let cardStatusCueTouchVerticalPadding: CGFloat = 4
+        public static let cardStatusCueTouchMinVerticalPadding: CGFloat = 3
         /// Resume-chip (play glyph + progress bar + "… left") drawn on landscape
         /// artwork. tvOS's tuned constants: read from ~10ft, so the glyph is large
         /// and the bar is comfortably readable without dominating the chip. iOS derives its own from real text styles in
@@ -280,6 +313,157 @@ public enum PlozzTheme {
         public static let readOnlyFocusedCardScale: CGFloat = 1.02
         /// Scale applied to a focused browsing tile (matches Twozz Browse).
         public static let focusedCardScale: CGFloat = 1.08
+
+        // MARK: Focus — "Highlight" style (outline off)
+
+        /// The scale a focused card grows to when the focus outline is switched
+        /// off (`CardFocusStyle.highlight`), given the card's measured size and
+        /// how far its outline used to reach *beyond* that size.
+        ///
+        /// The rule is "no smaller than before": with the outline gone, the card
+        /// has to cover at least the ground the outlined card covered, outline
+        /// included. So the ordinary focus scale is multiplied by how much the
+        /// outline grew the card — per axis, taking whichever axis the outline
+        /// grew more (a short card's outline is proportionally a bigger share of
+        /// its height than of its width), so the enlarged card is at least as
+        /// large in *both* directions.
+        ///
+        /// - Parameters:
+        ///   - outlineScale: the scale this card uses in the outlined style.
+        ///   - contentSize: the card's own (unscaled) layout size.
+        ///   - outlineReach: how far the outline extended past that size on each
+        ///     edge — the halo's padding for artwork-only cards, the glass
+        ///     frame's inset for framed ones.
+        public static func highlightFocusScale(
+            outlineScale: CGFloat,
+            contentSize: CGSize,
+            outlineReach: CGFloat
+        ) -> CGFloat {
+            // A caller asking for no lift at all (Reduce Motion) must not be
+            // handed one by the multiplier.
+            guard outlineScale > 1 else { return outlineScale }
+            // No reach means no ground to grow back. A framed card's glass frame
+            // lives inside its own bounds, so when it stops lighting up the card
+            // has lost nothing and must keep exactly the scale it always had.
+            //
+            // This is a `return`, not a fall-through to the fallback below: zero
+            // reach is a complete answer, and treating it as "unmeasured" grew
+            // every framed card by the fallback ratio — which is precisely the
+            // "framed cards are too big" this was meant to fix.
+            guard outlineReach > 0 else { return outlineScale }
+            // Reach, but no size yet: the frame or two before a card is measured.
+            guard contentSize.width > 0, contentSize.height > 0 else {
+                return outlineScale * highlightFocusFallbackRatio
+            }
+            let ratio = max(
+                (contentSize.width + outlineReach * 2) / contentSize.width,
+                (contentSize.height + outlineReach * 2) / contentSize.height
+            )
+            return outlineScale * min(max(ratio, 1), highlightFocusMaxRatio)
+        }
+
+        /// Growth used for the frame or two before a card has been measured, and
+        /// for anything that can't be. Sized from the *smallest* card in the app
+        /// (a cast portrait), whose outline is proportionally the largest, so the
+        /// "no smaller than before" rule holds everywhere on the fallback too.
+        public static let highlightFocusFallbackRatio: CGFloat = 1.11
+        /// Ceiling on that growth, so a small or oddly-shaped card can't be
+        /// blown up into its neighbours.
+        public static let highlightFocusMaxRatio: CGFloat = 1.22
+
+        /// Duration of the specular sweep that crosses a card as it takes focus.
+        public static let highlightSheenDuration: TimeInterval = 0.85
+
+        /// The focus animation for a card, which is where the two styles differ
+        /// most: the outlined card cross-fades a surface, so a short ease is all
+        /// it needs, while the highlighted card is pure movement and reads as
+        /// physical — it springs up with a little life, and eases back down more
+        /// slowly than it came, so leaving a card looks like it settling rather
+        /// than snapping off.
+        public static func cardFocusAnimation(
+            isFocused: Bool,
+            focusStyle: CardFocusStyle,
+            reduceMotion: Bool
+        ) -> Animation {
+            guard focusStyle == .highlight, !reduceMotion else {
+                return .easeOut(duration: 0.18)
+            }
+            return isFocused
+                ? .spring(response: 0.30, dampingFraction: 0.66)
+                : .spring(response: 0.52, dampingFraction: 0.82)
+        }
+
+        /// How long a card keeps its raised z-position after losing focus, so the
+        /// slower settle finishes *above* its neighbours instead of being clipped
+        /// behind the card that just took focus.
+        public static let highlightSettleDuration: TimeInterval = 0.52
+
+        /// How much further a focused card's caption drops in the highlight style.
+        ///
+        /// The push exists to keep a growing card off its own title, so it has to
+        /// track how much the card actually grows. Highlight grows roughly twice
+        /// as far past its resting size as the outlined style does, so the caption
+        /// has to get out of the way by roughly twice as much or the card lands on
+        /// top of it. Expressed as a ratio rather than a second constant, so the
+        /// two can't drift apart when the scales are tuned.
+        public static let highlightCaptionPushRatio: CGFloat = 1.85
+
+        /// How far a card tips as focus arrives on it, before unwinding flat.
+        ///
+        /// Small on purpose. This is meant to read as the card having mass — it
+        /// took the push that moved focus — not as an animation playing. Past a
+        /// few degrees it stops looking like weight and starts looking like a
+        /// trick, and a trick is exactly the thing that gets old.
+        public static let highlightLeanDegrees: Double = 5
+
+        /// Perspective for that tip. Shallow: a strong perspective on a card the
+        /// size of a poster distorts it into a shape the artwork was never
+        /// composed for.
+        public static let highlightLeanPerspective: CGFloat = 0.55
+
+        // MARK: Card captions
+
+        /// How long a caption's dissolve is, as a multiple of the caption inset
+        /// it lives in.
+        ///
+        /// A multiple rather than a fixed width, because that inset is already
+        /// derived per card — poster and landscape have different corner radii,
+        /// and every radius moves with the display-size setting — so expressing
+        /// the fade this way makes it track every card variation and density on
+        /// its own. At standard density the inset is 10–12pt, so a 1:1 fade was
+        /// about a third of a character wide: technically a gradient, visually a
+        /// cut.
+        ///
+        /// One value for every state, deliberately. A fade that lengthened on
+        /// focus changed where the line began dissolving, which changed how much
+        /// of it fitted, which changed whether it was masked at all — and a mask
+        /// that appears when a card takes focus stops the caption animating (see
+        /// `PlozzMarqueeText.EdgeFade`). Focus decides whether the line walks;
+        /// it decides nothing about the line's geometry.
+        public static let marqueeFadeRatio: CGFloat = 2.2
+
+        /// How fast a focused card's caption walks its overflow into view.
+        ///
+        /// Reading pace, not scrolling pace — and unhurried, because the line is
+        /// going to sit at the far end for a second anyway. Fast enough that a
+        /// long title finishes before you've moved on, slow enough that the
+        /// movement itself is calm.
+        public static let marqueePointsPerSecond: Double = 32
+        /// How fast it glides back afterwards. A little quicker than the way out:
+        /// the return carries no information — you've already read the end — so
+        /// it shouldn't take as long, but it still has to feel like the same
+        /// movement, not a snap.
+        public static let marqueeReturnPointsPerSecond: Double = 46
+        /// How long a caption sits still after taking focus before it starts to
+        /// move — long enough to read the beginning first, and long enough that
+        /// scrubbing through a row never sets anything moving.
+        public static let marqueeStartDelay: Double = 1.0
+        /// How long the end of the line stays on screen once it arrives. Without
+        /// this the title's end is only ever glimpsed in passing.
+        public static let marqueeEndHold: Double = 1.4
+        /// How long it rests at the start before going again, so a card left in
+        /// focus isn't in perpetual motion.
+        public static let marqueeRestHold: Double = 1.2
 
         // MARK: Focus caption movement
 

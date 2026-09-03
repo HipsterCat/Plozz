@@ -44,7 +44,20 @@ extension HomeHeroView {
             return false
         })
         var seen = Set<ArtworkReference>()
-        return references.filter { seen.insert($0).inserted }
+        let ladder = references.filter { seen.insert($0).inserted }
+        // Keyed on the router's answer as well as the item, so the line is emitted
+        // again once the (asynchronous) router resolves — the first call always
+        // sees `nil` there, and logging only that would be actively misleading.
+        HeroArtDiagnostics.emitOnce(
+            stage: "home-draw",
+            key: "\(item.id)|\(resolvedBackdrop[item.id]?.absoluteString ?? "nil")"
+        ) {
+            "HOME \(item.title) draws=\(HeroArtDiagnostics.brief(ladder.first)) "
+            + "router=\(HeroArtDiagnostics.brief(resolvedBackdrop[item.id])) "
+            + "explicitHomeHero=[\(explicit.map(HeroArtDiagnostics.brief).joined(separator: " , "))] "
+            + "selections=\(item.artworkSelections.map(\.placement.rawValue).joined(separator: ","))"
+        }
+        return ladder
     }
 
     // MARK: - Artwork routing / preload
@@ -287,8 +300,10 @@ extension HomeHeroView {
         // primary backdrop URLs fail, so a title with real backdrop art is
         // unaffected.
         return {
-            if let hero = await ArtworkRouter.shared.artworkURL(.hero, for: item) { return hero }
-            return item.posterURL
+            await ArtworkRouter.shared.heroArtworkURL(
+                for: item,
+                placement: .homeHero
+            )
         }
     }
 

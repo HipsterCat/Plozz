@@ -322,6 +322,31 @@ struct DetailHeroView: View, Equatable {
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var presentationCache = HeroPresentationCache()
+    /// A backdrop for this page that is deliberately NOT the one Home is showing,
+    /// once the router has found one.
+    ///
+    /// Resolved into the ladder rather than left as `asyncFallbackURL`, because a
+    /// fallback only fires when the ladder FAILS — and the ladder now always has
+    /// the server's backdrop in it, so the distinct picture would never have been
+    /// Bumped when a watchlist press is accepted, purely to re-run `body`.
+    ///
+    /// `heroWatchlistAction` recomputes its add/remove state from
+    /// `actionHandler.actions(for:)` every pass, so it is already correct the
+    /// moment it is asked — it was simply never re-asked. Home rebuilds off this
+    /// notification; the detail page never listened, so its button kept whatever
+    /// it had resolved to on appear until the page was rebuilt. Listens to the
+    /// CHEAP signal — the durable one re-resolves every card and saves the content
+    /// store, which is precisely the main-thread work that was stopping the new
+    /// state from reaching the screen.
+    ///
+    /// **`heroWatchlistAction` must read it.** A `@State` value only invalidates
+    /// the bodies that actually read it, so for a while this was bumped and read
+    /// nowhere — which invalidates nothing at all. The listener fired, the counter
+    /// moved, and the button went on showing the old label until some unrelated
+    /// change happened to redraw the page. What that usually waited on was the
+    /// durable write returning from plex.tv, so a change the app had already
+    /// accepted looked like one it was still thinking about.
+    @State private var watchlistRevision = 0
 
     /// The item supplying the backdrop artwork (the pinned series, when set).
     private var backdrop: MediaItem { backdropItem ?? item }
@@ -357,10 +382,12 @@ struct DetailHeroView: View, Equatable {
     /// tone flips — so legibility stays consistent between appearances.
     private var scrimTone: Color { colorScheme == .dark ? .black : .white }
 
-    private var heroLogoHeight: CGFloat { 200 }
-    /// Width cap for the hero logo, sized to the hero's text column so the wordmark
-    /// never runs wider than the overview beneath it.
-    private var heroLogoWidth: CGFloat { 620 }
+    /// The nominal box handed to `HeroLogoArtwork`.
+    ///
+    /// Shared with Home rather than derived from this page's own 620pt text
+    /// column, so the same show's wordmark is drawn at the same size on both
+    /// screens — see ``HeroLogoLayout``.
+    private var heroLogoBox: CGSize { HeroLogoLayout.box }
 
     // MARK: - Visible item actions (discoverability)
 
@@ -394,6 +421,18 @@ struct DetailHeroView: View, Equatable {
     /// watched toggle, which deliberately resolves against the play target for the
     /// same reason in reverse: each button acts on the thing it is actually about.
     private var heroWatchlistAction: MediaItemAction? {
+        // Read so SwiftUI records the dependency.
+        //
+        // Whether this title is watchlisted lives in the coordinator, not in any
+        // state this view owns, so nothing here changes when the answer does — and
+        // a `@State` counter is only a redraw trigger for a body that actually
+        // reads it. Bumped and never read, it invalidated nothing: the press was
+        // accepted at once, the coordinator knew immediately, and the button went
+        // on showing the old label until something unrelated happened to redraw the
+        // page. That wait was the durable write finishing, which is a network round
+        // trip to plex.tv and can take many seconds — so a change the app had
+        // already made looked like one it was still thinking about.
+        _ = watchlistRevision
         let subject = backdrop.watchlistSubject
         let actions = subject.id == item.id
             ? heroActions
@@ -758,8 +797,12 @@ struct DetailHeroView: View, Equatable {
                     // so the gap above and below it varied with each logo's aspect
                     // ratio. Bounding the width makes such a logo hit that limit
                     // first and shrink its own height to match, leaving no slack.
-                    maxWidth: heroLogoWidth,
-                    maxHeight: heroLogoHeight
+                    //
+                    // The box is *pinned* rather than nominal, so the drawn logo
+                    // stops at the text column instead of flexing past it — see
+                    // ``heroLogoBox``.
+                    maxWidth: heroLogoBox.width,
+                    maxHeight: heroLogoBox.height
                 ) {
                     titleText(hideText: hideText)
                 }
@@ -1039,6 +1082,13 @@ struct DetailHeroView: View, Equatable {
         }
         // Cross-fade the hero text as the focused context changes, while the
         // backdrop swaps underneath it.
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: .watchlistIntentDidChange
+            )
+        ) { _ in
+            watchlistRevision &+= 1
+        }
         .animation(.easeInOut(duration: 0.2), value: item.id)
         // Cross-fade the backdrop when the active server changes.
         .animation(.easeInOut(duration: 0.3), value: backdrop.id)
@@ -1072,7 +1122,8 @@ struct DetailHeroView: View, Equatable {
         FallbackAsyncImage(
             references: item.artworkReferences(for: .episodeThumbnail),
             variant: .landscapeCard,
-            asyncFallbackURL: episodeStillFallback
+            asyncFallbackURL: episodeStillFallback,
+            pinIdentity: item.stablePresentationID
         ) {
             MediaArtworkPlaceholder()
         }
@@ -1100,15 +1151,26 @@ struct DetailHeroView: View, Equatable {
     /// dissolve mask. Rendered as a `.background` of the hero content so it can
     /// ignore the horizontal/top overscan safe area and span the screen edge to
     /// edge *without* inflating the hero's (and the scroll column's) layout width.
-    @ViewBuilder
     private func heroBackdrop() -> some View {
         // The shared `HeroBackdropLayer` (CoreUI) owns the exact scrim + dissolve
         // + full-bleed treatment, so the detail hero and the Home hero carousel
         // render an identical backdrop. Hero artwork is never spoiler-blurred;
         // episode spoiler masking remains limited to episode text and cards.
-        SeriesDetailHeroBackdrop(
-            references: backdrop.artworkReferences(for: .detailBackdrop),
+        let ladder = backdrop.artworkReferences(for: .detailBackdrop)
+        HeroArtDiagnostics.emitOnce(
+            stage: "detail-draw",
+            key: backdrop.id
+        ) {
+            "DETAIL \(backdrop.title) draws=\(HeroArtDiagnostics.brief(ladder.first)) "
+            + "ladder=[\(ladder.map(HeroArtDiagnostics.brief).joined(separator: " , "))] "
+            + "selections=\(backdrop.artworkSelections.map(\.placement.rawValue).joined(separator: ",")) "
+            + "legacyHero=\(HeroArtDiagnostics.brief(backdrop.heroBackdropURL)) "
+            + "legacyBackdrop=\(HeroArtDiagnostics.brief(backdrop.backdropURL))"
+        }
+        return SeriesDetailHeroBackdrop(
+            references: ladder,
             asyncFallbackURL: tmdbBackdropFallback,
+            itemID: backdrop.id,
             width: Self.screenWidth,
             height: Self.screenHeight * heroHeightFraction,
             scrimTone: scrimTone,
@@ -1150,8 +1212,7 @@ struct DetailHeroView: View, Equatable {
                     progress: playProgress,
                     remainingText: playRemainingText,
                     seasonEpisodeText: playSeasonEpisodeText,
-                    onLight: playButtonHasFocus || colorScheme == .light,
-                    barHeight: 10
+                    onLight: playButtonHasFocus || colorScheme == .light
                 )
             }
         }
@@ -1709,8 +1770,10 @@ struct DetailHeroView: View, Equatable {
         // when the server backdrop URLs fail, so titles with real backdrop art are
         // unaffected.
         return {
-            if let hero = await ArtworkRouter.shared.artworkURL(.hero, for: source) { return hero }
-            return source.posterURL
+            await ArtworkRouter.shared.heroArtworkURL(
+                for: source,
+                placement: .detailBackdrop
+            ) ?? source.posterURL
         }
     }
 
@@ -1964,6 +2027,7 @@ private struct SeriesHeroContentLiftModifier: ViewModifier {
 private struct SeriesDetailHeroBackdrop: View {
     let references: [ArtworkReference]
     let asyncFallbackURL: (@Sendable () async -> URL?)?
+    let itemID: String
     let width: CGFloat
     let height: CGFloat
     let scrimTone: Color
@@ -1980,7 +2044,8 @@ private struct SeriesDetailHeroBackdrop: View {
             scrimTone: scrimTone,
             verticalOffset: 0,
             ignoresOverscan: false,
-            stillImageOpacity: showsTrailer ? 0 : 1
+            stillImageOpacity: showsTrailer ? 0 : 1,
+            pinIdentity: "detail:\(itemID)"
         ) {
             if showsTrailer {
                 ZStack {

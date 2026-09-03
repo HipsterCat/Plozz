@@ -43,19 +43,27 @@ public struct MediaBrowserWatchlistDestination: WatchlistLibraryResolving {
     /// happened to land.
     public func resolveLibraryCopy(
         for entry: WatchlistDestinationEntry
-    ) async -> MediaSourceRef? {
+    ) async -> WatchlistLibraryCopy? {
         guard let binding = entry.corroboratedProviderBinding,
               binding.accountDescriptorID == provider.accountID else { return nil }
-        return MediaSourceRef(
-            accountID: provider.accountID,
-            itemID: binding.providerItemID,
-            kind: entry.kind,
-            providerKind: provider.kind
+        return WatchlistLibraryCopy(
+            source: MediaSourceRef(
+                accountID: provider.accountID,
+                itemID: binding.providerItemID,
+                kind: entry.kind,
+                providerKind: provider.kind
+            ),
+            // A Jellyfin/Emby favourite IS the library item, so the presentation
+            // the destination already read is the owned presentation.
+            presentation: entry.presentation
         )
     }
 
     public func fetchEntries() async throws -> [WatchlistDestinationEntry] {
-        try await provider.watchlist().compactMap { item in
+        let items = try await provider.watchlist()
+        var entries: [WatchlistDestinationEntry] = []
+        entries.reserveCapacity(items.count)
+        for item in items {
             guard item.kind == .movie || item.kind == .series,
                   let key = MediaAliasProviderBindingKey(
                     providerKind: provider.kind,
@@ -65,8 +73,12 @@ public struct MediaBrowserWatchlistDestination: WatchlistLibraryResolving {
                   let binding = WatchlistDestinationBinding(
                     destinationID: id,
                     opaqueValue: key.providerItemID
-                  ) else { return nil }
-            return WatchlistDestinationEntry(
+                  ) else {
+                // A filtered Favorites response is authoritative. Silently
+                // dropping one malformed record would reconcile it as absent.
+                throw WatchlistDestinationError.transient
+            }
+            guard let entry = WatchlistDestinationEntry(
                 kind: item.kind,
                 externalIDs: Self.externalIDs(item),
                 binding: binding,
@@ -76,9 +88,14 @@ public struct MediaBrowserWatchlistDestination: WatchlistLibraryResolving {
                     year: item.productionYear,
                     artworkURL: item.posterURL?.absoluteString,
                     backdropURL: item.backdropURL?.absoluteString
-                )
-            )
+                ),
+                presentationAccountID: provider.accountID
+            ) else {
+                throw WatchlistDestinationError.transient
+            }
+            entries.append(entry)
         }
+        return entries
     }
 
     public func resolve(

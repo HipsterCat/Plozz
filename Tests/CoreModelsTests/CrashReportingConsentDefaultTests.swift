@@ -65,4 +65,49 @@ final class CrashReportingConsentDefaultTests: XCTestCase {
         XCTAssertTrue(AppReleaseChannel.testflight.isBeta)
         XCTAssertFalse(AppReleaseChannel.production.isBeta)
     }
+
+    func testCrashReportEnvironmentMatchesDistributionChannel() {
+        XCTAssertEqual(AppReleaseChannel.debug.crashReportEnvironment, "debug")
+        XCTAssertEqual(AppReleaseChannel.testflight.crashReportEnvironment, "testflight")
+        XCTAssertEqual(AppReleaseChannel.production.crashReportEnvironment, "production")
+    }
+
+    func testBakedChannelIsParsedCaseInsensitively() {
+        XCTAssertEqual(AppReleaseChannel.baked("testflight"), .testflight)
+        XCTAssertEqual(AppReleaseChannel.baked("TestFlight"), .testflight)
+        XCTAssertEqual(AppReleaseChannel.baked("  production \n"), .production)
+        XCTAssertEqual(AppReleaseChannel.baked("debug"), .debug)
+    }
+
+    /// A local build leaves the setting empty, and a project generated without
+    /// the bake leaves the literal `$(PLOZZ_RELEASE_CHANNEL)` behind. Neither is
+    /// an answer, so both must fall through to runtime detection rather than
+    /// being mistaken for a channel name.
+    func testAbsentOrUnresolvedBakeYieldsNoAnswer() {
+        XCTAssertNil(AppReleaseChannel.baked(nil))
+        XCTAssertNil(AppReleaseChannel.baked(""))
+        XCTAssertNil(AppReleaseChannel.baked("   "))
+        XCTAssertNil(AppReleaseChannel.baked("$(PLOZZ_RELEASE_CHANNEL)"))
+        XCTAssertNil(AppReleaseChannel.baked("nonsense"))
+    }
+
+    /// The whole point of the bake: a TestFlight build must default consent ON
+    /// even when the App Store receipt runtime detection relies on is missing,
+    /// which on tvOS is the normal state until a purchase happens.
+    func testBakedTestFlightChannelDefaultsConsentOn() {
+        XCTAssertEqual(AppReleaseChannel.baked("testflight")?.isBeta, true)
+        XCTAssertEqual(AppReleaseChannel.baked("production")?.isBeta, false)
+    }
+
+    func testLegacySettingsWithoutTheRetiredMarkerStillDecode() throws {
+        let legacy = Data(#"{"isEnabled":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(CrashReportingSettings.self, from: legacy)
+        XCTAssertFalse(decoded.isEnabled, "an explicit opt-out must survive the migration")
+    }
+
+    func testLegacyTestingMarkerIsIgnoredWithoutLosingConsent() throws {
+        let legacy = Data(#"{"isEnabled":true,"isMaintainerDevice":true}"#.utf8)
+        let decoded = try JSONDecoder().decode(CrashReportingSettings.self, from: legacy)
+        XCTAssertTrue(decoded.isEnabled)
+    }
 }

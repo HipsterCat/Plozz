@@ -90,6 +90,7 @@ public struct CircularFocusTile<Avatar: View, Caption: View>: View {
 
     @FocusState private var isFocused: Bool
     @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.plozzCardFocusStyle) private var focusStyle
 
     public init(
         diameter: CGFloat,
@@ -119,7 +120,7 @@ public struct CircularFocusTile<Avatar: View, Caption: View>: View {
     public var body: some View {
         // Always reserve the focused gap; the caption rides up when unfocused via a
         // transform (see `.offset`), so the drop never changes the tile's footprint.
-        let push = metrics.focusCaptionPush
+        let push = metrics.focusCaptionPush(for: focusStyle)
         VStack(spacing: captionSpacing + push) {
             avatar()
                 .frame(width: diameter, height: diameter)
@@ -139,8 +140,7 @@ public struct CircularFocusTile<Avatar: View, Caption: View>: View {
         .focusEffectDisabled()
         .onTapGesture(perform: action)
         .accessibilityAddTraits(.isButton)
-        .zIndex(isFocused ? 2 : 0)
-        .animation(.easeOut(duration: 0.18), value: isFocused)
+        .plozzCardFocusTransition(isFocused: isFocused)
     }
 }
 #endif

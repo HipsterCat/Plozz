@@ -123,6 +123,10 @@ struct PlexMetadata: Decodable {
     let type: String?          // "movie", "show", "season", "episode", "clip"
     /// For extras/clips, the kind of extra, e.g. "trailer", "behindTheScenes".
     let subtype: String?
+    /// Legacy numeric classifier used when `subtype` is absent.
+    @LenientInt var extraType: Int?
+    /// Plex's preferred trailer/extra rating key for the parent item.
+    let primaryExtraKey: String?
     let title: String?  // l10n:content — server-supplied media item title
     /// Original-language title (`originalTitle`), present when distinct from the
     /// localised `title`. Used as an extra cross-server discovery query.
@@ -141,6 +145,11 @@ struct PlexMetadata: Decodable {
     let index: Int?            // episode number (or season index)
     let parentIndex: Int?      // season number for an episode
     let year: Int?
+    /// The title's release / first-air day as a bare `YYYY-MM-DD` calendar date
+    /// (Plex's `originallyAvailableAt`). Present on movies, shows and episodes
+    /// whenever the agent dated them — including on hub and library listings, so
+    /// it does not need the full metadata fetch.
+    let originallyAvailableAt: String?
     let duration: Int?         // milliseconds
     let viewOffset: Int?       // milliseconds resumed-to
     let viewCount: Int?

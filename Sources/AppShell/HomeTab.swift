@@ -22,6 +22,24 @@ import MALService
 import LastFmService
 import TopShelfKit
 
+/// What a ``HomeTab`` stack is rooted at.
+///
+/// The rail promotes libraries to **top-level destinations**, so a library grid has
+/// to be a stack root (chrome visible, nothing to go Back to) rather than a page
+/// pushed on top of Home. Rather than duplicate the ~500 lines of detail/person/
+/// episode destinations, `HomeTab` takes its root as data: everything below the
+/// root — navigation, playback, deep links, the cross-server picker — is shared
+/// verbatim, so a library opened from Home and one opened from the rail can never
+/// drift apart.
+enum HomeTabRoot {
+    case home
+    case watchlist
+    /// One library's grid.
+    case library(MediaLibrary)
+    /// The combined grid over every browsable library the profile can see.
+    case allLibraries([AggregatedLibrary])
+}
+
 /// Home tab with its own navigation stack: Home → Library (paged) → Detail and
 /// full-screen player presentation. Every destination resolves its provider from
 /// the tapped item/library's `sourceAccountID`.
@@ -31,6 +49,12 @@ struct HomeTab: View {
     /// another process, so its titles have to be resolved on this side.
     @Environment(\.locale) private var locale
     @Environment(\.mediaItemActionHandler) private var mediaItemActionHandler
+    /// The rail's chrome model, present only under ``NavigationStyle/rail``. This
+    /// stack reports its depth so the rail steps aside on a detail page.
+    @Environment(NavigationChromeModel.self) private var navigationChrome: NavigationChromeModel?
+    /// What this stack is rooted at: `.home` for the Home destination, a library
+    /// for one of the rail's library slots.
+    var root: HomeTabRoot = .home
     let accounts: [ResolvedAccount]
     /// Every server added to the device, regardless of what this profile has
     /// switched on. Home needs it to tell "no servers yet" from "all off".
@@ -81,6 +105,10 @@ struct HomeTab: View {
     let enqueueWatchMutation: (WatchMutation) -> Void
     let watchBridge: WatchOutboxBridge
     let identitySources: @Sendable (MediaItem) -> [MediaSourceRef]
+    /// The identity index's publish counter, handed to the cross-server browse so a
+    /// running merge re-folds when the index grows. Defaulted so previews/tests can
+    /// omit it.
+    var identityRevision: @Sendable () -> Int = { 0 }
     /// Snapshot of the durable outbox's not-yet-confirmed plays, folded into the
     /// Continue Watching row so a reload reflects in-app plays the servers haven't
     /// recorded yet (r8-cw-outbox-patch).
@@ -153,30 +181,48 @@ struct HomeTab: View {
         }
     }
 
-    var body: some View {
-        let _ = plozzPrintChanges { Self._printChanges() }
-        let _ = PlozzBodyRate.tick("HomeTab")
-        NavigationStack(path: $path) {
-            HomeView(
-                viewModel: runtime.homeViewModel.value(forKey: runtime.scopeKey) {
-                    HomeViewModel(
-                        accounts: accounts,
-                        layoutStore: homeLayoutStore,
-                        contentStore: homeContentStore,
-                        identitySources: identitySources,
-                        currentVisibility: { homeVisibility.visibility },
-                        pendingWatchMutations: pendingWatchMutations,
-                        recentlyAppliedRecency: appliedWatchRecency,
-                        mediaItemActionHandler: mediaItemActionHandler,
-                        contentPublisher: { continueWatching, latest in
-                            await TopShelfPublisher.publish(
-                                continueWatching: continueWatching,
-                                latest: latest,
-                                locale: locale
-                            )
-                        }
+    /// The stack's root screen, chosen by ``root``. Home, Watchlist, one library's
+    /// grid, or the combined grid over every library all sit under the same set of
+    /// pushed destinations below.
+    @ViewBuilder
+    private var rootContent: some View {
+        switch root {
+        case .home:
+            homeRoot
+        case .watchlist:
+            watchlistRoot
+        case let .library(library):
+            libraryBrowse(for: library)
+        case let .allLibraries(libraries):
+            allLibrariesBrowse(libraries)
+        }
+    }
+
+    private var sharedHomeViewModel: HomeViewModel {
+        runtime.homeViewModel.value(forKey: runtime.scopeKey) {
+            HomeViewModel(
+                accounts: accounts,
+                layoutStore: homeLayoutStore,
+                contentStore: homeContentStore,
+                identitySources: identitySources,
+                currentVisibility: { homeVisibility.visibility },
+                pendingWatchMutations: pendingWatchMutations,
+                recentlyAppliedRecency: appliedWatchRecency,
+                mediaItemActionHandler: mediaItemActionHandler,
+                contentPublisher: { continueWatching, latest in
+                    await TopShelfPublisher.publish(
+                        continueWatching: continueWatching,
+                        latest: latest,
+                        locale: locale
                     )
-                },
+                }
+            )
+        }
+    }
+
+    private var homeRoot: some View {
+            HomeView(
+                viewModel: sharedHomeViewModel,
                 visibility: homeVisibility,
                 spoilerSettings: spoilerSettings,
                 heroSettings: heroSettings,
@@ -262,24 +308,91 @@ struct HomeTab: View {
                 configuredServerCount: configuredServerCount,
                 enabledServerCount: accounts.count
             )
-            .navigationDestination(for: MediaLibrary.self) { library in
-                let browse = resolveLibraryBrowse(for: library, in: accounts, identitySources: identitySources)
-                LibraryBrowseView(
-                    viewModel: LibraryBrowseViewModel(
-                        provider: browse.provider,
-                        containerID: library.id,
-                        containerKind: library.kind,
-                        sourceAccountID: browse.sourceAccountID
-                    ),
-                    title: library.displayName,
-                    spoilerSettings: spoilerSettings,
-                    onSelect: {
-                        navigate(
-                            $0,
-                            libraryOrigin: browse.sourceAccountID ?? library.sourceAccountID
-                        )
-                    }
+    }
+
+    private var watchlistRoot: some View {
+        WatchlistBrowseView(
+            viewModel: sharedHomeViewModel,
+            visibility: homeVisibility.visibility,
+            spoilerSettings: spoilerSettings,
+            onSelect: { navigate($0) }
+        )
+    }
+
+    /// One library's paged grid. Shared by the pushed `MediaLibrary` destination
+    /// and — under the rail — by the stack root, so a library looks and behaves the
+    /// same however it was opened.
+    private func libraryBrowse(for library: MediaLibrary) -> some View {
+        let browse = resolveLibraryBrowse(
+            for: library,
+            in: accounts,
+            identitySources: identitySources,
+            identityRevision: identityRevision
+        )
+        return LibraryBrowseView(
+            viewModel: LibraryBrowseViewModel(
+                provider: browse.provider,
+                containerID: library.id,
+                containerKind: library.kind,
+                sourceAccountID: browse.sourceAccountID
+            ),
+            title: library.displayName,
+            spoilerSettings: spoilerSettings,
+            onSelect: {
+                navigate(
+                    $0,
+                    libraryOrigin: browse.sourceAccountID ?? library.sourceAccountID
                 )
+            }
+        )
+    }
+
+    /// The combined "All Libraries" grid. Falls back to an unavailable state if no
+    /// source resolves (every account signed out mid-flight), which is the only way
+    /// the aggregate can end up with nothing to page.
+    @ViewBuilder
+    private func allLibrariesBrowse(_ libraries: [AggregatedLibrary]) -> some View {
+        if let provider = resolveAllLibrariesBrowse(
+            libraries: libraries,
+            in: accounts,
+            identitySources: identitySources,
+            identityRevision: identityRevision
+        ) {
+            LibraryBrowseView(
+                viewModel: LibraryBrowseViewModel(
+                    provider: provider,
+                    // The aggregate ignores the container id (each source carries its
+                    // own), but the kind still keys the remembered sort — so this grid
+                    // gets its own key rather than sharing one with real libraries.
+                    containerID: AllLibrariesBrowse.containerID,
+                    containerKind: .unknown,
+                    sortKeySuffix: AllLibrariesBrowse.sortKeySuffix,
+                    sourceAccountID: nil
+                ),
+                title: Text(AllLibrariesBrowse.title),
+                spoilerSettings: spoilerSettings,
+                onSelect: { navigate($0) }
+            )
+        } else {
+            ContentUnavailableView {
+                Label {
+                    Text(AllLibrariesBrowse.emptyTitle)
+                } icon: {
+                    Image(systemName: "square.stack.3d.up.slash")
+                }
+            } description: {
+                Text(AllLibrariesBrowse.emptyMessage)
+            }
+        }
+    }
+
+    var body: some View {
+        let _ = plozzPrintChanges { Self._printChanges() }
+        let _ = PlozzBodyRate.tick("HomeTab")
+        NavigationStack(path: $path) {
+            rootContent
+            .navigationDestination(for: MediaLibrary.self) { library in
+                libraryBrowse(for: library)
             }
             .navigationDestination(for: MediaItem.self) { item in
                 // Home/Search rows: cross-server-merged, so the detail picker
@@ -461,6 +574,10 @@ struct HomeTab: View {
             // Watching and was silently dropped in every pushed detail page.
             .mediaItemNavigator { navigate($0, asOwnSubject: $0.kind == .episode) }
         }
+        // Under the rail, a pushed page is a detail page — report the depth so the
+        // chrome steps aside and the title page is full-bleed. No-op under the two
+        // native tab styles, which install no chrome model.
+        .reportsNavigationDepth(path.count, to: navigationChrome)
         // The deep-link watcher lives in its own leaf view. Reading the pending
         // id in *this* body subscribed the whole tab to it, and every publish
         // re-ran `HomeTab.body` — 1,619 times in 50s on device while the id
@@ -471,11 +588,29 @@ struct HomeTab: View {
             DeepLinkPlayRouter(
                 pendingPlay: runtime.pendingPlay,
                 accounts: accounts,
-                onResolved: { requestPlay($0) }
+                isActive: isActiveTab,
+                // Open the title's page, then start it. Playing straight from the
+                // shelf left the viewer on Home the moment they backed out — the
+                // title they had just been watching nowhere in sight, and no way
+                // to reach its episodes or its description without finding it
+                // again. Pushing first means Back lands somewhere that makes
+                // sense, and costs nothing on the way in: the player is presented
+                // over the stack, so the page is simply already there underneath.
+                onResolved: { item in
+                    navigate(item)
+                    // Next runloop turn, so the push is committed before the
+                    // player is presented over it. Presenting into a navigation
+                    // change that is still settling drops the cover on tvOS.
+                    Task { @MainActor in
+                        await Task.yield()
+                        requestPlay(item)
+                    }
+                }
             )
             ScreenshotRouter(
                 director: runtime.screenshotDirector,
                 accounts: accounts,
+                isActive: isActiveTab,
                 onHome: {
                     // The player is presented over the stack, not pushed onto
                     // it, so emptying the path leaves it up — and every request
@@ -528,6 +663,7 @@ struct HomeTab: View {
     private struct ScreenshotRouter: View {
         let director: ScreenshotDirector
         let accounts: [ResolvedAccount]
+        let isActive: Bool
         let onHome: () -> Void
         let onPush: (any Hashable) -> Void
         let onPlay: (MediaItem, Double) -> Void
@@ -536,10 +672,21 @@ struct HomeTab: View {
             Color.clear
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
-                .task(id: director.request) { await perform() }
+                // Active state is part of identity so a request that arrived while
+                // this tab was hidden runs when the tab becomes visible.
+                .task(id: RouteRequest(
+                    request: director.request,
+                    isActive: isActive
+                )) { await perform() }
+        }
+
+        private struct RouteRequest: Equatable {
+            let request: ScreenshotDirector.Request?
+            let isActive: Bool
         }
 
         private func perform() async {
+            guard isActive else { return }
             guard let request = director.request else { return }
             director.request = nil
             director.finish(await reach(request))
@@ -747,24 +894,77 @@ struct HomeTab: View {
     private struct DeepLinkPlayRouter: View {
         let pendingPlay: PendingPlayRequest
         let accounts: [ResolvedAccount]
+        let isActive: Bool
         let onResolved: (MediaItem) -> Void
 
         var body: some View {
             Color.clear
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
-                .task(id: pendingPlay.itemID) { await route() }
+                // Keyed on the accounts as well as the id. A launch straight from a
+                // Top Shelf card delivers the link before any provider exists, so a
+                // task watching only the id runs once, against nothing, and never
+                // again — the app opens and sits there, which is exactly what the
+                // shelf looked like from the sofa.
+                .task(id: RouteRequest(
+                    itemID: pendingPlay.itemID,
+                    accountID: pendingPlay.accountID,
+                    accountIDs: accounts.map(\.account.id),
+                    isActive: isActive
+                )) { await route() }
+        }
+
+        /// What a routing attempt depends on. Any change re-runs it.
+        private struct RouteRequest: Equatable {
+            let itemID: String?
+            let accountID: String?
+            let accountIDs: [String]
+            let isActive: Bool
         }
 
         private func route() async {
+            guard isActive else { return }
             guard let id = pendingPlay.itemID else { return }
-            pendingPlay.itemID = nil
-            for resolved in accounts {
+            // Nothing to ask yet. Deliberately keeps the request pending: accounts
+            // arriving is a change this task is watching, so it will run again with
+            // something to resolve against.
+            guard !accounts.isEmpty else { return }
+
+            // The link's own account first, when it named one — it is the server the
+            // card was built from, so it is both the fastest answer and the only one
+            // guaranteed to mean the same title.
+            let ordered: [ResolvedAccount]
+            if let owner = pendingPlay.accountID,
+               let match = accounts.first(where: { $0.account.id == owner }) {
+                ordered = [match] + accounts.filter { $0.account.id != owner }
+            } else {
+                ordered = accounts
+            }
+
+            for resolved in ordered {
                 if let item = try? await resolved.provider.item(id: id) {
+                    // Another run may have resolved it while this one was waiting:
+                    // the task restarts whenever the accounts change, and a request
+                    // already in flight is not stopped by that. Acting twice pushes
+                    // the page twice and presents the player over itself.
+                    guard pendingPlay.itemID == id else { return }
+                    pendingPlay.itemID = nil
+                    pendingPlay.accountID = nil
                     onResolved(item.taggingSource(resolved.account.id))
                     return
                 }
             }
+            // Only an uninterrupted sweep may declare the title gone. A cancelled
+            // one asked nobody: the fetch above cannot tell being cancelled apart
+            // from a server saying no, so a task restarted mid-flight would fall
+            // through here and discard a request that no server ever answered —
+            // landing the viewer on Home, which is the whole thing this fixes.
+            guard !Task.isCancelled else { return }
+            // Asked every signed-in server and none of them knows it. Clearing stops
+            // a title that has genuinely gone from re-asking on every account change
+            // for the rest of the session.
+            pendingPlay.itemID = nil
+            pendingPlay.accountID = nil
         }
     }
 

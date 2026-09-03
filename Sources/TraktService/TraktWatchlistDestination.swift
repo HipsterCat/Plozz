@@ -2,8 +2,14 @@ import CoreModels
 import CoreNetworking
 import Foundation
 
-public actor TraktWatchlistDestination: WatchlistDestination {
+public actor TraktWatchlistDestination:
+    WatchlistDestination, WatchlistReconciliationScopedApplying {
     public nonisolated let id: WatchlistDestinationID
+    public nonisolated var reconciliationScope: String {
+        id.rawValue + "#" + (
+            tokenStore.load()?.stableAccountIdentity ?? "disconnected"
+        )
+    }
     public nonisolated let capabilities = WatchlistDestinationCapabilities(
         readable: true,
         writable: true,
@@ -16,6 +22,7 @@ public actor TraktWatchlistDestination: WatchlistDestination {
     private let auth: TraktAuthService
     private let tokenStore: TraktTokenStoring
     private let profileGeneration: TraktProfileGeneration
+    private let operationGate = ConcurrencyLimiter(limit: 1)
 
     public init(
         config: TraktConfig,
@@ -43,13 +50,18 @@ public actor TraktWatchlistDestination: WatchlistDestination {
     }
 
     public func fetchEntries() async throws -> [WatchlistDestinationEntry] {
+        try await operationGate.run { [self] in
+            try await fetchEntriesUnserialized()
+        }
+    }
+
+    private func fetchEntriesUnserialized() async throws
+        -> [WatchlistDestinationEntry] {
         let result = try await client.watchlist(
             accessToken: validAccessToken()
         )
-        return result.movies.compactMap {
-            entry(kind: .movie, title: $0)
-        } + result.shows.compactMap {
-            entry(kind: .series, title: $0)
+        return try result.map {
+            try entry(kind: $0.kind, title: $0.title)
         }
     }
 
@@ -69,15 +81,48 @@ public actor TraktWatchlistDestination: WatchlistDestination {
         _ desiredState: WatchlistDesiredState,
         to binding: WatchlistDestinationBinding
     ) async throws {
+        try await apply(
+            desiredState,
+            to: binding,
+            expectedReconciliationScope: reconciliationScope
+        )
+    }
+
+    public func apply(
+        _ desiredState: WatchlistDesiredState,
+        to binding: WatchlistDestinationBinding,
+        expectedReconciliationScope: String
+    ) async throws {
+        try await operationGate.run { [self] in
+            try await applyUnserialized(
+                desiredState,
+                to: binding,
+                expectedReconciliationScope: expectedReconciliationScope
+            )
+        }
+    }
+
+    private func applyUnserialized(
+        _ desiredState: WatchlistDesiredState,
+        to binding: WatchlistDestinationBinding,
+        expectedReconciliationScope: String
+    ) async throws {
         guard binding.destinationID == id,
               let parsed = Self.parse(binding.opaqueValue) else {
             throw WatchlistDestinationError.permanent
+        }
+        guard reconciliationScope == expectedReconciliationScope else {
+            throw WatchlistDestinationError.authenticationRequired
+        }
+        let token = try await validAccessToken()
+        guard reconciliationScope == expectedReconciliationScope else {
+            throw WatchlistDestinationError.authenticationRequired
         }
         try await client.setWatchlisted(
             desiredState == .present,
             kind: parsed.kind,
             ids: Self.ids(parsed.externalID),
-            accessToken: try await validAccessToken()
+            accessToken: token
         )
     }
 
@@ -89,6 +134,7 @@ public actor TraktWatchlistDestination: WatchlistDestination {
         guard tokens.isExpired else { return tokens.accessToken }
         do {
             let refreshed = try await auth.refresh(tokens.refreshToken)
+                .inheritingAccountIdentity(from: tokens)
             guard profileGeneration.performIfCurrent(
                 generation,
                 operation: { try? tokenStore.save(refreshed) }
@@ -110,21 +156,26 @@ public actor TraktWatchlistDestination: WatchlistDestination {
     private func entry(
         kind: MediaItemKind,
         title: TraktWatchlistTitle
-    ) -> WatchlistDestinationEntry? {
+    ) throws -> WatchlistDestinationEntry {
         let externalIDs = Self.externalIDs(title.ids)
         guard let first = externalIDs.first,
               let binding = WatchlistDestinationBinding(
                 destinationID: id,
                 opaqueValue: "\(kind.rawValue)|\(first.namespace.rawValue)|\(first.value)"
-              ) else { return nil }
-        return WatchlistDestinationEntry(
+              ) else {
+            throw WatchlistDestinationError.transient
+        }
+        guard let entry = WatchlistDestinationEntry(
             kind: kind,
             externalIDs: externalIDs,
             binding: binding,
             presentation: title.title.map {
                 MediaAliasPresentation(title: $0, year: title.year)
             }
-        )
+        ) else {
+            throw WatchlistDestinationError.transient
+        }
+        return entry
     }
 
     private static func externalIDs(

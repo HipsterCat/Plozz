@@ -39,6 +39,27 @@ public enum MediaAliasResolver {
             return match
         }
 
+        // The viewer's own copy, on their own account. Consulted after the
+        // catalogue ids (which are what actually merge two servers' copies into
+        // one title) and before title/year, because "the same item id on the
+        // same account" is a stronger statement than "same name, same year" —
+        // and unlike title/year it cannot collide across accounts.
+        //
+        // Placed OUTSIDE the `evidence.strong.isEmpty` gate below on purpose: a
+        // subject that carries a strong id which matched nothing is still the
+        // viewer's own copy, and refusing to recognise it there would mint a
+        // second alias for a title the ledger already holds.
+        let localCandidates = Set(
+            evidence.localSources.flatMap { snapshot.aliases(for: $0) }
+        )
+        if let match = uniqueCompatible(
+            localCandidates,
+            evidence: evidence,
+            snapshot: snapshot
+        ) {
+            return match
+        }
+
         guard let weak = evidence.weak else { return nil }
         // Rule 1 of `MediaItemIdentity`: **a strong id suppresses the title key.**
         // Falling back to title/year while the incoming item carries a catalogue id
@@ -138,6 +159,10 @@ public enum MediaAliasResolver {
         result.locallyValidatedBindings.formIntersection(Set(hints.keys))
         changed = changed || priorValidation != result.locallyValidatedBindings
 
+        let priorLocalSources = result.localSources
+        result.localSources.formUnion(evidence.localSources)
+        changed = changed || priorLocalSources != result.localSources
+
         if let incoming = evidence.presentation {
             if result.presentation == nil {
                 result.presentation = incoming.sanitizedForSync()
@@ -152,17 +177,36 @@ public enum MediaAliasResolver {
                     presentation.year = incoming.year
                     changed = true
                 }
-                if presentation.artworkURL == nil, incoming.artworkURL != nil {
-                    presentation.artworkURL = SyncURLSanitizer.sanitize(
-                        string: incoming.artworkURL
-                    )
-                    changed = true
+                // Artwork is the one field here that must be allowed to CHANGE.
+                //
+                // Title and year are facts about a work and settle once. An
+                // artwork URL is a fact about a server, and it goes stale: a
+                // token expires, a server moves, or — as happened — a whole
+                // watchlist gets pinned to URLs that pointed at a server which
+                // had never heard of those titles. Written once and never
+                // revisited, a bad URL is permanent, and no amount of fixing the
+                // code that produces URLs can dislodge one that is already
+                // stored. Every title in a watchlist wore one show's poster for
+                // exactly that reason, and three separate corrections upstream
+                // changed nothing on screen.
+                //
+                // So a newer answer wins. Artwork is cosmetic and cheap to
+                // re-store, which makes "take the latest" both the safe rule and
+                // the self-healing one: the next read repairs whatever the last
+                // one got wrong, on every device, with no migration.
+                if let incomingArtwork = incoming.artworkURL {
+                    let sanitized = SyncURLSanitizer.sanitize(string: incomingArtwork)
+                    if presentation.artworkURL != sanitized {
+                        presentation.artworkURL = sanitized
+                        changed = true
+                    }
                 }
-                if presentation.backdropURL == nil, incoming.backdropURL != nil {
-                    presentation.backdropURL = SyncURLSanitizer.sanitize(
-                        string: incoming.backdropURL
-                    )
-                    changed = true
+                if let incomingBackdrop = incoming.backdropURL {
+                    let sanitized = SyncURLSanitizer.sanitize(string: incomingBackdrop)
+                    if presentation.backdropURL != sanitized {
+                        presentation.backdropURL = sanitized
+                        changed = true
+                    }
                 }
                 result.presentation = presentation
             }

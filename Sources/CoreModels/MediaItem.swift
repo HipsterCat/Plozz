@@ -138,7 +138,13 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// Provider addressing continues to use `id` and `sources`.
     public var watchlistAliasID: MediaAliasID?
     public var stablePresentationID: String {
-        watchlistAliasID.map { "watchlist:\($0)" } ?? id
+        if let watchlistAliasID {
+            return "watchlist:\(watchlistAliasID)"
+        }
+        if let sourceAccountID {
+            return "account:\(sourceAccountID):\(id)"
+        }
+        return id
     }
     public var title: String  // l10n:content — media title (server/provider content)
     /// The title in the work's original/production language, when the server
@@ -155,6 +161,21 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     public var seasonNumber: Int?
     public var episodeNumber: Int?
     public var productionYear: Int?
+
+    /// The day the title was first released — a movie's premiere or an episode's
+    /// original air date (Jellyfin `PremiereDate`, Plex `originallyAvailableAt`).
+    ///
+    /// Distinct from ``scheduledAirDate``, which exists only on placeholder rows
+    /// for episodes that have *not* aired and are in nobody's library: this is a
+    /// fact about a real item, and is set on anything the server dates. Distinct
+    /// too from ``productionYear``, which is the coarser year the same servers
+    /// report and is what most rows show; keep both, since a server routinely
+    /// knows one and not the other.
+    ///
+    /// Providers report a bare calendar day, so it is stored as the date at UTC
+    /// midnight and must be **formatted in UTC** — rendering it in the device's
+    /// zone shifts a release west of Greenwich back a day.
+    public var releaseDate: Date?
 
     /// The content/age-classification certificate, e.g. `TV-14`, `PG-13`, `R`.
     /// Provider-native string (Jellyfin `OfficialRating`); `nil` when unrated or
@@ -287,6 +308,19 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// owning provider. Once you drill into a single-provider subtree the field
     /// is irrelevant and may be `nil`.
     public var sourceAccountID: String?
+    /// Account provenance keyed by credential-free artwork URL identity.
+    ///
+    /// One item can legitimately combine a poster from one source with a
+    /// backdrop/logo donated by another. Keeping provenance per URL lets each
+    /// resource be re-signed by its actual account after persistence strips
+    /// credentials, even when playback has been retargeted elsewhere.
+    public var artworkSourceAccountIDsByURL: [String: String]
+
+    /// The sole artwork account when every known URL shares one, otherwise nil.
+    public var artworkSourceAccountID: String? {
+        let accounts = Set(artworkSourceAccountIDsByURL.values)
+        return accounts.count == 1 ? accounts.first : nil
+    }
 
     /// Other `Account.id`s that also hold this same title, populated when the
     /// Search aggregator de-duplicates a result that exists on several servers
@@ -391,6 +425,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         seasonNumber: Int? = nil,
         episodeNumber: Int? = nil,
         productionYear: Int? = nil,
+        releaseDate: Date? = nil,
         officialRating: String? = nil,
         genres: [String] = [],
         people: [MediaPerson] = [],
@@ -419,6 +454,8 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         downloadProgress: Double? = nil,
         mediaInfo: MediaSourceMetadata? = nil,
         sourceAccountID: String? = nil,
+        artworkSourceAccountID: String? = nil,
+        artworkSourceAccountIDsByURL: [String: String] = [:],
         additionalSourceAccountIDs: [String] = [],
         libraryID: String? = nil,
         versions: [MediaVersion] = [],
@@ -445,6 +482,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.seasonNumber = seasonNumber
         self.episodeNumber = episodeNumber
         self.productionYear = productionYear
+        self.releaseDate = releaseDate
         self.officialRating = officialRating
         self.genres = genres
         self.people = people
@@ -473,6 +511,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.downloadProgress = downloadProgress
         self.mediaInfo = mediaInfo
         self.sourceAccountID = sourceAccountID
+        self.artworkSourceAccountIDsByURL = artworkSourceAccountIDsByURL
         self.additionalSourceAccountIDs = additionalSourceAccountIDs
         self.libraryID = libraryID
         self.versions = versions
@@ -482,6 +521,17 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.lastPlayedAt = lastPlayedAt
         self.selectedSourceAccountID = selectedSourceAccountID
         self.explicitSourceSelection = explicitSourceSelection
+        if let artworkSourceAccountID {
+            recordArtworkSource(
+                accountID: artworkSourceAccountID,
+                for: remoteArtworkURLs
+            )
+        } else if let sourceAccountID {
+            recordArtworkSource(
+                accountID: sourceAccountID,
+                for: remoteArtworkURLs
+            )
+        }
     }
 
     /// Persisted keys. `selectedVersionID` is intentionally omitted so it is
@@ -491,14 +541,15 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, watchlistAliasID, title, kind, overview, parentTitle, seasonNumber, episodeNumber
         case originalTitle
-        case productionYear, officialRating, genres, people, studios, tags, taglines
+        case productionYear, releaseDate, officialRating, genres, people, studios, tags, taglines
         case seriesID, seasonID, runtime, resumePosition, playedPercentage, isPlayed, hasBeenPlayed
         case posterURL, seriesPosterURL, backdropURL, heroBackdropURL
         case fallbackArtworkURL, logoURL, ratings, providerIDs, metadataProvenance
         case artworkSelections, mediaInfo
         case availability, locallyValidatedPlayableSource
         case downloadProgress
-        case sourceAccountID, additionalSourceAccountIDs, versions, isFavorite
+        case sourceAccountID, artworkSourceAccountIDsByURL
+        case additionalSourceAccountIDs, versions, isFavorite
         case sources, lastPlayedAt, libraryID
         case scheduledAirDate, scheduledAirDateHasTime, showsScheduledReleaseTime
     }
@@ -521,6 +572,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         seasonNumber = try container.decodeIfPresent(Int.self, forKey: .seasonNumber)
         episodeNumber = try container.decodeIfPresent(Int.self, forKey: .episodeNumber)
         productionYear = try container.decodeIfPresent(Int.self, forKey: .productionYear)
+        releaseDate = try container.decodeIfPresent(Date.self, forKey: .releaseDate)
         officialRating = try container.decodeIfPresent(String.self, forKey: .officialRating)
         genres = try container.decodeIfPresent([String].self, forKey: .genres) ?? []
         people = try container.decodeIfPresent([MediaPerson].self, forKey: .people) ?? []
@@ -542,6 +594,29 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         logoURL = try container.decodeIfPresent(URL.self, forKey: .logoURL)
         ratings = try container.decodeIfPresent([ExternalRating].self, forKey: .ratings) ?? []
         providerIDs = try container.decodeIfPresent([String: String].self, forKey: .providerIDs) ?? [:]
+        // Home snapshots written before anime title-search validation may carry
+        // the same poisoned ids as the durable alias ledger. Repair both stores:
+        // cleaning only the ledger still leaves an offline/first-frame card able
+        // to classify itself as the wrong anime and ask for its poster.
+        let repairedLegacyAnimeContamination: Bool
+        if LegacyAnimeIdentityRepair.containsAnimeIDs(in: providerIDs),
+           let repairedYear = LegacyAnimeIdentityRepair.expectedYear(
+               providerIDs: providerIDs,
+               kind: kind
+           ) {
+            repairedLegacyAnimeContamination = true
+            providerIDs.removeProviderIDs(
+                in: LegacyAnimeIdentityRepair.animeNamespaces
+            )
+            // Episodes and seasons often carry their series' external ids, but
+            // their production date belongs to the child. Remove inherited bad
+            // anime ids there too; never turn a 2024 episode into a 2021 one.
+            if kind == .movie || kind == .series {
+                productionYear = repairedYear
+            }
+        } else {
+            repairedLegacyAnimeContamination = false
+        }
         metadataProvenance = (try? container.decodeIfPresent(
             MetadataProvenance.self,
             forKey: .metadataProvenance
@@ -570,6 +645,10 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         downloadProgress = try container.decodeIfPresent(Double.self, forKey: .downloadProgress)
         mediaInfo = try container.decodeIfPresent(MediaSourceMetadata.self, forKey: .mediaInfo)
         sourceAccountID = try container.decodeIfPresent(String.self, forKey: .sourceAccountID)
+        artworkSourceAccountIDsByURL = try container.decodeIfPresent(
+            [String: String].self,
+            forKey: .artworkSourceAccountIDsByURL
+        ) ?? [:]
         additionalSourceAccountIDs = try container.decodeIfPresent([String].self, forKey: .additionalSourceAccountIDs) ?? []
         scheduledAirDate = try container.decodeIfPresent(Date.self, forKey: .scheduledAirDate)
         scheduledAirDateHasTime = try container.decodeIfPresent(Bool.self, forKey: .scheduledAirDateHasTime) ?? false
@@ -583,6 +662,17 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         selectedVersionID = nil
         selectedSourceAccountID = nil
         explicitSourceSelection = false
+        if repairedLegacyAnimeContamination {
+            // The bad anime image was an async fallback selected because these
+            // poisoned IDs misclassified a mainstream title. The snapshot's own
+            // server artwork is independent and often correct; discarding it
+            // forces the card to resolve another fallback after launch, producing
+            // the exact poster swap this migration exists to stop.
+            ratings.removeAll { $0.source == .anilist }
+            if metadataProvenance[.ratings]?.source == .anilist {
+                metadataProvenance[.ratings] = nil
+            }
+        }
     }
 
     /// Ordered explicit candidates followed by source-compatible legacy URL
@@ -608,20 +698,28 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         case .homeHero:
             return [heroBackdropURL, backdropURL, fallbackArtworkURL].compactMap { $0 }
         case .detailBackdrop:
-            // No poster last resort here.
+            // The parent backdrop is the last rung, and only when it isn't the
+            // poster.
             //
-            // A discovery title opened from a cast or Related card arrives with a
-            // poster and nothing else, so this ladder painted the poster full-bleed
-            // and then swapped it for the real backdrop the moment enrichment
-            // landed — the background visibly changing a second after arriving, on
-            // every such page. A portrait poster stretched behind a landscape hero
-            // was never the image we wanted anyway; it was a placeholder that
-            // outstayed its welcome by being indistinguishable from the real thing.
+            // Previously this ladder stopped at the item's own two URLs, which for
+            // an episode-seeded series page is nothing at all: a Jellyfin episode
+            // carries Primary/Thumb, not backdrops. The hero therefore opened EMPTY
+            // and waited on an asynchronous router lookup before it could draw
+            // anything — the blank hero, and a good part of why opening a show
+            // feels slow. `fallbackArtworkURL` already holds exactly the right
+            // picture for that moment: the owning series' landscape backdrop
+            // (Jellyfin resolves it through `SeriesId`, Plex through the parent's
+            // `art`), and it is already in hand, so first paint costs no request.
             //
-            // The layer's async fallback still resolves a genuine backdrop, so the
-            // page goes from its scrim straight to the right image — one appearance
-            // instead of a replacement.
-            return [heroBackdropURL, backdropURL].compactMap { $0 }
+            // The exclusion it replaces was aimed at a real regression, and that
+            // aim is kept: a discovery title opened from a cast or Related card can
+            // arrive with a poster and nothing else, and painting a portrait poster
+            // full-bleed — then swapping it for the real backdrop the moment
+            // enrichment lands — looked like a bug on every such page. Comparing
+            // against `posterURL` excludes precisely that case and nothing else,
+            // rather than throwing away every parent backdrop to be rid of it.
+            let parent = fallbackArtworkURL == posterURL ? nil : fallbackArtworkURL
+            return [heroBackdropURL, backdropURL, parent].compactMap { $0 }
         case .poster:
             return [posterURL, fallbackArtworkURL].compactMap { $0 }
         case .seriesPoster:
@@ -644,7 +742,54 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     public func taggingSource(_ accountID: String) -> MediaItem {
         var copy = self
         copy.sourceAccountID = accountID
+        copy.recordArtworkSource(
+            accountID: accountID,
+            for: copy.remoteArtworkURLs
+        )
         return copy
+    }
+
+    public func artworkSourceAccountID(for url: URL) -> String? {
+        artworkSourceAccountIDsByURL[
+            SyncURLSanitizer.sanitize(url).absoluteString
+        ]
+    }
+
+    public mutating func recordArtworkSource(
+        accountID: String,
+        for urls: some Sequence<URL>
+    ) {
+        for url in urls {
+            artworkSourceAccountIDsByURL[
+                SyncURLSanitizer.sanitize(url).absoluteString
+            ] = accountID
+        }
+    }
+
+    public func taggingArtworkSource(_ accountID: String) -> MediaItem {
+        var copy = self
+        copy.recordArtworkSource(
+            accountID: accountID,
+            for: copy.remoteArtworkURLs
+        )
+        return copy
+    }
+
+    var remoteArtworkURLs: [URL] {
+        let direct = [
+            posterURL,
+            seriesPosterURL,
+            backdropURL,
+            heroBackdropURL,
+            fallbackArtworkURL,
+            logoURL
+        ].compactMap { $0 }
+        let selected = artworkSelections.flatMap(\.references).compactMap {
+            reference -> URL? in
+            guard case .remote(let url) = reference else { return nil }
+            return url
+        }
+        return direct + selected + people.compactMap(\.imageURL)
     }
 
     /// Returns a copy of this item stamped with the provider-local `libraryID`
@@ -882,6 +1027,112 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         if let parentTitle { return parentTitle }
         if let productionYear { return String(productionYear) }
         return nil
+    }
+
+    /// ``releaseDate`` rendered for display — abbreviated, locale-aware, and
+    /// **fixed to UTC**.
+    ///
+    /// The time zone is not a detail: providers date a title by calendar day and
+    /// we store that day at UTC midnight, so formatting it in the device's zone
+    /// would show anyone west of Greenwich the day before. `nil` when the server
+    /// never dated the item.
+    public var releaseDateLabel: String? {  // l10n:content — date-format output, already locale-aware
+        MediaItem.releaseDateLabel(for: releaseDate)
+    }
+
+    /// The shared formatting used by ``releaseDateLabel``, exposed so callers
+    /// holding a loose date (rather than a whole item) format it identically.
+    public static func releaseDateLabel(for date: Date?) -> String? {  // l10n:content — date-format output, already locale-aware
+        guard let date else { return nil }
+        return date.formatted(
+            Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: .gmt)
+        )
+    }
+
+    /// Parses a bare `YYYY-MM-DD` calendar day into the instant of UTC midnight
+    /// on that day, the storage contract for ``releaseDate``.
+    ///
+    /// Shared because more than one backend dates a title this way — Plex's
+    /// `originallyAvailableAt` and TMDb's `release_date`/`first_air_date` through
+    /// Seerr — and a per-caller parser is how the two would drift a day apart.
+    /// Anchored to UTC: parsed in the device's zone the day would land on local
+    /// midnight, and anyone east of Greenwich would read it back a date later. A
+    /// format *style* rather than a `DateFormatter` so there is no mutable
+    /// singleton to hand across concurrency domains. Anything longer than a bare
+    /// day (an agent that wrote a full timestamp into the same field) is trimmed
+    /// to its leading ten characters, which are the calendar day either way.
+    public static func calendarDayReleaseDate(from raw: String?) -> Date? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.count >= 10
+        else { return nil }
+        return try? calendarDayStyle.parse(String(trimmed.prefix(10)))
+    }
+
+    private static let calendarDayStyle = Date.ISO8601FormatStyle(
+        dateSeparator: .dash,
+        timeZone: .gmt
+    ).year().month().day()
+
+    /// Snaps an absolute instant to the calendar day it was *meant* to be, for a
+    /// backend that means a bare day but transmits a timestamp.
+    ///
+    /// Jellyfin is that backend. Its scrapers take TMDb/TheTVDB's bare `AirDate`,
+    /// stamp it with the **server's** zone and convert to UTC
+    /// (`DateTime.SpecifyKind(airDate, .Local).ToUniversalTime()`), then serialise
+    /// with a hardcoded `Z`. A premiere of 14 April therefore leaves a UTC-5
+    /// server as `2019-04-14T05:00:00Z` and a UTC+10 server as
+    /// `2019-04-13T14:00:00Z` — and that second one is a different UTC *day*.
+    /// Reading the day straight off the wire shows everyone using an eastern
+    /// server the date a day early. It is a long-standing Jellyfin-side defect,
+    /// not something a client can ask the server to stop doing.
+    ///
+    /// A shifted midnight is always exactly the server's own offset away from the
+    /// true one, so the *nearest* midnight recovers the intended day from UTC−11:30
+    /// through UTC+12 — every inhabited zone but two, and the tie-break is what
+    /// buys the top of that range.
+    ///
+    /// The two it does not fix, and the one it costs:
+    /// - **UTC+12:45 … +14** (Chatham Islands, New Zealand in summer, Kiritimati)
+    ///   read a day early. They read a day early before this too — not a
+    ///   regression, just out of reach.
+    /// - **UTC−12** now reads a day *late*, where it used to be right. That is a
+    ///   real (if tiny) regression, and it is the price of the tie: a −12 midnight
+    ///   lands exactly 12 hours into the UTC day, the same distance as a +12 one,
+    ///   and resolving ties to the later day is what makes +12 correct. New
+    ///   Zealand, Fiji, Kamchatka and the Marshall Islands sit at +12; UTC−12 is
+    ///   Baker and Howland Islands, which nobody lives on. Taking that trade
+    ///   deliberately.
+    ///
+    /// Deliberately NOT for a value that is a genuine timestamp: rounding a real
+    /// 20:00 broadcast would move it to the next day. Use it only on fields
+    /// documented as a bare calendar day.
+    public static func calendarDayReleaseDate(snapping instant: Date?) -> Date? {
+        guard let instant else { return nil }
+        let day: TimeInterval = 24 * 60 * 60
+        let seconds = instant.timeIntervalSince1970
+        // `.down` rather than truncation so instants before 1970 floor the same
+        // direction as everything after it.
+        let dayStart = (seconds / day).rounded(.down) * day
+        return Date(
+            // `>=`, not `>`, and load-bearing: a midnight from a UTC+12 server sits
+            // exactly half a day in, so resolving the tie to the LATER day is what
+            // makes New Zealand right (and UTC−12 wrong). Pinned by the `+12` case
+            // in `MediaItemReleaseDateTests`.
+            timeIntervalSince1970: (seconds - dayStart) >= day / 2 ? dayStart + day : dayStart
+        )
+    }
+
+    /// The episode's place in the run, comma-separated — `S4, E1`.
+    ///
+    /// A tighter sibling of ``subtitle`` for places that already join with `·`,
+    /// where the dotted form would produce "S4 · E1 · 22m" and read as three
+    /// separate facts instead of one designation and a duration. The comma keeps
+    /// the season and episode visibly paired — bare "S4 E1 · 22m" runs the two
+    /// numbers together. `nil` unless both are known: a half-built "S4" says
+    /// nothing useful.
+    public var seasonEpisodeLabel: String? {  // l10n:content — "S"/"E" abbreviations are hand-built formatting, not copy
+        guard let season = seasonNumber, let episode = episodeNumber else { return nil }
+        return "S\(season), E\(episode)"
     }
 
     /// On-screen / voice talent, in billing order (crew filtered out).

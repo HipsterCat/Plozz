@@ -224,6 +224,133 @@ final class PlexWatchlistTests: XCTestCase {
         XCTAssertEqual(items.last?.title, "Film 102")
     }
 
+    /// Discover can transiently return a short first window even while reporting
+    /// that the watchlist contains many more titles. Treating every short page as
+    /// terminal made a large watchlist collapse to four cards until app relaunch.
+    func testWatchlistContinuesAfterShortPageWhenTotalReportsMore() async throws {
+        let stub = StubHTTPClient()
+        let remainder = (4..<104).map {
+            """
+            {"ratingKey":"k\($0)","type":"movie","title":"Film \($0)","year":2020}
+            """
+        }.joined(separator: ",")
+        stub.stubSequence(pathSuffix: "/library/sections/watchlist/all", jsons: [
+            """
+            {"MediaContainer":{"size":4,"totalSize":104,"Metadata":[
+              {"ratingKey":"k0","type":"movie","title":"Film 0","year":2020},
+              {"ratingKey":"k1","type":"movie","title":"Film 1","year":2020},
+              {"ratingKey":"k2","type":"movie","title":"Film 2","year":2020},
+              {"ratingKey":"k3","type":"movie","title":"Film 3","year":2020}
+            ]}}
+            """,
+            """
+            {"MediaContainer":{"size":100,"totalSize":104,"Metadata":[\(remainder)]}}
+            """
+        ])
+
+        let items = try await PlexProvider(
+            session: makeSession(),
+            http: stub
+        ).watchlist()
+
+        XCTAssertEqual(items.count, 104)
+        XCTAssertEqual(items.last?.title, "Film 103")
+        XCTAssertEqual(
+            stub.sentQueryItems.compactMap {
+                $0.first { $0.name == "X-Plex-Container-Start" }?.value
+            },
+            ["0", "4"]
+        )
+    }
+
+    func testWatchlistRejectsOverlappingPages() async throws {
+        let stub = StubHTTPClient()
+        stub.stubSequence(pathSuffix: "/library/sections/watchlist/all", jsons: [
+            """
+            {"MediaContainer":{"size":2,"totalSize":3,"Metadata":[
+              {"ratingKey":"k0","guid":"plex://movie/k0","type":"movie","title":"First"},
+              {"ratingKey":"k1","guid":"plex://movie/k1","type":"movie","title":"Second"}
+            ]}}
+            """,
+            """
+            {"MediaContainer":{"size":1,"totalSize":3,"Metadata":[
+              {"ratingKey":"k1","guid":"plex://movie/k1","type":"movie","title":"Repeated"}
+            ]}}
+            """
+        ])
+
+        do {
+            _ = try await PlexProvider(
+                session: makeSession(),
+                http: stub
+            ).watchlist()
+            XCTFail("Expected overlapping pages to fail")
+        } catch {
+            XCTAssertEqual(error as? AppError, .invalidResponse)
+        }
+    }
+
+    /// A later empty page cannot turn a partial read into authoritative success
+    /// while the service still reports unseen titles.
+    func testWatchlistRejectsIncompleteEmptyPage() async throws {
+        let stub = StubHTTPClient()
+        let firstPage = (0..<100).map {
+            """
+            {"ratingKey":"k\($0)","type":"movie","title":"Film \($0)","year":2020}
+            """
+        }.joined(separator: ",")
+        stub.stubSequence(pathSuffix: "/library/sections/watchlist/all", jsons: [
+            """
+            {"MediaContainer":{"size":100,"totalSize":500,"Metadata":[\(firstPage)]}}
+            """,
+            """
+            {"MediaContainer":{"size":0,"totalSize":500,"Metadata":[]}}
+            """
+        ])
+
+        do {
+            _ = try await PlexProvider(
+                session: makeSession(),
+                http: stub
+            ).watchlist()
+            XCTFail("Expected an incomplete response to fail")
+        } catch {
+            XCTAssertEqual(error as? AppError, .invalidResponse)
+        }
+    }
+
+    /// The request cap is a safety boundary, not permission to publish a list the
+    /// service itself says is incomplete.
+    func testWatchlistRejectsIncompleteReadAtRequestCap() async throws {
+        let stub = StubHTTPClient()
+        let pages = (0..<100).map { page in
+            let start = page * 4
+            let items = (start..<(start + 4)).map {
+                """
+                {"ratingKey":"k\($0)","type":"movie","title":"Film \($0)","year":2020}
+                """
+            }.joined(separator: ",")
+            return """
+            {"MediaContainer":{"size":4,"totalSize":500,"Metadata":[\(items)]}}
+            """
+        }
+        stub.stubSequence(
+            pathSuffix: "/library/sections/watchlist/all",
+            jsons: pages
+        )
+
+        do {
+            _ = try await PlexProvider(
+                session: makeSession(),
+                http: stub
+            ).watchlist()
+            XCTFail("Expected a capped partial response to fail")
+        } catch {
+            XCTAssertEqual(error as? AppError, .invalidResponse)
+        }
+        XCTAssertEqual(stub.sentPaths.count, 100)
+    }
+
     func testWatchlistWriteUsesDiscoverHost() async throws {
         let stub = StubHTTPClient()
         stub.stub(pathSuffix: "/actions/addToWatchlist", json: "{}")
@@ -289,6 +416,24 @@ final class PlexWatchlistTests: XCTestCase {
         XCTAssertNil(unresolvedBinding)
     }
 
+    func testHomeUserTokenChangeInvalidatesDestinationScope() throws {
+        let token = MutablePlexDiscoverToken("home-user-a")
+        let provider = PlexProvider(session: makeSession())
+        let destination = try XCTUnwrap(PlexWatchlistDestination(
+            provider: provider,
+            requiresHomeUserToken: true,
+            reconciliationScope: "profile#home-user",
+            discoverToken: { token.value }
+        ))
+        let firstScope = destination.reconciliationScope
+        let cacheScope = destination.cacheIdentityScope
+
+        token.value = "home-user-b"
+
+        XCTAssertNotEqual(destination.reconciliationScope, firstScope)
+        XCTAssertEqual(destination.cacheIdentityScope, cacheScope)
+    }
+
     func testUniversalDestinationImportProducesCorroboratedAliasEvidence() async throws {
         let stub = StubHTTPClient()
         stub.stub(pathSuffix: "/library/sections/watchlist/all", json: """
@@ -310,6 +455,7 @@ final class PlexWatchlistTests: XCTestCase {
         let entry = try XCTUnwrap(imported.first)
         let evidence = try XCTUnwrap(entry.mediaAliasEvidence)
 
+        XCTAssertEqual(entry.presentationAccountID, "plex-account")
         XCTAssertEqual(evidence.strong.first?.value, "tt1160419")
         XCTAssertEqual(
             evidence.locallyValidatedBindings.first?.providerItemID,
@@ -322,6 +468,168 @@ final class PlexWatchlistTests: XCTestCase {
         )!
         let reboundResolution = try await destination.resolve(rebound)
         XCTAssertNotNil(reboundResolution)
+    }
+
+    func testUniversalDestinationFailsClosedWhenEntryCannotMap() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/library/sections/watchlist/all", json: """
+        {"MediaContainer":{"size":1,"totalSize":1,"Metadata":[
+          {"ratingKey":"abc123","type":"movie","title":"Missing global guid"}
+        ]}}
+        """)
+        let destination = try XCTUnwrap(PlexWatchlistDestination(
+            provider: PlexProvider(session: makeSession(), http: stub)
+        ))
+
+        do {
+            _ = try await destination.fetchEntries()
+            XCTFail("Expected malformed authoritative input to fail")
+        } catch let error as WatchlistDestinationError {
+            XCTAssertEqual(error, .transient)
+        }
+    }
+
+    private final class MutablePlexDiscoverToken: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storedValue: String
+
+        init(_ value: String) {
+            storedValue = value
+        }
+
+        var value: String {
+            get {
+                lock.lock()
+                defer { lock.unlock() }
+                return storedValue
+            }
+            set {
+                lock.lock()
+                storedValue = newValue
+                lock.unlock()
+            }
+        }
+    }
+
+    /// Regression — the reported bug: **removing a TV SHOW from the Plex
+    /// watchlist did nothing while removing a movie worked.**
+    ///
+    /// A series page fronts its hero on the episode Play would run, so the
+    /// bookmark's subject is the show *promoted* from that episode — an item that
+    /// carries no ids of its own. Everything downstream of that promotion has to
+    /// keep working on a show exactly as it does on a film: the show's global
+    /// `plex://show/<id>` guid is the account-level list's key, and a removal must
+    /// address `removeFromWatchlist` with it. A movie was never affected because a
+    /// movie hero already IS the movie.
+    func testUniversalDestinationRemovesSeriesUsingShowGuid() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/actions/removeFromWatchlist", json: "{}")
+        let provider = PlexProvider(session: makeSession(), http: stub)
+        let destination = try XCTUnwrap(
+            PlexWatchlistDestination(provider: provider)
+        )
+        var show = MediaItem(id: "local-show", title: "Andor", kind: .series)
+        show.providerIDs["PlexGuid"] = "plex://show/5d9c0874"
+
+        let resolved = try await destination.resolve(
+            WatchlistMutationTarget(aliasID: MediaAliasID(), item: show)!
+        )
+        let binding = try XCTUnwrap(resolved)
+        XCTAssertEqual(binding.opaqueValue, "5d9c0874")
+        try await destination.apply(.absent, to: binding)
+
+        XCTAssertEqual(
+            stub.method(forPathSuffix: "/actions/removeFromWatchlist"),
+            .put
+        )
+        let query = stub.queryItems(forPathSuffix: "/actions/removeFromWatchlist") ?? []
+        XCTAssertTrue(query.contains { $0.name == "ratingKey" && $0.value == "5d9c0874" })
+        XCTAssertEqual(
+            stub.baseURL(forPathSuffix: "/actions/removeFromWatchlist")?.host,
+            "discover.provider.plex.tv"
+        )
+    }
+
+    /// Regression: a mutation target assembled from the **ledger record** — all a
+    /// promoted series subject has, since it carries no provider ids itself — must
+    /// keep the `plexGuid`. It was dropped on the way out of the record, so such a
+    /// target resolved to nothing on Plex and its removal was discarded as an
+    /// unsupported identity: the confirmation appeared, the show stayed.
+    func testMutationTargetKeepsPlexGuidFromAliasRecord() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/actions/removeFromWatchlist", json: "{}")
+        let provider = PlexProvider(session: makeSession(), http: stub)
+        let destination = try XCTUnwrap(
+            PlexWatchlistDestination(provider: provider)
+        )
+        let record = try XCTUnwrap(
+            MediaAliasRecord(
+                kind: .series,
+                strongEvidence: [
+                    MediaAliasStrongEvidence(
+                        kind: .series,
+                        namespace: .plexGuid,
+                        value: "plex://show/5d9c0874"
+                    )!
+                ]
+            )
+        )
+        let target = try XCTUnwrap(
+            WatchlistMutationTarget(aliasID: record.id, aliasRecord: record)
+        )
+        XCTAssertTrue(target.externalIDs.contains {
+            $0.namespace == .plex && $0.value == "plex://show/5d9c0874"
+        })
+
+        let resolved = try await destination.resolve(target)
+        let binding = try XCTUnwrap(resolved)
+        XCTAssertEqual(binding.opaqueValue, "5d9c0874")
+        try await destination.apply(.absent, to: binding)
+
+        let query = stub.queryItems(forPathSuffix: "/actions/removeFromWatchlist") ?? []
+        XCTAssertTrue(query.contains { $0.name == "ratingKey" && $0.value == "5d9c0874" })
+    }
+
+    /// A show only ever seen through the watchlist READ has no guid of its own on
+    /// the target — just the binding the import corroborated. Removal must still
+    /// address the Discover id, not fall through to "unsupported identity".
+    func testUniversalDestinationRemovesSeriesFromCorroboratedBinding() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/library/sections/watchlist/all", json: """
+        {"MediaContainer":{"size":1,"Metadata":[
+          {"ratingKey":"5d9c0874","type":"show","title":"Andor","year":2022,
+           "guid":"plex://show/5d9c0874","Guid":[{"id":"tvdb://371980"}]}
+        ]}}
+        """)
+        stub.stub(pathSuffix: "/actions/removeFromWatchlist", json: "{}")
+        let provider = PlexProvider(
+            session: makeSession(),
+            accountID: "plex-account",
+            http: stub
+        )
+        let destination = try XCTUnwrap(
+            PlexWatchlistDestination(provider: provider)
+        )
+
+        let entries = try await destination.fetchEntries()
+        let entry = try XCTUnwrap(entries.first)
+        XCTAssertEqual(entry.kind, .series)
+        let evidence = try XCTUnwrap(entry.mediaAliasEvidence)
+        let target = try XCTUnwrap(
+            WatchlistMutationTarget(
+                aliasID: MediaAliasID(),
+                kind: .series,
+                validatedBindings: Array(evidence.locallyValidatedBindings)
+            )
+        )
+
+        let resolvedBinding = try await destination.resolve(target)
+        let binding = try XCTUnwrap(resolvedBinding)
+        XCTAssertEqual(binding.opaqueValue, "5d9c0874")
+        try await destination.apply(.absent, to: binding)
+
+        let query = stub.queryItems(forPathSuffix: "/actions/removeFromWatchlist") ?? []
+        XCTAssertTrue(query.contains { $0.name == "ratingKey" && $0.value == "5d9c0874" })
     }
 
     func testDiscoverDetailRemainsUnownedDespiteAccountOrigin() async throws {
@@ -339,5 +647,185 @@ final class PlexWatchlistTests: XCTestCase {
 
         XCTAssertFalse(item.locallyValidatedPlayableSource)
         XCTAssertFalse(item.hasPlayableLibraryTarget())
+    }
+}
+
+/// Covers the order the watchlist is asked for.
+///
+/// The row was arriving in an order that matched neither when titles were added
+/// nor one read to the next — "seemingly random when I open the app". Nothing
+/// downstream shuffles it: the union preserves each destination's own list
+/// position, and that position is the order this read returned. So an unordered
+/// read is an unordered row, and asking for no order was the whole of it.
+final class PlexWatchlistOrderTests: XCTestCase {
+    private func makeSession() -> UserSession {
+        UserSession(
+            server: MediaServer(id: "srv", name: "Home", baseURL: URL(string: "https://plex.host:32400")!, provider: .plex),
+            userID: "u1", userName: "Alice", deviceID: "d1", accessToken: "TOKEN"
+        )
+    }
+
+    private func sortValue(_ stub: StubHTTPClient) -> String? {
+        stub.queryItems(forPathSuffix: "/library/sections/watchlist/all")?
+            .first { $0.name == "sort" }?
+            .value
+    }
+
+    func testTheReadAsksForWatchlistOrderNewestFirst() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(
+            pathSuffix: "/library/sections/watchlist/all",
+            json: #"{"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"k1","type":"movie","title":"A","year":2020}]}}"#
+        )
+
+        _ = try await PlexProvider(session: makeSession(), http: stub).watchlist()
+
+        XCTAssertEqual(
+            sortValue(stub),
+            "watchlistedAt:desc",
+            "watchlistedAt is when the title was watchlisted; addedAt answers a different question — when it reached a library"
+        )
+    }
+
+    /// The order returned is the order presented, so it must survive the read
+    /// exactly rather than being re-sorted on some other key.
+    func testTheReturnedOrderIsPreserved() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(
+            pathSuffix: "/library/sections/watchlist/all",
+            json: """
+            {"MediaContainer":{"size":3,"totalSize":3,"Metadata":[
+              {"ratingKey":"k1","type":"movie","title":"Newest","year":2024},
+              {"ratingKey":"k2","type":"movie","title":"Middle","year":2022},
+              {"ratingKey":"k3","type":"movie","title":"Oldest","year":2020}
+            ]}}
+            """
+        )
+
+        let items = try await PlexProvider(session: makeSession(), http: stub).watchlist()
+
+        XCTAssertEqual(items.map(\.title), ["Newest", "Middle", "Oldest"])
+    }
+
+    /// These endpoints are undocumented and change without notice. A sort the
+    /// service refuses must cost the ordering, never the watchlist.
+    func testARefusedSortFallsBackToAnUnorderedReadRatherThanFailing() async throws {
+        let stub = StubHTTPClient()
+        // First attempt (with the sort) fails; the retry without it succeeds.
+        stub.stubSequence(pathSuffix: "/library/sections/watchlist/all", responses: [
+            (json: #"{"error":"unsupported sort"}"#, status: 400),
+            (json: #"{"MediaContainer":{"size":1,"totalSize":1,"Metadata":[{"ratingKey":"k1","type":"movie","title":"Kept","year":2020}]}}"#, status: 200)
+        ])
+
+        let items = try await PlexProvider(session: makeSession(), http: stub).watchlist()
+
+        XCTAssertEqual(items.map(\.title), ["Kept"], "An unordered watchlist beats no watchlist")
+        XCTAssertNil(sortValue(stub), "The retry drops the sort rather than sending an empty one")
+    }
+
+    func testMalformedSortedResponseDoesNotFallBack() async throws {
+        let stub = StubHTTPClient()
+        stub.stubSequence(pathSuffix: "/library/sections/watchlist/all", jsons: [
+            "{}",
+            #"{"MediaContainer":{"size":0,"totalSize":0,"Metadata":[]}}"#
+        ])
+
+        do {
+            _ = try await PlexProvider(
+                session: makeSession(),
+                http: stub
+            ).watchlist()
+            XCTFail("Expected malformed JSON to propagate")
+        } catch {
+            XCTAssertEqual(error as? AppError, .decoding)
+        }
+        XCTAssertEqual(stub.sentPaths.count, 1)
+    }
+
+    func testAuthenticationErrorDoesNotFallBack() async throws {
+        let stub = StubHTTPClient()
+        stub.stubSequence(pathSuffix: "/library/sections/watchlist/all", responses: [
+            (json: #"{"error":"unauthorized"}"#, status: 401),
+            (json: #"{"MediaContainer":{"size":0,"totalSize":0,"Metadata":[]}}"#, status: 200)
+        ])
+
+        do {
+            _ = try await PlexProvider(
+                session: makeSession(),
+                http: stub
+            ).watchlist()
+            XCTFail("Expected authentication failure to propagate")
+        } catch {
+            XCTAssertEqual(error as? AppError, .unauthorized)
+        }
+        XCTAssertEqual(stub.sentPaths.count, 1)
+    }
+}
+
+/// A paged watchlist read must not splice two orderings together.
+///
+/// An offset only means anything within one ordering, so continuing unsorted from
+/// where a sorted read left off repeats some titles and silently loses others.
+final class PlexWatchlistSortFallbackPagingTests: XCTestCase {
+    private func makeSession() -> UserSession {
+        UserSession(
+            server: MediaServer(id: "srv", name: "Home", baseURL: URL(string: "https://plex.host:32400")!, provider: .plex),
+            userID: "u1", userName: "Alice", deviceID: "d1", accessToken: "TOKEN"
+        )
+    }
+
+    func testARefusedSortRestartsTheReadRatherThanResumingIt() async throws {
+        let stub = StubHTTPClient()
+        let firstPage = (0..<100).map {
+            #"{"ratingKey":"k\#($0)","type":"movie","title":"Film \#($0)","year":2020}"#
+        }.joined(separator: ",")
+        stub.stubSequence(pathSuffix: "/library/sections/watchlist/all", responses: [
+            // Page 1 sorted, then the service refuses page 2's sort.
+            (json: "{\"MediaContainer\":{\"size\":100,\"totalSize\":102,\"Metadata\":[\(firstPage)]}}", status: 200),
+            (json: #"{"error":"unsupported sort"}"#, status: 400),
+            // The restart: both pages again, unsorted.
+            (json: "{\"MediaContainer\":{\"size\":100,\"totalSize\":102,\"Metadata\":[\(firstPage)]}}", status: 200),
+            (json: #"""
+            {"MediaContainer":{"size":2,"totalSize":102,"Metadata":[
+              {"ratingKey":"k100","type":"movie","title":"Film 100","year":2020},
+              {"ratingKey":"k101","type":"movie","title":"Film 101","year":2020}
+            ]}}
+            """#, status: 200)
+        ])
+
+        let items = try await PlexProvider(session: makeSession(), http: stub).watchlist()
+
+        XCTAssertEqual(items.count, 102, "Every title exactly once — no page banked under the old ordering")
+        XCTAssertEqual(Set(items.map(\.id)).count, 102, "and none of them duplicated")
+    }
+
+    func testSortFallbackResetsTheAbandonedReadTotal() async throws {
+        let stub = StubHTTPClient()
+        let firstPage = (0..<100).map {
+            #"{"ratingKey":"k\#($0)","type":"movie","title":"Film \#($0)","year":2020}"#
+        }.joined(separator: ",")
+        stub.stubSequence(pathSuffix: "/library/sections/watchlist/all", responses: [
+            (json: "{\"MediaContainer\":{\"size\":100,\"totalSize\":500,\"Metadata\":[\(firstPage)]}}", status: 200),
+            (json: #"{"error":"unsupported sort"}"#, status: 400),
+            (json: #"""
+            {"MediaContainer":{"size":4,"totalSize":4,"Metadata":[
+              {"ratingKey":"u0","type":"movie","title":"Unsorted 0","year":2020},
+              {"ratingKey":"u1","type":"movie","title":"Unsorted 1","year":2020},
+              {"ratingKey":"u2","type":"movie","title":"Unsorted 2","year":2020},
+              {"ratingKey":"u3","type":"movie","title":"Unsorted 3","year":2020}
+            ]}}
+            """#, status: 200)
+        ])
+
+        let items = try await PlexProvider(
+            session: makeSession(),
+            http: stub
+        ).watchlist()
+
+        XCTAssertEqual(
+            items.map(\.title),
+            ["Unsorted 0", "Unsorted 1", "Unsorted 2", "Unsorted 3"]
+        )
+        XCTAssertEqual(stub.sentPaths.count, 3)
     }
 }

@@ -53,25 +53,76 @@ export PLOZZ_TV_TOPSHELF_ENTITLEMENTS="${PLOZZ_TV_TOPSHELF_ENTITLEMENTS:-TopShel
 # canonical app's Push / iCloud / Associated Domains capabilities.
 export PLOZZ_IOS_APP_ENTITLEMENTS="${PLOZZ_IOS_APP_ENTITLEMENTS:-App/PlozziOS/PlozziOS.entitlements}"
 
-if [ "$BAKE_ONLY" != "1" ]; then
-  xcodegen generate
-elif [ ! -f "Plozz.xcodeproj/project.pbxproj" ]; then
-  echo "error: --bake-only requires an existing Plozz.xcodeproj; run without it once" >&2
-  exit 1
+# Xcode resolves xcconfig includes before scheme pre-actions run, so linking the
+# local override from a scheme is one build too late. Restore it here before
+# either XcodeGen or the bake-only device-build path reads build settings.
+secrets_file="Config/Secrets.local.xcconfig"
+canonical_secrets="${XDG_CONFIG_HOME:-$HOME/.config}/plozz/Secrets.local.xcconfig"
+if [ ! -e "$secrets_file" ] && [ -f "$canonical_secrets" ]; then
+  ln -s "$canonical_secrets" "$secrets_file"
+  echo "Linked $secrets_file from $canonical_secrets"
 fi
 
-proj="Plozz.xcodeproj/project.pbxproj"
+proj_dir="Plozz.xcodeproj"
+proj="${proj_dir}/project.pbxproj"
+generation_signature_file="${proj_dir}/.plozz-generation-signature"
+generation_signature="$(
+  {
+    shasum -a 256 project.yml Package.swift
+    printf '%s\n' \
+      "PLOZZ_ID_SUFFIX=${PLOZZ_ID_SUFFIX}" \
+      "PLOZZ_NAME_SUFFIX=${PLOZZ_NAME_SUFFIX}" \
+      "PLOZZ_TV_APP_ENTITLEMENTS=${PLOZZ_TV_APP_ENTITLEMENTS}" \
+      "PLOZZ_TV_TOPSHELF_ENTITLEMENTS=${PLOZZ_TV_TOPSHELF_ENTITLEMENTS}" \
+      "PLOZZ_IOS_APP_ENTITLEMENTS=${PLOZZ_IOS_APP_ENTITLEMENTS}"
+    # XcodeGen expands directory sources into concrete file references. Git pulls
+    # can change that set while leaving this ignored project behind, so paths are
+    # part of the signature even though ordinary source-content edits are not.
+    find App Sources Tests TopShelf -type f -print | LC_ALL=C sort
+  } | shasum -a 256 | awk '{print $1}'
+)"
 
-# If PLOZZ_SENTRY_DSN wasn't provided in the environment, read it from the local,
-# gitignored .env.fastlane so one file feeds both local device builds and
-# `fastlane` (which also exports it). An explicit env override always wins.
-if [ -z "${PLOZZ_SENTRY_DSN:-}" ] && [ -f ".env.fastlane" ]; then
-  dsn_line=$(grep -E '^[[:space:]]*PLOZZ_SENTRY_DSN=' ".env.fastlane" | tail -n1 || true)
-  if [ -n "$dsn_line" ]; then
-    PLOZZ_SENTRY_DSN=$(printf '%s' "$dsn_line" \
+should_generate=0
+if [ "$BAKE_ONLY" != "1" ]; then
+  should_generate=1
+elif [ ! -f "$proj" ]; then
+  echo "error: --bake-only requires an existing Plozz.xcodeproj; run without it once" >&2
+  exit 1
+elif [ ! -f "$generation_signature_file" ] \
+  || [ "$(cat "$generation_signature_file")" != "$generation_signature" ]; then
+  echo "Project inputs changed since the last XcodeGen run; regenerating automatically."
+  should_generate=1
+fi
+
+if [ "$should_generate" = "1" ]; then
+  xcodegen generate
+  printf '%s\n' "$generation_signature" > "$generation_signature_file"
+fi
+
+# If PLOZZ_SENTRY_DSN wasn't provided in the environment, read it from a
+# gitignored env file so one file feeds both local device builds and `fastlane`
+# (which also exports it). An explicit env override always wins.
+#
+# The per-worktree .env.fastlane is checked first, then a machine-wide file that
+# lives OUTSIDE any checkout. That second location matters: .env.fastlane is
+# gitignored, so it does not exist in a freshly created worktree — which is how
+# every build since the DSN was first configured silently shipped with crash
+# reporting disabled. The machine-wide copy survives worktrees and branches.
+PLOZZ_ENV_FILES="${PLOZZ_ENV_FILE:-} .env.fastlane ${XDG_CONFIG_HOME:-$HOME/.config}/plozz/env"
+if [ -z "${PLOZZ_SENTRY_DSN:-}" ]; then
+  for env_file in $PLOZZ_ENV_FILES; do
+    [ -n "$env_file" ] && [ -f "$env_file" ] || continue
+    dsn_line=$(grep -E '^[[:space:]]*PLOZZ_SENTRY_DSN=' "$env_file" | tail -n1 || true)
+    [ -n "$dsn_line" ] || continue
+    candidate=$(printf '%s' "$dsn_line" \
       | sed -E "s/^[[:space:]]*PLOZZ_SENTRY_DSN=//; s/^\"//; s/\"$//; s/^'//; s/'$//")
-    export PLOZZ_SENTRY_DSN
-  fi
+    if [ -n "$candidate" ]; then
+      PLOZZ_SENTRY_DSN="$candidate"
+      export PLOZZ_SENTRY_DSN
+      echo "Read PLOZZ_SENTRY_DSN from ${env_file}"
+      break
+    fi
+  done
 fi
 
 # --- Opt-in crash-reporting DSN bake -----------------------------------------
@@ -88,6 +139,52 @@ if [ -n "${PLOZZ_SENTRY_DSN:-}" ]; then
   else
     echo "warning: $proj not found; skipping DSN bake"
   fi
+fi
+
+# --- Release channel bake ----------------------------------------------------
+# The runtime fallback for "is this a TestFlight build?" sniffs
+# `Bundle.main.appStoreReceiptURL`, which on tvOS can be nil (a receipt is only
+# written after a purchase) — so a TestFlight install could read as production
+# and silently default crash reporting OFF. The fastlane `beta`/`release` lanes
+# set PLOZZ_RELEASE_CHANNEL so the answer is decided at build time instead.
+release_channel="${PLOZZ_RELEASE_CHANNEL:-}"
+if [ -n "$release_channel" ]; then
+  case "$release_channel" in
+    testflight|production) ;;
+    *)
+      echo "error: PLOZZ_RELEASE_CHANNEL must be 'testflight' or 'production' (got '${release_channel}')" >&2
+      exit 1
+      ;;
+  esac
+fi
+if [ -f "$proj" ]; then
+  /usr/bin/sed -i '' -E "s|PLOZZ_RELEASE_CHANNEL = [^;]*;|PLOZZ_RELEASE_CHANNEL = \"${release_channel}\";|g" "$proj"
+  if [ -n "$release_channel" ]; then
+    echo "Baked PLOZZ_RELEASE_CHANNEL = ${release_channel} into ${proj}"
+  fi
+else
+  echo "warning: $proj not found; skipping release-channel bake"
+fi
+
+# --- Release-notes id bake ---------------------------------------------------
+# Distribution lanes select one committed ReleaseNotes.json entry. Baking that
+# stable id into Info.plist lets the app distinguish real shipped releases from
+# local builds and from another TestFlight build using the same CalVer date.
+release_id="${PLOZZ_RELEASE_ID:-}"
+if [ -n "$release_id" ]; then
+  if ! printf '%s' "$release_id" | grep -Eq '^release/[0-9]{3,}$'; then
+    echo "error: PLOZZ_RELEASE_ID must match release/<build> (got '${release_id}')" >&2
+    exit 1
+  fi
+fi
+if [ -f "$proj" ]; then
+  esc_release_id=$(printf '%s' "$release_id" | sed -e 's/[\\&|]/\\&/g')
+  /usr/bin/sed -i '' -E "s|PLOZZ_RELEASE_ID = [^;]*;|PLOZZ_RELEASE_ID = \"${esc_release_id}\";|g" "$proj"
+  if [ -n "$release_id" ]; then
+    echo "Baked PLOZZ_RELEASE_ID = ${release_id} into ${proj}"
+  fi
+else
+  echo "warning: $proj not found; skipping release-id bake"
 fi
 
 if [ -n "${PLOZZ_BUILD_NUMBER:-}" ]; then

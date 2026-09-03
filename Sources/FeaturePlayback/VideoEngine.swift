@@ -121,10 +121,11 @@ public protocol VideoEngine: AnyObject {
     /// (e.g. a leased SMB session + source cursor) and **awaits** its full
     /// shutdown before returning. `stop()` only halts decode; the transport it
     /// held is otherwise released asynchronously on deinit, which lets a fresh
-    /// engine's re-open race the draining cursor. The stall-recovery retry awaits
-    /// this first so the new session opens against a clean slate. Defaulted to a
-    /// no-op (see the protocol extension) — only engines that lease their own
-    /// transport (Plozzigen's network-file path) do real work here.
+    /// engine's re-open race the draining cursor. Normal player teardown and
+    /// stall-recovery retries await this so the next source opens against a clean
+    /// slate. Defaulted to a no-op (see the protocol extension) — only engines
+    /// that lease their own transport (Plozzigen's network-file path) do real work
+    /// here.
     func drainTransport() async
 
     // MARK: Live tunables
@@ -219,6 +220,11 @@ public protocol VideoEngine: AnyObject {
     /// file. `nil` until the engine has probed, or for engines that don't expose
     /// it (native/`AVPlayer`, whose facts come from provider metadata + the item).
     var probedSourceFacts: EngineProbedSourceFacts? { get }
+
+    /// Aspect ratio of the video image presented inside the engine's output view.
+    /// The player host uses this to align bitmap subtitles with aspect-fit video
+    /// instead of stretching them across the full window.
+    var videoAspectRatio: Double? { get }
 
     // MARK: Tracks
 
@@ -325,6 +331,17 @@ public extension VideoEngine {
 
     /// Default: engines that don't track buffering report no buffer fill.
     var bufferedPosition: TimeInterval { 0 }
+
+    /// Default to independently probed dimensions when an engine exposes them.
+    var videoAspectRatio: Double? {
+        guard let width = probedSourceFacts?.videoWidth,
+              let height = probedSourceFacts?.videoHeight,
+              width > 0,
+              height > 0 else {
+            return nil
+        }
+        return Double(width) / Double(height)
+    }
 
     /// Default: engines that don't program the panel just perform a normal stop —
     /// the `preserveDisplayMode` hint is only meaningful to the on-device engine,

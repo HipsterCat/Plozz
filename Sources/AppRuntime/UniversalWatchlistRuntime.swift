@@ -64,6 +64,40 @@ public enum NativeWatchlistAccounts {
     }
 }
 
+/// Scope keys for the universal-watchlist runtime.
+///
+/// The split is load-bearing:
+///
+/// - ``live(profileID:identityGeneration:accountsKey:)`` keys objects that capture
+///   credentials. A token override changing must rebuild them even when the person
+///   did not change.
+/// - ``persistent(profileID:accountsKey:plexIdentityKey:)`` keys last-known
+///   results on disk. It must survive token refreshes and process restarts, but
+///   must change when the actual Plex Home user or server set changes.
+///
+/// Mixing the two made cached library ownership useless. The process-local
+/// generation restarts at zero and bumps while credentials restore, so yesterday's
+/// persisted scope almost never equalled today's. The whole native view — including
+/// every `ownedSource` already proved — was dropped on every launch, and every card
+/// showed "+" until a fresh network read and library resolution finished.
+enum UniversalWatchlistScope {
+    static func live(
+        profileID: String,
+        identityGeneration: Int,
+        accountsKey: String
+    ) -> String {
+        "\(profileID)#\(identityGeneration)#\(accountsKey)"
+    }
+
+    static func persistent(
+        profileID: String,
+        accountsKey: String,
+        plexIdentityKey: String
+    ) -> String {
+        "\(profileID)#\(accountsKey)#\(plexIdentityKey)"
+    }
+}
+
 /// One memoized membership set, keyed by the revision that changes whenever the
 /// watchlist would. Main-actor isolated and process-wide because the hosts are
 /// per-shell singletons and a stale revision simply misses the cache.
@@ -72,6 +106,7 @@ final class UniversalWatchlistMembershipCache {
     static let shared = UniversalWatchlistMembershipCache()
     private var revision: UInt64?
     private var cached: Set<MediaAliasID> = []
+    private(set) var generation: UInt64 = 0
 
     func ids(for revision: UInt64) -> Set<MediaAliasID>? {
         self.revision == revision ? cached : nil
@@ -80,6 +115,84 @@ final class UniversalWatchlistMembershipCache {
     func store(_ ids: Set<MediaAliasID>, revision: UInt64) {
         self.revision = revision
         cached = ids
+    }
+
+    /// Forget the memo outright and advance the O(1) invalidation generation.
+    func invalidate() {
+        revision = nil
+        cached = []
+        generation &+= 1
+    }
+}
+
+@MainActor
+private final class UniversalWatchlistLoadingProgress {
+    static let shared = UniversalWatchlistLoadingProgress()
+    private var targetCountByProfileID: [String: Int] = [:]
+
+    func targetCount(for profileID: String) -> Int? {
+        targetCountByProfileID[profileID]
+    }
+
+    func update(profileID: String, targetCount: Int?) {
+        let targetCount = targetCount.map { max($0, 0) }
+        guard targetCountByProfileID[profileID] != targetCount else { return }
+        targetCountByProfileID[profileID] = targetCount
+        NotificationCenter.default.post(
+            name: .universalWatchlistLoadingProgressDidChange,
+            object: nil
+        )
+    }
+}
+
+enum NativeWatchlistOwnershipResolution {
+    static let maximumConcurrentLookups = 8
+
+    static func resolve(
+        _ entries: [(MediaAliasID, WatchlistDestinationEntry)],
+        known: [MediaAliasID: WatchlistLibraryCopy],
+        maximumConcurrentLookups: Int = maximumConcurrentLookups,
+        using resolver:
+            (@Sendable (WatchlistDestinationEntry) async -> WatchlistLibraryCopy?)?
+    ) async -> [WatchlistLibraryCopy?] {
+        var resolved = entries.map { known[$0.0] }
+        guard let resolver else { return resolved }
+
+        let pending = entries.indices.filter {
+            resolved[$0]?.presentation == nil
+        }
+        guard !pending.isEmpty else { return resolved }
+
+        let limit = max(1, maximumConcurrentLookups)
+        await withTaskGroup(
+            of: (Int, WatchlistLibraryCopy?).self
+        ) { group in
+            var next = 0
+
+            func submit(_ pendingOffset: Int) {
+                let index = pending[pendingOffset]
+                let entry = entries[index].1
+                group.addTask {
+                    (index, await resolver(entry))
+                }
+            }
+
+            while next < min(limit, pending.count) {
+                submit(next)
+                next += 1
+            }
+
+            while let (index, copy) = await group.next() {
+                if let copy {
+                    resolved[index] = copy
+                }
+                if next < pending.count {
+                    submit(next)
+                    next += 1
+                }
+            }
+        }
+        return resolved
     }
 }
 
@@ -120,8 +233,17 @@ public protocol UniversalWatchlistHost: AnyObject {
     var universalWatchlistAnimeBridge: AnimeIDBridgeStore { get }
     var universalWatchlistNativeViewStore:
         (any NativeWatchlistViewStoring)? { get set }
+    /// True only after the native view for the CURRENT profile/identity/server
+    /// scope has been decoded, scoped and installed.
+    ///
+    /// `store != nil` is not equivalent: while a new scope is being prepared the
+    /// old store object still exists, and Home used that to resolve against the
+    /// new scope's still-empty in-memory view.
+    var universalWatchlistNativeViewLoaded: Bool { get set }
     var universalWatchlistDestinationIDs:
         Set<WatchlistDestinationID> { get set }
+    /// Invalidates an older same-profile refresh when a newer one starts.
+    var universalWatchlistRefreshGeneration: UInt64 { get set }
     /// Identity of the built reconciler: profile + Plex identity generation, so a
     /// "watching as" change rebuilds its destinations. Not just a profile id
     /// despite the name.
@@ -166,6 +288,17 @@ public protocol UniversalWatchlistHost: AnyObject {
 }
 
 public extension UniversalWatchlistHost {
+    var isUniversalWatchlistPresentationReady: Bool {
+        universalWatchlistNativeViewLoaded
+            && universalWatchlistProfileID?
+                .hasPrefix("\(profiles.activeProfileID)#") == true
+    }
+
+    var universalWatchlistLoadingTargetCount: Int? {
+        UniversalWatchlistLoadingProgress.shared.targetCount(
+            for: profiles.activeProfileID
+        )
+    }
 
     /// The accounts the NATIVE watchlist import may read from — see
     /// `NativeWatchlistAccounts.resolve(profiles:accountsProviders:)`.
@@ -307,6 +440,13 @@ public extension UniversalWatchlistHost {
         hasher.combine(aliases.recordsByID.count)
         hasher.combine(aliases.activeRecordCount)
         hasher.combine(universalWatchlist.activeSnapshot.activeAliasIDs.count)
+        // Tombstones, not just active ids. Removing a title whose presence came
+        // from a DESTINATION's list rather than from a local intent adds an
+        // `.absent` intent without ever decrementing the active count — every
+        // other input here is untouched too, so without this the revision is
+        // identical before and after the removal and the memoized membership set
+        // is reused: the write reached the server, and the bookmark stayed filled.
+        hasher.combine(universalWatchlist.activeSnapshot.tombstoneCount)
         // The native side moves independently of the ledger: a server switched
         // off, or a refresh that returns a different list, changes what the
         // viewer sees without touching a single intent. Counting destinations
@@ -316,6 +456,7 @@ public extension UniversalWatchlistHost {
         for bucket in universalWatchlistNativeView.bucketsByDestinationID.values {
             hasher.combine(bucket.entries.count)
         }
+        hasher.combine(UniversalWatchlistMembershipCache.shared.generation)
         return UInt64(bitPattern: Int64(hasher.finalize()))
     }
 
@@ -356,12 +497,14 @@ public extension UniversalWatchlistHost {
         guard runtimeFeatureFlags.isEnabled(.universalWatchlist) else {
             return false
         }
-        // One identity path. Resolving through `TitleIdentityResolver` rather than
-        // the item's own evidence means a Plex Discover row (which carries only a
-        // PlexGuid) and a Jellyfin row (which carries IMDb) both reach the same Plozz
-        // UUID when the index knows they are one title — so the heart on a card and
-        // the heart on the page it opens can no longer disagree.
-        guard let aliasID = titleIdentityResolver.aliasID(for: item) else { return false }
+        // One identity path. Resolving through `universalWatchlistAliasID` rather
+        // than the item's own evidence means a Plex Discover row (which carries only
+        // a PlexGuid) and a Jellyfin row (which carries IMDb) both reach the same
+        // Plozz UUID when the index knows they are one title — so the heart on a card
+        // and the heart on the page it opens can no longer disagree. It is also the
+        // SAME call the write makes, which is what keeps a freshly created alias
+        // visible to the button that just created it.
+        guard let aliasID = universalWatchlistAliasID(for: item) else { return false }
         // Through the LEDGER's redirect graph, which is the same map the union
         // keyed itself by. Going through the watchlist snapshot's own table
         // instead left a merged title with two ids and made the card disagree
@@ -398,6 +541,317 @@ public extension UniversalWatchlistHost {
         return resolved
     }
 
+    /// Re-signs last-known artwork for this process without a network lookup.
+    ///
+    /// Home/native-watchlist snapshots correctly strip credentials before they
+    /// hit disk. That leaves enough resource identity to sync and diagnose, but
+    /// not a URL Plex/Jellyfin can serve after relaunch. Owned server art is
+    /// reconstructed from its playback account; Plex Discover art keeps separate
+    /// artwork provenance because playback may have been retargeted to a Jellyfin
+    /// or share copy. This happens before Home publishes, so first paint uses the
+    /// intended poster instead of failing into an external fallback and changing
+    /// again later.
+    func rehydratedPersistedArtwork(
+        _ items: [MediaItem]
+    ) -> [MediaItem] {
+        let activeProfile = profiles.activeProfile
+        let activeProviders = accountsProviders.homeAccounts
+        let nativeAccounts = nativeWatchlistAccounts
+        let discoverSigners: [(
+            accountID: String,
+            provider: PlexProvider,
+            token: String?
+        )] = nativeAccounts.compactMap { resolved in
+            guard let provider = resolved.provider as? PlexProvider else {
+                return nil
+            }
+            let accountID = resolved.account.id
+            let token = plexDiscoverTokens.token(for: accountID)
+            let requiresHomeUserToken =
+                activeProfile.homeUserBinding(forPlexAccount: accountID) != nil
+            guard token != nil || !requiresHomeUserToken else { return nil }
+            return (accountID, provider, token)
+        }
+        var providersByAccountID: [String: any MediaProvider] = [:]
+        for resolved in activeProviders + nativeAccounts {
+            providersByAccountID[resolved.account.id] = resolved.provider
+        }
+        let referencedAccountIDs = Set(items.flatMap { item in
+            Array(item.artworkSourceAccountIDsByURL.values)
+                + [item.sourceAccountID, item.selectedSourceAccountID]
+                    .compactMap { $0 }
+        })
+        for accountID in referencedAccountIDs
+        where providersByAccountID[accountID] == nil {
+            providersByAccountID[accountID] =
+                accountsProviders.provider(forAccountID: accountID)
+        }
+
+        return items.map { persistedItem in
+            var item = persistedItem
+            var rehydratedArtworkSources: [(URL, String)] = []
+
+            func rehydratedDiscoverURL(_ url: URL?) -> URL? {
+                guard let url else { return nil }
+                let accountID =
+                    item.artworkSourceAccountID(for: url)
+                    ?? item.sourceAccountID
+                guard let accountID,
+                      let signer = discoverSigners.first(where: {
+                          $0.accountID == accountID
+                      })
+                else { return url }
+                guard let signed =
+                    signer.provider.reauthenticatedDiscoverImageURL(
+                    url,
+                    discoverToken: signer.token
+                ) else { return url }
+                rehydratedArtworkSources.append((signed, accountID))
+                return signed
+            }
+            item.posterURL = rehydratedDiscoverURL(item.posterURL)
+            item.seriesPosterURL = rehydratedDiscoverURL(item.seriesPosterURL)
+            item.backdropURL = rehydratedDiscoverURL(item.backdropURL)
+            item.heroBackdropURL = rehydratedDiscoverURL(item.heroBackdropURL)
+            item.fallbackArtworkURL = rehydratedDiscoverURL(
+                item.fallbackArtworkURL
+            )
+            item.logoURL = rehydratedDiscoverURL(item.logoURL)
+            item.artworkSelections = item.artworkSelections.map { selection in
+                ArtworkSelection(
+                    placement: selection.placement,
+                    references: selection.references.map { reference in
+                        guard case .remote(let url) = reference,
+                              let signed = rehydratedDiscoverURL(url)
+                        else { return reference }
+                        return .remote(signed)
+                    }
+                )
+            }
+            item.people = item.people.map { person in
+                guard let signed = rehydratedDiscoverURL(person.imageURL)
+                else { return person }
+                var person = person
+                person.imageURL = signed
+                return person
+            }
+
+            func finalizedItem() -> MediaItem {
+                var result = item
+                for (url, accountID) in rehydratedArtworkSources {
+                    result.recordArtworkSource(
+                        accountID: accountID,
+                        for: [url]
+                    )
+                }
+                return result
+            }
+
+            guard item.locallyValidatedPlayableSource else {
+                return finalizedItem()
+            }
+            let playbackAccountID =
+                item.selectedSourceAccountID ?? item.sourceAccountID
+            let playbackProvider = playbackAccountID.flatMap {
+                providersByAccountID[$0]
+            }
+
+            func reauthenticatedLocalURL(
+                _ url: URL?,
+                maxWidth: Int?
+            ) -> URL? {
+                guard let url else { return nil }
+                if let accountID = item.artworkSourceAccountID(for: url) {
+                    guard let provider = providersByAccountID[accountID],
+                          provider.ownsPersistedImageURL(url)
+                    else { return nil }
+                    guard let signed = provider.reauthenticatedImageURL(
+                        url,
+                        maxWidth: maxWidth
+                    ) else { return nil }
+                    rehydratedArtworkSources.append((signed, accountID))
+                    return signed
+                }
+                var candidates: [(
+                    accountID: String,
+                    provider: any MediaProvider
+                )] = []
+                var seen = Set<String>()
+                if let playbackAccountID, let playbackProvider {
+                    seen.insert(playbackAccountID)
+                    candidates.append((
+                        playbackAccountID,
+                        playbackProvider
+                    ))
+                }
+                for resolved in activeProviders
+                where seen.insert(resolved.account.id).inserted {
+                    candidates.append((
+                        resolved.account.id,
+                        resolved.provider
+                    ))
+                }
+                let owners = candidates.filter {
+                    $0.provider.ownsPersistedImageURL(url)
+                }
+                guard owners.count == 1 else { return nil }
+                guard let signed =
+                    owners[0].provider.reauthenticatedImageURL(
+                    url,
+                    maxWidth: maxWidth
+                ) else { return nil }
+                rehydratedArtworkSources.append((
+                    signed,
+                    owners[0].accountID
+                ))
+                return signed
+            }
+
+            func playbackFallback(
+                for url: URL?,
+                kind: ImageKind,
+                maxWidth: Int
+            ) -> URL? {
+                guard let playbackProvider,
+                      let url,
+                      playbackProvider.ownsPersistedImageURL(url)
+                else { return nil }
+                guard let signed = playbackProvider.imageURL(
+                    itemID: item.id,
+                    kind: kind,
+                    maxWidth: maxWidth
+                ) else { return nil }
+                if let playbackAccountID {
+                    rehydratedArtworkSources.append((
+                        signed,
+                        playbackAccountID
+                    ))
+                }
+                return signed
+            }
+
+            func missingArtworkFallback(
+                kind: ImageKind,
+                maxWidth: Int
+            ) -> URL? {
+                guard let playbackProvider,
+                      playbackProvider.kind == .plex,
+                      item.kind == .movie || item.kind == .series,
+                      let signed = playbackProvider.imageURL(
+                          itemID: item.id,
+                          kind: kind,
+                          maxWidth: maxWidth
+                      )
+                else { return nil }
+                if let playbackAccountID {
+                    rehydratedArtworkSources.append((
+                        signed,
+                        playbackAccountID
+                    ))
+                }
+                return signed
+            }
+
+            if let poster =
+                reauthenticatedLocalURL(item.posterURL, maxWidth: 500)
+                ?? (item.posterURL == nil
+                    ? missingArtworkFallback(
+                        kind: .primary,
+                        maxWidth: 500
+                    )
+                    : nil)
+                ?? playbackFallback(
+                    for: item.posterURL,
+                    kind: .primary,
+                    maxWidth: 500
+                ) {
+                item.posterURL = poster
+            }
+            if let seriesPoster = reauthenticatedLocalURL(
+                item.seriesPosterURL,
+                maxWidth: 500
+            ) {
+                item.seriesPosterURL = seriesPoster
+            } else if item.seriesPosterURL == nil,
+                      let seriesPoster = missingArtworkFallback(
+                          kind: .primary,
+                          maxWidth: 500
+                      ) {
+                item.seriesPosterURL = seriesPoster
+            }
+            if let backdrop =
+                reauthenticatedLocalURL(item.backdropURL, maxWidth: 1280)
+                ?? (item.backdropURL == nil
+                    ? missingArtworkFallback(
+                        kind: .backdrop,
+                        maxWidth: 1280
+                    )
+                    : nil)
+                ?? playbackFallback(
+                    for: item.backdropURL,
+                    kind: .backdrop,
+                    maxWidth: 1280
+                ) {
+                item.backdropURL = backdrop
+            }
+            if let hero =
+                reauthenticatedLocalURL(
+                    item.heroBackdropURL,
+                    maxWidth: 3840
+                )
+                ?? (item.heroBackdropURL == nil
+                    ? missingArtworkFallback(
+                        kind: .backdrop,
+                        maxWidth: 3840
+                    )
+                    : nil)
+                ?? playbackFallback(
+                    for: item.heroBackdropURL,
+                    kind: .backdrop,
+                    maxWidth: 3840
+                ) {
+                item.heroBackdropURL = hero
+            }
+            if let fallback = reauthenticatedLocalURL(
+                item.fallbackArtworkURL,
+                maxWidth: 1280
+            ) {
+                item.fallbackArtworkURL = fallback
+            }
+            if let logo = reauthenticatedLocalURL(
+                item.logoURL,
+                maxWidth: nil
+            ) {
+                item.logoURL = logo
+            }
+            item.artworkSelections = item.artworkSelections.map { selection in
+                ArtworkSelection(
+                    placement: selection.placement,
+                    references: selection.references.map { reference in
+                        guard case .remote(let url) = reference,
+                              let signed = reauthenticatedLocalURL(
+                                  url,
+                                  maxWidth: nil
+                              )
+                        else { return reference }
+                        return .remote(signed)
+                    }
+                )
+            }
+            item.people = item.people.map { person in
+                guard let signed = reauthenticatedLocalURL(
+                          person.imageURL,
+                          maxWidth: 500
+                      )
+                else { return person }
+                var person = person
+                person.imageURL = signed
+                return person
+            }
+            return finalizedItem()
+        }
+    }
+
     func performUniversalWatchlist(
         adding: Bool,
         item: MediaItem
@@ -412,7 +866,7 @@ public extension UniversalWatchlistHost {
             let aliasID = try await mediaAliasLedger.resolveOrCreate(
                 profileID: profileID,
                 evidence: evidence,
-                preferredAliasID: item.watchlistAliasID
+                preferredAliasID: universalWatchlistPreferredAliasID(for: item)
             )
             if adding {
                 try universalWatchlist.add(
@@ -429,10 +883,7 @@ public extension UniversalWatchlistHost {
                     presentation: evidence.presentation
                 )
             }
-            NotificationCenter.default.post(
-                name: .universalWatchlistDidChange,
-                object: nil
-            )
+            announceUniversalWatchlistDidChange()
             scheduleCloudPublish()
             return true
         } catch {
@@ -449,7 +900,7 @@ public extension UniversalWatchlistHost {
         guard let evidence = universalWatchlistEvidence(for: item),
               let aliasID = MediaAliasResolver.lookup(
                 evidence: evidence,
-                preferredAliasID: item.watchlistAliasID,
+                preferredAliasID: universalWatchlistPreferredAliasID(for: item),
                 in: mediaAliasLedger.activeSnapshot
               ),
               let target = universalMutationTarget(
@@ -477,25 +928,70 @@ public extension UniversalWatchlistHost {
 
     func seedLegacyUniversalWatchlist() async throws {
         let profileID = profiles.activeProfileID
-        guard try universalWatchlist.migrationMetadata(
-            profileID: profileID
-        ).legacyHomeSeedCompletedAt == nil else { return }
-        let cached = HomeContentStore(
+        let contentStore = HomeContentStore(
             namespace: profiles.activeNamespace
-        ).load()?.watchlist ?? []
+        )
+        let migration = try universalWatchlist.migrationMetadata(
+            profileID: profileID
+        )
+        let legacyAliasIDs = Set(
+            universalWatchlist.activeSnapshot.intentsByAliasID.values
+                .filter { $0.origin == .legacyHomeSeed }
+                .map(\.aliasID)
+        )
+        if migration.legacyHomeSeedCompletedAt != nil {
+            if migration.legacyPresentationArtworkScrubbedAt == nil {
+                if try await mediaAliasLedger.clearPresentationArtwork(
+                    profileID: profileID,
+                    aliasIDs: legacyAliasIDs
+                ) > 0 {
+                    scheduleCloudPublish()
+                }
+                try universalWatchlist
+                    .markLegacyPresentationArtworkScrubbed(
+                        profileID: profileID
+                    )
+            }
+            contentStore.clearLegacyWatchlistSeed()
+            return
+        }
+        let legacySeed = contentStore.loadLegacyWatchlistSeed()
+        guard legacySeed != nil
+                || !contentStore.hasPendingLegacyWatchlistSeed
+        else { return }
+        let cached =
+            (legacySeed ?? [])
+            + (contentStore.load()?.watchlist ?? [])
         var entries: [(MediaAliasID, MediaItemKind, MediaAliasPresentation?)] = []
+        var resolvedLegacyAliasIDs = Set<MediaAliasID>()
         for item in cached where item.kind == .movie || item.kind == .series {
-            guard let evidence = universalWatchlistEvidence(for: item) else { continue }
+            guard var evidence = universalWatchlistEvidence(for: item)
+            else { continue }
+            evidence.presentation?.artworkURL = nil
+            evidence.presentation?.backdropURL = nil
             let aliasID = try await mediaAliasLedger.resolveOrCreate(
                 profileID: profileID,
                 evidence: evidence
             )
+            resolvedLegacyAliasIDs.insert(aliasID)
             entries.append((aliasID, item.kind, evidence.presentation))
+        }
+        let aliasesToScrub =
+            legacyAliasIDs.union(resolvedLegacyAliasIDs)
+        if try await mediaAliasLedger.clearPresentationArtwork(
+            profileID: profileID,
+            aliasIDs: aliasesToScrub
+        ) > 0 {
+            scheduleCloudPublish()
         }
         try universalWatchlist.seedLegacyIfNeeded(
             profileID: profileID,
             entries: entries
         )
+        try universalWatchlist.markLegacyPresentationArtworkScrubbed(
+            profileID: profileID
+        )
+        contentStore.clearLegacyWatchlistSeed()
         PlozzLog.app.info("Watchlist legacy seed count=\(entries.count)")
     }
 
@@ -512,14 +1008,29 @@ public extension UniversalWatchlistHost {
     /// destinations that are enabled *right now* — so switching a server off
     /// retracts its contribution for free.
     ///
-    /// The reconciliation below is unchanged and still matters: it is how an
-    /// explicit ADD gets re-asserted on a server that lost it, and how an
-    /// explicit REMOVE is confirmed and then, if the server later adds the title
-    /// back, superseded.
+    /// Reconciliation distinguishes an add that never landed from a title that a
+    /// destination accepted and later removed. The former is retried; the latter
+    /// becomes a durable removal and is fanned out to every other destination.
     func refreshNativeWatchlistView() async {
         guard let reconciler = universalWatchlistReconciler else { return }
         let profileID = profiles.activeProfileID
+        UniversalWatchlistLoadingProgress.shared.update(
+            profileID: profileID,
+            targetCount: nil
+        )
+        universalWatchlistRefreshGeneration &+= 1
+        let refreshGeneration = universalWatchlistRefreshGeneration
+        func refreshIsCurrent() -> Bool {
+            profiles.activeProfileID == profileID
+                && universalWatchlistReconciler === reconciler
+                && universalWatchlistRefreshGeneration == refreshGeneration
+        }
         let started = Date()
+        // Native results describe this exact intent generation. Capturing after
+        // the network suspension would let an absence fetched before a local
+        // re-add erase that newer action.
+        let observedIntentsByAlias =
+            universalWatchlist.activeSnapshot.intentsByAliasID
         let report = await reconciler.fetchNativeEntries()
         // Belt to the caller's braces. Fetching is network work, and what comes
         // back reflects whatever credentials the destinations held when it
@@ -527,15 +1038,16 @@ public extension UniversalWatchlistHost {
         // these are somebody else's entries and must not be recorded here.
         // Ordering the switch is the real fix — this makes a mistake there
         // fail closed instead of silently caching a stranger's watchlist.
-        guard profiles.activeProfileID == profileID else {
+        guard refreshIsCurrent() else {
             PlozzLog.app.info("Watchlist refresh dropped — profile changed mid-fetch")
             return
         }
         let successfulDestinationIDs = Set(
             report.successes.map(\.destinationID)
         )
-        var resolvedByDestination:
-            [WatchlistDestinationID: [(MediaAliasID, WatchlistDestinationEntry)]] = [:]
+        var resolvableEntries:
+            [(WatchlistDestinationID, WatchlistDestinationEntry)] = []
+        var resolutionRequests: [MediaAliasResolutionRequest] = []
         // Widen every entry's ids before anything is resolved. A tracker's row
         // knows a show only as AniList/MAL and a server's row only as
         // AniDB/TMDb/TVDb, so without this they share nothing to match on and
@@ -543,26 +1055,75 @@ public extension UniversalWatchlistHost {
         // evidence — mints two aliases for one show. The viewer then sees it
         // twice: once as the copy they own, once as one to request.
         let animeBridge = await universalWatchlistAnimeBridge.refreshIfNeeded()
+        guard refreshIsCurrent() else { return }
         for read in report.successes {
             for entry in read.entries {
                 guard let evidence = entry.mediaAliasEvidence else { continue }
-                guard let aliasID = try? await mediaAliasLedger.resolveOrCreate(
-                    profileID: profileID,
+                resolvableEntries.append((read.destinationID, entry))
+                resolutionRequests.append(MediaAliasResolutionRequest(
                     evidence: evidence.bridgingAnimeIdentities(using: animeBridge)
-                ) else { continue }
-                resolvedByDestination[read.destinationID, default: []]
-                    .append((aliasID, entry))
+                ))
             }
         }
+        let resolvedAliasIDs: [MediaAliasID]
+        do {
+            resolvedAliasIDs = try await mediaAliasLedger.resolveOrCreateBatch(
+                profileID: profileID,
+                requests: resolutionRequests
+            )
+        } catch {
+            PlozzLog.app.error("Watchlist alias batch resolution failed")
+            return
+        }
+        guard resolvedAliasIDs.count == resolvableEntries.count else {
+            PlozzLog.app.error("Watchlist alias batch resolution was incomplete")
+            return
+        }
+        var resolvedByDestination:
+            [WatchlistDestinationID: [(MediaAliasID, WatchlistDestinationEntry)]] = [:]
+        for (resolved, aliasID) in zip(resolvableEntries, resolvedAliasIDs) {
+            resolvedByDestination[resolved.0, default: []]
+                .append((aliasID, resolved.1))
+        }
+        var loadingView = universalWatchlistNativeView
+        for read in report.successes {
+            let entries = resolvedByDestination[
+                read.destinationID,
+                default: []
+            ].enumerated().compactMap { offset, resolved in
+                NativeWatchlistEntry(
+                    aliasID: resolved.0,
+                    kind: resolved.1.kind,
+                    presentation: resolved.1.presentation,
+                    presentationAccountID: resolved.1.presentationAccountID,
+                    index: offset
+                )
+            }
+            loadingView.applySuccess(
+                destinationID: read.destinationID,
+                entries: entries
+            )
+        }
+        let loadingUnion = WatchlistUnion(
+            snapshot: universalWatchlist.activeSnapshot,
+            nativeView: loadingView,
+            aliasSnapshot: mediaAliasLedger.activeSnapshot,
+            enabledDestinationIDs: universalWatchlistDestinationIDs
+        )
+        UniversalWatchlistLoadingProgress.shared.update(
+            profileID: profileID,
+            targetCount: loadingUnion.orderedEntries.count
+        )
 
         let targetedKeys = await reconciler.targetedKeys(profileID: profileID)
+        guard refreshIsCurrent() else { return }
         var candidatesByDestination:
             [WatchlistDestinationID: [WatchlistNativeReconciliationCandidate]] = [:]
         var targetsByAlias: [MediaAliasID: WatchlistMutationTarget] = [:]
         let presentByDestination = resolvedByDestination.mapValues {
             Set($0.map(\.0))
         }
-        for intent in universalWatchlist.activeSnapshot.intentsByAliasID.values {
+        for intent in observedIntentsByAlias.values {
             guard let record = mediaAliasLedger.activeSnapshot.record(
                 for: intent.aliasID
             ), let target = WatchlistMutationTarget(
@@ -602,13 +1163,38 @@ public extension UniversalWatchlistHost {
             }
         }
 
+        guard refreshIsCurrent() else {
+            PlozzLog.app.info("Watchlist refresh dropped — scope changed during identity resolution")
+            return
+        }
         var view = universalWatchlistNativeView
         var supersededCount = 0
+        var confirmedRemovalSourcesByAlias:
+            [MediaAliasID: Set<WatchlistDestinationID>] = [:]
+        var reassertions:
+            [(WatchlistDestinationID, [WatchlistMutationTarget])] = []
         for read in report.successes {
+            guard let currentScope =
+                    await reconciler.currentReconciliationScope(
+                for: read.destinationID
+            ) else { continue }
+            guard let currentCacheScope =
+                    await reconciler.currentCacheIdentityScope(
+                for: read.destinationID
+            ) else { continue }
+            guard currentScope == read.reconciliationScope else {
+                view.discardCachedEntries(
+                    for: read.destinationID,
+                    unlessIdentityScopeMatches: currentCacheScope
+                )
+                continue
+            }
             let observations = (try? await reconciler.observeNativeBatch(
                 profileID: profileID,
                 destinationID: read.destinationID,
-                candidates: candidatesByDestination[read.destinationID] ?? []
+                candidates: candidatesByDestination[read.destinationID] ?? [],
+                reconciliationScope: read.reconciliationScope,
+                nativeReadStartedAt: read.startedAt
             )) ?? [:]
             // Ask the server which of these it actually holds. It is the same
             // server that just handed us the list, so the answer arrives with
@@ -621,54 +1207,137 @@ public extension UniversalWatchlistHost {
             // known are asked, and the answer is persisted with the view, so a
             // steady watchlist costs nothing on later refreshes.
             let known = Dictionary(
-                universalWatchlistNativeView.bucket(for: read.destinationID)?
+                view.bucket(for: read.destinationID)?
                     .entries.compactMap { entry in
-                        entry.ownedSource.map { (entry.aliasID, $0) }
+                        entry.ownedCopy.map { (entry.aliasID, $0) }
                     } ?? [],
                 uniquingKeysWith: { first, _ in first }
             )
             let resolver = await reconciler.libraryResolver(for: read.destinationID)
-            var entries: [NativeWatchlistEntry] = []
-            for (offset, resolved) in resolvedByDestination[
+            let destinationEntries = resolvedByDestination[
                 read.destinationID,
                 default: []
-            ].enumerated() {
+            ]
+            let ownedCopies = await NativeWatchlistOwnershipResolution.resolve(
+                destinationEntries,
+                known: known,
+                using: resolver
+            )
+            var entries: [NativeWatchlistEntry] = []
+            for (offset, resolved) in destinationEntries.enumerated() {
                 let (aliasID, entry) = resolved
-                var owned = known[aliasID]
-                if owned == nil, let resolver {
-                    owned = await resolver(entry)
-                }
+                let owned = ownedCopies[offset]
                 guard let value = NativeWatchlistEntry(
                     aliasID: aliasID,
                     kind: entry.kind,
                     presentation: entry.presentation,
+                    presentationAccountID: entry.presentationAccountID,
                     index: offset,
-                    ownedSource: owned
+                    ownedSource: owned?.source,
+                    // Once the server has proved its own copy, its presentation
+                    // belongs with that answer. Persisting only the source ref let
+                    // the badge flip now but left Discover artwork on screen
+                    // until a later Home rebuild happened to find the full local
+                    // MediaItem.
+                    ownedPresentation: owned?.presentation
                 ) else { continue }
                 entries.append(value)
+            }
+            guard refreshIsCurrent() else { return }
+            guard let currentScope =
+                    await reconciler.currentReconciliationScope(
+                for: read.destinationID
+            ) else { continue }
+            guard let currentCacheScope =
+                    await reconciler.currentCacheIdentityScope(
+                for: read.destinationID
+            ) else { continue }
+            guard currentScope == read.reconciliationScope else {
+                view.discardCachedEntries(
+                    for: read.destinationID,
+                    unlessIdentityScopeMatches: currentCacheScope
+                )
+                continue
             }
             // A successful read REPLACES what this destination held, empty
             // included: the viewer clearing a server's watchlist is an answer,
             // not a blip. Home learned the same lesson the expensive way.
             view.applySuccess(
                 destinationID: read.destinationID,
-                entries: entries
+                entries: entries,
+                identityScope: currentCacheScope
             )
             FanoutDiagnostics.emit(
                 "watchlist.owned dest=\(read.destinationID.rawValue) entries=\(entries.count) resolved=\(entries.filter { $0.ownedSource != nil }.count) hadResolver=\(resolver != nil)"
             )
             for (aliasID, observation) in observations
             where observation == .nativeAddition {
-                // The removal was applied here and the server has since added
-                // the title back. Stop the tombstone suppressing it, rather than
-                // re-asserting it as intent — presence now comes from the native
-                // view, so switching this server off still takes it away.
-                if (try? universalWatchlist.markRemovalSuperseded(
-                    profileID: profileID,
-                    aliasID: aliasID
-                )) == true {
+                guard let observedIntent = observedIntentsByAlias[aliasID],
+                      observedIntent.desiredState == .absent,
+                      let currentIntent = universalWatchlist.activeSnapshot
+                        .intentsByAliasID[aliasID],
+                      currentIntent.changedAt == observedIntent.changedAt,
+                      let target = targetsByAlias[aliasID] else { continue }
+                let supersededIntent: WatchlistIntent?
+                if currentIntent.metadata.suppressesNativePresence {
+                    guard (try? universalWatchlist.markRemovalSuperseded(
+                        profileID: profileID,
+                        aliasID: aliasID,
+                        expectedChangedAt: observedIntent.changedAt
+                    )) == true else { continue }
+                    supersededIntent = universalWatchlist.activeSnapshot
+                        .intentsByAliasID[aliasID]
                     supersededCount += 1
+                } else {
+                    // A prior attempt persisted the superseded tombstone but
+                    // failed before fan-out/acknowledgement. The observation
+                    // remains armed so this pass can retry the durable work.
+                    supersededIntent = currentIntent
                 }
+                do {
+                    try await reconciler
+                        .replacePendingRemovalsWithPresentFanOut(
+                        profileID: profileID,
+                        target: target,
+                        excluding: [read.destinationID]
+                    )
+                    do {
+                        try await reconciler.acknowledgeNativeAddition(
+                            profileID: profileID,
+                            target: target,
+                            destinationID: read.destinationID,
+                            observedReconciliationScope:
+                                read.reconciliationScope
+                        )
+                    } catch {
+                        PlozzLog.app.error(
+                            "Watchlist native re-add acknowledgement failed"
+                        )
+                    }
+                    scheduleCloudPublish()
+                } catch {
+                    let latest = universalWatchlist.activeSnapshot
+                        .intentsByAliasID[aliasID]
+                    if latest?.changedAt == supersededIntent?.changedAt,
+                       latest?.metadata.suppressesNativePresence == false {
+                        try? universalWatchlist.remove(
+                            profileID: profileID,
+                            aliasID: aliasID,
+                            kind: observedIntent.kind,
+                            presentation: observedIntent.presentation
+                        )
+                    }
+                    PlozzLog.app.error(
+                        "Watchlist native re-add failed to enqueue"
+                    )
+                }
+            }
+            for (aliasID, observation) in observations
+            where observation == .confirmedNativeRemoval {
+                confirmedRemovalSourcesByAlias[
+                    aliasID,
+                    default: []
+                ].insert(read.destinationID)
             }
             let reassertTargets = observations.compactMap {
                 aliasID, observation in
@@ -676,37 +1345,124 @@ public extension UniversalWatchlistHost {
                     ? targetsByAlias[aliasID]
                     : nil
             }
+            reassertions.append((read.destinationID, reassertTargets))
+            guard refreshIsCurrent() else { return }
+        }
+        var confirmedRemovalCount = 0
+        for (aliasID, sourceDestinationIDs) in confirmedRemovalSourcesByAlias {
+            guard let observedIntent = observedIntentsByAlias[aliasID],
+                  let currentIntent =
+                    universalWatchlist.activeSnapshot.intentsByAliasID[aliasID],
+                  currentIntent.desiredState == .present
+                    || !currentIntent.metadata.suppressesNativePresence,
+                  currentIntent.origin == .local,
+                  currentIntent.changedAt == observedIntent.changedAt,
+                  let target = targetsByAlias[aliasID] else { continue }
+            do {
+                try universalWatchlist.remove(
+                    profileID: profileID,
+                    aliasID: aliasID,
+                    kind: currentIntent.kind,
+                    presentation: currentIntent.presentation
+                )
+                confirmedRemovalCount += 1
+                // Persisted intent must reach peers even if a newer refresh
+                // supersedes this one during the fan-out actor hops below.
+                scheduleCloudPublish()
+            } catch {
+                PlozzLog.app.error(
+                    "Watchlist confirmed native removal failed to persist"
+                )
+                continue
+            }
+            do {
+                // One reconciler call produces one durable batch. A local re-add
+                // that arrives while this actor hop is pending is therefore
+                // ordered after the whole removal fan-out, never between peers.
+                try await reconciler.enqueueFanOut(
+                    profileID: profileID,
+                    desiredState: .absent,
+                    target: target,
+                    excluding: sourceDestinationIDs
+                )
+            } catch {
+                PlozzLog.app.error(
+                    "Watchlist confirmed native removal failed to enqueue"
+                )
+            }
+            guard refreshIsCurrent() else { return }
+        }
+        for (destinationID, targets) in reassertions {
+            let filtered = targets.filter {
+                confirmedRemovalSourcesByAlias[$0.aliasID] == nil
+            }
             try? await reconciler.enqueue(
                 profileID: profileID,
                 desiredState: .present,
-                targets: reassertTargets,
-                destinationID: read.destinationID
+                targets: filtered,
+                destinationID: destinationID
             )
+            guard refreshIsCurrent() else { return }
         }
-        // A destination that could not be read keeps whatever it last told us,
-        // marked stale. Blanking the watchlist because one server is down for a
-        // moment is exactly the failure the cached-snapshot rules exist to stop.
+        // A transient destination failure keeps the last-known answer. An
+        // authentication failure does not: it means this profile is disconnected
+        // or its identity changed, so retaining that bucket could show the prior
+        // account's list indefinitely.
         for failure in report.failures {
-            view.applyFailure(destinationID: failure.destinationID)
+            guard let currentScope =
+                    await reconciler.currentReconciliationScope(
+                for: failure.destinationID
+            ) else { continue }
+            guard let currentCacheScope =
+                    await reconciler.currentCacheIdentityScope(
+                for: failure.destinationID
+            ) else { continue }
+            guard currentScope == failure.reconciliationScope else {
+                view.discardCachedEntries(
+                    for: failure.destinationID,
+                    unlessIdentityScopeMatches: currentCacheScope
+                )
+                continue
+            }
+            if failure.classification == .authentication {
+                view.applySuccess(
+                    destinationID: failure.destinationID,
+                    entries: [],
+                    identityScope: currentCacheScope
+                )
+            } else {
+                view.applyFailure(
+                    destinationID: failure.destinationID,
+                    identityScope: currentCacheScope
+                )
+            }
         }
         // And one that is no longer enabled contributes nothing at all. This is
         // the whole point: turning a server off retracts its titles, with
         // nothing left behind in the ledger to undo.
+        guard refreshIsCurrent() else {
+            PlozzLog.app.info("Watchlist refresh dropped — scope changed before persistence")
+            return
+        }
         view.retainOnly(destinationIDs: universalWatchlistDestinationIDs)
         persistUniversalWatchlistNativeView(view)
 
-        NotificationCenter.default.post(
-            name: .universalWatchlistDidChange,
-            object: nil
-        )
+        announceUniversalWatchlistDidChange()
         _ = await reconciler.drain(profileID: profileID)
+        guard refreshIsCurrent() else { return }
         await universalWatchlistRetryScheduler?.reschedule()
+        guard refreshIsCurrent() else { return }
         // The aliases a native read just created have no provider bindings yet,
         // and nothing else triggers the identity pass now that native entries
         // aren't intents. Without this a title sits in the row unable to find
         // its own library copy, and the page it opens can't tell it is on the
         // watchlist at all.
-        await reconcileUniversalWatchlistIdentity(profileID: profileID)
+        await reconcileUniversalWatchlistIdentity(
+            profileID: profileID,
+            skippingMutationAliasIDs: Set(
+                confirmedRemovalSourcesByAlias.keys
+            )
+        )
 
         let union = universalWatchlistUnion
         // Off the startup path entirely: detached so nothing awaits it, and it
@@ -715,7 +1471,7 @@ public extension UniversalWatchlistHost {
         Task.detached(priority: .utility) { [box = universalWatchlistAnimeBridge] in
             await box.refreshIfNeeded()
         }
-        let refreshLine = "watchlist.refresh destinations=\(view.bucketsByDestinationID.count) accounts=\(nativeWatchlistAccounts.count) enabled=\(universalWatchlistDestinationIDs.count) reads=\(report.successes.count) entries=\(report.successes.reduce(0) { $0 + $1.entries.count }) failures=\(report.failures.map { "\($0.destinationID.rawValue):\($0.classification)" }) superseded=\(supersededCount) bridge=\(animeBridge.count) ms=\(Int(Date().timeIntervalSince(started) * 1000))"
+        let refreshLine = "watchlist.refresh destinations=\(view.bucketsByDestinationID.count) accounts=\(nativeWatchlistAccounts.count) enabled=\(universalWatchlistDestinationIDs.count) reads=\(report.successes.count) entries=\(report.successes.reduce(0) { $0 + $1.entries.count }) failures=\(report.failures.map { "\($0.destinationID.rawValue):\($0.classification)" }) superseded=\(supersededCount) externalRemovals=\(confirmedRemovalCount) bridge=\(animeBridge.count) ms=\(Int(Date().timeIntervalSince(started) * 1000))"
         PlozzLog.app.info("Watchlist \(refreshLine)")
         FanoutDiagnostics.emit(refreshLine)
         // Counts only — no titles, ids or server names. `nativeOnly` is the half
@@ -759,6 +1515,10 @@ public extension UniversalWatchlistHost {
     /// would be a strictly worse outcome.
     func persistUniversalWatchlistNativeView(_ view: NativeWatchlistView) {
         universalWatchlistNativeView = view
+        UniversalWatchlistLoadingProgress.shared.update(
+            profileID: profiles.activeProfileID,
+            targetCount: nil
+        )
         do {
             try universalWatchlistNativeViewStore?.save(view)
         } catch {
@@ -774,7 +1534,14 @@ public extension UniversalWatchlistHost {
     /// dropped on the way in. Otherwise a server switched off while the app was
     /// closed would come back on the next launch, which is the exact bug the
     /// read-time view exists to fix.
-    func loadUniversalWatchlistNativeView(profileID: String, scope: String) {
+    func loadUniversalWatchlistNativeView(
+        profileID: String,
+        scope: String,
+        destinationIdentityScopes: [String: String] = [:],
+        legacyValidatedDestinationIDs: Set<String> = []
+    ) {
+        let previous = universalWatchlistNativeView
+        let wasLoaded = universalWatchlistNativeViewLoaded
         let store: (any NativeWatchlistViewStoring)?
         if let directory = universalWatchlistStorageDirectory {
             store = try? AtomicNativeWatchlistViewStore(
@@ -790,9 +1557,62 @@ public extension UniversalWatchlistHost {
         universalWatchlistNativeViewStore = store
         // Scoped BEFORE anything reads it: entries read as a different Plex
         // identity are somebody else's and must not be shown here even once.
-        var view = ((try? store?.load()) ?? .empty).scoped(to: scope)
+        var view = ((try? store?.load()) ?? .empty).scoped(
+            to: scope,
+            destinationIdentityScopes: destinationIdentityScopes,
+            legacyValidatedDestinationIDs: legacyValidatedDestinationIDs
+        )
         view.retainOnly(destinationIDs: universalWatchlistDestinationIDs)
         universalWatchlistNativeView = view
+        universalWatchlistNativeViewLoaded = true
+        if FanoutDiagnostics.isEnabled {
+            let entries = view.bucketsByDestinationID.values
+                .reduce(0) { $0 + $1.entries.count }
+            let owned = view.bucketsByDestinationID.values
+                .reduce(0) { count, bucket in
+                    count + bucket.entries.lazy
+                        .filter { $0.ownedSource != nil }.count
+                }
+            FanoutDiagnostics.emit(
+                "watchlist.cache loaded=\(entries) owned=\(owned) "
+                + "destinations=\(view.bucketsByDestinationID.count) "
+                + "changed=\(view != previous)"
+            )
+        }
+
+        // Tell Home about the authoritative cached answer immediately, including
+        // an empty one that must clear a stale last-known row.
+        //
+        // `HomeViewModel` can paint its own content snapshot before this
+        // preparation task reaches the native-view store. Its initializer then
+        // asks the still-empty watchlist runtime to re-resolve that snapshot and
+        // turns every title into "unknown" — a "+" on every card. The cache loads
+        // milliseconds later with the `ownedSource` answers from last session,
+        // but until now nobody announced that fact. Home only heard the later
+        // destination refresh, 30–45 seconds away.
+        //
+        // Distinct from the ordinary watchlist notification because Home debounces
+        // that one to keep a user press responsive. This is startup state already
+        // in memory; it should be folded immediately.
+        if !wasLoaded || view != previous {
+            UniversalWatchlistMembershipCache.shared.invalidate()
+            // The Home model can be constructed before its view has installed
+            // the notification observer. Yield one main-actor turn: if Home was
+            // already mounted this changes nothing; if it was still being built,
+            // the subscription exists by the time this fires. Guard the profile
+            // and value so a switch during the yield cannot publish somebody
+            // else's cache.
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self,
+                      self.profiles.activeProfileID == profileID,
+                      self.universalWatchlistNativeView == view else { return }
+                NotificationCenter.default.post(
+                    name: .universalWatchlistCacheDidLoad,
+                    object: nil
+                )
+            }
+        }
     }
 
     func universalWatchlistIdentityDidUpdate() {
@@ -812,7 +1632,10 @@ public extension UniversalWatchlistHost {
         }
     }
 
-    func reconcileUniversalWatchlistIdentity(profileID: String) async {
+    func reconcileUniversalWatchlistIdentity(
+        profileID: String,
+        skippingMutationAliasIDs: Set<MediaAliasID> = []
+    ) async {
         guard let reconciler = universalWatchlistReconciler,
               profiles.activeProfileID == profileID else { return }
         let intents = Array(
@@ -890,7 +1713,10 @@ public extension UniversalWatchlistHost {
         )
 
         var changes: [WatchlistIdentityEvidenceChange] = []
-        for intent in intents {
+        for intent in intents
+        where !skippingMutationAliasIDs.contains(intent.aliasID)
+            && (intent.desiredState != .absent
+                || intent.metadata.suppressesNativePresence) {
             guard let record = mediaAliasLedger.activeSnapshot.record(
                 for: intent.aliasID
             ), let target = WatchlistMutationTarget(
@@ -928,10 +1754,7 @@ public extension UniversalWatchlistHost {
         // owned copy findable, but nothing was announcing it, so Home kept the
         // items it had resolved at t=0 and every title stayed "request it" until
         // something else happened to rebuild the row.
-        NotificationCenter.default.post(
-            name: .universalWatchlistDidChange,
-            object: nil
-        )
+        announceUniversalWatchlistDidChange()
         let indexSnapshot = identityIndex.identitySnapshot
         let reconcileLine = "watchlist.identity considered=\(aliasIDs.count) intents=\(intents.count) enriched=\(enrichments.count) fanOut=\(changes.count) indexedIdentities=\(indexSnapshot.identityCount) indexedAccounts=\(indexSnapshot.indexedAccountIDs.count)"
         PlozzLog.app.info("Watchlist \(reconcileLine)")
@@ -980,6 +1803,7 @@ public extension UniversalWatchlistHost {
                 self.universalWatchlistReconciler = nil
                 self.universalWatchlistMutationStore = nil
                 self.universalWatchlistNativeViewStore = nil
+                self.universalWatchlistNativeViewLoaded = false
                 self.universalWatchlistNativeView = .empty
                 self.universalWatchlistDestinationIDs = []
             }
@@ -989,12 +1813,13 @@ public extension UniversalWatchlistHost {
     func makeUniversalWatchlistReconciler(
         profileID: String
     ) async throws {
-        // Keyed by profile AND Plex identity. The destinations capture the token
-        // of whoever the profile plays as, and switching "watching as" changes
-        // that token without changing the profile — so a profile-only key kept
-        // the previous identity's destination alive and went on reading the
-        // previous person's watchlist. `plexIdentityGeneration` bumps on every
-        // override change, which is exactly the event that invalidates them.
+        // The LIVE reconciler is keyed by profile AND Plex identity generation.
+        // The destinations capture the token of whoever the profile plays as,
+        // and switching "watching as" changes that token without changing the
+        // profile — so a profile-only key kept the previous identity's
+        // destination alive and went on reading the previous person's watchlist.
+        // `plexIdentityGeneration` bumps on every override change, which is
+        // exactly the event that invalidates those live objects.
         //
         // The accounts are in the key too, because switching a server off for a
         // profile changes neither the profile nor the Plex identity. Without
@@ -1003,14 +1828,46 @@ public extension UniversalWatchlistHost {
         // read-time view exists to stop.
         let accountsKey = nativeWatchlistAccounts
             .map(\.account.id).sorted().joined(separator: ",")
-        let scopeKey = "\(profileID)#\(plexWatchlistIdentityGeneration)#\(accountsKey)"
-        guard universalWatchlistProfileID != scopeKey else { return }
+        let reconcilerKey = UniversalWatchlistScope.live(
+            profileID: profileID,
+            identityGeneration: plexWatchlistIdentityGeneration,
+            accountsKey: accountsKey
+        )
+        guard universalWatchlistProfileID != reconcilerKey else { return }
+        // From here until `loadUniversalWatchlistNativeView` completes, any
+        // durable resolution would be against an empty or previous-scope view.
+        universalWatchlistNativeViewLoaded = false
         universalWatchlistIdentityUpdateTask?.cancel()
         universalWatchlistIdentityUpdateTask = nil
         await universalWatchlistRetryScheduler?.cancel()
         universalWatchlistRetryScheduler = nil
         var destinations: [any WatchlistDestination] = []
         let profile = profiles.activeProfile
+        // The PERSISTED native view must use a stable identity, never the
+        // generation above.
+        //
+        // A generation is a process-local counter: it starts at zero every
+        // launch and bumps while the saved Home-user credential is restored.
+        // Persisting it into `NativeWatchlistView.identityScope` meant a warm
+        // launch almost always compared yesterday's `#1` with today's `#0` (or
+        // vice versa), rejected the whole cached view, and forgot every
+        // `ownedSource` it had already proved. The row painted every title with
+        // a "+" until a fresh network read + library resolution finished 30–45
+        // seconds later — on every launch, for a watchlist the viewer had opened
+        // a hundred times.
+        //
+        // `plexPlaybackIdentityKey` is the existing canonical answer: account id
+        // + bound Home-user id (or "owner"), stable across token refreshes and
+        // different when the actual viewer changes. Accounts stay in the scope
+        // too, so switching a server off still invalidates what it contributed.
+        let plexIdentityKey = profile.plexPlaybackIdentityKey(
+            for: nativeWatchlistAccounts.map(\.account)
+        )
+        let cacheScopeKey = UniversalWatchlistScope.persistent(
+            profileID: profileID,
+            accountsKey: accountsKey,
+            plexIdentityKey: plexIdentityKey
+        )
         for resolved in nativeWatchlistAccounts {
             if let provider = resolved.provider as? PlexProvider,
                let destination = PlexWatchlistDestination(provider: provider) {
@@ -1024,11 +1881,17 @@ public extension UniversalWatchlistHost {
                 // destination refuses to act until it arrives, instead of falling
                 // back to the account owner's list.
                 let accountID = resolved.account.id
-                let playsAsHomeUser = profile.homeUserBinding(forPlexAccount: accountID) != nil
+                let homeUserID = profile.homeUserBinding(
+                    forPlexAccount: accountID
+                )?.homeUserID
+                let playsAsHomeUser = homeUserID != nil
+                let destinationScope =
+                    "\(accountID)#\(homeUserID ?? "owner")"
                 destinations.append(
                     PlexWatchlistDestination(
                         provider: provider,
                         requiresHomeUserToken: playsAsHomeUser,
+                        reconciliationScope: destinationScope,
                         discoverToken: { [box = plexDiscoverTokens] in
                             box.token(for: accountID)
                         }
@@ -1041,6 +1904,7 @@ public extension UniversalWatchlistHost {
                 destinations.append(destination)
             }
         }
+        let legacyValidatedDestinationIDs = Set(destinations.map(\.id.rawValue))
         destinations.append(contentsOf: trackerWatchlistDestinations)
         // Which destinations may contribute to what the viewer sees. Taken from
         // the destinations actually built, so it can never drift from the set
@@ -1055,7 +1919,16 @@ public extension UniversalWatchlistHost {
         } ?? InMemoryWatchlistMutationStateStore()
         let mutationStore = try DurableWatchlistMutationStore(store: stateStore)
         universalWatchlistMutationStore = mutationStore
-        loadUniversalWatchlistNativeView(profileID: profileID, scope: scopeKey)
+        loadUniversalWatchlistNativeView(
+            profileID: profileID,
+            scope: cacheScopeKey,
+            destinationIdentityScopes: Dictionary(
+                uniqueKeysWithValues: destinations.map {
+                    ($0.id.rawValue, $0.cacheIdentityScope)
+                }
+            ),
+            legacyValidatedDestinationIDs: legacyValidatedDestinationIDs
+        )
         universalWatchlistReconciler = WatchlistReconciler(
             registry: WatchlistDestinationRegistry(destinations),
             mutationStore: mutationStore
@@ -1074,7 +1947,7 @@ public extension UniversalWatchlistHost {
             }
         )
         universalWatchlistRetryScheduler = scheduler
-        universalWatchlistProfileID = scopeKey
+        universalWatchlistProfileID = reconcilerKey
         await scheduler.reschedule()
     }
 
@@ -1083,6 +1956,23 @@ public extension UniversalWatchlistHost {
         _ = try? await reconciler.resumeAuthentication()
         _ = await reconciler.drain(profileID: profiles.activeProfileID)
         await universalWatchlistRetryScheduler?.reschedule()
+    }
+
+    /// Tell every surface the watchlist moved, and drop the memoized membership
+    /// set first.
+    ///
+    /// Both halves, always, in this order. Announcing without invalidating is what
+    /// made a removal appear to do nothing: the shells rebuilt promptly, asked
+    /// membership again, and were served the pre-removal set out of
+    /// ``UniversalWatchlistMembershipCache`` because its O(1) revision key could
+    /// not see the change. Anything that mutates the watchlist announces here
+    /// rather than posting the notification itself.
+    func announceUniversalWatchlistDidChange() {
+        UniversalWatchlistMembershipCache.shared.invalidate()
+        NotificationCenter.default.post(
+            name: .universalWatchlistDidChange,
+            object: nil
+        )
     }
 
     func universalWatchlistEvidence(
@@ -1125,9 +2015,54 @@ public extension UniversalWatchlistHost {
         }
         return MediaAliasEvidence(
             item: item,
+            // The SAME widening `TitleIdentityResolver` applies when it answers
+            // `universalWatchlistMembership`. Without it the read and the write
+            // resolved identity differently, and a target that carries no ids of
+            // its own — the show a series page promotes its episode hero to, which
+            // is a bare `id` + `title` stub — produced evidence with no strong id
+            // and no year at all. `resolveOrCreate` then minted a FRESH alias and
+            // the removal tombstone landed on a row nothing else referenced: the
+            // toast said "Removed from Watchlist" while the filled bookmark, which
+            // reads through the index, kept answering about the real alias. Movies
+            // were unaffected only because a movie hero is already the movie.
+            canonicalEvidence: identityIndex.identitySnapshot.canonicalEvidence(for: item),
             bindingHints: hints,
             locallyValidatedBindings: Set(bindings)
         )
+    }
+
+    /// The alias this item is watchlisted AS — the single resolution both the
+    /// button's state and the write it performs go through.
+    ///
+    /// `TitleIdentityResolver` alone is not enough, and the gap is not academic.
+    /// It builds evidence from the item's own payload widened by the identity
+    /// index; the write widens further with provider bindings (see
+    /// `universalWatchlistEvidence`). A subject with no ids of its own — the show
+    /// an episode hero is promoted to, which is a bare id + title stub with no
+    /// year, so it has no strong evidence and no *weak* evidence either — reaches
+    /// the ledger only by its ``MediaAliasLocalSourceKey``. Resolving through one
+    /// function means the read and the write cannot look for it under different
+    /// keys.
+    func universalWatchlistAliasID(for item: MediaItem) -> MediaAliasID? {
+        if let preferred = item.watchlistAliasID,
+           let resolved = mediaAliasLedger.activeSnapshot.resolvedAliasID(for: preferred) {
+            return resolved
+        }
+        if let indexed = titleIdentityResolver.aliasID(for: item) {
+            return indexed
+        }
+        guard let evidence = universalWatchlistEvidence(for: item) else { return nil }
+        return MediaAliasResolver.lookup(
+            evidence: evidence,
+            in: mediaAliasLedger.activeSnapshot
+        )
+    }
+
+    /// The alias a watchlist mutation must address: whichever one
+    /// ``universalWatchlistMembership`` answered from, so the write can never
+    /// target a different row than the button the viewer just pressed.
+    func universalWatchlistPreferredAliasID(for item: MediaItem) -> MediaAliasID? {
+        universalWatchlistAliasID(for: item)
     }
 
 

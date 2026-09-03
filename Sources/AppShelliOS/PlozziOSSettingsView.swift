@@ -60,6 +60,11 @@ struct PlozziOSSettingsView: View {
         }
         .scrollContentBackground(.hidden)
         .background { SettingsPageBackground() }
+        .transientStatusOverlay(
+            presenter: appModel.transientStatusPresenter,
+            bottomPadding: 24,
+            isLightSurface: palette.isLight
+        )
         .environment(\.themePalette, palette)
         .environment(\.colorScheme, palette.isLight ? .light : .dark)
         .tint(palette.primaryText)
@@ -620,7 +625,8 @@ private struct PlozziOSSettingsSplitView: View {
                 transparency: appModel.settings.transparency,
                 cardStyle: appModel.settings.cardStyle,
                 density: appModel.settings.density,
-                watchIndicator: appModel.settings.watchIndicator
+                watchIndicator: appModel.settings.watchIndicator,
+                navigation: appModel.settings.navigation
             )
         case .home:
             PlozziOSHomeSettingsView(
@@ -702,6 +708,13 @@ private struct PlozziOSAboutSettingsView: View {
                             "CFBundleVersion"
                         ] as? String ?? "—"
                     )
+                }
+                if ReleaseNotesModel.shared.isAvailable {
+                    NavigationLink {
+                        ReleaseNotesSettingsView(model: .shared)
+                    } label: {
+                        Label("Release Notes", systemImage: "doc.text")
+                    }
                 }
             }
 
@@ -879,7 +892,8 @@ private struct PlozziOSSettingsCompactMenu: View {
                         transparency: appModel.settings.transparency,
                         cardStyle: appModel.settings.cardStyle,
                         density: appModel.settings.density,
-                        watchIndicator: appModel.settings.watchIndicator
+                        watchIndicator: appModel.settings.watchIndicator,
+                        navigation: appModel.settings.navigation
                     )
                 } label: {
                     Label("Appearance", systemImage: "paintpalette")
@@ -1081,6 +1095,13 @@ private struct PlozziOSSettingsCompactMenu: View {
                 }
                 LabeledContent("Build") {
                     Text(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—")
+                }
+                if ReleaseNotesModel.shared.isAvailable {
+                    NavigationLink {
+                        ReleaseNotesSettingsView(model: .shared)
+                    } label: {
+                        Label("Release Notes", systemImage: "doc.text")
+                    }
                 }
                 if !appModel.accounts.isEmpty, !appModel.profiles.activeProfile.isKids {
                     Button("Sign Out of All Accounts", role: .destructive) {
@@ -1588,6 +1609,7 @@ private struct PlozziOSAppearanceSettingsView: View {
     @Bindable var cardStyle: CardStyleSettingsModel
     @Bindable var density: UIDensitySettingsModel
     @Bindable var watchIndicator: WatchStatusIndicatorSettingsModel
+    @Bindable var navigation: NavigationStyleSettingsModel
     @Environment(AppLanguageSettingsModel.self) private var appLanguage
 
     var body: some View {
@@ -1607,6 +1629,10 @@ private struct PlozziOSAppearanceSettingsView: View {
                         .tag(language)
                     }
                 }
+                // A menu rather than the default push: every release-ready
+                // language is offered, so the pushed variant is a screen of
+                // nearly forty rows reached by leaving this one.
+                .pickerStyle(.menu)
             } footer: {
                 Text("Applies to Plozz's own labels. Media titles keep the language your server provides, and system prompts follow the device.")
             }
@@ -1650,6 +1676,12 @@ private struct PlozziOSAppearanceSettingsView: View {
                         Text(indicator.displayName).tag(indicator)
                     }
                 }
+
+                SettingsSectionGroup("Navigation") {
+                    Toggle("Show Watchlist", isOn: $navigation.showsWatchlist)
+                } footer: {
+                    Text("Home, Search, profile switching and Settings always stay available.")
+                }
             }
         }
         .settingsPageSurface()
@@ -1678,6 +1710,29 @@ private struct PlozziOSHomeSettingsView: View {
                             set: { visibility.setGlobalRowEnabled($0, for: row) }
                         )
                     )
+                }
+                // Nested under the row it belongs to, and only while that row is
+                // on — a preference for a hidden row is noise. A picker rather
+                // than a switch: both options put artwork on the card, so an
+                // on/off label would imply that "off" leaves it blank.
+                if visibility.isGlobalRowEnabled(.continueWatching) {
+                    Picker(
+                        "Continue Watching",
+                        selection: Binding<ContinueWatchingArtworkStyle>(
+                            get: {
+                                visibility.continueWatchingShowsSeriesArtwork
+                                    ? .logoAndArtwork
+                                    : .thumbnail
+                            },
+                            set: {
+                                visibility.setContinueWatchingShowsSeriesArtwork($0 == .logoAndArtwork)
+                            }
+                        )
+                    ) {
+                        ForEach(ContinueWatchingArtworkStyle.allCases, id: \.self) { option in
+                            Text(option.displayName).tag(option)
+                        }
+                    }
                 }
                 Toggle(
                     "Merge libraries",
@@ -2034,6 +2089,9 @@ private struct PlozziOSPlaybackSettingsView: View {
 
             SettingsSectionGroup("Playback") {
                 Toggle("Seek without pausing", isOn: $model.settings.seekWithoutPausing)
+                // Autoplay first: whether the next episode starts at all, then
+                // whether the card announces it. Independent switches.
+                Toggle("Autoplay next episode", isOn: $model.settings.autoPlayNextEpisode)
                 Toggle("Show Up Next card", isOn: $model.settings.showUpNextCard)
                 if model.settings.showUpNextCard {
                     Picker("Up Next lead time", selection: $model.settings.upNextLeadSeconds) {
@@ -2264,7 +2322,15 @@ private struct PlozziOSSpoilerSettingsView: View {
                     isOn: $model.settings.hideRatingsUntilWatched
                 )
             } footer: {
-                Text("Episode titles, summaries, and artwork can be hidden until you watch them.")
+                Text(LocalizedStringResource(
+                    "settings.spoilers.footer",
+                    defaultValue: """
+                        Episode titles, summaries, and artwork can be hidden until \
+                        you watch them. Hidden ratings are blurred on a title's \
+                        page — tap to reveal them.
+                        """,
+                    comment: "Footer under the Spoilers settings group on iPhone/iPad, explaining what the switches above it do."
+                ))
             }
         }
         .settingsPageSurface()

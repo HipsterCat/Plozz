@@ -122,8 +122,12 @@ public final class AppState {
     public var universalWatchlistNativeViewStore:
         (any NativeWatchlistViewStoring)?
     @ObservationIgnored
+    public var universalWatchlistNativeViewLoaded = false
+    @ObservationIgnored
     public var universalWatchlistDestinationIDs:
         Set<WatchlistDestinationID> = []
+    @ObservationIgnored
+    public var universalWatchlistRefreshGeneration: UInt64 = 0
     @ObservationIgnored
     public var universalWatchlistProfileID: String?
     @ObservationIgnored
@@ -254,6 +258,15 @@ public final class AppState {
             },
             resolveDurableWatchlist: { [unowned self] items in
                 self.resolvedUniversalWatchlistItems(candidates: items)
+            },
+            durableWatchlistPresentationReady: { [unowned self] in
+                self.isUniversalWatchlistPresentationReady
+            },
+            durableWatchlistLoadingTarget: { [unowned self] in
+                self.universalWatchlistLoadingTargetCount
+            },
+            rehydratePersistedArtworkItems: { [unowned self] items in
+                self.rehydratedPersistedArtwork(items)
             },
             seedLegacyUniversalWatchlist: { [weak self] _ in
                 try? await self?.seedLegacyUniversalWatchlist()
@@ -501,13 +514,13 @@ public final class AppState {
     /// is no longer deferred and its final resume/played write goes out. Sequenced
     /// in a single task so the end always precedes the enqueue's drain. `accountID`
     /// is optional so a barely-started/untargeted stop still flushes deferred work.
-    public func finishLiveWatchSession(accountID: String?, itemID: String, watchedPercent: Double, mutation: WatchMutation?) {
+    public func finishLiveWatchSession(accountID: String?, itemID: String, watchedPercent: Double, mutation: WatchMutation?, item: MediaItem? = nil) {
         let reconciler = watchReconciler
         // (a) Index state captured at the moment of stop — the value the fan-out
         // actually saw. If crossServer=0 here, the index never warmed a union for
         // any title, so the stop's targets could only be origin-only.
         FanoutDiagnostics.emit(FanoutDiagnostics.indexStateLine(identityIndex.identitySnapshotStore.current, phase: "stop-index"))
-        publishOptimisticWatchState(itemID: itemID, mutation: mutation, watchedPercent: watchedPercent)
+        publishOptimisticWatchState(itemID: itemID, mutation: mutation, watchedPercent: watchedPercent, item: item)
         Task {
             if let accountID {
                 await reconciler.endLiveSession(accountID: accountID, itemID: itemID)
@@ -536,7 +549,7 @@ public final class AppState {
     ///    progress bar update in place — the "watched 4 min, pressed Back, page still
     ///    looks untouched" bug. `watchedPercent` (0...100) becomes the `0...1`
     ///    fraction `PosterCardView` reads.
-    private func publishOptimisticWatchState(itemID: String, mutation: WatchMutation?, watchedPercent: Double) {
+    private func publishOptimisticWatchState(itemID: String, mutation: WatchMutation?, watchedPercent: Double, item: MediaItem? = nil) {
         guard let mutation else { return }
         var ids = Set(mutation.targets.map(\.itemID))
         ids.insert(itemID)
@@ -546,10 +559,10 @@ public final class AppState {
         // flipping the wrong card's badge / resume bar / recency.
         let scoped = Set(mutation.targets.map(\.id))
         if mutation.played == true {
-            MediaItemMutation(itemIDs: ids, scopedItemIDs: scoped, played: true, resumePosition: 0, playedPercentage: 1).post()
+            MediaItemMutation(itemIDs: ids, scopedItemIDs: scoped, played: true, resumePosition: 0, playedPercentage: 1, item: item).post()
         } else if let resume = mutation.resumePosition {
             let fraction = max(0, min(watchedPercent / 100, 1))
-            MediaItemMutation(itemIDs: ids, scopedItemIDs: scoped, resumePosition: resume, playedPercentage: fraction).post()
+            MediaItemMutation(itemIDs: ids, scopedItemIDs: scoped, resumePosition: resume, playedPercentage: fraction, item: item).post()
         }
     }
 
@@ -1331,8 +1344,12 @@ public final class AppState {
         // first because it shares the scheme; outside DEBUG this always
         // declines, so a shipped build falls straight through to Top Shelf.
         if screenshotDirector.handle(url: url) { return }
-        if let id = TopShelf.itemID(from: url) {
-            pendingPlay.itemID = id
+        if let reference = TopShelf.itemReference(from: url) {
+            pendingPlay.itemID = reference.id
+            // Kept rather than discarded: the link knows which server the title
+            // came from, and throwing that away leaves the router guessing across
+            // every signed-in account for an id that is only unique within one.
+            pendingPlay.accountID = reference.accountID
         }
     }
 
@@ -1661,12 +1678,16 @@ public final class AppState {
         apply(.seerrSelected)
     }
 
-    /// Completes the one-time first-run theme picker and enters the app. Applying
-    /// any Plex Home-user binding (which can raise a PIN prompt) is deferred to
-    /// here so it surfaces as the user actually enters the app — not over the
-    /// theme screen.
+    /// Completes the one-time first-run theme picker and advances to navigation.
     public func finishThemeSelection() {
         apply(.themeSelected)
+    }
+
+    /// Completes first-run appearance setup and enters the app. Applying any Plex
+    /// Home-user binding (which can raise a PIN prompt) is deferred until here so
+    /// it never stacks over either appearance picker.
+    public func finishNavigationSelection() {
+        apply(.navigationSelected)
         plexHomeUsers.ensurePlexIdentityForActiveProfile()
     }
 
@@ -1710,6 +1731,10 @@ public final class AppState {
         profileFlow.finishSetupFlow()
     }
 
+    public func completeProfileAppearanceSetup(for id: String) {
+        profileFlow.completeAppearanceSetup(for: id)
+    }
+
     /// Marks a profile as restricted, or lifts the restriction.
     public func setKidsProfile(_ isKids: Bool, forProfile id: String) {
         guard var profile = profilesModel.profiles.first(where: { $0.id == id }) else { return }
@@ -1717,12 +1742,11 @@ public final class AppState {
         profilesModel.update(profile)
     }
 
-    /// Dismisses the one-time theme picker shown after creating a profile in-app
-    /// and applies the (now active) new profile's Plex identity — raising a PIN
-    /// prompt if it maps to a protected Home user. Guarded so it's safe to call
-    /// from both the Continue button and the cover's dismissal binding.
-    public func finishNewProfileThemeSelection() {
-        guard profileFlow.finishPickingThemeForNewProfile() else { return }
+    /// Dismisses the one-time appearance flow shown after creating a profile and
+    /// applies the active profile's Plex identity. Guarded so Continue and the
+    /// cover binding cannot complete it twice.
+    public func finishNewProfileAppearanceSelection() {
+        guard profileFlow.finishPickingAppearanceForNewProfile() else { return }
         plexHomeUsers.ensurePlexIdentityForActiveProfile()
     }
 
@@ -1749,7 +1773,8 @@ public final class AppState {
         share: String,
         username: String,
         password: String,
-        displayName: String
+        displayName: String,
+        subpath: String = ""
     ) {
         let service = MediaShareAccountConfigurationService(
             accountStore: accountsProviders.accountStore
@@ -1762,7 +1787,8 @@ public final class AppState {
                 share: share,
                 username: username,
                 password: password,
-                displayName: displayName
+                displayName: displayName,
+                subpath: subpath
             )
         } catch {
             apply(.authenticationFailed(.unknown("Invalid share address")))
@@ -1795,26 +1821,22 @@ public final class AppState {
     /// — e.g. to update its password — updates the existing account in place
     /// instead of creating a duplicate.
     ///
-    /// Identity = host + port + share + user, all case-folded, because SMB treats
-    /// host, share, and username as case-insensitive. Folding to lowercase means
-    /// `//NAS/Media` and `//nas/media`, and `COPILOT2` vs `Copilot2`, resolve to
-    /// the same account (no accidental fork). The username IS part of the identity
-    /// so genuinely different users on the SAME share (e.g. `brandon` and `sister`,
-    /// who may see different files) can both be added as separate accounts. An
-    /// empty username is a guest/anonymous share and folds to a stable `guest`
-    /// identity. Only the identity is normalized; the display name and the
-    /// connection `baseURL` keep the user's original casing (SMB ignores case on
-    /// the wire).
+    /// Identity = host + non-default port + share + exact selected subpath + user.
+    /// Host, share, and username are case-folded because SMB treats those values as
+    /// case-insensitive; the subpath keeps its case for Samba shares backed by a
+    /// case-sensitive filesystem. An empty username folds to `guest`.
     static func mediaShareServerID(
         host: String,
         port: Int?,
         share: String,
+        subpath: String = "",
         username: String
     ) -> String {
         MediaShareAccountConfigurationService.smbID(
             host: host,
             port: port,
             share: share,
+            subpath: subpath,
             username: username
         )
     }
@@ -1986,6 +2008,7 @@ public final class AppState {
         host: String,
         port: Int?,
         exportPath: String,
+        subpath: String = "",
         displayName: String
     ) {
         let service = MediaShareAccountConfigurationService(
@@ -1997,6 +2020,7 @@ public final class AppState {
                 host: host,
                 port: port,
                 exportPath: exportPath,
+                subpath: subpath,
                 displayName: displayName
             )
         } catch {
@@ -2121,10 +2145,6 @@ public final class AppState {
             previousAccount: prepared.previousAccount,
             isFirstRun: isFirstRun
         )
-    }
-
-    private static func normalizedFilesystemPath(_ raw: String) -> String {
-        MediaShareAccountConfigurationService.normalizedFilesystemPath(raw)
     }
 
     /// Begins adding another account from inside the signed-in app.
@@ -2433,5 +2453,10 @@ public final class AppState {
     private func apply(_ event: SessionEvent) {
         machine.apply(event)
         state = machine.state
+    }
+
+    public func retryUnconfirmedCredentials() {
+        guard accountsProviders.retryUnconfirmedCredentials() else { return }
+        apply(.accountsChanged(accountsProviders.accounts))
     }
 }

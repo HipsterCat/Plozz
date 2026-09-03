@@ -147,8 +147,7 @@ public struct EpisodeColumnCard: View, Equatable {
             action: action
         )
         .compositingGroup()
-        .zIndex(isFocused ? 2 : 0)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isFocused)
+        .plozzCardFocusTransition(isFocused: isFocused, animates: !reduceMotion)
         .task(id: synopsisTaskID) {
             synopsisVisible = false
             synopsisAtRest = false
@@ -193,18 +192,57 @@ public struct EpisodeColumnCard: View, Equatable {
         FallbackAsyncImage(
             references: item.artworkReferences(for: .episodeThumbnail),
             variant: .landscapeCard,
-            asyncFallbackURL: asyncArtworkFallback
+            asyncFallbackURL: asyncArtworkFallback,
+            pinIdentity: item.stablePresentationID
         ) {
             neutralPlaceholder
         }
     }
 
+    /// Spoiler-safe art for `.placeholder` mode: only ever **series-level** art,
+    /// never the real episode frame.
+    ///
+    /// Mirrors `realArtwork`'s shape — server art first, then an `ArtworkRouter`
+    /// last resort. Previously this read a single URL and fell straight through to
+    /// a grey box, and that URL (`fallbackArtworkURL`) was only ever populated by
+    /// Jellyfin, so on Plex and direct shares every hidden episode rendered blank.
+    ///
+    /// Nothing here may reach for `posterURL`/`backdropURL`: on Jellyfin those are
+    /// the episode's own images, which is exactly what this mode hides.
     private var placeholderArtwork: some View {
         FallbackAsyncImage(
-            urls: [item.fallbackArtworkURL].compactMap { $0 },
-            variant: .landscapeCard
+            references: placeholderArtworkReferences,
+            variant: .landscapeCard,
+            asyncFallbackURL: placeholderArtworkFallback,
+            pinIdentity: item.stablePresentationID
         ) {
             neutralPlaceholder
+        }
+    }
+
+    /// Server-supplied series art for a wide card: the show's backdrop, with its
+    /// vertical poster as a last resort — a cropped poster still identifies the
+    /// show, and a blank card does not.
+    private var placeholderArtworkReferences: [ArtworkReference] {
+        // Only the explicitly series-scoped local selection. Going through
+        // `artworkReferences(for: .seriesPoster)` would append that placement's
+        // legacy ladder, which ends in the episode's own `posterURL`.
+        let localSeriesArt = item.artworkSelections
+            .first(where: { $0.placement == .seriesPoster })?
+            .references ?? []
+        let remote = [item.fallbackArtworkURL, item.seriesPosterURL]
+            .compactMap { $0.map(ArtworkReference.remote) }
+        var seen = Set<ArtworkReference>()
+        return (remote + localSeriesArt).filter { seen.insert($0).inserted }
+    }
+
+    /// Last-resort series art from the metadata router. Asks only for a
+    /// series-scoped hero against a synthesized series item — never `.thumbnail`,
+    /// which resolves the episode's own still.
+    private var placeholderArtworkFallback: (@Sendable () async -> URL?)? {
+        let seriesItem = PosterCardView.seriesArtworkItem(for: item)
+        return {
+            await ArtworkRouter.shared.artworkURL(.hero, for: seriesItem)
         }
     }
 

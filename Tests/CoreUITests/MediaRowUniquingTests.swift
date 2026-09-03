@@ -57,4 +57,70 @@ final class MediaRowUniquingTests: XCTestCase {
         ])
         XCTAssertEqual(deduped.count, 2)
     }
+
+    func testDoesNotCollapseProviderLocalIDSharedAcrossAccounts() {
+        var first = item("same-id", "First server")
+        first.sourceAccountID = "account-a"
+        var second = item("same-id", "Second server")
+        second.sourceAccountID = "account-b"
+
+        let deduped = MediaRowView.uniqued([first, second])
+
+        XCTAssertEqual(deduped.count, 2)
+        XCTAssertNotEqual(
+            deduped[0].stablePresentationID,
+            deduped[1].stablePresentationID
+        )
+    }
+
+    func testRawFocusIDNormalizesToPresentationIdentity() {
+        var item = item("episode-8", "Episode")
+        item.sourceAccountID = "account-a"
+
+        XCTAssertEqual(
+            MediaRowView.presentationID(
+                matching: "episode-8",
+                in: [item]
+            ),
+            item.stablePresentationID
+        )
+    }
+
+    func testPresentationElementsKeepUniqueItemsThenAppendPlaceholders() {
+        let first = item("a", "First")
+        let second = item("b", "Second")
+        let elements = MediaRowView.presentationElements(
+            items: [
+                first,
+                second,
+                item("a", "Duplicate"),
+            ],
+            loadingPlaceholderCount: 3
+        )
+
+        XCTAssertEqual(
+            elements.map(\.id),
+            [
+                .item(first.stablePresentationID),
+                .item(second.stablePresentationID),
+                .loadingPlaceholder(0),
+                .loadingPlaceholder(1),
+                .loadingPlaceholder(2),
+            ]
+        )
+        XCTAssertEqual(elements.count, 5)
+    }
+
+    func testPresentationElementsClampNegativePlaceholderCount() {
+        let only = item("a", "Only")
+        let elements = MediaRowView.presentationElements(
+            items: [only],
+            loadingPlaceholderCount: -2
+        )
+
+        XCTAssertEqual(
+            elements.map(\.id),
+            [.item(only.stablePresentationID)]
+        )
+    }
 }

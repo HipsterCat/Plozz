@@ -39,35 +39,24 @@ public struct CrashReportContext: Sendable {
         self.providers = providers
     }
 
-    /// Builds a context from the running process. Callers supply the non-derivable
-    /// bits (version/build/bundleID/providers); the rest is read from the device.
+    /// Builds a context from the running process. The caller supplies the detected
+    /// binary environment, so UI and reporting share one channel decision.
     public static func make(
         bundleIdentifier: String,
         version: String,
         build: String,
-        providers: [String]
+        providers: [String],
+        environment: String
     ) -> CrashReportContext {
         CrashReportContext(
             releaseName: "\(bundleIdentifier)@\(version)+\(build)",
             version: version,
             build: build,
-            environment: detectEnvironment(),
+            environment: environment,
             systemVersion: currentSystemVersion(),
             deviceModel: deviceModelIdentifier(),
             providers: providers
         )
-    }
-
-    static func detectEnvironment() -> String {
-        #if DEBUG
-        return "debug"
-        #else
-        if let receiptURL = Bundle.main.appStoreReceiptURL,
-           receiptURL.lastPathComponent == "sandboxReceipt" {
-            return "testflight"
-        }
-        return "production"
-        #endif
     }
 
     static func currentSystemVersion() -> String {  // l10n:content — crash-report tag metadata, never displayed to users
@@ -142,6 +131,12 @@ public final class CrashReportingController {
         self.reporter = NoopCrashReporter()
         self.isConfigured = false
         #endif
+    }
+
+    /// Test seam: inject a reporter directly.
+    init(reporter: CrashReporter, isConfigured: Bool) {
+        self.reporter = reporter
+        self.isConfigured = isConfigured
     }
 
     /// Reconcile the live reporter with the user's current consent. Starts on the

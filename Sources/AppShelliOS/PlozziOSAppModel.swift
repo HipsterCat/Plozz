@@ -19,6 +19,7 @@ import MediaDownloads
 import MediaTransportCore
 import MetadataKit
 import Observation
+import ProviderPlex
 import ProviderShare
 import SeerService
 import SimklService
@@ -281,6 +282,10 @@ final class PlozziOSAppModel {
     let requiresLaunchProfileSelection: Bool
     private(set) var settings: PlozziOSSettingsModel
     private var backgroundWorkRevision: UInt64 = 0
+    @ObservationIgnored
+    private var applicationIsActive = true
+    @ObservationIgnored
+    private var downloadProfileGeneration = 0
     private(set) var seriesTrackStore: SeriesTrackPreferenceStore
     private(set) var versionPreferences: VersionPreferenceStore
     private(set) var downloads: PlozziOSDownloadsModel
@@ -360,6 +365,15 @@ final class PlozziOSAppModel {
             resolveDurableWatchlist: { [unowned self] items in
                 self.resolvedUniversalWatchlistItems(candidates: items)
             },
+            durableWatchlistPresentationReady: { [unowned self] in
+                self.isUniversalWatchlistPresentationReady
+            },
+            durableWatchlistLoadingTarget: { [unowned self] in
+                self.universalWatchlistLoadingTargetCount
+            },
+            rehydratePersistedArtworkItems: { [unowned self] items in
+                self.rehydratedPersistedArtwork(items)
+            },
             seedLegacyUniversalWatchlist: { [weak self] _ in
                 try? await self?.seedLegacyUniversalWatchlist()
             },
@@ -404,6 +418,8 @@ final class PlozziOSAppModel {
         (any NativeWatchlistViewStoring)?
     @ObservationIgnored var universalWatchlistDestinationIDs:
         Set<WatchlistDestinationID> = []
+    @ObservationIgnored var universalWatchlistRefreshGeneration: UInt64 = 0
+    @ObservationIgnored var universalWatchlistNativeViewLoaded = false
     @ObservationIgnored var universalWatchlistProfileID: String?
     @ObservationIgnored var universalWatchlistRetryScheduler:
         WatchlistRetryScheduler?
@@ -556,9 +572,10 @@ final class PlozziOSAppModel {
         self.crashReporting = CrashReportingSettingsModel()
         self.crashReportingController = CrashReportingController()
         self.requiresLaunchProfileSelection = requiresLaunchProfileSelection
-        self.settings = PlozziOSSettingsModel(
+        let initialSettings = PlozziOSSettingsModel(
             namespace: profiles.activeNamespace
         )
+        self.settings = initialSettings
         self.seriesTrackStore = SeriesTrackPreferenceStore(
             namespace: profiles.activeNamespace
         )
@@ -570,6 +587,7 @@ final class PlozziOSAppModel {
             durableStore: durableLocalStateStore,
             mediaShareRuntime: mediaShareRuntime,
             accountsProviders: accountsProviders,
+            settings: initialSettings,
             authenticatedHTTPResolver: authenticatedHTTPResolver
         )
         self.pendingLibrarySelection = nil
@@ -751,7 +769,8 @@ final class PlozziOSAppModel {
             bundleIdentifier: Bundle.main.bundleIdentifier ?? "com.thatcube.Plozz",
             version: version,
             build: build,
-            providers: providers
+            providers: providers,
+            environment: AppReleaseChannel.current.crashReportEnvironment
         )
     }
 
@@ -823,6 +842,7 @@ final class PlozziOSAppModel {
     }
 
     func setBackgroundWorkAllowed(_ allowed: Bool) {
+        applicationIsActive = allowed
         backgroundWorkRevision &+= 1
         let revision = backgroundWorkRevision
         Task { [mediaShareRuntime] in
@@ -1379,13 +1399,7 @@ final class PlozziOSAppModel {
         versionPreferences = VersionPreferenceStore(
             namespace: profiles.activeNamespace
         )
-        downloads = Self.makeDownloadsModel(
-            namespace: profiles.activeProfileID,
-            durableStore: durableLocalStateStore,
-            mediaShareRuntime: mediaShareRuntime,
-            accountsProviders: accountsProviders,
-            authenticatedHTTPResolver: authenticatedHTTPResolver
-        )
+        transitionDownloads(to: profiles.activeProfileID)
         plexHomeUsers.ensurePlexIdentityForActiveProfile()
         reloadAccountsAndCrashContext()
         identityIndex.reset()
@@ -1398,7 +1412,35 @@ final class PlozziOSAppModel {
             await updateTrackersForActiveProfile()
             await prepareUniversalWatchlist()
         }
+
         Task { await seerService.setActiveProfile(namespace: profiles.activeNamespace) }
+    }
+
+    private func transitionDownloads(to profileID: String) {
+        let outgoing = downloads
+        outgoing.beginProfileTransition()
+        downloads = PlozziOSDownloadsModel(
+            initializationError: "Switching download profiles."
+        )
+        downloadProfileGeneration &+= 1
+        let generation = downloadProfileGeneration
+        Task { @MainActor [weak self] in
+            await outgoing.quiesceForProfileSwitch()
+            guard let self,
+                  self.downloadProfileGeneration == generation,
+                  self.profiles.activeProfileID == profileID else {
+                return
+            }
+            self.downloads = Self.makeDownloadsModel(
+                namespace: profileID,
+                durableStore: self.durableLocalStateStore,
+                mediaShareRuntime: self.mediaShareRuntime,
+                accountsProviders: self.accountsProviders,
+                settings: self.settings,
+                startsActive: self.applicationIsActive,
+                authenticatedHTTPResolver: self.authenticatedHTTPResolver
+            )
+        }
     }
 
     /// Re-points every tracker at the active profile's namespace.
@@ -1657,6 +1699,8 @@ final class PlozziOSAppModel {
         durableStore: DurableLocalStateStore?,
         mediaShareRuntime: DefaultMediaShareRuntime,
         accountsProviders: AccountsProvidersModel,
+        settings: PlozziOSSettingsModel,
+        startsActive: Bool = true,
         authenticatedHTTPResolver: ManagedAuthenticatedHTTPResolver
     ) -> PlozziOSDownloadsModel {
         guard let durableStore else {
@@ -1674,7 +1718,26 @@ final class PlozziOSAppModel {
                         $0.id == accountID
                     }?.server.provider
                 },
-                managedURLResolver: { source in
+                preferredAudioLanguages: { item in
+                    let playbackSettings = settings.playback.settings
+                    let policy = settings.audioPolicy.resolvedPolicy(
+                        settings: playbackSettings
+                    )
+                    return AudioLanguagePolicy.preferredAudioLanguages(
+                        remembered: nil,
+                        preference: policy.effectivePreference(
+                            for: ContentClassifier.audioCategory(for: item)
+                        ),
+                        originalLanguage:
+                            ContentClassifier.originalAudioLanguage(for: item),
+                        deviceLanguage: LanguageMatch.deviceLanguageCode
+                    )
+                },
+                startsActive: startsActive,
+                managedURLResolver: {
+                    source,
+                    updateSource,
+                    updatePreparationProgress in
                     let provider: (any MediaProvider)? = await MainActor.run {
                         guard accountsProviders.accounts.first(where: {
                             $0.id == source.accountID
@@ -1693,8 +1756,132 @@ final class PlozziOSAppModel {
                     let playback = try await provider.playbackInfo(
                         for: source.itemID,
                         mediaSourceID: source.mediaSourceID,
-                        forceTranscode: false
+                        forceTranscode: source.quality != .original
                     )
+                    if case .constrained(let constraint) = source.quality {
+                        let streamURL: URL
+                        if case .authenticatedHTTP(let locator) =
+                            playback.playbackSource {
+                            streamURL = try await authenticatedHTTPResolver.resolve(
+                                locator
+                            )
+                        } else if let legacyURL = playback.streamURL {
+                            streamURL = legacyURL
+                        } else {
+                            throw MediaTransportError.unsupportedCapability(
+                                "This server did not provide an offline rendition."
+                            )
+                        }
+                        guard
+                              var components = URLComponents(
+                                url: streamURL,
+                                resolvingAgainstBaseURL: false
+                              ) else {
+                            throw MediaTransportError.unsupportedCapability(
+                                "This server did not provide an offline rendition."
+                            )
+                        }
+                        var items = components.queryItems ?? []
+                        func setQueryItem(_ name: String, _ value: String) {
+                            items.removeAll {
+                                $0.name.caseInsensitiveCompare(name) == .orderedSame
+                            }
+                            items.append(URLQueryItem(name: name, value: value))
+                        }
+                        switch source.provider {
+                        case .plex:
+                            guard !source.includesAllAudioTracks else {
+                                throw MediaTransportError.unsupportedCapability(
+                                    "Plex reduced-quality downloads support one audio track. Turn off Include All Audio Tracks or choose Original quality."
+                                )
+                            }
+                            let audioStreamID = playback.audioTracks.first {
+                                track in
+                                source.preferredAudioLanguages.contains {
+                                    preferred in
+                                    Self.languagesMatch(
+                                        preferred,
+                                        track.language
+                                    )
+                                }
+                            }?.id
+                                ?? playback.audioTracks.first {
+                                    $0.isDefault
+                                }?.id
+                                ?? playback.audioTracks.first?.id
+                            let textSubtitleStreamID = playback.subtitleTracks
+                                .first {
+                                    $0.isDefault && !$0.isImageBasedSubtitle
+                                }?.id
+                                ?? playback.subtitleTracks.first {
+                                    !$0.isImageBasedSubtitle
+                                }?.id
+                            guard let constrainedURL =
+                                    PlexOfflineTranscodeURLBuilder.makeURL(
+                                        from: streamURL,
+                                        maximumVideoBitrateBps:
+                                            constraint.maximumVideoBitrateBps,
+                                        maximumHeight: constraint.maximumHeight,
+                                        audioStreamID: audioStreamID,
+                                        textSubtitleStreamID:
+                                            textSubtitleStreamID,
+                                        includesTextSubtitle:
+                                            source.includesTextSubtitleTracks
+                                    ) else {
+                                throw MediaTransportError.unsupportedCapability(
+                                    "This Plex server did not provide a compatible offline rendition."
+                                )
+                            }
+                            return try await PlexOfflineDownloadQueue.prepare(
+                                progressiveURL: constrainedURL,
+                                source: source,
+                                expectedDuration: playback.item.runtime,
+                                updateSource: updateSource,
+                                updatePreparationProgress:
+                                    updatePreparationProgress
+                            )
+                        case .jellyfin, .emby:
+                            if let audioStreamID = playback.audioTracks.first(
+                                where: { track in
+                                    source.preferredAudioLanguages.contains {
+                                        Self.languagesMatch(
+                                            $0,
+                                            track.language
+                                        )
+                                    }
+                                }
+                            )?.id {
+                                setQueryItem(
+                                    "AudioStreamIndex",
+                                    String(audioStreamID)
+                                )
+                            }
+                            setQueryItem(
+                                "VideoBitrate",
+                                String(constraint.maximumVideoBitrateBps)
+                            )
+                            setQueryItem(
+                                "MaxHeight",
+                                String(constraint.maximumHeight)
+                            )
+                        default:
+                            throw MediaTransportError.unsupportedCapability(
+                                "This server cannot create reduced-quality downloads."
+                            )
+                        }
+
+                        components.queryItems = items
+                        guard let constrainedURL = components.url else {
+                            throw MediaTransportError.unsupportedCapability(
+                                "The offline rendition URL was invalid."
+                            )
+                        }
+                        return .init(
+                            url: constrainedURL,
+                            expectedDuration: playback.item.runtime,
+                            cleanupURL: nil
+                        )
+                    }
                     guard case .authenticatedHTTP(let locator) =
                             playback.downloadableOriginalSource,
                           locator.deliveryMode == .directFile else {
@@ -1702,7 +1889,11 @@ final class PlozziOSAppModel {
                             "managed background download requires a direct file"
                         )
                     }
-                    return try await authenticatedHTTPResolver.resolve(locator)
+                    return .init(
+                        url: try await authenticatedHTTPResolver.resolve(locator),
+                        expectedDuration: playback.item.runtime,
+                        cleanupURL: nil
+                    )
                 }
             )
         } catch {
@@ -1710,6 +1901,13 @@ final class PlozziOSAppModel {
                 initializationError: error.localizedDescription
             )
         }
+    }
+
+    nonisolated private static func languagesMatch(
+        _ preferred: String,
+        _ candidate: String?
+    ) -> Bool {
+        LanguageMatch.matches(preferred, candidate)
     }
 
     /// Creates or updates a profile from a shared `ProfileEditorView` draft —
@@ -1804,13 +2002,7 @@ final class PlozziOSAppModel {
             versionPreferences = VersionPreferenceStore(
                 namespace: profiles.activeNamespace
             )
-            downloads = Self.makeDownloadsModel(
-                namespace: profiles.activeProfileID,
-                durableStore: durableLocalStateStore,
-                mediaShareRuntime: mediaShareRuntime,
-                accountsProviders: accountsProviders,
-                authenticatedHTTPResolver: authenticatedHTTPResolver
-            )
+            transitionDownloads(to: profiles.activeProfileID)
             plexHomeUsers.ensurePlexIdentityForActiveProfile()
         }
         reloadAccountsAndCrashContext()
@@ -2169,6 +2361,7 @@ final class PlozziOSAppModel {
         host: String,
         port: Int?,
         exportPath: String,
+        subpath: String = "",
         displayName: String
     ) -> Bool {
         do {
@@ -2176,6 +2369,7 @@ final class PlozziOSAppModel {
                 host: host,
                 port: port,
                 exportPath: exportPath,
+                subpath: subpath,
                 displayName: displayName
             )
             reloadAccountsAndCrashContext()
@@ -2196,7 +2390,8 @@ final class PlozziOSAppModel {
         share: String,
         username: String,
         password: String,
-        displayName: String
+        displayName: String,
+        subpath: String = ""
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveSMB(
@@ -2205,7 +2400,8 @@ final class PlozziOSAppModel {
                 share: share,
                 username: username,
                 password: password,
-                displayName: displayName
+                displayName: displayName,
+                subpath: subpath
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2419,6 +2615,430 @@ private struct PlozziOSMediaShareArtworkCacheLifecycle:
             accountID: accountID,
             credentialRevision: credentialRevision
         )
+    }
+}
+#endif
+
+#if os(iOS)
+private enum PlexOfflineDownloadQueue {
+    static func prepare(
+        progressiveURL: URL,
+        source: ManagedHTTPDownloadSource,
+        expectedDuration: TimeInterval?,
+        updateSource: @escaping PlozziOSBackgroundHTTPDownloadEngine.SourceUpdater,
+        updatePreparationProgress:
+            @escaping PlozziOSBackgroundHTTPDownloadEngine.PreparationProgressUpdater
+    ) async throws -> PlozziOSBackgroundHTTPDownloadEngine.Resolution {
+        guard let rootURL =
+                PlexOfflineTranscodeURLBuilder.makeDownloadQueueURL(
+                    from: progressiveURL
+                ) else {
+            throw PlexOfflineDownloadQueueError.invalidRequest
+        }
+
+        let reference: ManagedHTTPPreparationReference
+        if let existing = source.preparationReference {
+            reference = existing
+        } else {
+            let queueResponse = try await send(
+                QueueResponse.self,
+                to: rootURL,
+                method: "POST"
+            )
+            guard let queueID =
+                    queueResponse.MediaContainer.DownloadQueue.first?.id else {
+                throw PlexOfflineDownloadQueueError.invalidResponse
+            }
+            let addURL = try makeAddURL(
+                rootURL: rootURL,
+                progressiveURL: progressiveURL,
+                queueID: queueID,
+                source: source
+            )
+            let addResponse = try await send(
+                AddResponse.self,
+                to: addURL,
+                method: "POST"
+            )
+            guard let itemID =
+                    addResponse.MediaContainer.AddedQueueItems.first?.id
+                    ?? addResponse.MediaContainer.DownloadQueueItem.first?.id
+            else {
+                throw PlexOfflineDownloadQueueError.invalidResponse
+            }
+            reference = ManagedHTTPPreparationReference(
+                queueIdentifier: String(queueID),
+                itemIdentifier: String(itemID)
+            )
+            await updateSource(
+                ManagedHTTPDownloadSource(
+                    provider: source.provider,
+                    accountID: source.accountID,
+                    itemID: source.itemID,
+                    mediaSourceID: source.mediaSourceID,
+                    quality: source.quality,
+                    includesAllAudioTracks:
+                        source.includesAllAudioTracks,
+                    includesTextSubtitleTracks:
+                        source.includesTextSubtitleTracks,
+                    preferredAudioLanguages:
+                        source.preferredAudioLanguages,
+                    preparationReference: reference
+                )
+            )
+        }
+
+        while true {
+            try Task.checkCancellation()
+            let itemsURL = try endpoint(
+                rootURL: rootURL,
+                path: [
+                    reference.queueIdentifier,
+                    "items"
+                ]
+            )
+            let response = try await send(
+                ItemsResponse.self,
+                to: itemsURL,
+                method: "GET"
+            )
+            guard let item = response.MediaContainer.DownloadQueueItem.first(
+                where: {
+                    String($0.id) == reference.itemIdentifier
+                }
+            ) else {
+                await discard(
+                    rootURL: rootURL,
+                    reference: reference,
+                    source: source,
+                    updateSource: updateSource
+                )
+                throw PlexOfflineDownloadQueueError.missingItem
+            }
+            if item.TranscodeSession?.error == true {
+                await discard(
+                    rootURL: rootURL,
+                    reference: reference,
+                    source: source,
+                    updateSource: updateSource
+                )
+                throw PlexOfflineDownloadQueueError.serverFailure
+            }
+            await updatePreparationProgress(
+                item.TranscodeSession?.progress.map {
+                    min(1, max(0, $0 / 100))
+                }
+            )
+            switch item.status.lowercased() {
+            case "available":
+                await updatePreparationProgress(1)
+                let mediaURL = try endpoint(
+                    rootURL: rootURL,
+                    path: [
+                        reference.queueIdentifier,
+                        "item",
+                        reference.itemIdentifier,
+                        "media"
+                    ]
+                )
+                let cleanupURL = try endpoint(
+                    rootURL: rootURL,
+                    path: [
+                        reference.queueIdentifier,
+                        "items",
+                        reference.itemIdentifier
+                    ]
+                )
+                return .init(
+                    url: mediaURL,
+                    expectedDuration: expectedDuration,
+                    cleanupURL: cleanupURL
+                )
+            case "failed", "error", "cancelled", "expired":
+                await discard(
+                    rootURL: rootURL,
+                    reference: reference,
+                    source: source,
+                    updateSource: updateSource
+                )
+                throw PlexOfflineDownloadQueueError.serverFailure
+            case "waiting", "pending", "processing", "transcoding",
+                 "preparing", "queued":
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+            default:
+                throw PlexOfflineDownloadQueueError.invalidStatus(
+                    item.status
+                )
+            }
+        }
+    }
+
+    private static func makeAddURL(
+        rootURL: URL,
+        progressiveURL: URL,
+        queueID: Int,
+        source: ManagedHTTPDownloadSource
+    ) throws -> URL {
+        let progressiveItems = URLComponents(
+            url: progressiveURL,
+            resolvingAgainstBaseURL: false
+        )?.queryItems ?? []
+        func value(_ name: String) -> String? {
+            progressiveItems.first {
+                $0.name.caseInsensitiveCompare(name) == .orderedSame
+            }?.value
+        }
+        let metadataPath =
+            value("path") ?? "/library/metadata/\(source.itemID)"
+        let sessionID = UUID().uuidString.lowercased()
+        var queryItems = [
+            URLQueryItem(name: "keys", value: metadataPath),
+            URLQueryItem(name: "path", value: metadataPath),
+            URLQueryItem(name: "directPlay", value: "0"),
+            URLQueryItem(name: "directStream", value: "0"),
+            URLQueryItem(name: "directStreamAudio", value: "1"),
+            URLQueryItem(name: "protocol", value: "http"),
+            URLQueryItem(name: "fastSeek", value: "1"),
+            URLQueryItem(name: "session", value: sessionID),
+            URLQueryItem(
+                name: "mediaIndex",
+                value: value("mediaIndex") ?? "0"
+            ),
+            URLQueryItem(
+                name: "partIndex",
+                value: value("partIndex") ?? "0"
+            ),
+            URLQueryItem(name: "mediaBufferSize", value: "50000"),
+            URLQueryItem(name: "hasMDE", value: "1"),
+            URLQueryItem(name: "subtitleSize", value: "0"),
+            URLQueryItem(name: "videoQuality", value: "100"),
+            URLQueryItem(
+                name: "videoResolution",
+                value: value("videoResolution")
+            ),
+            URLQueryItem(
+                name: "maxVideoBitrate",
+                value: value("maxVideoBitrate")
+            ),
+            URLQueryItem(name: "audioBoost", value: "0"),
+            URLQueryItem(name: "autoAdjustSubtitle", value: "0"),
+            URLQueryItem(
+                name: "advancedSubtitles",
+                value: source.includesTextSubtitleTracks ? "text" : "none"
+            ),
+            URLQueryItem(name: "copyts", value: "1"),
+            URLQueryItem(
+                name: "X-Plex-Client-Profile-Name",
+                value: "Generic"
+            ),
+            URLQueryItem(
+                name: "X-Plex-Client-Profile-Extra",
+                value:
+                    "add-transcode-target(type=videoProfile&context=all&protocol=http&container=mp4&videoCodec=h264&audioCodec=aac&subtitleCodec=mov_text&replace=true)"
+            )
+        ]
+        if let audioStreamID = value("audioStreamID") {
+            queryItems.append(
+                URLQueryItem(name: "audioStreamID", value: audioStreamID)
+            )
+        }
+        if source.includesTextSubtitleTracks,
+           let subtitleStreamID = value("subtitleStreamID") {
+            queryItems.append(
+                URLQueryItem(
+                    name: "subtitleStreamID",
+                    value: subtitleStreamID
+                )
+            )
+            queryItems.append(
+                URLQueryItem(name: "subtitles", value: "auto")
+            )
+        } else {
+            queryItems.append(
+                URLQueryItem(name: "subtitles", value: "none")
+            )
+        }
+        return try endpoint(
+            rootURL: rootURL,
+            path: [String(queueID), "add"],
+            queryItems: queryItems
+        )
+    }
+
+    private static func discard(
+        rootURL: URL,
+        reference: ManagedHTTPPreparationReference,
+        source: ManagedHTTPDownloadSource,
+        updateSource: @escaping PlozziOSBackgroundHTTPDownloadEngine.SourceUpdater
+    ) async {
+        if let url = try? endpoint(
+            rootURL: rootURL,
+            path: [
+                reference.queueIdentifier,
+                "items",
+                reference.itemIdentifier
+            ]
+        ) {
+            var request = URLRequest(
+                url: url,
+                cachePolicy: .reloadIgnoringLocalCacheData,
+                timeoutInterval: 20
+            )
+            request.httpMethod = "DELETE"
+            _ = try? await URLSession.shared.data(for: request)
+        }
+        await updateSource(
+            ManagedHTTPDownloadSource(
+                provider: source.provider,
+                accountID: source.accountID,
+                itemID: source.itemID,
+                mediaSourceID: source.mediaSourceID,
+                quality: source.quality,
+                includesAllAudioTracks: source.includesAllAudioTracks,
+                includesTextSubtitleTracks:
+                    source.includesTextSubtitleTracks,
+                preferredAudioLanguages:
+                    source.preferredAudioLanguages
+            )
+        )
+    }
+
+    private static func endpoint(
+        rootURL: URL,
+        path: [String],
+        queryItems: [URLQueryItem] = []
+    ) throws -> URL {
+        guard var components = URLComponents(
+            url: rootURL,
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw PlexOfflineDownloadQueueError.invalidRequest
+        }
+        components.path += "/" + path.joined(separator: "/")
+        components.queryItems = (components.queryItems ?? []) + queryItems
+        guard let url = components.url else {
+            throw PlexOfflineDownloadQueueError.invalidRequest
+        }
+        return url
+    }
+
+    private static func send<Response: Decodable>(
+        _ type: Response.Type,
+        to url: URL,
+        method: String
+    ) async throws -> Response {
+        var request = URLRequest(
+            url: url,
+            cachePolicy: .reloadIgnoringLocalCacheData,
+            timeoutInterval: 30
+        )
+        request.httpMethod = method
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Accept"
+        )
+        request.setValue(
+            "1.0.0",
+            forHTTPHeaderField: "X-Plex-Pms-Api-Version"
+        )
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw PlexOfflineDownloadQueueError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw PlexOfflineDownloadQueueError.rejected(
+                status: httpResponse.statusCode
+            )
+        }
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            throw PlexOfflineDownloadQueueError.invalidResponse
+        }
+    }
+
+    private struct QueueResponse: Decodable {
+        struct Container: Decodable {
+            struct Queue: Decodable {
+                let id: Int
+            }
+            let DownloadQueue: [Queue]
+        }
+        let MediaContainer: Container
+    }
+
+    private struct AddResponse: Decodable {
+        struct Container: Decodable {
+            struct Item: Decodable {
+                let id: Int
+            }
+            let AddedQueueItems: [Item]
+            let DownloadQueueItem: [Item]
+
+            init(from decoder: any Decoder) throws {
+                let container = try decoder.container(
+                    keyedBy: CodingKeys.self
+                )
+                AddedQueueItems = try container.decodeIfPresent(
+                    [Item].self,
+                    forKey: .AddedQueueItems
+                ) ?? []
+                DownloadQueueItem = try container.decodeIfPresent(
+                    [Item].self,
+                    forKey: .DownloadQueueItem
+                ) ?? []
+            }
+
+            private enum CodingKeys: String, CodingKey {
+                case AddedQueueItems
+                case DownloadQueueItem
+            }
+        }
+        let MediaContainer: Container
+    }
+
+    private struct ItemsResponse: Decodable {
+        struct Container: Decodable {
+            struct Item: Decodable {
+                struct Session: Decodable {
+                    let progress: Double?
+                    let error: Bool?
+                }
+                let id: Int
+                let status: String
+                let TranscodeSession: Session?
+            }
+            let DownloadQueueItem: [Item]
+        }
+        let MediaContainer: Container
+    }
+}
+
+private enum PlexOfflineDownloadQueueError: LocalizedError {
+    case invalidRequest
+    case invalidResponse
+    case rejected(status: Int)
+    case missingItem
+    case serverFailure
+    case invalidStatus(String)
+
+    var errorDescription: String? { // l10n:content — LocalizedError protocol requires resolved text
+        let resource: LocalizedStringResource
+        switch self {
+        case .invalidRequest:
+            resource = "Plex could not build the offline download request."
+        case .invalidResponse:
+            resource = "Plex returned an invalid offline download response."
+        case let .rejected(status):
+            resource = "Plex rejected offline download preparation with HTTP \(status)."
+        case .missingItem:
+            resource = "Plex removed the prepared download before it could be transferred."
+        case .serverFailure:
+            resource = "Plex could not prepare this offline rendition."
+        case let .invalidStatus(status):
+            resource = "Plex returned an unknown offline download status: \(status)."
+        }
+        return String(localized: resource) // l10n:content — LocalizedError requires resolved text.
     }
 }
 #endif

@@ -22,8 +22,25 @@ enum EngineSelection {
         capabilities: MediaCapabilities,
         subtitleRule: SubtitlePolicy.Rule
     ) -> PlaybackEngineKind {
-        if request.streamURL?.isFileURL == true, plozzigenAvailable {
-            return .plozzigen
+        if let streamURL = request.streamURL, streamURL.isFileURL {
+            if streamURL.pathExtension.lowercased() == "movpkg" {
+                // Legacy failed Plex rendition records can retain this filename
+                // after switching from HLS packages to progressive MKV. A real
+                // package is a directory; a progressive file needs Plozzigen.
+                let isDirectory = (
+                    try? streamURL.resourceValues(
+                        forKeys: [.isDirectoryKey]
+                    ).isDirectory
+                ) == true
+                if isDirectory || !FileManager.default.fileExists(
+                    atPath: streamURL.path
+                ) {
+                    return .native
+                }
+            }
+            if plozzigenAvailable {
+                return .plozzigen
+            }
         }
         if case .some(.networkFile) = request.playbackSource {
             return .plozzigen

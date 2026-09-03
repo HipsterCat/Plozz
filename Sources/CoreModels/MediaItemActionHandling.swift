@@ -29,8 +29,37 @@ public protocol MediaItemActionHandling: AnyObject {
     /// Current Plozz-owned membership. Must be an immutable in-memory lookup.
     func isWatchlisted(_ item: MediaItem) -> Bool
 
+    /// Whether the viewer explicitly requested removal and that local write is
+    /// still pending. Never infer this from membership or refresh results.
+    func isActivelyRemovingFromWatchlist(_ item: MediaItem) -> Bool
+
     /// Resolves the durable ordered row against current presentation candidates.
     func durableWatchlistItems(from candidates: [MediaItem]) -> [MediaItem]
+
+    /// Whether the durable watchlist runtime has restored its last-known native
+    /// view and can authoritatively re-resolve a saved Home row.
+    ///
+    /// Home itself has a persisted snapshot. On process start that snapshot is
+    /// ready before the watchlist runtime has opened its own file. Resolving it
+    /// against the still-empty runtime does not "freshen" it — it throws away
+    /// every native-only entry and every cached ownership answer, producing the
+    /// 78 explicit intents where the saved row held 181 resolved titles. Until
+    /// this turns true, last session's Home snapshot is the more complete truth.
+    func isDurableWatchlistPresentationReady() -> Bool
+
+    /// Exact number of slots in a native refresh whose identity is known but
+    /// whose library ownership is still resolving. `nil` when no refresh is in
+    /// that phase.
+    func durableWatchlistLoadingTargetCount() -> Int?
+
+    /// Rebuilds authenticated artwork URLs for owned watchlist items.
+    ///
+    /// Persisted Home/native-watchlist state must not contain credentials, so a
+    /// Plex/Jellyfin URL read from disk is resource identity, not a request that
+    /// can succeed. The item already knows its owned `(account, item ID)`;
+    /// composition uses that to ask the active provider for a current signed URL
+    /// synchronously, before the first frame.
+    func rehydratePersistedArtwork(_ items: [MediaItem]) -> [MediaItem]
 
     /// One-time bounded Home-cache migration before native imports.
     func seedLegacyWatchlist(_ items: [MediaItem]) async
@@ -40,8 +69,14 @@ public protocol MediaItemActionHandling: AnyObject {
 public extension MediaItemActionHandling {
     func invalidateAccountCaches() {}
     func isWatchlisted(_ item: MediaItem) -> Bool { false }
+    func isActivelyRemovingFromWatchlist(_ item: MediaItem) -> Bool { false }
     func durableWatchlistItems(from candidates: [MediaItem]) -> [MediaItem] {
         candidates.filter(\.isFavorite)
+    }
+    func isDurableWatchlistPresentationReady() -> Bool { true }
+    func durableWatchlistLoadingTargetCount() -> Int? { nil }
+    func rehydratePersistedArtwork(_ items: [MediaItem]) -> [MediaItem] {
+        items
     }
     func seedLegacyWatchlist(_ items: [MediaItem]) async {}
 }
@@ -61,8 +96,50 @@ public extension Notification.Name {
     /// it. Carries no payload; observers read the live snapshot on receipt.
     static let identityIndexDidUpdate = Notification.Name("PlozzIdentityIndexDidUpdate")
     /// Posted after durable Plozz watchlist membership changes locally.
+    ///
+    /// **Expensive.** Home answers it with `refreshDurableWatchlist()`, which
+    /// re-resolves universal identity for every loaded card and then saves the
+    /// content store — hundreds of milliseconds of main-thread work, on purpose,
+    /// because the durable set really did move. Post it when the DURABLE state
+    /// changes, never merely to refresh a control.
     static let universalWatchlistDidChange =
         Notification.Name("PlozzUniversalWatchlistDidChange")
+
+    /// Posted after the last-known native watchlist has been restored from disk.
+    ///
+    /// Separate from ``universalWatchlistDidChange`` because that notification is
+    /// intentionally debounced by Home: it normally follows a user write, and an
+    /// immediate full-row identity resolve delayed the frame that acknowledged the
+    /// press by six or seven seconds. A cache restore is the opposite situation —
+    /// nobody is interacting, the data is already in memory, and the whole point
+    /// is to paint last-known ownership before the first network refresh.
+    ///
+    /// Home answers this one immediately. Without it, the cache loaded correctly
+    /// but sat unpublished until a 30–45 second destination refresh happened to
+    /// post the ordinary change notification; every owned card showed "+" in the
+    /// meantime.
+    static let universalWatchlistCacheDidLoad =
+        Notification.Name("PlozzUniversalWatchlistCacheDidLoad")
+
+    /// Posted after a native read has resolved complete membership and ordering,
+    /// before slower per-title ownership checks finish. Existing cards stay put;
+    /// Home and Watchlist add skeleton slots for the unresolved remainder.
+    static let universalWatchlistLoadingProgressDidChange =
+        Notification.Name("PlozzUniversalWatchlistLoadingProgressDidChange")
+
+    /// Posted when a watchlist press is accepted, before the durable write.
+    ///
+    /// The cheap counterpart to `universalWatchlistDidChange`, and separate from
+    /// it for a measured reason: raising the durable notification on the press
+    /// ran Home's full identity re-resolve plus a content-store save on the main
+    /// thread, so the frame that would have shown the button's new state could
+    /// not be drawn until it finished. The button appeared to lag the toast by
+    /// six or seven seconds — worse than the two or three it was meant to fix.
+    ///
+    /// Only the views that draw a watchlist control observe this, and all they do
+    /// is ask again. Nothing recomputes a row, nothing touches disk.
+    static let watchlistIntentDidChange =
+        Notification.Name("PlozzWatchlistIntentDidChange")
 }
 
 /// The payload of a `.mediaItemDidMutate` notification: which items changed and
@@ -115,6 +192,21 @@ public struct MediaItemMutation: Sendable, Equatable {
     /// New fractional watched progress in `0...1`, or `nil` if unchanged. Drives the
     /// poster-card progress bar directly (`PosterCardView` reads `playedPercentage`).
     public let playedPercentage: Double?
+    /// The card this mutation is about, when the sender had it.
+    ///
+    /// Carried so a surface can show a title it was not already showing. Every
+    /// other field describes a *change* to a card a screen is assumed to hold
+    /// already, which is true for a badge or a progress bar and false for the one
+    /// case that matters most: the first time something is played, Continue
+    /// Watching has never carried it. Home would then have nothing to update, and
+    /// would have to ask a server that has not necessarily recorded the play yet —
+    /// measured on device losing that race routinely, leaving the title missing
+    /// until the app was relaunched.
+    ///
+    /// The player is holding the real card the whole time it plays, so passing it
+    /// along costs nothing and removes the question entirely. `nil` from senders
+    /// that genuinely have only ids, such as a context-menu toggle.
+    public let item: MediaItem?
 
     public init(
         itemIDs: Set<String>,
@@ -122,7 +214,8 @@ public struct MediaItemMutation: Sendable, Equatable {
         played: Bool? = nil,
         favorite: Bool? = nil,
         resumePosition: TimeInterval? = nil,
-        playedPercentage: Double? = nil
+        playedPercentage: Double? = nil,
+        item: MediaItem? = nil
     ) {
         self.itemIDs = itemIDs
         self.scopedItemIDs = scopedItemIDs
@@ -130,6 +223,7 @@ public struct MediaItemMutation: Sendable, Equatable {
         self.favorite = favorite
         self.resumePosition = resumePosition
         self.playedPercentage = playedPercentage
+        self.item = item
     }
 
     /// Reconstructs the optimistic UI portion of a durable outbox mutation. This
@@ -156,6 +250,7 @@ public struct MediaItemMutation: Sendable, Equatable {
         static let favorite = "favorite"
         static let resumePosition = "resumePosition"
         static let playedPercentage = "playedPercentage"
+        static let item = "item"
     }
 
     /// Account-scoped key for one physical copy, matching ``MediaSourceRef/id``.
@@ -244,6 +339,10 @@ public struct MediaItemMutation: Sendable, Equatable {
         if let favorite { userInfo[Key.favorite] = favorite }
         if let resumePosition { userInfo[Key.resumePosition] = resumePosition }
         if let playedPercentage { userInfo[Key.playedPercentage] = playedPercentage }
+        // Passed by reference through the notification rather than encoded: the
+        // observers are all in-process, and a round trip through Data would cost a
+        // needless encode on the main thread at the moment playback stops.
+        if let item { userInfo[Key.item] = item }
         NotificationCenter.default.post(
             name: .mediaItemDidMutate,
             object: nil,
@@ -269,7 +368,8 @@ public struct MediaItemMutation: Sendable, Equatable {
             played: played,
             favorite: favorite,
             resumePosition: resumePosition,
-            playedPercentage: playedPercentage
+            playedPercentage: playedPercentage,
+            item: notification.userInfo?[Key.item] as? MediaItem
         )
     }
 }

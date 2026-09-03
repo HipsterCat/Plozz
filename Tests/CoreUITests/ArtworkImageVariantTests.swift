@@ -13,6 +13,7 @@ final class ArtworkImageVariantTests: XCTestCase {
         // only `.original` decodes at native source size.
         XCTAssertNil(ArtworkImageVariant.original.maxPixelSize)
         XCTAssertEqual(ArtworkImageVariant.musicThumbnail.maxPixelSize, 256)
+        XCTAssertEqual(ArtworkImageVariant.posterPreview.maxPixelSize, 320)
         XCTAssertEqual(ArtworkImageVariant.posterCard.maxPixelSize, 960)
         XCTAssertEqual(ArtworkImageVariant.landscapeCard.maxPixelSize, 1_200)
         XCTAssertEqual(ArtworkImageVariant.heroPreview.maxPixelSize, 768)
@@ -24,10 +25,12 @@ final class ArtworkImageVariantTests: XCTestCase {
         // never decode larger than the hero, and every bounded variant must be
         // smaller than an unbounded `.original`.
         let poster = ArtworkImageVariant.posterCard.maxPixelSize!
+        let posterPreview = ArtworkImageVariant.posterPreview.maxPixelSize!
         let landscape = ArtworkImageVariant.landscapeCard.maxPixelSize!
         let preview = ArtworkImageVariant.heroPreview.maxPixelSize!
         let hero = ArtworkImageVariant.heroBackdrop.maxPixelSize!
         XCTAssertLessThan(poster, hero)
+        XCTAssertLessThan(posterPreview, poster)
         XCTAssertLessThan(landscape, hero)
         XCTAssertLessThan(preview, hero)
         XCTAssertLessThanOrEqual(poster, landscape)
@@ -101,6 +104,30 @@ final class ArtworkImageVariantTests: XCTestCase {
     func testUnknownArtworkEndpointIsNotRewritten() {
         let source = URL(string: "https://images.example.com/backdrop.jpg?width=3840")!
         XCTAssertEqual(ArtworkImageVariant.heroPreview.requestURL(for: source), source)
+    }
+
+    func testPreviewIsNotDistinctForUnresizableArtworkEndpoint() {
+        let source = URL(string: "https://images.example.com/poster.jpg")!
+
+        XCTAssertFalse(
+            ArtworkImageVariant.posterPreview.hasDistinctRequestURL(
+                from: .posterCard,
+                for: source
+            )
+        )
+    }
+
+    func testPreviewIsDistinctForResizablePlexArtworkEndpoint() {
+        let source = URL(
+            string: "https://plex.example/photo/:/transcode?width=1280&height=1920"
+        )!
+
+        XCTAssertTrue(
+            ArtworkImageVariant.posterPreview.hasDistinctRequestURL(
+                from: .posterCard,
+                for: source
+            )
+        )
     }
 
     #if canImport(UIKit)

@@ -1,24 +1,33 @@
+public enum WatchlistNavigationPolicy {
+    /// Optional Watchlist chrome may disappear while selected. Required
+    /// destinations are left untouched; only Watchlist falls back to Home.
+    public static func resolvedSelection<Destination: Equatable>(
+        _ selection: Destination,
+        watchlist: Destination,
+        home: Destination,
+        showsWatchlist: Bool
+    ) -> Destination {
+        selection == watchlist && !showsWatchlist ? home : selection
+    }
+}
+
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
 import CoreUI
 
-/// The compact, in-Settings picker for the navigation style: a two-up row of
-/// preview cards (`PreviewCard` + `NavigationStyleSwatch`) that share the detail
-/// pane's width, mirroring `CompactWatchIndicatorPicker`. Tapping a card selects
-/// that chrome; the active one carries the same accent wash/ring the theme and
+/// The compact, in-Settings picker for the navigation style: a row of preview
+/// cards (`PreviewCard` + `NavigationStyleSwatch`) that share the detail pane's
+/// width, mirroring `CompactWatchIndicatorPicker`. Tapping a card selects that
+/// chrome; the active one carries the same accent wash/ring the theme and
 /// card-style pickers use.
-///
-/// With only two choices there's plenty of horizontal room, so each card's
-/// preview is given the same taller swatch the watch-indicator picker uses, so the
-/// top-bar-vs-sidebar illustration reads clearly.
 struct CompactNavigationPicker: View {
     @Binding var selection: NavigationStyle
     @Environment(\.themePalette) private var palette
 
-    /// Matches `CompactWatchIndicatorPicker` — the two-up layout leaves room for a
-    /// larger, more legible chrome illustration.
-    private let swatchHeight: CGFloat = 248
+    /// Matches `CompactWatchIndicatorPicker`'s proportions, trimmed so three cards
+    /// (rather than two) still read clearly across the detail pane's width.
+    private let swatchHeight: CGFloat = 210
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {

@@ -22,6 +22,7 @@ struct MusicArtworkImage: View {
     /// don't shift with the app theme.
     var showsMediaEdge: Bool = true
     var asyncFallbackURL: (@Sendable () async -> URL?)? = nil
+    var pinIdentity: String? = nil
     /// Optional override for the placeholder icon color — pass
     /// `PlozzCardCaption.subtitleColor(...)` so it flips with focus + reduced
     /// transparency. Falls back to `.secondary` when nil.
@@ -35,6 +36,7 @@ struct MusicArtworkImage: View {
         variant: ArtworkImageVariant = .original,
         showsMediaEdge: Bool = true,
         asyncFallbackURL: (@Sendable () async -> URL?)? = nil,
+        pinIdentity: String? = nil,
         placeholderColor: Color? = nil
     ) {
         self.url = url
@@ -43,6 +45,7 @@ struct MusicArtworkImage: View {
         self.variant = variant
         self.showsMediaEdge = showsMediaEdge
         self.asyncFallbackURL = asyncFallbackURL
+        self.pinIdentity = pinIdentity
         self.placeholderColor = placeholderColor
     }
 
@@ -53,7 +56,8 @@ struct MusicArtworkImage: View {
             FallbackAsyncImage(
                 urls: [url].compactMap { $0 },
                 variant: variant,
-                asyncFallbackURL: asyncFallbackURL
+                asyncFallbackURL: asyncFallbackURL,
+                pinIdentity: pinIdentity
             ) {
                 placeholder
             }
@@ -104,6 +108,7 @@ struct MusicCard: View {
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
     @Environment(\.plozzMetrics) private var metrics
     @Environment(\.plozzCardStyle) private var cardStyle
+    @Environment(\.plozzCardFocusStyle) private var focusStyle
 
     /// The artwork edge length, scaled by the active UI density so music tiles
     /// grow/shrink in step with the movie/show cards.
@@ -127,14 +132,19 @@ struct MusicCard: View {
         self.action = action
     }
 
+    /// Whether the card's surface should read as focused: the glass lift is the
+    /// framed card's focus outline, so with the outline off it stays at rest and
+    /// the caption keeps its resting ink.
+    private var surfaceFocused: Bool { isFocused && focusStyle.drawsFocusOutline }
+
     /// Title/subtitle colour, flipped to dark ink over a focused card's opaque
     /// "lift" surface. Centralised in `PlozzCardCaption` (CoreUI) so every card
     /// type flips identically.
     private var titleColor: Color {
-        PlozzCardCaption.titleColor(isFocused: isFocused, reduceTransparency: reduceTransparency)
+        PlozzCardCaption.titleColor(isFocused: surfaceFocused, reduceTransparency: reduceTransparency)
     }
     private var subtitleColor: Color {
-        PlozzCardCaption.subtitleColor(isFocused: isFocused, reduceTransparency: reduceTransparency)
+        PlozzCardCaption.subtitleColor(isFocused: surfaceFocused, reduceTransparency: reduceTransparency)
     }
 
     var body: some View {
@@ -152,27 +162,36 @@ struct MusicCard: View {
                 .frame(width: scaledWidth, height: scaledWidth)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: metrics.cardTitleFontSize, weight: .semibold))
-                    .foregroundStyle(titleColor)
-                    .lineLimit(1)
-                Text(subtitle ?? " ")
-                    .font(.system(size: metrics.cardSubtitleFontSize))
-                    .foregroundStyle(subtitleColor)
-                    .lineLimit(1)
-                    .opacity(subtitle == nil ? 0 : 1)
+                PlozzMarqueeText(
+                    text: Text(title),
+                    font: .system(size: metrics.cardTitleFontSize, weight: .semibold),
+                    color: titleColor,
+                    inset: metrics.landscapeCaptionInset,
+                    isFocused: isFocused
+                )
+                PlozzMarqueeText(
+                    text: Text(subtitle ?? " "),
+                    font: .system(size: metrics.cardSubtitleFontSize),
+                    color: subtitleColor,
+                    inset: metrics.landscapeCaptionInset,
+                    isFocused: isFocused
+                )
+                .opacity(subtitle == nil ? 0 : 1)
             }
-            .padding([.horizontal, .bottom], metrics.landscapeCaptionInset)
+            .padding(.bottom, metrics.landscapeCaptionInset)
             .frame(width: scaledWidth, alignment: .leading)
         }
         .padding(metrics.cardInset)
-        .plozzGlassCard(cornerRadius: metrics.landscapeCardCornerRadius, isFocused: isFocused)
+        .plozzGlassCard(cornerRadius: metrics.landscapeCardCornerRadius, isFocused: surfaceFocused)
         .focusableCard(isFocused: $isFocused, cornerRadius: metrics.landscapeCardCornerRadius, action: action)
         .plozzCardRasterize(reduceTransparency: reduceTransparency)
         .shadow(color: .black.opacity(isFocused ? 0.36 : 0.15), radius: isFocused ? 20 : 8, y: isFocused ? 10 : 4)
-        .scaleEffect(isFocused ? PlozzTheme.Metrics.mediumFocusedCardScale : 1)
-        .zIndex(isFocused ? 2 : 0)
-        .animation(.easeOut(duration: 0.18), value: isFocused)
+        .plozzCardFocusLift(
+            isFocused: isFocused,
+            cornerRadius: metrics.landscapeCardCornerRadius,
+            outlineScale: PlozzTheme.Metrics.mediumFocusedCardScale
+        )
+        .plozzCardFocusTransition(isFocused: isFocused)
     }
 
     /// Borderless ("Posters") music card: the square artwork with no glass
@@ -192,21 +211,21 @@ struct MusicCard: View {
             BorderlessCardCaption(
                 title: Text(verbatim: title),
                 subtitle: subtitle,
-                horizontalInset: metrics.landscapeCaptionInset
+                horizontalInset: metrics.landscapeCaptionInset,
+                isFocused: isFocused
             )
             .frame(width: scaledWidth)
             // Push the caption down on focus with a pure transform (see
             // `borderlessCaptionSpacing`) so the footprint stays fixed and focusing
             // a tile never shifts the grid/row.
-            .offset(y: isFocused ? 0 : -metrics.focusCaptionPush)
+            .offset(y: isFocused ? 0 : -captionPush)
         }
         .padding(.horizontal, metrics.borderlessCardSideMargin)
         .focusableCard(isFocused: $isFocused, cornerRadius: metrics.landscapeCardCornerRadius, action: action)
         // See PosterCardView.borderlessCard: composite (never rasterize) so the
         // focus halo + scale bloom that extend beyond the bounds aren't clipped.
         .compositingGroup()
-        .zIndex(isFocused ? 2 : 0)
-        .animation(.easeOut(duration: 0.18), value: isFocused)
+        .plozzCardFocusTransition(isFocused: isFocused)
     }
 
     /// Artwork↔caption gap for the borderless music card. Always reserved at its
@@ -214,7 +233,13 @@ struct MusicCard: View {
     /// unfocused via a transform offset, so the tile's footprint never changes with
     /// focus and neighbours don't move.
     private var borderlessCaptionSpacing: CGFloat {
-        metrics.landscapeCaptionTopSpacing + metrics.focusCaptionPush
+        metrics.landscapeCaptionTopSpacing + captionPush
+    }
+
+    /// How far this card's caption drops on focus, for the active focus style —
+    /// the highlight style grows the card further, so the caption clears further.
+    private var captionPush: CGFloat {
+        metrics.focusCaptionPush(for: focusStyle)
     }
 
     @ViewBuilder
@@ -224,6 +249,7 @@ struct MusicCard: View {
             systemPlaceholder: systemPlaceholder,
             cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius,
             asyncFallbackURL: asyncFallbackURL,
+            pinIdentity: "\(title)\n\(subtitle ?? "")",
             placeholderColor: subtitleColor
         )
     }
@@ -237,6 +263,7 @@ struct MusicCard: View {
             systemPlaceholder: systemPlaceholder,
             cornerRadius: metrics.landscapeCardCornerRadius,
             asyncFallbackURL: asyncFallbackURL,
+            pinIdentity: "\(title)\n\(subtitle ?? "")",
             placeholderColor: .secondary
         )
     }
@@ -299,7 +326,8 @@ struct ArtistCard: View {
                     url: artist.artworkURL,
                     systemPlaceholder: "music.mic",
                     cornerRadius: diameter / 2,
-                    asyncFallbackURL: MusicArtworkFallback.artistImage(name: artist.name)
+                    asyncFallbackURL: MusicArtworkFallback.artistImage(name: artist.name),
+                    pinIdentity: artist.id
                 )
             },
             caption: { isFocused in

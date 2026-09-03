@@ -28,6 +28,10 @@ struct PlozziOSDiagnosticsSettingsView: View {
         )
     }
 
+    private var crashReportingFooter: LocalizedStringResource {
+        "Anonymous crash and freeze reports. No servers, logins, credentials, or viewing activity."
+    }
+
     var body: some View {
         List {
             SettingsSectionGroup("Get Help") {
@@ -58,9 +62,7 @@ struct PlozziOSDiagnosticsSettingsView: View {
                 .disabled(!appModel.crashReportingController.isConfigured)
             } footer: {
                 if appModel.crashReportingController.isConfigured {
-                    Text(
-                        "On by default during the beta; you can turn it off any time. When enabled, anonymous crash details help improve Plozz. Server addresses, media titles, profile names, and credentials are never included."
-                    )
+                    Text(crashReportingFooter)
                 } else {
                     Text("Crash reporting is unavailable in this build.")
                 }
@@ -93,13 +95,22 @@ struct PlozziOSDiagnosticsSettingsView: View {
             }
 
             SettingsSectionGroup {
-                Toggle("Playback diagnostics", isOn: $model.settings.isEnabled)
-                Toggle(
-                    "Home performance overlay",
-                    isOn: $model.settings.homePerformanceOverlayEnabled
-                )
-            } footer: {
-                Text("Troubleshooting overlays stay on this device and are off by default.")
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Playback Diagnostics Overlay", isOn: $model.settings.isEnabled)
+                    Text("Shows codec, bitrate, buffer, and memory during playback.")
+                        .font(.footnote)
+                        .plozzForeground(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle(
+                        "Home Performance Overlay",
+                        isOn: $model.settings.homePerformanceOverlayEnabled
+                    )
+                    Text("Shows FPS, hitches, and thermal state on Home.")
+                        .font(.footnote)
+                        .plozzForeground(.secondary)
+                }
             }
         }
         .settingsPageSurface()

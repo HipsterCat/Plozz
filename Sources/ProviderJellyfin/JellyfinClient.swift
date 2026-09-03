@@ -365,7 +365,19 @@ public struct JellyfinClient: Sendable {
     func item(userID: String, id: String) async throws -> BaseItemDto {
         let endpoint = Endpoint(
             path: "/Users/\(userID)/Items/\(id)",
-            queryItems: [URLQueryItem(name: "Fields", value: "Overview,OriginalTitle,MediaStreams,MediaSources,ProviderIds,Trickplay,Chapters,Genres,People,Studios,Tags,Taglines")],
+            queryItems: [
+                URLQueryItem(name: "Fields", value: "Overview,OriginalTitle,MediaStreams,MediaSources,ProviderIds,Trickplay,Chapters,Genres,People,Studios,Tags,Taglines"),
+                // Ask for the title's *other* backdrops, so the detail page has a
+                // second picture to show and isn't reduced to repeating Home's.
+                //
+                // Deliberately only here. `ImageTypeLimit` caps tags per image type
+                // across the whole response, so raising it on a listing would grow
+                // every card's payload in a grid that shows one image each. This is
+                // a single item the viewer has opened, so the extra tags are a few
+                // dozen bytes on a request that is already fetching chapters,
+                // people and media sources.
+                URLQueryItem(name: "ImageTypeLimit", value: "4")
+            ],
             headers: authHeaders
         )
         let result = try await interactiveHTTP.decode(BaseItemDto.self, from: endpoint, baseURL: baseURL)
@@ -442,7 +454,24 @@ public struct JellyfinClient: Sendable {
     func localTrailers(userID: String, id: String) async throws -> [BaseItemDto] {
         let endpoint = Endpoint(
             path: "/Users/\(userID)/Items/\(id)/LocalTrailers",
-            queryItems: [URLQueryItem(name: "Fields", value: "Overview")],
+            queryItems: [URLQueryItem(
+                name: "Fields",
+                value: "Overview,MediaStreams,MediaSources,UserData"
+            )],
+            headers: authHeaders
+        )
+        return try await http.decode([BaseItemDto].self, from: endpoint, baseURL: baseURL)
+    }
+
+    /// Local special features attached to a movie, series, season, episode, or
+    /// collection. Jellyfin and Emby return ordinary playable item DTOs.
+    func specialFeatures(userID: String, id: String) async throws -> [BaseItemDto] {
+        let endpoint = Endpoint(
+            path: "/Users/\(userID)/Items/\(id)/SpecialFeatures",
+            queryItems: [URLQueryItem(
+                name: "Fields",
+                value: "Overview,MediaStreams,MediaSources,UserData"
+            )],
             headers: authHeaders
         )
         return try await http.decode([BaseItemDto].self, from: endpoint, baseURL: baseURL)
@@ -717,26 +746,71 @@ public struct JellyfinClient: Sendable {
         _ = try await http.send(endpoint, baseURL: baseURL)
     }
 
-    /// `GET /Users/{userId}/Items?Filters=IsFavorite` — the user's favourited
-    /// movies & series, newest first, for the Watchlist row. Requests the same
-    /// card-level fields as other rows so artwork resolves.
-    func favorites(userID: String, limit: Int = 60) async throws -> [BaseItemDto] {
-        let endpoint = Endpoint(
-            path: "/Users/\(userID)/Items",
-            queryItems: [
-                URLQueryItem(name: "Filters", value: "IsFavorite"),
-                URLQueryItem(name: "Recursive", value: "true"),
-                URLQueryItem(name: "IncludeItemTypes", value: "Movie,Series"),
-                URLQueryItem(name: "SortBy", value: "DateCreated"),
-                URLQueryItem(name: "SortOrder", value: "Descending"),
-                URLQueryItem(name: "Limit", value: String(limit)),
-                URLQueryItem(name: "Fields", value: "PrimaryImageAspectRatio,ProviderIds"),
-                URLQueryItem(name: "ImageTypeLimit", value: "1"),
-                URLQueryItem(name: "EnableTotalRecordCount", value: "false")
-            ],
-            headers: authHeaders
-        )
-        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL).Items
+    /// `GET /Users/{userId}/Items?Filters=IsFavorite` — every favourited movie
+    /// and series, in the order returned by the server.
+    ///
+    /// Neither Jellyfin nor Emby exposes when an item was favourited. In
+    /// particular, `DateCreated` is the date the library item was created, not the
+    /// date the user added the favourite, so imposing that sort would fabricate
+    /// watchlist chronology. The server's order is preserved instead.
+    func favorites(userID: String, limit: Int = 10_000) async throws -> [BaseItemDto] {
+        guard limit > 0 else { throw AppError.invalidResponse }
+        let maximumPages = 1_000
+        var startIndex = 0
+        var expectedTotal: Int?
+        var seenIDs: Set<String> = []
+        var collected: [BaseItemDto] = []
+
+        for _ in 0..<maximumPages {
+            let endpoint = Endpoint(
+                path: "/Users/\(userID)/Items",
+                queryItems: [
+                    URLQueryItem(name: "Filters", value: "IsFavorite"),
+                    URLQueryItem(name: "Recursive", value: "true"),
+                    URLQueryItem(name: "IncludeItemTypes", value: "Movie,Series"),
+                    URLQueryItem(name: "StartIndex", value: String(startIndex)),
+                    URLQueryItem(name: "Limit", value: String(limit)),
+                    URLQueryItem(name: "Fields", value: "PrimaryImageAspectRatio,ProviderIds"),
+                    URLQueryItem(name: "ImageTypeLimit", value: "1"),
+                    URLQueryItem(name: "EnableTotalRecordCount", value: "true")
+                ],
+                headers: authHeaders
+            )
+            let response = try await http.decode(
+                ItemsResponse.self,
+                from: endpoint,
+                baseURL: baseURL
+            )
+            guard let total = response.TotalRecordCount,
+                  total >= 0,
+                  response.Items.count <= limit else {
+                throw AppError.invalidResponse
+            }
+            if let expectedTotal {
+                guard total == expectedTotal else {
+                    throw AppError.invalidResponse
+                }
+            } else {
+                expectedTotal = total
+            }
+            for item in response.Items {
+                guard !item.Id.isEmpty, seenIDs.insert(item.Id).inserted else {
+                    throw AppError.invalidResponse
+                }
+            }
+            collected.append(contentsOf: response.Items)
+            guard collected.count <= total else {
+                throw AppError.invalidResponse
+            }
+            if collected.count == total {
+                return collected
+            }
+            guard !response.Items.isEmpty else {
+                throw AppError.invalidResponse
+            }
+            startIndex = collected.count
+        }
+        throw AppError.invalidResponse
     }
 
     /// `POST /Items/{itemId}/Refresh` — asks the server to re-scan metadata &
@@ -952,7 +1026,7 @@ public struct JellyfinClient: Sendable {
     /// what busts client-side image caches when art is replaced server-side —
     /// without it, replaced art keeps showing the stale cached copy because the
     /// tag-less URL never changes.
-    func imageURL(itemID: String, kind: ImageKind, maxWidth: Int?, tag: String? = nil) -> URL? {
+    func imageURL(itemID: String, kind: ImageKind, maxWidth: Int?, tag: String? = nil, index: Int? = nil) -> URL? {
         let typeSegment: String
         switch kind {
         case .primary: typeSegment = "Primary"
@@ -963,6 +1037,15 @@ public struct JellyfinClient: Sendable {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
         let basePath = components.path.hasSuffix("/") ? String(components.path.dropLast()) : components.path
         components.path = basePath + "/Items/\(itemID)/Images/\(typeSegment)"
+        // Only `Backdrop` holds more than one image, and the *index* is what
+        // selects between them — it belongs in the path, not the query. `tag`
+        // alone does not: the server reads it for cache validation and still
+        // serves index 0, so a second backdrop requested by tag came back as the
+        // first one. Index 0 keeps the bare path it has always used, so every
+        // existing URL (and anything cached under it) is byte-identical.
+        if let index, index > 0 {
+            components.path += "/\(index)"
+        }
         var query: [URLQueryItem] = []
         if let maxWidth {
             query.append(URLQueryItem(name: "maxWidth", value: String(maxWidth)))

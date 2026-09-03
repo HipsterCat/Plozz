@@ -57,6 +57,10 @@ public enum WatchlistPresentationResolver {
                 // refuses to act without a strong external id, so this widens
                 // what gets ASKED, never what gets matched.
                 var candidate = item
+                if candidate.artworkSourceAccountIDsByURL.isEmpty,
+                   let accountID = entry.artworkSourceAccountID {
+                    candidate = candidate.taggingArtworkSource(accountID)
+                }
                 if !candidate.locallyValidatedPlayableSource,
                    candidate.availability == nil {
                     candidate.availability = .unknown
@@ -69,6 +73,12 @@ public enum WatchlistPresentationResolver {
                 if let owned = entry.ownedSource,
                    !candidate.locallyValidatedPlayableSource {
                     var resolved = candidate.selectingSource(owned)
+                    resolved = applyingOwnedPresentation(
+                        entry.presentation,
+                        artworkSourceAccountID:
+                            entry.artworkSourceAccountID,
+                        to: resolved
+                    )
                     resolved.availability = nil
                     resolved.watchlistAliasID = aliasID
                     return WatchlistPresentationEntry(
@@ -118,7 +128,8 @@ public enum WatchlistPresentationResolver {
                 // and it is also what makes the badge correct if the search below
                 // finds nothing.
                 availability: .unknown,
-                locallyValidatedPlayableSource: false
+                locallyValidatedPlayableSource: false,
+                artworkSourceAccountID: entry.artworkSourceAccountID
             )
             let resolved = indexedSources.flatMap {
                 placeholder.retargetedToOwnedLibraryCopy(
@@ -130,12 +141,53 @@ public enum WatchlistPresentationResolver {
             // answer first, the index only as a fallback.
             var item = entry.ownedSource.map {
                 var owned = placeholder.selectingSource($0)
+                owned = applyingOwnedPresentation(
+                    entry.presentation,
+                    artworkSourceAccountID:
+                        entry.artworkSourceAccountID,
+                    to: owned
+                )
                 owned.availability = nil
                 return owned
             } ?? resolved ?? placeholder
             item.watchlistAliasID = aliasID
             return WatchlistPresentationEntry(aliasID: aliasID, item: item)
         }
+    }
+
+    /// Carries the owned library's artwork onto the item at the same moment its
+    /// source makes the availability badge disappear.
+    ///
+    /// `selectingSource` deliberately changes playback identity only:
+    /// `MediaSourceRef` has no artwork. Without this fold, the card learned "you
+    /// own it" immediately but kept its Discover poster until a later Home rebuild
+    /// happened to bring the full library item into the candidate set — which is
+    /// why leaving Home and returning changed the artwork after the "+" was
+    /// already gone.
+    private static func applyingOwnedPresentation(
+        _ presentation: MediaAliasPresentation?,
+        artworkSourceAccountID: String?,
+        to item: MediaItem
+    ) -> MediaItem {
+        guard let presentation else { return item }
+        var item = item
+        var adoptedArtwork: [URL] = []
+        if let artwork = presentation.artworkURL.flatMap(URL.init(string:)) {
+            item.posterURL = artwork
+            adoptedArtwork.append(artwork)
+        }
+        if let backdrop = presentation.backdropURL.flatMap(URL.init(string:)) {
+            item.backdropURL = backdrop
+            item.heroBackdropURL = backdrop
+            adoptedArtwork.append(backdrop)
+        }
+        if let accountID = artworkSourceAccountID {
+            item.recordArtworkSource(
+                accountID: accountID,
+                for: adoptedArtwork
+            )
+        }
+        return item
     }
 
     public static func indexCurrentItems(

@@ -52,6 +52,7 @@ public final class MediaAliasLedgerModel {
     ] = [:]
     private var removedProfileIDs: Set<String> = []
     private var pendingPurgeProfileIDs: Set<String> = []
+    @ObservationIgnored private var mutationGeneration: UInt64 = 0
 
     public init(
         durableStore: DurableLocalStateStore? = nil,
@@ -136,6 +137,18 @@ public final class MediaAliasLedgerModel {
         return id
     }
 
+    public func resolveOrCreateBatch(
+        profileID: String,
+        requests: [MediaAliasResolutionRequest]
+    ) async throws -> [MediaAliasID] {
+        guard !requests.isEmpty else { return [] }
+        try reviveProfiles([profileID])
+        let ledger = try await ledger(for: profileID)
+        let ids = try await ledger.resolveOrCreate(requests)
+        publish(await ledger.snapshot(), profileID: profileID)
+        return ids
+    }
+
     public func enrich(
         profileID: String,
         aliasID: MediaAliasID,
@@ -148,6 +161,23 @@ public final class MediaAliasLedgerModel {
         let ledger = try await ledger(for: profileID)
         try await ledger.enrich(aliasID: aliasID, with: evidence)
         publish(await ledger.snapshot(), profileID: profileID)
+    }
+
+    @discardableResult
+    public func clearPresentationArtwork(
+        profileID: String,
+        aliasIDs: Set<MediaAliasID>
+    ) async throws -> Int {
+        try ensureDeletionStateAvailable()
+        guard !removedProfileIDs.contains(profileID) else {
+            throw MediaAliasLedgerError.profileDeleted(profileID)
+        }
+        let ledger = try await ledger(for: profileID)
+        let changed = try await ledger.clearPresentationArtwork(
+            aliasIDs: aliasIDs
+        )
+        publish(await ledger.snapshot(), profileID: profileID)
+        return changed
     }
 
     /// Applies one identity-index publication with one durable write and one
@@ -177,35 +207,81 @@ public final class MediaAliasLedgerModel {
             pendingPurgeProfileIDs.remove(profileID)
         }
 
+        // Revival is an explicit consequence of the caller's profile list and
+        // happens once. A retry after a concurrent deletion must not feed this
+        // stale list through `loadProfiles` again and undo the new tombstone.
         try await loadProfiles(profileIDs)
-        var captured: [SyncRecordID: Data] = [:]
-        for profileID in ledgersByProfile.keys.sorted()
-        where !removedProfileIDs.contains(profileID) {
-            guard let ledger = ledgersByProfile[profileID] else { continue }
-            for dto in await ledger.captureSyncDTOs() {
-                let key = MediaStateRecordKey(profileID: profileID, aliasID: dto.id)
-                guard let localBytes = CanonicalJSON.encode(dto) else { continue }
-                if let fallbackBytes = fallback[key.recordName],
-                   let fallbackDTO = CanonicalJSON.decode(
-                       MediaAliasSyncDTO.self,
-                       from: fallbackBytes
-                   ),
-                   fallbackDTO.id == dto.id,
-                   fallbackDTO == dto {
-                    captured[key.recordName] = fallbackBytes
-                } else {
-                    captured[key.recordName] = localBytes
-                }
+        while true {
+            try Task.checkCancellation()
+            let generation = mutationGeneration
+            var batches: [(profileID: String, dtos: [MediaAliasSyncDTO])] = []
+            for profileID in ledgersByProfile.keys.sorted()
+            where !removedProfileIDs.contains(profileID) {
+                guard let ledger = ledgersByProfile[profileID] else { continue }
+                batches.append((
+                    profileID: profileID,
+                    dtos: await ledger.captureSyncDTOs()
+                ))
             }
-        }
-        for (recordName, bytes) in fallback where captured[recordName] == nil {
-            guard let key = MediaStateRecordKey.parse(recordName),
-                  !removedProfileIDs.contains(key.profileID) else {
+            guard mutationGeneration == generation else { continue }
+            let removed = removedProfileIDs
+            // Canonical JSON encoding is CPU work and a large ledger can take
+            // seconds. This model is MainActor-isolated because it publishes
+            // observable snapshots; serialization has no UI state and must not
+            // block focus. The generation checks reject a result if any local
+            // mutation or profile removal lands while the actor is suspended.
+            let encoding = Task.detached(
+                priority: .utility
+            ) { () -> [SyncRecordID: Data]? in
+                var captured: [SyncRecordID: Data] = [:]
+                for batch in batches {
+                    if Task.isCancelled { return nil }
+                    for dto in batch.dtos {
+                        if Task.isCancelled { return nil }
+                        let key = MediaStateRecordKey(
+                            profileID: batch.profileID,
+                            aliasID: dto.id
+                        )
+                        guard let localBytes = CanonicalJSON.encode(dto) else {
+                            continue
+                        }
+                        if let fallbackBytes = fallback[key.recordName],
+                           let fallbackDTO = CanonicalJSON.decode(
+                               MediaAliasSyncDTO.self,
+                               from: fallbackBytes
+                           ),
+                           fallbackDTO.id == dto.id,
+                           fallbackDTO == dto {
+                            captured[key.recordName] = fallbackBytes
+                        } else {
+                            captured[key.recordName] = localBytes
+                        }
+                    }
+                }
+                for (recordName, bytes) in fallback
+                where captured[recordName] == nil {
+                    if Task.isCancelled { return nil }
+                    guard let key = MediaStateRecordKey.parse(recordName),
+                          !removed.contains(key.profileID) else {
+                        continue
+                    }
+                    captured[recordName] = bytes
+                }
+                return captured
+            }
+            let captured = await withTaskCancellationHandler {
+                await encoding.value
+            } onCancel: {
+                encoding.cancel()
+            }
+            try Task.checkCancellation()
+            guard let captured else { throw CancellationError() }
+            guard mutationGeneration == generation,
+                  removedProfileIDs == removed else {
                 continue
             }
-            captured[recordName] = bytes
+            return captured
         }
-        return captured
     }
 
     private func publish(
@@ -214,6 +290,7 @@ public final class MediaAliasLedgerModel {
     ) {
         guard snapshotsByProfile[profileID] != snapshot else { return }
         snapshotsByProfile[profileID] = snapshot
+        mutationGeneration &+= 1
     }
 
     @discardableResult
@@ -285,6 +362,7 @@ public final class MediaAliasLedgerModel {
                 removedProfileIDs.remove(profileID)
                 throw error
             }
+            mutationGeneration &+= 1
         }
         pendingPurgeProfileIDs.insert(profileID)
         try await purgeProfileStorage(profileID)
@@ -369,6 +447,7 @@ public final class MediaAliasLedgerModel {
         pendingPurgeProfileIDs.subtract(revived)
         do {
             try persistDeletionState()
+            mutationGeneration &+= 1
         } catch {
             removedProfileIDs.formUnion(revived)
             pendingPurgeProfileIDs.formUnion(revived)

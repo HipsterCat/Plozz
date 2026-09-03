@@ -145,9 +145,13 @@ final class WatchlistModelTests: XCTestCase {
             entries: [(MediaAliasID(), .movie, nil)]
         )
         try model.retireNativeImports(profileID: "p")
+        try model.markLegacyPresentationArtworkScrubbed(profileID: "p")
 
         let metadata = try model.migrationMetadata(profileID: "p")
         XCTAssertNotNil(metadata.legacyHomeSeedCompletedAt)
+        XCTAssertNotNil(
+            metadata.legacyPresentationArtworkScrubbedAt
+        )
         XCTAssertNotNil(metadata.nativeImportRetiredAt)
         XCTAssertEqual(model.activeSnapshot.orderedEntries.count, 1)
     }
@@ -222,6 +226,35 @@ final class WatchlistModelTests: XCTestCase {
         ).contains(aliasID: alias))
     }
 
+    func testStaleNativeReAddCannotSupersedeANewerLocalRemoval() throws {
+        let model = WatchlistModel()
+        let alias = MediaAliasID()
+        let observedAt = Date(timeIntervalSince1970: 100)
+        try model.activate(profileID: "p")
+        try model.remove(
+            profileID: "p",
+            aliasID: alias,
+            kind: .movie,
+            at: observedAt
+        )
+        try model.remove(
+            profileID: "p",
+            aliasID: alias,
+            kind: .movie,
+            at: observedAt.addingTimeInterval(1)
+        )
+
+        XCTAssertFalse(try model.markRemovalSuperseded(
+            profileID: "p",
+            aliasID: alias,
+            expectedChangedAt: observedAt
+        ))
+        XCTAssertTrue(
+            model.activeSnapshot.intent(for: alias)?
+                .metadata.suppressesNativePresence ?? false
+        )
+    }
+
     func testRedirectRekeysAndMergesWithoutChangingOldestRank() throws {
         let winner = MediaAliasID(
             uuidString: "00000000-0000-0000-0000-000000000001"
@@ -270,6 +303,38 @@ final class WatchlistModelTests: XCTestCase {
             model.activeSnapshot.intent(for: winner)?.desiredState,
             .absent
         )
+    }
+
+    func testMergedTombstoneRetainsNativeReaddSupersession() {
+        let alias = MediaAliasID()
+        let removedAt = Date(timeIntervalSince1970: 100)
+        let supersededAt = Date(timeIntervalSince1970: 200)
+        let snapshot = WatchlistSnapshot(intents: [
+            WatchlistIntent(
+                aliasID: alias,
+                kind: .movie,
+                desiredState: .absent,
+                rank: 0,
+                origin: .local,
+                changedAt: removedAt,
+                metadata: WatchlistIntentMetadata(
+                    lastExplicitRemovalAt: removedAt,
+                    removalSupersededAt: supersededAt
+                )
+            )!,
+            WatchlistIntent(
+                aliasID: alias,
+                kind: .movie,
+                desiredState: .absent,
+                rank: 1,
+                origin: .cloud,
+                changedAt: removedAt.addingTimeInterval(-1)
+            )!
+        ])
+
+        let merged = snapshot.intent(for: alias)
+        XCTAssertEqual(merged?.metadata.removalSupersededAt, supersededAt)
+        XCTAssertFalse(merged?.metadata.suppressesNativePresence ?? true)
     }
 
     func testSyncCaptureApplyIsByteStableForAddAndTombstone() throws {
@@ -378,6 +443,75 @@ final class WatchlistModelTests: XCTestCase {
         XCTAssertEqual(
             try Data(contentsOf: store.fileURL),
             Data("not-json".utf8)
+        )
+    }
+
+    func testAtomicStoreLoadRewritesCompletedLegacyPresentation() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "PlozzWatchlistRewriteTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try AtomicWatchlistIntentStore(
+            directoryURL: root,
+            profileID: "p"
+        )
+        _ = try store.load()
+        let intent = WatchlistIntent(
+            aliasID: MediaAliasID(),
+            kind: .series,
+            desiredState: .present,
+            rank: 0,
+            origin: .local,
+            presentation: MediaAliasPresentation(
+                title: "Arcane",
+                year: 2021,
+                artworkURL: "https://art.example/clean.jpg"
+            )
+        )!
+        try store.save(WatchlistIntentStoreState(
+            intents: [intent],
+            migration: WatchlistMigrationMetadata(
+                legacyHomeSeedCompletedAt: Date()
+            )
+        ))
+
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: store.fileURL)
+            ) as? [String: Any]
+        )
+        var intents = try XCTUnwrap(
+            object["intents"] as? [[String: Any]]
+        )
+        var legacy = intents[0]
+        legacy["origin"] = "legacyHomeSeed"
+        var presentation = try XCTUnwrap(
+            legacy["presentation"] as? [String: Any]
+        )
+        presentation["artworkURL"] =
+            "https://art.example/wrong.jpg?X-Plex-Token=SECRET"
+        legacy["presentation"] = presentation
+        intents[0] = legacy
+        object["intents"] = intents
+        try JSONSerialization.data(
+            withJSONObject: object,
+            options: [.sortedKeys]
+        ).write(to: store.fileURL, options: [.atomic])
+
+        let reloaded = try AtomicWatchlistIntentStore(
+            directoryURL: root,
+            profileID: "p"
+        )
+        let loaded = try XCTUnwrap(reloaded.load().intents.first)
+
+        XCTAssertNil(loaded.presentation?.artworkURL)
+        XCTAssertFalse(
+            String(
+                decoding: try Data(contentsOf: store.fileURL),
+                as: UTF8.self
+            ).contains("SECRET")
         )
     }
 
@@ -710,6 +844,52 @@ final class WatchlistModelTests: XCTestCase {
             [deletedKey.recordName]
         )
         XCTAssertTrue(deletedReport.rejectedRecordNames.isEmpty)
+    }
+
+    /// Removing a title whose presence came from a DESTINATION's own list — a
+    /// show added on Plex rather than in Plozz — has to be visible to a caller
+    /// that memoizes membership against O(1) counts.
+    ///
+    /// It is the one removal that leaves the active count alone: there was no
+    /// local `.present` intent to retire, so the removal only writes a
+    /// tombstone. A revision built from active ids alone was byte-identical
+    /// before and after, the memoized membership set was served again, and the
+    /// bookmark on the page kept rendering "on the watchlist" for a title that
+    /// had really come off it.
+    func testRemovingNativeOnlyTitleIsVisibleToCountBasedMembershipCaching() throws {
+        let model = WatchlistModel()
+        let series = MediaAliasID()
+        let destination = WatchlistDestinationID(rawValue: "plex-discover")!
+        try model.activate(profileID: "p")
+
+        var view = NativeWatchlistView()
+        view.applySuccess(
+            destinationID: destination,
+            entries: [NativeWatchlistEntry(aliasID: series, kind: .series, index: 0)!]
+        )
+        func membership() -> WatchlistUnion {
+            model.union(
+                profileID: "p",
+                nativeView: view,
+                aliasSnapshot: .empty,
+                enabledDestinationIDs: [destination]
+            )
+        }
+
+        XCTAssertTrue(membership().activeAliasIDs.contains(series))
+        let before = model.activeSnapshot
+
+        try model.remove(profileID: "p", aliasID: series, kind: .series)
+
+        let after = model.activeSnapshot
+        XCTAssertFalse(membership().activeAliasIDs.contains(series))
+        // The blind spot itself: the count every other watchlist input is
+        // derived from does not move here…
+        XCTAssertEqual(before.activeAliasIDs.count, after.activeAliasIDs.count)
+        // …and the tombstone is the only signal that anything happened, so any
+        // membership revision has to include it.
+        XCTAssertEqual(before.tombstoneCount, 0)
+        XCTAssertEqual(after.tombstoneCount, 1)
     }
 }
 

@@ -37,19 +37,26 @@ public struct WatchlistDiagnosticsValues: Equatable, Sendable {
 public struct WatchlistNativeRead: Sendable {
     public let destinationID: WatchlistDestinationID
     public let entries: [WatchlistDestinationEntry]
+    public let reconciliationScope: String
+    public let startedAt: Date
 
     public init(
         destinationID: WatchlistDestinationID,
-        entries: [WatchlistDestinationEntry]
+        entries: [WatchlistDestinationEntry],
+        reconciliationScope: String,
+        startedAt: Date
     ) {
         self.destinationID = destinationID
         self.entries = entries
+        self.reconciliationScope = reconciliationScope
+        self.startedAt = startedAt
     }
 }
 
 public struct WatchlistNativeReadFailure: Sendable {
     public let destinationID: WatchlistDestinationID
     public let classification: WatchlistMutationFailureClass
+    public let reconciliationScope: String
 }
 
 public struct WatchlistNativeReadReport: Sendable {
@@ -109,7 +116,8 @@ public actor WatchlistReconciler {
     private let retryPolicy: WatchlistRetryPolicy
     private var activeProfileIDs: Set<String> = []
     private var inFlightKeys: Set<DestinationTitleKey> = []
-    private var isReadingNativeEntries = false
+    private var nativeReadTask:
+        Task<WatchlistNativeReadReport, Never>?
 
     public init(
         registry: WatchlistDestinationRegistry,
@@ -125,10 +133,12 @@ public actor WatchlistReconciler {
         profileID: String,
         desiredState: WatchlistDesiredState,
         target: WatchlistMutationTarget,
+        excluding excludedDestinationIDs: Set<WatchlistDestinationID> = [],
         now: Date = Date()
     ) async throws {
         var requests: [WatchlistMutationEnqueueRequest] = []
-        for destinationID in registry.destinationIDs(for: target) {
+        for destinationID in registry.destinationIDs(for: target)
+        where !excludedDestinationIDs.contains(destinationID) {
             guard let destination = registry[destinationID] else { continue }
             let capabilities = destination.capabilities
             guard capabilities.accepts(target.kind),
@@ -139,7 +149,11 @@ public actor WatchlistReconciler {
                 profileID: profileID,
                 desiredState: desiredState,
                 target: target,
-                destinationID: destination.id
+                destinationID: destination.id,
+                confirmationIdentity: confirmationIdentity(
+                    target: target,
+                    destination: destination
+                )
             ))
         }
         FanoutDiagnostics.emit(
@@ -149,6 +163,39 @@ public actor WatchlistReconciler {
             + "connected=[\(registry.destinations.map { $0.id.rawValue }.sorted().joined(separator: ","))]"
         )
         try await mutationStore.enqueueBatch(requests, now: now)
+    }
+
+    public func replacePendingRemovalsWithPresentFanOut(
+        profileID: String,
+        target: WatchlistMutationTarget,
+        excluding excludedDestinationIDs: Set<WatchlistDestinationID> = [],
+        now: Date = Date()
+    ) async throws {
+        let requests = registry.destinationIDs(for: target).compactMap {
+            destinationID -> WatchlistMutationEnqueueRequest? in
+            guard !excludedDestinationIDs.contains(destinationID),
+                  let destination = registry[destinationID],
+                  destination.capabilities.accepts(target.kind),
+                  destination.capabilities.write.isWritable else {
+                return nil
+            }
+            return WatchlistMutationEnqueueRequest(
+                profileID: profileID,
+                desiredState: .present,
+                target: target,
+                destinationID: destinationID,
+                confirmationIdentity: confirmationIdentity(
+                    target: target,
+                    destination: destination
+                )
+            )
+        }
+        try await mutationStore.replacePendingRemovalsWithPresentFanOut(
+            profileID: profileID,
+            aliasID: target.aliasID,
+            requests: requests,
+            now: now
+        )
     }
 
     public func enqueue(
@@ -170,6 +217,10 @@ public actor WatchlistReconciler {
             desiredState: desiredState,
             target: target,
             destinationID: destinationID,
+            confirmationIdentity: confirmationIdentity(
+                target: target,
+                destination: destination
+            ),
             now: now
         )
     }
@@ -194,7 +245,11 @@ public actor WatchlistReconciler {
                 profileID: profileID,
                 desiredState: desiredState,
                 target: target,
-                destinationID: destinationID
+                destinationID: destinationID,
+                confirmationIdentity: confirmationIdentity(
+                    target: target,
+                    destination: destination
+                )
             )
         }
         try await mutationStore.enqueueBatch(requests, now: now)
@@ -263,7 +318,11 @@ public actor WatchlistReconciler {
                 if await mutationStore.isAlreadyConfirmed(
                     key,
                     desiredState: change.desiredState,
-                    target: change.target
+                    target: change.target,
+                    confirmationIdentity: confirmationIdentity(
+                        target: change.target,
+                        destination: destination
+                    )
                 ) {
                     suppressed += 1
                     continue
@@ -272,7 +331,11 @@ public actor WatchlistReconciler {
                     profileID: profileID,
                     desiredState: change.desiredState,
                     target: change.target,
-                    destinationID: destinationID
+                    destinationID: destinationID,
+                    confirmationIdentity: confirmationIdentity(
+                        target: change.target,
+                        destination: destination
+                    )
                 ))
             }
         }
@@ -347,14 +410,24 @@ public actor WatchlistReconciler {
     }
 
     public func fetchNativeEntries() async -> WatchlistNativeReadReport {
-        guard !isReadingNativeEntries else {
-            return WatchlistNativeReadReport(successes: [], failures: [])
+        if let nativeReadTask {
+            return await nativeReadTask.value
         }
-        isReadingNativeEntries = true
-        defer { isReadingNativeEntries = false }
         let readable = registry.destinations.filter {
             $0.capabilities.read.isReadable
         }
+        let task = Task {
+            await Self.readNativeEntries(from: readable)
+        }
+        nativeReadTask = task
+        let report = await task.value
+        nativeReadTask = nil
+        return report
+    }
+
+    private nonisolated static func readNativeEntries(
+        from readable: [any WatchlistDestination]
+    ) async -> WatchlistNativeReadReport {
         var successes: [WatchlistNativeRead] = []
         var failures: [WatchlistNativeReadFailure] = []
         for start in stride(
@@ -371,29 +444,40 @@ public actor WatchlistReconciler {
             await withTaskGroup(of: NativeReadResult.self) { group in
                 for destination in batch {
                     group.addTask {
+                        let reconciliationScope =
+                            destination.reconciliationScope
+                        let startedAt = Date()
                         do {
+                            let entries = try await destination.fetchEntries()
+                            guard destination.reconciliationScope
+                                    == reconciliationScope else {
+                                return .failure(.init(
+                                    destinationID: destination.id,
+                                    classification: .authentication,
+                                    reconciliationScope: reconciliationScope
+                                ))
+                            }
                             return .success(
                                 WatchlistNativeRead(
                                     destinationID: destination.id,
-                                    entries: try await destination.fetchEntries()
+                                    entries: entries,
+                                    reconciliationScope: reconciliationScope,
+                                    startedAt: startedAt
                                 )
                             )
                         } catch {
-                            return .failure(
-                                destination.id,
-                                Self.classifyReadFailure(error)
-                            )
+                            return .failure(.init(
+                                destinationID: destination.id,
+                                classification: Self.classifyReadFailure(error),
+                                reconciliationScope: reconciliationScope
+                            ))
                         }
                     }
                 }
                 for await result in group {
                     switch result {
                     case .success(let read): successes.append(read)
-                    case .failure(let id, let classification):
-                        failures.append(.init(
-                            destinationID: id,
-                            classification: classification
-                        ))
+                    case .failure(let failure): failures.append(failure)
                     }
                 }
             }
@@ -434,9 +518,18 @@ public actor WatchlistReconciler {
         profileID: String,
         destinationID: WatchlistDestinationID,
         candidates: [WatchlistNativeReconciliationCandidate],
+        reconciliationScope: String? = nil,
+        nativeReadStartedAt: Date? = nil,
         now: Date = Date()
     ) async throws -> [MediaAliasID: WatchlistNativeObservation] {
         guard let destination = registry[destinationID] else { return [:] }
+        if let reconciliationScope,
+           destination.reconciliationScope != reconciliationScope {
+            return [:]
+        }
+        let observedScope =
+            reconciliationScope ?? destination.reconciliationScope
+        let targetedKeys = await mutationStore.targetedKeys(profileID: profileID)
         var requests: [WatchlistNativeObservationRequest] = []
         requests.reserveCapacity(candidates.count)
         for candidate in candidates {
@@ -445,7 +538,7 @@ public actor WatchlistReconciler {
                 aliasID: candidate.aliasID,
                 destinationID: destinationID
             )
-            let wasTargeted = await mutationStore.isTargeted(key)
+            let wasTargeted = targetedKeys.contains(key)
             var eligible = wasTargeted
             if !eligible,
                let target = candidate.target {
@@ -458,6 +551,10 @@ public actor WatchlistReconciler {
                 key: key,
                 isPresent: candidate.isPresent,
                 localDesiredState: candidate.localDesiredState,
+                confirmationIdentity: candidate.target.map {
+                    observedScope + "\u{0}" + $0.identityFingerprint
+                },
+                nativeReadStartedAt: nativeReadStartedAt,
                 isEligibleTarget: eligible
             ))
         }
@@ -488,7 +585,7 @@ public actor WatchlistReconciler {
     /// and so the registry stays the single place destinations are looked up.
     public func libraryResolver(
         for destinationID: WatchlistDestinationID
-    ) -> (@Sendable (WatchlistDestinationEntry) async -> MediaSourceRef?)? {
+    ) -> (@Sendable (WatchlistDestinationEntry) async -> WatchlistLibraryCopy?)? {
         guard let destination = registry[destinationID]
                 as? any WatchlistLibraryResolving else { return nil }
         return { entry in await destination.resolveLibraryCopy(for: entry) }
@@ -500,10 +597,63 @@ public actor WatchlistReconciler {
         registry.destinationIDs(for: target)
     }
 
+    public func currentReconciliationScope(
+        for destinationID: WatchlistDestinationID
+    ) -> String? {
+        registry[destinationID]?.reconciliationScope
+    }
+
+    public func currentCacheIdentityScope(
+        for destinationID: WatchlistDestinationID
+    ) -> String? {
+        registry[destinationID]?.cacheIdentityScope
+    }
+
+    public func acknowledgeNativeAddition(
+        profileID: String,
+        target: WatchlistMutationTarget,
+        destinationID: WatchlistDestinationID,
+        observedReconciliationScope: String
+    ) async throws {
+        guard let destination = registry[destinationID],
+              destination.reconciliationScope == observedReconciliationScope else {
+            throw WatchlistDestinationError.authenticationRequired
+        }
+        try await mutationStore.acknowledgeNativeAddition(
+            WatchlistMutationKey(
+                profileID: profileID,
+                aliasID: target.aliasID,
+                destinationID: destinationID
+            ),
+            confirmationIdentity:
+                observedReconciliationScope + "\u{0}" + target.identityFingerprint
+        )
+    }
+
+    private func confirmationIdentity(
+        target: WatchlistMutationTarget,
+        destination: any WatchlistDestination
+    ) -> String {
+        destination.reconciliationScope + "\u{0}" + target.identityFingerprint
+    }
+
     public func targetedKeys(
         profileID: String
     ) async -> Set<WatchlistMutationKey> {
         await mutationStore.targetedKeys(profileID: profileID)
+    }
+
+    @discardableResult
+    public func cancelPending(
+        profileID: String,
+        aliasID: MediaAliasID,
+        desiredState: WatchlistDesiredState
+    ) async throws -> Int {
+        try await mutationStore.cancelPending(
+            profileID: profileID,
+            aliasID: aliasID,
+            desiredState: desiredState
+        )
     }
 
     public func status(profileID: String) async -> WatchlistDestinationStatus {
@@ -547,10 +697,21 @@ public actor WatchlistReconciler {
     ) async {
         guard let destination = registry[mutation.key.destinationID] else {
             try? await mutationStore.markFailed(
-                mutation.key,
+                mutation,
                 classification: .permanent,
                 retryAt: nil
             )
+            return
+        }
+        let operationScope = destination.reconciliationScope
+        let identityMatches = mutation.confirmationIdentity.map {
+            $0 == confirmationIdentity(
+                target: mutation.target,
+                destination: destination
+            )
+        } ?? (operationScope == destination.id.rawValue)
+        guard identityMatches else {
+            try? await mutationStore.discard(mutation)
             return
         }
         do {
@@ -564,8 +725,21 @@ public actor WatchlistReconciler {
             guard let binding = try await destination.resolve(mutation.target) else {
                 throw WatchlistDestinationError.unsupportedIdentity
             }
-            try await destination.apply(mutation.desiredState, to: binding)
-            try await mutationStore.markSucceeded(mutation.key, now: now)
+            guard destination.reconciliationScope == operationScope else {
+                try? await mutationStore.discard(mutation)
+                return
+            }
+            if let scoped = destination
+                as? any WatchlistReconciliationScopedApplying {
+                try await scoped.apply(
+                    mutation.desiredState,
+                    to: binding,
+                    expectedReconciliationScope: operationScope
+                )
+            } else {
+                try await destination.apply(mutation.desiredState, to: binding)
+            }
+            try await mutationStore.markSucceeded(mutation, now: Date())
             // The destination is answering again, so stop punishing it.
             rateLimitCooldowns[destination.id] = nil
             FanoutDiagnostics.emit(
@@ -582,7 +756,7 @@ public actor WatchlistReconciler {
                 attempt: mutation.attemptCount
             )
             try? await mutationStore.markFailed(
-                mutation.key,
+                mutation,
                 classification: decision.classification,
                 retryAt: decision.retryDelay.map { now.addingTimeInterval($0) }
             )
@@ -638,6 +812,6 @@ public actor WatchlistReconciler {
 
     private enum NativeReadResult: Sendable {
         case success(WatchlistNativeRead)
-        case failure(WatchlistDestinationID, WatchlistMutationFailureClass)
+        case failure(WatchlistNativeReadFailure)
     }
 }

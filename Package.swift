@@ -84,7 +84,7 @@ let package = Package(
         // Powers the native HLS-fMP4 remux path for MKV → DoVi + Atmos + seek.
         // See AGENTS.local.md › "Playback engine (AetherEngine / Plozzigen)".
         //
-        // Pinned to the UPSTREAM release tag 6.15.2 -> c47db496b86e716f323417d4bb6996d04d112f2c.
+        // Pinned to the UPSTREAM release tag 6.66.0 -> 1eebae01f7d94c012a8a158179d5f0924b8449ad.
         //
         // Plozz no longer carries an AetherEngine fork. Everything the old
         // `plozz-pin-*` stack existed for is upstream as of 5.23.2:
@@ -132,38 +132,48 @@ let package = Package(
         //     breaking change across the 84 releases in this range; no public
         //     symbol was removed or renamed.
         //
-        // Pinned to the 6.15.2 RELEASE rather than upstream HEAD. Same reasoning as
+        // Pinned to the 6.34.1 RELEASE rather than upstream HEAD. Same reasoning as
         // the exact-SHA pin: the playback path takes documented, released changes
-        // only. The SHA is the COMMIT the 6.15.2 tag points at, not the annotated
+        // only. The SHA is the COMMIT the 6.34.1 tag points at, not the annotated
         // tag object's own id — a `revision:` pin wants the commit.
         //
-        // Moved up from 6.6.0. Nine minor releases plus patches, every one of them
-        // documented drop-in with no consumer source change, no symbol removed or
-        // renamed. The ones that matter to shapes Plozz actually serves:
-        //   - 6.15.2 the live `AVIOReader` stopped cycling its own healthy
-        //     connections. The 16 MB high-water end had no live branch, so it was
-        //     the only thing terminating a healthy live connection: each end
-        //     dropped everything broadcast during the ~8 MB drain and the demuxer
-        //     rejoined on a corrupt TS packet.
-        //   - 6.15.1 a `nativeRemoteHLS` bypass that could neither play nor fail
-        //     (an origin answering everything while AVFoundation builds no track)
-        //     now does one of the two instead of sitting in `.loading` forever.
-        //   - 6.14.0 `LoadOptions.externalSubtitles` was silently dropped on a
-        //     remote-HLS source — empty `subtitleTracks`, no error, indistinguishable
-        //     from a source with no subtitles.
-        //   - 6.12.0 a source connection that dies silently is now noticed on
-        //     wall-clock time rather than only once a consumer drains the window.
-        //   - 6.11.0 an origin refusing every refill no longer spirals into ~15
-        //     reconnects a second.
-        //   - 6.13.0 `hasFirstFrameReadyForDisplay`, the edge a black cover should
-        //     come off on. `isSessionReady` is `readyToPlay`, which AVFoundation
-        //     reaches before the layer holds a picture and which stays true across
-        //     a seek — so it lifts a cover onto black. Plozz approximates this today
-        //     with `awaitingFirstFrame`; worth revisiting that against this signal.
+        // Moved up from 6.15.2. Nineteen minors plus patches, every one documented
+        // drop-in with no consumer source change and no symbol removed or renamed.
+        // Three carry behaviour changes worth knowing before anyone moves this again:
+        //   - 6.32.0 a BRIDGED source of two channels or fewer is now delivered as
+        //     FLAC rather than E-AC-3. Bridging is the path taken only when a track
+        //     can't be stream-copied, so Atmos/E-AC-3 direct play is untouched; what
+        //     changes is the carriage of small bridged tracks. The #165 encoder
+        //     cascade was re-derived from the codec id to match.
+        //   - 6.33.0 a session against an origin that is REFUSING it now keeps
+        //     retrying for up to 600s per refusal window (reporting
+        //     `.stalled(reconnecting:)`) instead of failing at ~212s. Slow origins
+        //     recover where they used to give up; a genuinely dead one takes longer
+        //     to say so.
+        //   - 6.16.0 the display-criteria settle gate finally receives mode-switch
+        //     notifications — it had never received one. Plozz drives its HDR veil
+        //     off that gate (`DisplaySettleObserver` → `hdrTransition`), so this is
+        //     the one to watch on a real panel after a bump.
+        // Also in range and directly useful to shapes Plozz serves: 6.21.0/6.22.x
+        // (HLS-rendition and system-toggled subtitles), 6.23.1/6.25.3 (bitmap
+        // subtitles after a seek), 6.25.x (black-screen classes on the loopback VOD
+        // path, against UHD-BD remuxes), and 6.26.0 (`state = .error(...)` gains an
+        // additive classification API).
+        //
+        // 6.13.0's `hasFirstFrameReadyForDisplay` is still unused here — Plozz
+        // approximates it with `awaitingFirstFrame`. Still worth revisiting.
+        //
+        // Moved up from 6.56.9. This range is additive for Plozz's host API.
+        // 6.57.0 moves Aether's private FFmpeg binaries to namespaced framework
+        // names (FFmpegBuild 3.0.0); Plozz imports only AetherEngine, so no source
+        // changes are required. Playback fixes include VFW/VC-1 picture ordering,
+        // HLS audio-language publication, live-axis/rejoin placement, AC-4 probe
+        // startup, and fixed-HDR panel detection. New reload, software-path,
+        // audio-delivery, and lip-sync APIs remain opt-in.
         //
         // SMB enters AetherEngine only through Plozz's protocol-neutral custom-source
         // bridge; the engine's legacy SMB URL product is not linked.
-        .package(url: "https://github.com/superuser404notfound/AetherEngine", revision: "c47db496b86e716f323417d4bb6996d04d112f2c"),
+        .package(url: "https://github.com/superuser404notfound/AetherEngine", revision: "1eebae01f7d94c012a8a158179d5f0924b8449ad"),
         // NOTE: FFmpegBuild (FFmpeg n8.1.x decode-only) and LibDovi (Dolby Vision
         // RPU parser) are pulled in TRANSITIVELY by AetherEngine — its own manifest
         // declares and consumes them. Plozz used to declare them directly only for
@@ -364,7 +374,7 @@ let package = Package(
         ),
         .target(
             name: "HeroUI",
-            dependencies: ["CoreModels", "CoreUI", "FeatureHomeCore"]
+            dependencies: ["CoreModels", "CoreUI", "FeatureHomeCore", "MetadataKit"]
         ),
         .target(
             name: "FeatureHome",
@@ -616,6 +626,7 @@ let package = Package(
             name: "EnginePlozzigen",
             dependencies: [
                 "CoreModels",
+                "CoreNetworking",
                 "MediaTransportCore",
                 "FeaturePlayback",
                 .product(name: "AetherEngine", package: "AetherEngine"),
@@ -662,6 +673,7 @@ let package = Package(
                 "MediaTransportSFTP",
                 "MediaTransportFTP",
                 "MediaTransportNFS",
+                "MediaTransportSMB",
             ]
         ),
 
@@ -782,6 +794,10 @@ let package = Package(
             dependencies: ["CoreModels", "CoreUI"]
         ),
         .testTarget(
+            name: "CrashReportingTests",
+            dependencies: ["CrashReporting"]
+        ),
+        .testTarget(
             name: "FeatureWatchlistCoreTests",
             dependencies: ["FeatureWatchlistCore", "CoreModels"]
         ),
@@ -803,7 +819,7 @@ let package = Package(
         ),
         .testTarget(
             name: "AppShellTests",
-            dependencies: ["AppRuntime", "AppShell", "CoreModels", "FeatureHomeCore", "FeatureShareOnboarding", "MediaTransportSFTP", "MediaTransportFTP", "MediaTransportNFS", "MediaTransportWebDAV"]
+            dependencies: ["AppRuntime", "AppShell", "CoreModels", "FeatureHomeCore", "FeatureShareOnboarding", "MediaTransportHTTP", "MediaTransportSFTP", "MediaTransportFTP", "MediaTransportNFS", "MediaTransportWebDAV"]
         ),
         .testTarget(
             name: "CoreUITests",

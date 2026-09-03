@@ -38,7 +38,13 @@ struct DetailExtrasView: View {
     /// it is still working instead of appearing late and shoving the cast down.
     var relatedHasResolved: Bool = true
     var onSelectRelated: ((MediaItem) -> Void)? = nil
+    var extrasState: LoadState<[MediaExtra]> = .idle
+    var onSelectExtra: ((MediaExtra) -> Void)? = nil
+    var onRetryExtras: (() -> Void)? = nil
     var externalAvailability: ExternalTitleAvailability? = nil
+    /// The viewer's spoiler protection, forwarded to the Ratings section so it
+    /// hides scores on the same terms the hero above it already does.
+    var spoilerSettings: SpoilerSettings = .default
 
     /// Extra gap below the cast row on tvOS so a 3-line name wrapping out
     /// of its circle doesn't overlap the About header below.
@@ -77,11 +83,13 @@ struct DetailExtrasView: View {
     }
 
     private var hasContent: Bool {
-        showsRelated
+        showsExtras
+            || showsRelated
             || !item.cast.isEmpty
             || item.overview != nil
             || !item.ratings.isEmpty
             || item.productionYear != nil
+            || item.releaseDate != nil
             || item.runtime != nil
             || item.officialRating != nil
             || item.originalTitle != nil
@@ -94,9 +102,38 @@ struct DetailExtrasView: View {
             || externalAvailability?.isEmpty == false
     }
 
+    private var showsExtras: Bool {
+        guard onSelectExtra != nil else { return false }
+        switch extrasState {
+        case .loading, .failed:
+            return true
+        case .loaded(let extras):
+            return !extras.isEmpty
+        case .idle, .empty:
+            return false
+        }
+    }
+
     var body: some View {
         if hasContent {
             VStack(alignment: .leading, spacing: castBottomSpacing) {
+                if showsExtras, let onSelectExtra {
+                    ExtrasRowView(
+                        state: extrasState,
+                        leadingInset: leadingInset,
+                        spoilerSettings: spoilerSettings,
+                        onFocusEntered: onCastFocusEntered,
+                        onSelect: onSelectExtra,
+                        onRetry: { onRetryExtras?() }
+                    )
+                    .environment(\.plozzMetrics, .standard)
+                    .modifier(SeriesCastRevealModifier(
+                        model: seriesRecedeModel,
+                        revealsWithoutBrowser: revealsSeriesCastWithoutBrowser,
+                        suppressesFocus: suppressesFocus
+                    ))
+                    .id("detail-extras-media")
+                }
                 // Above the cast: "what else is like this" is a browsing decision,
                 // and the viewer is making it now. Who was in it is reference
                 // material they look up afterwards.
@@ -145,7 +182,8 @@ struct DetailExtrasView: View {
                     horizontalInset: leadingInset,
                     selectedSource: selectedSource,
                     selectedVersion: selectedVersion,
-                    externalAvailability: externalAvailability
+                    externalAvailability: externalAvailability,
+                    spoilerSettings: spoilerSettings
                 )
                 .id("detail-extras-info")
             }

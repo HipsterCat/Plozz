@@ -114,19 +114,50 @@ struct TraktClient: Sendable {
 
     func watchlist(
         accessToken: String
-    ) async throws -> (
-        movies: [TraktWatchlistTitle],
-        shows: [TraktWatchlistTitle]
-    ) {
-        let movies: [TraktWatchlistMovieEntry] = try await watchlistGET(
-            path: "/sync/watchlist/movies",
+    ) async throws -> [TraktWatchlistItem] {
+        async let movieEntries: [TraktWatchlistMovieEntry] = watchlistGET(
+            path: "/sync/watchlist/movies/added/desc",
             accessToken: accessToken
         )
-        let shows: [TraktWatchlistShowEntry] = try await watchlistGET(
-            path: "/sync/watchlist/shows",
+        async let showEntries: [TraktWatchlistShowEntry] = watchlistGET(
+            path: "/sync/watchlist/shows/added/desc",
             accessToken: accessToken
         )
-        return (movies.map(\.movie), shows.map(\.show))
+        let (movies, shows) = try await (movieEntries, showEntries)
+        var items: [TraktWatchlistItem] = []
+        for (providerOrder, entry) in movies.enumerated() {
+            guard let listedAt = Self.parseTimestamp(entry.listedAt) else {
+                throw WatchlistDestinationError.transient
+            }
+            items.append(TraktWatchlistItem(
+                id: entry.id,
+                listedAt: listedAt,
+                kind: .movie,
+                title: entry.movie,
+                providerOrder: providerOrder
+            ))
+        }
+        for (providerOrder, entry) in shows.enumerated() {
+            guard let listedAt = Self.parseTimestamp(entry.listedAt) else {
+                throw WatchlistDestinationError.transient
+            }
+            items.append(TraktWatchlistItem(
+                id: entry.id,
+                listedAt: listedAt,
+                kind: .series,
+                title: entry.show,
+                providerOrder: providerOrder
+            ))
+        }
+        return items.sorted {
+            if $0.listedAt != $1.listedAt {
+                return $0.listedAt > $1.listedAt
+            }
+            if $0.kind == $1.kind {
+                return $0.providerOrder < $1.providerOrder
+            }
+            return $0.kind.rawValue < $1.kind.rawValue
+        }
     }
 
     func setWatchlisted(
@@ -152,22 +183,100 @@ struct TraktClient: Sendable {
         try validateWatchlistStatus(response, idempotentMutation: true)
     }
 
-    private func watchlistGET<T: Decodable>(
+    private func watchlistGET<T: Decodable & TraktWatchlistIdentifiable>(
         path: String,
         accessToken: String
-    ) async throws -> T {
-        let endpoint = Endpoint(
-            method: .get,
-            path: path,
-            headers: headers(accessToken: accessToken)
-        )
-        let (data, response) = try await http.sendRaw(endpoint, baseURL: baseURL)
-        try validateWatchlistStatus(response, idempotentMutation: false)
-        do {
-            return try JSONDecoder.plozz.decode(T.self, from: data)
-        } catch {
-            throw AppError.decoding
+    ) async throws -> [T] {
+        let limit = 100
+        let maximumPages = 1_000
+        var page = 1
+        var result: [T] = []
+        var seenIDs: Set<Int> = []
+        var expectedItemCount: Int?
+        var expectedPageCount: Int?
+        while page <= maximumPages {
+            let endpoint = Endpoint(
+                method: .get,
+                path: path,
+                queryItems: [
+                    URLQueryItem(name: "page", value: String(page)),
+                    URLQueryItem(name: "limit", value: String(limit)),
+                ],
+                headers: headers(accessToken: accessToken)
+            )
+            let (data, response) = try await http.sendRaw(
+                endpoint,
+                baseURL: baseURL
+            )
+            try validateWatchlistStatus(response, idempotentMutation: false)
+            let entries: [T]
+            do {
+                entries = try JSONDecoder.plozz.decode([T].self, from: data)
+            } catch {
+                throw AppError.decoding
+            }
+            for entry in entries {
+                guard seenIDs.insert(entry.id).inserted else {
+                    throw WatchlistDestinationError.transient
+                }
+                result.append(entry)
+            }
+            let itemCount = response.value(
+                forHTTPHeaderField: "X-Pagination-Item-Count"
+            ).flatMap(Int.init)
+            if expectedItemCount != nil, itemCount == nil {
+                throw WatchlistDestinationError.transient
+            }
+
+            if let itemCount {
+                guard expectedItemCount == nil || expectedItemCount == itemCount else {
+                    throw WatchlistDestinationError.transient
+                }
+                expectedItemCount = itemCount
+            }
+            let pageCount = response.value(
+                forHTTPHeaderField: "X-Pagination-Page-Count"
+            ).flatMap(Int.init)
+            if expectedPageCount != nil, pageCount == nil {
+                throw WatchlistDestinationError.transient
+            }
+            if let pageCount {
+                guard expectedPageCount == nil || expectedPageCount == pageCount else {
+                    throw WatchlistDestinationError.transient
+                }
+                expectedPageCount = pageCount
+                if pageCount == 0, entries.isEmpty {
+                    guard expectedItemCount == nil || expectedItemCount == 0 else {
+                        throw WatchlistDestinationError.transient
+                    }
+                    return result
+                }
+                guard pageCount >= page else {
+                    throw WatchlistDestinationError.transient
+                }
+                if page >= pageCount {
+                    guard expectedItemCount == nil
+                            || expectedItemCount == result.count else {
+                        throw WatchlistDestinationError.transient
+                    }
+                    return result
+                }
+            } else {
+                if entries.count < limit { return result }
+                throw WatchlistDestinationError.transient
+            }
+            page += 1
         }
+        throw WatchlistDestinationError.transient
+    }
+
+    private static func parseTimestamp(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) { return date }
+        let wholeSeconds = ISO8601DateFormatter()
+        wholeSeconds.formatOptions = [.withInternetDateTime]
+        return wholeSeconds.date(from: value)
     }
 
     private func validateWatchlistStatus(
@@ -195,4 +304,12 @@ struct TraktClient: Sendable {
             throw WatchlistDestinationError.permanent
         }
     }
+
 }
+
+private protocol TraktWatchlistIdentifiable {
+    var id: Int { get }
+}
+
+extension TraktWatchlistMovieEntry: TraktWatchlistIdentifiable {}
+extension TraktWatchlistShowEntry: TraktWatchlistIdentifiable {}

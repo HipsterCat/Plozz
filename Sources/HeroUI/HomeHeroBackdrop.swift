@@ -3,6 +3,7 @@ import SwiftUI
 import CoreUI
 import CoreModels
 import FeatureHomeCore
+import MetadataKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -41,6 +42,8 @@ public struct HomeHeroBackdrop: View {
     let references: [ArtworkReference]
     /// Last-resort async art lookup (e.g. TMDb) when none of `urls` load.
     let asyncFallbackURL: (@Sendable () async -> URL?)?
+    let prefersOnlineArtwork: Bool
+    let sharedResolutionIdentity: String?
     /// Stable identity of the fronted slide (the item id). A *change* in this is
     /// what triggers a wipe — never a mere `urls` array rebuild for the same slide.
     let slideID: String
@@ -70,6 +73,11 @@ public struct HomeHeroBackdrop: View {
     /// renderer in an already-measured usable region and disables that breakout
     /// so the explicit width stays anchored through the physical trailing edge.
     var ignoresHorizontalSafeArea: Bool = true
+    /// Custom-rail-only alignment. Its content inset gives this fixed-width
+    /// artwork a slot wider than the panel; leading alignment prevents that extra
+    /// width being split into a black strip on the left. Native tab styles keep
+    /// the historical centered alignment.
+    var alignsArtworkToLeadingEdge: Bool = false
     /// Home relinquishes its scrim during a navigation push while preserving the
     /// shared video underneath. The incoming detail hero supplies the one visible
     /// scrim, preventing the two dark overlays from stacking during handoff.
@@ -88,10 +96,14 @@ public struct HomeHeroBackdrop: View {
         trailerController: HeroTrailerController? = nil,
         showsTrailer: Bool = false,
         ignoresHorizontalSafeArea: Bool = true,
-        scrimOpacity: Double = 1
+        alignsArtworkToLeadingEdge: Bool = false,
+        scrimOpacity: Double = 1,
+        sharedResolutionIdentity: String? = nil
     ) {
         self.references = references
         self.asyncFallbackURL = asyncFallbackURL
+        self.prefersOnlineArtwork = MetadataProviderSettingsStore().load().preferOnlineArtwork
+        self.sharedResolutionIdentity = sharedResolutionIdentity
         self.slideID = slideID
         self.forward = forward
         self.width = width
@@ -102,6 +114,7 @@ public struct HomeHeroBackdrop: View {
         self.trailerController = trailerController
         self.showsTrailer = showsTrailer
         self.ignoresHorizontalSafeArea = ignoresHorizontalSafeArea
+        self.alignsArtworkToLeadingEdge = alignsArtworkToLeadingEdge
         self.scrimOpacity = scrimOpacity
     }
 
@@ -118,7 +131,9 @@ public struct HomeHeroBackdrop: View {
         trailerController: HeroTrailerController? = nil,
         showsTrailer: Bool = false,
         ignoresHorizontalSafeArea: Bool = true,
-        scrimOpacity: Double = 1
+        alignsArtworkToLeadingEdge: Bool = false,
+        scrimOpacity: Double = 1,
+        sharedResolutionIdentity: String? = nil
     ) {
         self.init(
             references: urls.map(ArtworkReference.remote),
@@ -133,7 +148,9 @@ public struct HomeHeroBackdrop: View {
             trailerController: trailerController,
             showsTrailer: showsTrailer,
             ignoresHorizontalSafeArea: ignoresHorizontalSafeArea,
-            scrimOpacity: scrimOpacity
+            alignsArtworkToLeadingEdge: alignsArtworkToLeadingEdge,
+            scrimOpacity: scrimOpacity,
+            sharedResolutionIdentity: sharedResolutionIdentity
         )
     }
 
@@ -147,6 +164,17 @@ public struct HomeHeroBackdrop: View {
     /// so it can start lower and stay compact. Applied uniformly across the whole
     /// width (see `dissolveMask`).
     private var meltStart: CGFloat { isLight ? 0.38 : 0.62 }
+
+    /// Where the artwork sits in its slot.
+    ///
+    /// On tvOS the slot begins at the physical leading edge of the panel but is
+    /// slightly WIDER than the screen, so centring the fixed-width artwork split
+    /// the difference and left a black strip down the left with the same amount
+    /// spilling off-screen to the right. Leading-aligned, the artwork starts at the
+    /// panel edge — which is what full-bleed means here.
+    private var artworkAlignment: Alignment {
+        alignsArtworkToLeadingEdge ? .leading : .center
+    }
 
     public var body: some View {
         backdropImage
@@ -176,7 +204,10 @@ public struct HomeHeroBackdrop: View {
             .overlay(scrim.opacity(scrimOpacity))
             .animation(.easeOut(duration: 0.18), value: scrimOpacity)
             .mask(dissolveMask)
-            .frame(maxWidth: .infinity, alignment: .center)
+            // Leading-aligned whenever the page is inset, so the artwork's left
+            // edge is the anchor and the bleed below can carry it to the screen
+            // edge. Centre stays the default everywhere else.
+            .frame(maxWidth: .infinity, alignment: artworkAlignment)
             // The recede rise MUST be applied here, BEFORE .ignoresSafeArea().
             // An .offset() applied AFTER .ignoresSafeArea() (as this view is when
             // hosted as a `.background` on tvOS) is silently cancelled: the
@@ -202,6 +233,8 @@ public struct HomeHeroBackdrop: View {
         WipeImageView(
             references: references,
             asyncFallbackURL: asyncFallbackURL,
+            prefersOnlineArtwork: prefersOnlineArtwork,
+            sharedResolutionIdentity: sharedResolutionIdentity,
             slideID: slideID,
             forward: forward,
             width: width,
@@ -338,6 +371,8 @@ public enum HeroBackdropArtworkPolicy {
 private struct WipeImageView: UIViewRepresentable {
     let references: [ArtworkReference]
     let asyncFallbackURL: (@Sendable () async -> URL?)?
+    let prefersOnlineArtwork: Bool
+    let sharedResolutionIdentity: String?
     let slideID: String
     let forward: Bool
     let width: CGFloat
@@ -380,7 +415,12 @@ private struct WipeImageView: UIViewRepresentable {
         context.coordinator.container = view
         context.coordinator.configure(width: width, height: height)
         context.coordinator.update(
-            references: references, slideID: slideID, forward: forward, asyncFallbackURL: asyncFallbackURL
+            references: references,
+            slideID: slideID,
+            forward: forward,
+            asyncFallbackURL: asyncFallbackURL,
+            prefersOnlineArtwork: prefersOnlineArtwork,
+            sharedResolutionIdentity: sharedResolutionIdentity
         )
         return view
     }
@@ -389,7 +429,12 @@ private struct WipeImageView: UIViewRepresentable {
         context.coordinator.container = uiView
         context.coordinator.configure(width: width, height: height)
         context.coordinator.update(
-            references: references, slideID: slideID, forward: forward, asyncFallbackURL: asyncFallbackURL
+            references: references,
+            slideID: slideID,
+            forward: forward,
+            asyncFallbackURL: asyncFallbackURL,
+            prefersOnlineArtwork: prefersOnlineArtwork,
+            sharedResolutionIdentity: sharedResolutionIdentity
         )
     }
 
@@ -456,7 +501,9 @@ private struct WipeImageView: UIViewRepresentable {
             references: [ArtworkReference],
             slideID: String,
             forward: Bool,
-            asyncFallbackURL: (@Sendable () async -> URL?)?
+            asyncFallbackURL: (@Sendable () async -> URL?)?,
+            prefersOnlineArtwork: Bool,
+            sharedResolutionIdentity: String?
         ) {
             targetForward = forward
             // Same slide already shown/targeted: this is one of the countless
@@ -469,7 +516,9 @@ private struct WipeImageView: UIViewRepresentable {
                     resolveSameSlideUpgrade(
                         references: references,
                         slideID: slideID,
-                        asyncFallbackURL: asyncFallbackURL
+                        asyncFallbackURL: asyncFallbackURL,
+                        prefersOnlineArtwork: prefersOnlineArtwork,
+                        sharedResolutionIdentity: sharedResolutionIdentity
                     )
                 } else {
                     maybeUpgradeDisplayedArt(references: references)
@@ -482,7 +531,9 @@ private struct WipeImageView: UIViewRepresentable {
                 references: references,
                 slideID: slideID,
                 forward: forward,
-                asyncFallbackURL: asyncFallbackURL
+                asyncFallbackURL: asyncFallbackURL,
+                prefersOnlineArtwork: prefersOnlineArtwork,
+                sharedResolutionIdentity: sharedResolutionIdentity
             )
         }
 
@@ -494,82 +545,54 @@ private struct WipeImageView: UIViewRepresentable {
             references: [ArtworkReference],
             slideID: String,
             forward: Bool,
-            asyncFallbackURL: (@Sendable () async -> URL?)?
+            asyncFallbackURL: (@Sendable () async -> URL?)?,
+            prefersOnlineArtwork: Bool,
+            sharedResolutionIdentity: String?
         ) {
             loadTask?.cancel()
             loadTask = nil
             loadToken += 1
             let token = loadToken
 
-            var provisionalFullApplied = false
-            if let (image, reference) = firstUsableCached(references, variant: .heroBackdrop) {
-                applyResolved(
-                    image,
-                    reference: reference,
-                    quality: .full,
-                    id: slideID,
-                    forward: forward
-                )
-                if reference == references.first {
+            loadTask = Task { [weak self] in
+                guard let self else { return }
+                guard let firstPaint = await ArtworkFirstPaintResolver.resolve(
+                    references: references,
+                    variant: .heroPreview,
+                    maxAspectRatio: HeroBackdropArtworkPolicy.maxAspectRatio,
+                    asyncOnlineURL: asyncFallbackURL,
+                    maximumOnlineWait: ArtworkFirstPaintResolver.focalArtworkWait,
+                    prefersOnlineArtwork: prefersOnlineArtwork,
+                    sharedKey: sharedResolutionIdentity
+                ) else {
+                    guard !Task.isCancelled, token == self.loadToken else { return }
+                    self.loadTask = nil
+                    self.noArtResolved(for: slideID)
                     return
                 }
-                provisionalFullApplied = true
-            }
-
-            let cachedPreview = provisionalFullApplied
-                ? nil
-                : firstUsableCached(references, variant: .landscapeCard)
-                    ?? firstUsableCached(references, variant: .heroPreview)
-            let previewWasApplied = provisionalFullApplied || cachedPreview != nil
-            if let (image, reference) = cachedPreview {
-                applyResolved(
-                    image,
-                    reference: reference,
+                guard !Task.isCancelled, token == self.loadToken else { return }
+                self.applyResolved(
+                    firstPaint.image,
+                    reference: firstPaint.reference,
                     quality: .preview,
                     id: slideID,
                     forward: forward
                 )
-            }
 
-            loadTask = Task { [weak self] in
-                guard let self else { return }
-                var previewApplied = previewWasApplied
-                if !previewApplied {
-                    let preview = await self.firstUsableLoaded(
-                        references,
-                        variant: .heroPreview,
-                        asyncFallbackURL: asyncFallbackURL
-                    )
-                    guard !Task.isCancelled, token == self.loadToken else { return }
-                    if let (image, reference) = preview {
-                        self.applyResolved(
-                            image,
-                            reference: reference,
-                            quality: .preview,
-                            id: slideID,
-                            forward: forward
-                        )
-                        previewApplied = true
-                    }
-                }
-
-                let resolved = await self.firstUsableLoaded(
-                    references,
+                let full = await ArtworkImageCache.shared.image(
+                    for: firstPaint.reference,
                     variant: .heroBackdrop,
-                    asyncFallbackURL: asyncFallbackURL
                 )
                 guard !Task.isCancelled, token == self.loadToken else { return }
                 self.loadTask = nil
-                if let (image, reference) = resolved {
+                if let full, HeroBackdropArtworkPolicy.isUsable(full) {
                     self.applyResolved(
-                        image,
-                        reference: reference,
+                        full,
+                        reference: firstPaint.reference,
                         quality: .full,
                         id: slideID,
                         forward: forward
                     )
-                } else if !previewApplied {
-                    self.noArtResolved(for: slideID)
                 }
             }
         }
@@ -599,9 +622,9 @@ private struct WipeImageView: UIViewRepresentable {
             if id == displayedID {
                 let currentQuality = displayedQuality ?? .preview
                 guard quality.rawValue >= currentQuality.rawValue else { return }
-                guard reference != displayedReference || quality != displayedQuality else { return }
+                guard reference == displayedReference else { return }
+                guard quality != displayedQuality else { return }
                 container.frontImage = image
-                displayedReference = reference
                 displayedQuality = quality
                 return
             }
@@ -626,14 +649,18 @@ private struct WipeImageView: UIViewRepresentable {
         /// still-loading target can never swap the visible art without its wipe.
         private func maybeUpgradeDisplayedArt(references: [ArtworkReference]) {
             guard targetID == displayedID, let container else { return }
-            guard let (image, reference) = firstUsableCached(references, variant: .heroBackdrop) else { return }
-            guard displayedQuality != .full || reference != displayedReference else { return }
+            guard displayedQuality != .full,
+                  let displayedReference,
+                  let image = ArtworkImageCache.shared.cachedImage(
+                      for: displayedReference,
+                      variant: .heroBackdrop
+                  ),
+                  HeroBackdropArtworkPolicy.isUsable(image) else { return }
             if container.hasPages {
                 container.frontImage = image
             } else {
                 container.setInitialImage(image)
             }
-            displayedReference = reference
             displayedQuality = .full
         }
 
@@ -705,13 +732,21 @@ private struct WipeImageView: UIViewRepresentable {
         private func resolveSameSlideUpgrade(
             references: [ArtworkReference],
             slideID: String,
-            asyncFallbackURL: (@Sendable () async -> URL?)?
+            asyncFallbackURL: (@Sendable () async -> URL?)?,
+            prefersOnlineArtwork: Bool,
+            sharedResolutionIdentity: String?
         ) {
+            if displayedID == slideID, displayedReference != nil {
+                maybeUpgradeDisplayedArt(references: references)
+                return
+            }
             beginProgressiveResolution(
                 references: references,
                 slideID: slideID,
                 forward: targetForward,
-                asyncFallbackURL: asyncFallbackURL
+                asyncFallbackURL: asyncFallbackURL,
+                prefersOnlineArtwork: prefersOnlineArtwork,
+                sharedResolutionIdentity: sharedResolutionIdentity
             )
         }
 
