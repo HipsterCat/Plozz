@@ -159,6 +159,19 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
 
     // MARK: Size & placement
 
+    public enum VerticalAnchor: String, Codable, Sendable, Equatable, CaseIterable {
+        case automatic, top, center, bottom
+
+        public var displayName: LocalizedStringResource {
+            switch self {
+            case .automatic: "Auto"
+            case .top: "Top"
+            case .center: "Center"
+            case .bottom: "Bottom"
+            }
+        }
+    }
+
     /// The subtitle typeface. Defaults to bundled Atkinson Hyperlegible.
     public var fontFamily: SubtitleFontFamily
     /// The global typeface weight. The active family snaps this to the nearest
@@ -167,10 +180,14 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
     public var fontWeight: SubtitleFontWeight
     /// Multiplier on the base caption size (1.0 == default).
     public var fontScale: Double
-    /// Fraction of available vertical travel: `0` aligns the drawn block's bottom
-    /// with the screen bottom, `1` aligns its top with the screen top.
+    /// Vertical position measured upward from the screen bottom. The chosen
+    /// anchor stays fixed as lines change; Auto interpolates across available travel.
+    /// `0` aligns the block's bottom with the screen bottom, `1` aligns its top.
     /// Negative values deliberately move the block past the bottom edge.
     public var verticalPosition: Double
+    /// Which part of the block stays fixed when a cue gains or loses lines.
+    /// Screen-edge limits take precedence so 0% and 100% remain fully visible.
+    public var verticalAnchor: VerticalAnchor
     public static let verticalPositionRange: ClosedRange<Double> = -0.05...1
     public static let verticalPositionStep: Double = 0.005
     /// Integer indices avoid accumulating floating-point error while stepping.
@@ -317,6 +334,7 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
         fontWeight: SubtitleFontWeight = .regular,
         fontScale: Double = 1.0,
         verticalPosition: Double = 0.06,
+        verticalAnchor: VerticalAnchor = .bottom,
         horizontalOffset: Double = 0,
         textColor: Color = .white,
         opacity: Double = 1.0,
@@ -331,6 +349,7 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
         self.fontWeight = fontWeight
         self.fontScale = fontScale
         self.verticalPosition = verticalPosition
+        self.verticalAnchor = verticalAnchor
         self.horizontalOffset = horizontalOffset
         self.textColor = textColor
         self.opacity = opacity
@@ -450,7 +469,7 @@ public extension SubtitleStyle {
 
 extension SubtitleStyle {
     private enum CodingKeys: String, CodingKey {
-        case fontFamily, fontWeight, fontScale, verticalPosition, horizontalOffset
+        case fontFamily, fontWeight, fontScale, verticalPosition, verticalAnchor, horizontalOffset
         case textColor, opacity, hdrLuminanceScale
         case background, edge, border, secondary, followsSystemStyle
     }
@@ -465,6 +484,7 @@ extension SubtitleStyle {
             fontWeight: try c.decodeIfPresent(SubtitleFontWeight.self, forKey: .fontWeight) ?? d.fontWeight,
             fontScale: try c.decodeIfPresent(Double.self, forKey: .fontScale) ?? d.fontScale,
             verticalPosition: try c.decodeIfPresent(Double.self, forKey: .verticalPosition) ?? d.verticalPosition,
+            verticalAnchor: try c.decodeIfPresent(VerticalAnchor.self, forKey: .verticalAnchor) ?? d.verticalAnchor,
             horizontalOffset: try c.decodeIfPresent(Double.self, forKey: .horizontalOffset) ?? d.horizontalOffset,
             textColor: try c.decodeIfPresent(Color.self, forKey: .textColor) ?? d.textColor,
             opacity: try c.decodeIfPresent(Double.self, forKey: .opacity) ?? d.opacity,

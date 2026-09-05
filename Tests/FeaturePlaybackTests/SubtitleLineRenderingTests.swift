@@ -117,6 +117,7 @@ final class SubtitleLineRenderingTests: XCTestCase {
                     var style = SubtitleStyle.default
                     style.fontFamily = family
                     style.verticalPosition = position
+                    style.verticalAnchor = .automatic
                     style.secondary = placement.map { .init(placement: $0) }
                     let frames = dialogueFrames(
                         style: style, primary: "A subtitle gyp", secondary: "A subtitle gyp", screen: screen
@@ -134,6 +135,68 @@ final class SubtitleLineRenderingTests: XCTestCase {
         }
     }
 
+    func testSelectedAnchorStaysFixedWhenASecondLineAppears() throws {
+        try registerFonts()
+        let screen = CGSize(width: 960, height: 540)
+        for family in SubtitleFontFamily.allCases {
+            for anchor in [SubtitleStyle.VerticalAnchor.top, .center, .bottom] {
+                for placement: SubtitleStyle.Secondary.Placement? in [nil, .above, .below] {
+                    var style = SubtitleStyle.default
+                    style.fontFamily = family
+                    style.verticalAnchor = anchor
+                    style.verticalPosition = anchor == .top ? 0.75 : anchor == .bottom ? 0.06 : 0.5
+                    style.secondary = placement.map {
+                        .init(placement: $0, differentiate: true, relativeScale: 0.5)
+                    }
+                    let short = dialogueFrames(style: style, primary: "One line.", secondary: "Second track.", screen: screen)
+                    let long = dialogueFrames(style: style, primary: "One line.\nAnother line.", secondary: "Second track.", screen: screen)
+                    func anchorY(_ frames: [CGRect]) throws -> CGFloat {
+                        let top = try XCTUnwrap(frames.map(\.minY).min())
+                        let bottom = try XCTUnwrap(frames.map(\.maxY).max())
+                        switch anchor {
+                        case .top: return top
+                        case .center: return (top + bottom) / 2
+                        case .bottom: return bottom
+                        case .automatic: XCTFail("Expected a fixed anchor"); return 0
+                        }
+                    }
+                    XCTAssertEqual(try anchorY(short), try anchorY(long), accuracy: 1, "\(family) \(anchor)")
+                    XCTAssertEqual(try anchorY(long), screen.height * (1 - style.verticalPosition), accuracy: 1)
+                }
+            }
+        }
+    }
+
+    func testNegativePositionsContinuePastTheBottomWithEveryAnchor() throws {
+        try registerFonts()
+        let screen = CGSize(width: 960, height: 540)
+        for anchor in SubtitleStyle.VerticalAnchor.allCases {
+            for position in [-0.005, -0.05] {
+                var style = SubtitleStyle.default
+                style.verticalAnchor = anchor
+                style.verticalPosition = position
+                let frames = dialogueFrames(style: style, primary: "A subtitle.", secondary: "", screen: screen)
+                let frame = try XCTUnwrap(frames.first)
+                let distance = anchor == .automatic ? screen.height - frame.height : screen.height
+                XCTAssertEqual(frame.maxY, screen.height - distance * position, accuracy: 1)
+            }
+        }
+    }
+
+    func testBottomAnchoredPrimaryStaysPutWhenUpperSecondaryIsEmpty() throws {
+        try registerFonts()
+        var style = SubtitleStyle.default
+        style.secondary = .init(placement: .above)
+        let screen = CGSize(width: 960, height: 540)
+        let both = dialogueFrames(style: style, primary: "Primary.", secondary: "Secondary.", screen: screen)
+        let primaryOnly = dialogueFrames(style: style, primary: "Primary.", secondary: "", screen: screen)
+        XCTAssertEqual(
+            try XCTUnwrap(both.map(\.maxY).max()),
+            try XCTUnwrap(primaryOnly.map(\.maxY).max()),
+            accuracy: 1
+        )
+    }
+
     func testWhitespaceHasNoDrawnBox() {
         let view = SubtitleLineView()
         view.configure(config(family: .system, size: 42, text: " \n "))
@@ -146,25 +209,28 @@ final class SubtitleLineRenderingTests: XCTestCase {
         for family in SubtitleFontFamily.allCases {
             for scale in [0.6, 1.0, 2.5] {
                 for position in [0.0, 1.0] {
-                    for placement: SubtitleStyle.Secondary.Placement? in [nil, .above, .below] {
-                        var style = SubtitleStyle.default
-                        style.fontFamily = family
-                        style.fontScale = scale
-                        style.verticalPosition = position
-                        style.secondary = placement.map {
-                            .init(placement: $0, differentiate: true, relativeScale: 0.5)
+                    for anchor in SubtitleStyle.VerticalAnchor.allCases {
+                        for placement: SubtitleStyle.Secondary.Placement? in [nil, .above, .below] {
+                            var style = SubtitleStyle.default
+                            style.fontFamily = family
+                            style.fontScale = scale
+                            style.verticalPosition = position
+                            style.verticalAnchor = anchor
+                            style.secondary = placement.map {
+                                .init(placement: $0, differentiate: true, relativeScale: 0.5)
+                            }
+                            let frames = dialogueFrames(
+                                style: style, primary: "A subtitle gyp.\nAnother line.",
+                                secondary: "Small second language.", screen: screen
+                            )
+                            XCTAssertEqual(frames.count, placement == nil ? 1 : 2)
+                            if position == 0 {
+                                XCTAssertEqual(try XCTUnwrap(frames.map(\.maxY).max()), screen.height, accuracy: 1)
+                            } else {
+                                XCTAssertEqual(try XCTUnwrap(frames.map(\.minY).min()), 0, accuracy: 1)
+                            }
+                            XCTAssertTrue(frames.allSatisfy { $0.minY >= -1 && $0.maxY <= screen.height + 1 })
                         }
-                        let frames = dialogueFrames(
-                            style: style, primary: "A subtitle gyp.\nAnother line.",
-                            secondary: "Small second language.", screen: screen
-                        )
-                        XCTAssertEqual(frames.count, placement == nil ? 1 : 2)
-                        if position == 0 {
-                            XCTAssertEqual(try XCTUnwrap(frames.map(\.maxY).max()), screen.height, accuracy: 1)
-                        } else {
-                            XCTAssertEqual(try XCTUnwrap(frames.map(\.minY).min()), 0, accuracy: 1)
-                        }
-                        XCTAssertTrue(frames.allSatisfy { $0.minY >= -1 && $0.maxY <= screen.height + 1 })
                     }
                 }
             }

@@ -1149,6 +1149,14 @@ private struct PlozziOSSubtitleAppearanceView: View {
                         $0.formatted(.percent.precision(.fractionLength(0...1)).locale(locale))
                     }
                 )
+                Picker(
+                    "Vertical Anchor",
+                    selection: subtitleStyleBinding(viewModel, \.verticalAnchor)
+                ) {
+                    ForEach(SubtitleStyle.VerticalAnchor.allCases, id: \.self) { anchor in
+                        Text(anchor.displayName).tag(anchor)
+                    }
+                }
                 PlozziOSSubtitleSliderRow(
                     title: "Horizontal Offset",
                     value: subtitleStyleBinding(viewModel, \.horizontalOffset),

@@ -70,34 +70,63 @@ enum SubtitleOverlayGeometry {
     }
 }
 
-/// Moves the whole measured block between screen edges, not its bottom past the
-/// top edge. Also aligns text within reserved dual-subtitle lanes the same way.
+private struct SubtitleLaneHeight: LayoutValueKey {
+    static let defaultValue: CGFloat = 0
+}
+
+/// Anchors the visible text block while retaining empty dual-subtitle lanes.
+/// Measuring the outer ink edges separately keeps lane padding off screen edges.
 private struct SubtitlePositionLayout: Layout {
     let verticalPosition: Double
-    var minimumHeight: CGFloat = 0
+    let verticalAnchor: SubtitleStyle.VerticalAnchor
+    let spacing: CGFloat
+
+    private var anchorFraction: CGFloat {
+        switch verticalAnchor {
+        case .automatic: min(max(1 - verticalPosition, 0), 1)
+        case .top: 0
+        case .center: 0.5
+        case .bottom: 1
+        }
+    }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let content = subviews.first?.sizeThatFits(
-            ProposedViewSize(width: proposal.width, height: nil)
-        ) ?? .zero
+        let sizes = subviews.map { $0.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil)) }
+        let height = zip(subviews, sizes).reduce(CGFloat.zero) {
+            $0 + max($1.0[SubtitleLaneHeight.self], $1.1.height)
+        } + spacing * CGFloat(max(0, subviews.count - 1))
         return CGSize(
-            width: proposal.width ?? content.width,
-            height: max(minimumHeight, proposal.height ?? content.height)
+            width: proposal.width ?? sizes.map(\.width).max() ?? 0,
+            height: proposal.height ?? height
         )
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
         let contentProposal = ProposedViewSize(width: bounds.width, height: nil)
-        for subview in subviews {
-            let size = subview.sizeThatFits(contentProposal)
-            subview.place(
-                at: CGPoint(
-                    x: bounds.midX,
-                    y: bounds.minY + (bounds.height - size.height) * (1 - verticalPosition)
-                ),
-                anchor: .top,
-                proposal: contentProposal
-            )
+        let sizes = subviews.map { $0.sizeThatFits(contentProposal) }
+        let heights = zip(subviews, sizes).map { max($0.0[SubtitleLaneHeight.self], $0.1.height) }
+        let last = sizes.count - 1
+        let topInset = sizes[0].height > 0 ? (heights[0] - sizes[0].height) * anchorFraction : 0
+        let bottomInset = sizes[last].height > 0
+            ? (heights[last] - sizes[last].height) * (1 - anchorFraction) : 0
+        let height = heights.reduce(0, +) + spacing * CGFloat(last) - topInset - bottomInset
+        let travel = bounds.height - height
+        let origin: CGFloat
+        if verticalAnchor == .automatic {
+            origin = travel * (1 - verticalPosition)
+        } else if verticalPosition < 0 {
+            // Continue smoothly below 0% regardless of the selected anchor.
+            origin = travel - bounds.height * verticalPosition
+        } else {
+            let anchored = bounds.height * (1 - verticalPosition) - height * anchorFraction
+            origin = min(max(anchored, min(0, travel)), max(0, travel))
+        }
+        var y = bounds.minY + origin - topInset
+        for (index, subview) in subviews.enumerated() {
+            let inset = (heights[index] - sizes[index].height) * anchorFraction
+            subview.place(at: CGPoint(x: bounds.midX, y: y + inset), anchor: .top, proposal: contentProposal)
+            y += heights[index] + spacing
         }
     }
 }
@@ -229,10 +258,14 @@ public struct SubtitleOverlayView: View {
         let dialogue = text.filter { !isSourcePositioned($0) }
 
         ZStack {
-            SubtitlePositionLayout(verticalPosition: style.verticalPosition) {
+            SubtitlePositionLayout(
+                verticalPosition: style.verticalPosition,
+                verticalAnchor: style.verticalAnchor,
+                spacing: secondaryActive ? style.secondary?.gap ?? 0 : 0
+            ) {
                 dialogueStack(dialogue)
-                    .frame(maxWidth: size.width * 0.92, alignment: .center)
             }
+            .frame(width: size.width * 0.92, height: size.height)
             .frame(width: size.width, height: size.height)
             .offset(x: style.horizontalOffset * (size.width * 0.25))
 
@@ -298,31 +331,16 @@ public struct SubtitleOverlayView: View {
             let secScale = sec.differentiate ? sec.relativeScale : 1.0
             let primaryLane = reservedLineHeight(scale: 1.0)
             let secondaryLane = reservedLineHeight(scale: secScale)
-            VStack(spacing: sec.gap) {
-                if above {
-                    subtitleLane(minimumHeight: secondaryLane) { secondaryBlock() }
-                }
-                subtitleLane(minimumHeight: primaryLane) { primaryBlock(dialogue) }
-                if !above {
-                    subtitleLane(minimumHeight: secondaryLane) { secondaryBlock() }
-                }
+            if above {
+                secondaryBlock().layoutValue(key: SubtitleLaneHeight.self, value: secondaryLane)
+            }
+            primaryBlock(dialogue).layoutValue(key: SubtitleLaneHeight.self, value: primaryLane)
+            if !above {
+                secondaryBlock().layoutValue(key: SubtitleLaneHeight.self, value: secondaryLane)
             }
         } else {
             primaryBlock(dialogue)
         }
-    }
-
-    private func subtitleLane<Content: View>(
-        minimumHeight: CGFloat,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        SubtitlePositionLayout(
-            verticalPosition: style.verticalPosition,
-            minimumHeight: minimumHeight
-        ) {
-            content()
-        }
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// Height to reserve for one subtitle line at the given scale, so a dual-sub

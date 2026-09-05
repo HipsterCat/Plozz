@@ -55,6 +55,41 @@ final class PlayerControlsFormattingTests: XCTestCase {
         XCTAssertEqual(String(localized: PlayerControlsFormatting.hOffsetLabel(-15)), "Left 15%")
     }
 
+    func testBottomAnchorIsDefaultForNewAndPreviouslySavedProfiles() throws {
+        XCTAssertEqual(SubtitleStyle().verticalAnchor, .bottom)
+        XCTAssertEqual(SubtitleStyle.default.verticalAnchor, .bottom)
+        let suite = "SubtitleAnchorTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let legacy = Data(#"{"base":{"fontFamily":"fredoka","fontScale":1.2,"verticalPosition":0.065},"overrides":[]}"#.utf8)
+        XCTAssertEqual(try JSONDecoder().decode(SubtitleStylePreferences.self, from: legacy).base.verticalAnchor, .bottom)
+        for namespace: String? in [nil, "second-profile"] {
+            let store = SubtitleStyleStore(defaults: defaults, namespace: namespace)
+            XCTAssertEqual(store.load().base.verticalAnchor, .bottom)
+            defaults.set(legacy, forKey: SettingsKey.scoped(SubtitleStyleStore.storageKey, namespace: namespace))
+            let restored = store.load().base
+            XCTAssertEqual(restored.verticalAnchor, .bottom)
+            XCTAssertEqual(restored.fontFamily, .fredoka)
+            XCTAssertEqual(restored.fontScale, 1.2)
+            XCTAssertEqual(restored.verticalPosition, 0.065)
+        }
+    }
+
+    func testEveryVerticalAnchorPersistsPerProfile() throws {
+        let suite = "SubtitleAnchorRoundTripTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = SubtitleStyleStore(defaults: defaults, namespace: "custom")
+        let primary = SubtitleStyleStore(defaults: defaults)
+        for anchor in SubtitleStyle.VerticalAnchor.allCases {
+            var preferences = SubtitleStylePreferences.default
+            preferences.base.verticalAnchor = anchor
+            store.save(preferences)
+            XCTAssertEqual(store.load(), preferences)
+            XCTAssertEqual(primary.load().base.verticalAnchor, .bottom)
+        }
+    }
+
     func testCornerLabelSentinelReadsFull() {
         XCTAssertEqual(PlayerControlsFormatting.cornerLabel(12), "12")
         XCTAssertEqual(PlayerControlsFormatting.cornerLabel(PlayerControlsFormatting.cornerFull), "Full")
