@@ -8,7 +8,7 @@ import CoreModels
 final class PlayerControlsFormattingTests: XCTestCase {
     func testPositionGridIncludesEveryHalfPercentAndDefault() {
         let options = SubtitleStyle.verticalPositionOptions
-        XCTAssertEqual(options.count, 181)
+        XCTAssertEqual(options.count, 191)
         XCTAssertEqual(options.first, SubtitleStyle.verticalPositionRange.lowerBound)
         XCTAssertEqual(options.last, SubtitleStyle.verticalPositionRange.upperBound)
         XCTAssertTrue(options.contains(SubtitleStyle.default.verticalPosition))
@@ -17,10 +17,12 @@ final class PlayerControlsFormattingTests: XCTestCase {
         }
         let format = FloatingPointFormatStyle<Double>.Percent
             .percent.precision(.fractionLength(0...1)).locale(Locale(identifier: "en_US"))
-        XCTAssertEqual(options[0].formatted(format), "0%")
-        XCTAssertEqual(options[1].formatted(format), "0.5%")
-        XCTAssertEqual(options[13].formatted(format), "6.5%")
-        XCTAssertEqual(options[180].formatted(format), "90%")
+        XCTAssertEqual(options[0].formatted(format), "-5%")
+        XCTAssertEqual(options[9].formatted(format), "-0.5%")
+        XCTAssertEqual(options[10].formatted(format), "0%")
+        XCTAssertEqual(options[11].formatted(format), "0.5%")
+        XCTAssertEqual(options[23].formatted(format), "6.5%")
+        XCTAssertEqual(options[190].formatted(format), "90%")
     }
 
     func testHalfPercentPositionPersistsWithoutAffectingOtherProfiles() throws {
@@ -35,9 +37,12 @@ final class PlayerControlsFormattingTests: XCTestCase {
         secondary.save(preferences)
         XCTAssertEqual(secondary.load(), preferences)
         XCTAssertEqual(primary.load(), .default)
-        preferences.base.verticalPosition = 0
-        secondary.save(preferences)
-        XCTAssertEqual(secondary.load().base.verticalPosition, 0)
+        for position in [0.0, -0.005, -0.05] {
+            preferences.base.verticalPosition = position
+            secondary.save(preferences)
+            XCTAssertEqual(secondary.load().base.verticalPosition, position)
+            XCTAssertEqual(primary.load(), .default)
+        }
     }
 
     func testHorizontalOffsetLabelWordsDirection() {

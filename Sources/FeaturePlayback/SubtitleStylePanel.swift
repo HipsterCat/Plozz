@@ -221,8 +221,8 @@ struct SubtitleStylePanel: View {
             slot, "Position",
             options: Self.positionOptions,
             current: Int((s.verticalPosition / SubtitleStyle.verticalPositionStep).rounded()),
-            label: { Text(SubtitleStyle.verticalPositionOptions[$0], format: .percent.precision(.fractionLength(0...1))) }
-        ) { v in updateStyle { $0.verticalPosition = SubtitleStyle.verticalPositionOptions[v] } }); slot += 1
+            label: { Text(Double($0) * SubtitleStyle.verticalPositionStep, format: .percent.precision(.fractionLength(0...1))) }
+        ) { v in updateStyle { $0.verticalPosition = Double(v) * SubtitleStyle.verticalPositionStep } }); slot += 1
         rows.append(numberRow(slot, "Horizontal Offset", options: Self.hOffsetOptions, current: Int((s.horizontalOffset * 100).rounded()), label: { Text(PlayerControlsFormatting.hOffsetLabel($0)) }) { v in updateStyle { $0.horizontalOffset = Double(v) / 100 } }); slot += 1
         rows.append(colorRow(slot, "Text Color", options: Self.textColorOptions, current: s.textColor, label: PlayerControlsFormatting.colorLabel) { c in updateStyle { $0.textColor = c } }); slot += 1
         rows.append(numberRow(slot, "Opacity", options: Self.opacityOptions, current: Int((s.opacity * 100).rounded()), label: { Text(verbatim: "\($0)%") }) { v in updateStyle { $0.opacity = Double(v) / 100 } }); slot += 1
@@ -499,7 +499,9 @@ struct SubtitleStylePanel: View {
 
     // Precise, numeric option grids — no "low / high" buckets.
     private static let sizeOptions: [Int] = Array(stride(from: 60, through: 250, by: 5))
-    private static let positionOptions = Array(SubtitleStyle.verticalPositionOptions.indices)
+    private static let positionOptions = SubtitleStyle.verticalPositionOptions.map {
+        Int(($0 / SubtitleStyle.verticalPositionStep).rounded())
+    }
     /// Horizontal nudge as a signed percentage of the max offset (±25% of width);
     /// 0 = centred. Lets subtitles dodge burned-in signage / letterbox furniture.
     private static let hOffsetOptions: [Int] = Array(stride(from: -100, through: 100, by: 5))

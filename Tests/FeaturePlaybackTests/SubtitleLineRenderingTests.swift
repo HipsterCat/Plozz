@@ -112,7 +112,7 @@ final class SubtitleLineRenderingTests: XCTestCase {
         try registerFonts()
         let screen = CGSize(width: 960, height: 540)
         for family in SubtitleFontFamily.allCases {
-            for position in [0.0, 0.005, 0.06, 0.45] {
+            for position in [-0.05, -0.005, 0.0, 0.005, 0.06, 0.45] {
                 for placement: SubtitleStyle.Secondary.Placement? in [nil, .above, .below] {
                     var style = SubtitleStyle.default
                     style.fontFamily = family

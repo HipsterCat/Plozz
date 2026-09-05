@@ -169,15 +169,16 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
     public var fontScale: Double
     /// Distance from the screen's bottom edge to the drawn subtitle block, as a
     /// fraction of screen height. `0` touches the edge, including any box/effects.
+    /// Negative values deliberately move the block past the bottom edge.
     public var verticalPosition: Double
-    public static let verticalPositionRange: ClosedRange<Double> = 0...0.9
+    public static let verticalPositionRange: ClosedRange<Double> = -0.05...0.9
     public static let verticalPositionStep: Double = 0.005
     /// Integer indices avoid accumulating floating-point error while stepping.
-    public static let verticalPositionOptions: [Double] = (0...Int(
-        (verticalPositionRange.upperBound / verticalPositionStep).rounded()
-    )).map {
-        Double($0) * verticalPositionStep
-    }
+    public static let verticalPositionOptions: [Double] = {
+        let first = Int((verticalPositionRange.lowerBound / verticalPositionStep).rounded())
+        let last = Int((verticalPositionRange.upperBound / verticalPositionStep).rounded())
+        return (first...last).map { Double($0) * verticalPositionStep }
+    }()
     /// Horizontal nudge, `-1` … `1` (0 = centred). Lets users dodge burned-in
     /// signage or letterbox furniture.
     public var horizontalOffset: Double
