@@ -1105,6 +1105,7 @@ private struct PlozziOSSubtitleOptionsSheet: View {
 
 private struct PlozziOSSubtitleAppearanceView: View {
     let viewModel: PlayerViewModel
+    @Environment(\.locale) private var locale
 
     var body: some View {
         Form {
@@ -1142,9 +1143,11 @@ private struct PlozziOSSubtitleAppearanceView: View {
                 PlozziOSSubtitleSliderRow(
                     title: "Position",
                     value: subtitleStyleBinding(viewModel, \.verticalPosition),
-                    range: 0...0.9,
-                    step: 0.01,
-                    formattedValue: subtitlePositionLabel
+                    range: SubtitleStyle.verticalPositionRange,
+                    step: SubtitleStyle.verticalPositionStep,
+                    formattedValue: {
+                        $0.formatted(.percent.precision(.fractionLength(0...1)).locale(locale))
+                    }
                 )
                 PlozziOSSubtitleSliderRow(
                     title: "Horizontal Offset",
@@ -1628,14 +1631,6 @@ private func subtitlePreviewFont(
         return .custom("\(stem)-Regular", size: size)
     }
     return .system(size: size)
-}
-
-private func subtitlePositionLabel(_ value: Double) -> String {
-    switch value {
-    case ..<0.2: "Bottom"
-    case 0.2..<0.65: "\((value * 100).rounded().formatted())%"
-    default: "Top"
-    }
 }
 
 @MainActor

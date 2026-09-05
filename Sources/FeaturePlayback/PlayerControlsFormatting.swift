@@ -22,16 +22,6 @@ enum PlayerControlsFormatting {
         return best
     }
 
-    /// 0% = seated at the bottom safe edge; 90% = near the top. Anchors are named
-    /// so the extremes read clearly, but every step in between is a plain percent.
-    static func positionLabel(_ pct: Int) -> String {
-        switch pct {
-        case 0: return "Bottom"
-        case 90: return "Top"
-        default: return "\(pct)%"
-        }
-    }
-
     /// Horizontal offset readout: 0 reads "Centre"; a signed percentage otherwise,
     /// worded by direction so the sign never has to be parsed.
     static func hOffsetLabel(_ pct: Int) -> LocalizedStringResource {

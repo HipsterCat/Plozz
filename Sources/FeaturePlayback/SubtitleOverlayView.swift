@@ -198,7 +198,7 @@ public struct SubtitleOverlayView: View {
 
         ZStack {
             // Default dialogue: primary dialogue lines + the dual-sub secondary,
-            // seated just above the bottom safe edge (user-adjustable). Multiple
+            // seated against the physical bottom edge (user-adjustable). Multiple
             // simultaneous lines stack here rather than overlapping.
             dialogueStack(dialogue)
                 .frame(maxWidth: size.width * 0.92, alignment: .center)
@@ -274,7 +274,7 @@ public struct SubtitleOverlayView: View {
                 }
                 primaryBlock(dialogue).frame(minHeight: primaryLane, alignment: .bottom)
                 if !above {
-                    secondaryBlock().frame(minHeight: secondaryLane, alignment: .top)
+                    secondaryBlock().frame(minHeight: secondaryLane, alignment: .bottom)
                 }
             }
         } else {

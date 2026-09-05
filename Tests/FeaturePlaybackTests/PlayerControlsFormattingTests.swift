@@ -3,13 +3,41 @@ import CoreModels
 @testable import FeaturePlayback
 
 /// Tests the pure subtitle-style label formatters extracted from
-/// `PlayerControls`. These pin the human-readable readouts (named anchors,
+/// `PlayerControls`. These pin the human-readable readouts (precise positions,
 /// signed offsets, preset color names, edge summary) that the style rows show.
 final class PlayerControlsFormattingTests: XCTestCase {
-    func testPositionLabelNamesExtremes() {
-        XCTAssertEqual(PlayerControlsFormatting.positionLabel(0), "Bottom")
-        XCTAssertEqual(PlayerControlsFormatting.positionLabel(90), "Top")
-        XCTAssertEqual(PlayerControlsFormatting.positionLabel(45), "45%")
+    func testPositionGridIncludesEveryHalfPercentAndDefault() {
+        let options = SubtitleStyle.verticalPositionOptions
+        XCTAssertEqual(options.count, 181)
+        XCTAssertEqual(options.first, SubtitleStyle.verticalPositionRange.lowerBound)
+        XCTAssertEqual(options.last, SubtitleStyle.verticalPositionRange.upperBound)
+        XCTAssertTrue(options.contains(SubtitleStyle.default.verticalPosition))
+        for (previous, next) in zip(options, options.dropFirst()) {
+            XCTAssertEqual(next - previous, 0.005, accuracy: 0.000_001)
+        }
+        let format = FloatingPointFormatStyle<Double>.Percent
+            .percent.precision(.fractionLength(0...1)).locale(Locale(identifier: "en_US"))
+        XCTAssertEqual(options[0].formatted(format), "0%")
+        XCTAssertEqual(options[1].formatted(format), "0.5%")
+        XCTAssertEqual(options[13].formatted(format), "6.5%")
+        XCTAssertEqual(options[180].formatted(format), "90%")
+    }
+
+    func testHalfPercentPositionPersistsWithoutAffectingOtherProfiles() throws {
+        let suite = "SubtitlePositionTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let primary = SubtitleStyleStore(defaults: defaults)
+        let secondary = SubtitleStyleStore(defaults: defaults, namespace: "second-profile")
+        var preferences = SubtitleStylePreferences.default
+        preferences.base.verticalPosition = 0.005
+        preferences.base.fontFamily = .openDyslexic
+        secondary.save(preferences)
+        XCTAssertEqual(secondary.load(), preferences)
+        XCTAssertEqual(primary.load(), .default)
+        preferences.base.verticalPosition = 0
+        secondary.save(preferences)
+        XCTAssertEqual(secondary.load().base.verticalPosition, 0)
     }
 
     func testHorizontalOffsetLabelWordsDirection() {
