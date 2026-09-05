@@ -108,39 +108,26 @@ final class SubtitleLineRenderingTests: XCTestCase {
         }
     }
 
-    func testDialogueUsesScreenBottomAndHalfPercentOffsetsIncludingDualSubtitles() throws {
+    func testDialogueSpansBothScreenEdgesIncludingDualSubtitles() throws {
         try registerFonts()
         let screen = CGSize(width: 960, height: 540)
         for family in SubtitleFontFamily.allCases {
-            for position in [-0.05, -0.005, 0.0, 0.005, 0.06, 0.45] {
+            for position in [-0.05, -0.005, 0.0, 0.005, 0.06, 0.5, 0.9, 0.995, 1.0] {
                 for placement: SubtitleStyle.Secondary.Placement? in [nil, .above, .below] {
                     var style = SubtitleStyle.default
                     style.fontFamily = family
                     style.verticalPosition = position
                     style.secondary = placement.map { .init(placement: $0) }
-                    let cue = SubtitleCue(id: 0, start: 0, end: 10, body: .text(SubtitleText("A subtitle gyp")))
-                    let overlay = SubtitleOverlayView(
-                        primary: [cue],
-                        secondary: placement == nil ? [] : [cue],
-                        secondaryActive: placement != nil,
-                        style: style,
-                        videoRect: CGRect(x: 0, y: 70, width: 960, height: 400)
+                    let frames = dialogueFrames(
+                        style: style, primary: "A subtitle gyp", secondary: "A subtitle gyp", screen: screen
                     )
-                    let host = UIHostingController(rootView: overlay)
-                    host.safeAreaRegions = []
-                    let window = UIWindow(frame: CGRect(origin: .zero, size: screen))
-                    window.rootViewController = host
-                    window.isHidden = false
-                    defer { window.isHidden = true }
-                    host.view.frame = CGRect(origin: .zero, size: screen)
-                    host.view.setNeedsLayout()
-                    host.view.layoutIfNeeded()
-                    let lines = subtitleViews(in: host.view)
-                    XCTAssertEqual(lines.count, placement == nil ? 1 : 2)
-                    let bottom = try XCTUnwrap(lines.map {
-                        $0.convert($0.bounds, to: host.view).maxY
-                    }.max())
-                    XCTAssertEqual(bottom, screen.height * (1 - position), accuracy: 1,
+                    XCTAssertEqual(frames.count, placement == nil ? 1 : 2)
+                    let top = try XCTUnwrap(frames.map(\.minY).min())
+                    let bottom = try XCTUnwrap(frames.map(\.maxY).max())
+                    // Each reserved lane uses the same interpolation, so unused
+                    // lane height cannot leave a gap at either physical edge.
+                    let blockHeight = bottom - top
+                    XCTAssertEqual(top, (screen.height - blockHeight) * (1 - position), accuracy: 1,
                                    "\(family) position=\(position) dual=\(String(describing: placement))")
                 }
             }
@@ -151,6 +138,61 @@ final class SubtitleLineRenderingTests: XCTestCase {
         let view = SubtitleLineView()
         view.configure(config(family: .system, size: 42, text: " \n "))
         XCTAssertEqual(view.measure(maxWidth: 400), .zero)
+    }
+
+    func testMultilineAndDifferentlySizedDualSubtitlesTouchBothEdges() throws {
+        try registerFonts()
+        let screen = CGSize(width: 960, height: 540)
+        for family in SubtitleFontFamily.allCases {
+            for scale in [0.6, 1.0, 2.5] {
+                for position in [0.0, 1.0] {
+                    for placement: SubtitleStyle.Secondary.Placement? in [nil, .above, .below] {
+                        var style = SubtitleStyle.default
+                        style.fontFamily = family
+                        style.fontScale = scale
+                        style.verticalPosition = position
+                        style.secondary = placement.map {
+                            .init(placement: $0, differentiate: true, relativeScale: 0.5)
+                        }
+                        let frames = dialogueFrames(
+                            style: style, primary: "A subtitle gyp.\nAnother line.",
+                            secondary: "Small second language.", screen: screen
+                        )
+                        XCTAssertEqual(frames.count, placement == nil ? 1 : 2)
+                        if position == 0 {
+                            XCTAssertEqual(try XCTUnwrap(frames.map(\.maxY).max()), screen.height, accuracy: 1)
+                        } else {
+                            XCTAssertEqual(try XCTUnwrap(frames.map(\.minY).min()), 0, accuracy: 1)
+                        }
+                        XCTAssertTrue(frames.allSatisfy { $0.minY >= -1 && $0.maxY <= screen.height + 1 })
+                    }
+                }
+            }
+        }
+    }
+
+    private func dialogueFrames(
+        style: SubtitleStyle, primary: String, secondary: String, screen: CGSize
+    ) -> [CGRect] {
+        let overlay = SubtitleOverlayView(
+            primary: [.init(id: 0, start: 0, end: 10, body: .text(SubtitleText(primary)))],
+            secondary: style.secondary == nil ? [] : [
+                .init(id: 1, start: 0, end: 10, body: .text(SubtitleText(secondary)))
+            ],
+            secondaryActive: style.secondary != nil,
+            style: style,
+            videoRect: CGRect(x: 0, y: 70, width: screen.width, height: screen.height - 140)
+        )
+        let host = UIHostingController(rootView: overlay)
+        host.safeAreaRegions = []
+        let window = UIWindow(frame: CGRect(origin: .zero, size: screen))
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        host.view.frame = CGRect(origin: .zero, size: screen)
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
+        return subtitleViews(in: host.view).map { $0.convert($0.bounds, to: host.view) }
     }
 
     private func config(family: SubtitleFontFamily, size: CGFloat, text: String) -> SubtitleLineView.Config {

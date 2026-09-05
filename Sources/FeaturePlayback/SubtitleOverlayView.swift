@@ -70,6 +70,38 @@ enum SubtitleOverlayGeometry {
     }
 }
 
+/// Moves the whole measured block between screen edges, not its bottom past the
+/// top edge. Also aligns text within reserved dual-subtitle lanes the same way.
+private struct SubtitlePositionLayout: Layout {
+    let verticalPosition: Double
+    var minimumHeight: CGFloat = 0
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let content = subviews.first?.sizeThatFits(
+            ProposedViewSize(width: proposal.width, height: nil)
+        ) ?? .zero
+        return CGSize(
+            width: proposal.width ?? content.width,
+            height: max(minimumHeight, proposal.height ?? content.height)
+        )
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let contentProposal = ProposedViewSize(width: bounds.width, height: nil)
+        for subview in subviews {
+            let size = subview.sizeThatFits(contentProposal)
+            subview.place(
+                at: CGPoint(
+                    x: bounds.midX,
+                    y: bounds.minY + (bounds.height - size.height) * (1 - verticalPosition)
+                ),
+                anchor: .top,
+                proposal: contentProposal
+            )
+        }
+    }
+}
+
 /// Plozz's **own** subtitle renderer: an engine-agnostic SwiftUI overlay that
 /// draws a normalized `[SubtitleCue]` stream with full styling.
 ///
@@ -197,14 +229,12 @@ public struct SubtitleOverlayView: View {
         let dialogue = text.filter { !isSourcePositioned($0) }
 
         ZStack {
-            // Default dialogue: primary dialogue lines + the dual-sub secondary,
-            // seated against the physical bottom edge (user-adjustable). Multiple
-            // simultaneous lines stack here rather than overlapping.
-            dialogueStack(dialogue)
-                .frame(maxWidth: size.width * 0.92, alignment: .center)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .padding(.bottom, size.height * style.verticalPosition)
-                .offset(x: style.horizontalOffset * (size.width * 0.25))
+            SubtitlePositionLayout(verticalPosition: style.verticalPosition) {
+                dialogueStack(dialogue)
+                    .frame(maxWidth: size.width * 0.92, alignment: .center)
+            }
+            .frame(width: size.width, height: size.height)
+            .offset(x: style.horizontalOffset * (size.width * 0.25))
 
             // Positioned cues (ASS signs / captions): each honours its own
             // layout independently, placed against the video rect.
@@ -270,16 +300,29 @@ public struct SubtitleOverlayView: View {
             let secondaryLane = reservedLineHeight(scale: secScale)
             VStack(spacing: sec.gap) {
                 if above {
-                    secondaryBlock().frame(minHeight: secondaryLane, alignment: .bottom)
+                    subtitleLane(minimumHeight: secondaryLane) { secondaryBlock() }
                 }
-                primaryBlock(dialogue).frame(minHeight: primaryLane, alignment: .bottom)
+                subtitleLane(minimumHeight: primaryLane) { primaryBlock(dialogue) }
                 if !above {
-                    secondaryBlock().frame(minHeight: secondaryLane, alignment: .bottom)
+                    subtitleLane(minimumHeight: secondaryLane) { secondaryBlock() }
                 }
             }
         } else {
             primaryBlock(dialogue)
         }
+    }
+
+    private func subtitleLane<Content: View>(
+        minimumHeight: CGFloat,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        SubtitlePositionLayout(
+            verticalPosition: style.verticalPosition,
+            minimumHeight: minimumHeight
+        ) {
+            content()
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// Height to reserve for one subtitle line at the given scale, so a dual-sub

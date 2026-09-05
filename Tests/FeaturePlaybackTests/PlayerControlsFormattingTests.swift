@@ -8,7 +8,7 @@ import CoreModels
 final class PlayerControlsFormattingTests: XCTestCase {
     func testPositionGridIncludesEveryHalfPercentAndDefault() {
         let options = SubtitleStyle.verticalPositionOptions
-        XCTAssertEqual(options.count, 191)
+        XCTAssertEqual(options.count, 211)
         XCTAssertEqual(options.first, SubtitleStyle.verticalPositionRange.lowerBound)
         XCTAssertEqual(options.last, SubtitleStyle.verticalPositionRange.upperBound)
         XCTAssertTrue(options.contains(SubtitleStyle.default.verticalPosition))
@@ -23,6 +23,8 @@ final class PlayerControlsFormattingTests: XCTestCase {
         XCTAssertEqual(options[11].formatted(format), "0.5%")
         XCTAssertEqual(options[23].formatted(format), "6.5%")
         XCTAssertEqual(options[190].formatted(format), "90%")
+        XCTAssertEqual(options[209].formatted(format), "99.5%")
+        XCTAssertEqual(options[210].formatted(format), "100%")
     }
 
     func testHalfPercentPositionPersistsWithoutAffectingOtherProfiles() throws {
@@ -37,7 +39,7 @@ final class PlayerControlsFormattingTests: XCTestCase {
         secondary.save(preferences)
         XCTAssertEqual(secondary.load(), preferences)
         XCTAssertEqual(primary.load(), .default)
-        for position in [0.0, -0.005, -0.05] {
+        for position in [0.0, -0.005, -0.05, 0.995, 1.0] {
             preferences.base.verticalPosition = position
             secondary.save(preferences)
             XCTAssertEqual(secondary.load().base.verticalPosition, position)

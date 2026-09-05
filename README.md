@@ -88,8 +88,8 @@ presents them as a single library rather than a set of tabs you switch between.
   ([The full format list](https://github.com/superuser404notfound/AetherEngine/blob/main/docs/formats.md).)
 - **Subtitles you can actually read** — change font, size, weight, colour,
   opacity, background, shadow, position, and HDR brightness from inside the
-  player. Position adjusts in 0.5% steps from -5% to 90%, with consistent sizing
-  across fonts. 0% aligns to the bottom edge; negative values allow cropping.
+  player. Position adjusts in 0.5% steps from -5% to 100%, with consistent sizing
+  across fonts. 0% aligns to the bottom edge, 100% to the top; negative values allow cropping.
 - **Two subtitle tracks at once** — for learning a language, or for a household
   that doesn't share one.
 - **Mark as watched** — a whole season, or everything up to a given episode.
