@@ -33,6 +33,8 @@ struct NavigationRailShell<Content: View>: View {
     /// the initial pick, which would open the navigation every time the app launches
     /// or the viewer switches destination.
     @Namespace private var focusScopeID
+    @Namespace private var contentFocusScopeID
+    @Environment(\.resetFocus) private var resetFocus
     @StateObject private var pinnedSidebarInteraction = PlozzPinnedSidebarInteraction()
     /// Whether focus is inside the rail, reported up from it.
     @State private var railExpanded = false
@@ -42,6 +44,7 @@ struct NavigationRailShell<Content: View>: View {
     /// returns to the page.
     @State private var railReturnToken = 0
     @State private var isOpeningNavigation = false
+    @State private var searchContentFocusRequest = 0
 
     var body: some View {
         let hidden = chrome.isChromeHidden
@@ -53,6 +56,8 @@ struct NavigationRailShell<Content: View>: View {
         )
         return ZStack(alignment: .leading) {
             content
+                // A reset into this scope excludes the page's navigation capsule.
+                .focusScope(contentFocusScopeID)
                 // Native Search owns its navigation bar. Reserve actual container
                 // space above it, rather than overlaying its field or keyboard.
                 .padding(.top, presentation.headerHeight)
@@ -116,7 +121,8 @@ struct NavigationRailShell<Content: View>: View {
                     isExpandedOutward: $railExpanded,
                     onOpenProfileSwitcher: onOpenProfileSwitcher,
                     focusRequestToken: focusRequestToken,
-                    focusReleaseToken: railReturnToken
+                    focusReleaseToken: railReturnToken,
+                    opensExpanded: presentation.opensExpanded
                 )
                 // Keep the focus-request observer mounted while Search hides the
                 // collapsed rail. Invisible rows must not compete with its keyboard.
@@ -133,15 +139,23 @@ struct NavigationRailShell<Content: View>: View {
         .focusScope(focusScopeID)
         .animation(.easeInOut(duration: 0.26), value: hidden)
         .animation(NavigationRailMetrics.expandAnimation, value: railExpanded)
-        .onChange(of: selection) { _, _ in
+        .onChange(of: selection, initial: true) { previous, destination in
             // The outgoing destination's stack is torn down without reporting, so
             // without this the rail would stay hidden after leaving a detail page
             // by switching destinations rather than by pressing Back.
-            chrome.resetForDestinationChange()
-            isOpeningNavigation = false
+            if previous != destination {
+                chrome.resetForDestinationChange()
+                isOpeningNavigation = false
+            }
+            if destination == .search {
+                searchContentFocusRequest &+= 1
+            }
         }
-        .onChange(of: railExpanded) { _, _ in
+        .onChange(of: railExpanded) { _, expanded in
             isOpeningNavigation = false
+            if !expanded, selection == .search {
+                searchContentFocusRequest &+= 1
+            }
         }
         .onChange(of: hidden) { _, hidden in
             if hidden {
@@ -151,6 +165,19 @@ struct NavigationRailShell<Content: View>: View {
         }
         .onChange(of: pinnedSidebarInteraction.openRequest) { _, _ in
             requestNavigationFocus()
+        }
+        .task(id: searchContentFocusRequest) {
+            guard searchContentFocusRequest > 0 else { return }
+            // Let the destination and the rail's focus release land first.
+            await Task.yield()
+            let current = NavigationRailPresentation(
+                destination: selection,
+                chromeHidden: chrome.isChromeHidden,
+                isExpanded: railExpanded,
+                isOpening: isOpeningNavigation
+            )
+            guard !Task.isCancelled, current.shouldEnterSearchContent else { return }
+            resetFocus(in: contentFocusScopeID)
         }
     }
 
@@ -169,6 +196,8 @@ struct NavigationRailPresentation: Equatable {
 
     var usesPageButton: Bool { destination == .search }
     var showsPageButton: Bool { !chromeHidden && usesPageButton }
+    var opensExpanded: Bool { showsPageButton && isOpening }
+    var shouldEnterSearchContent: Bool { showsPageButton && !isExpanded && !isOpening }
     // UIKit cannot move focus into a fully transparent view. Reveal the rail
     // before its focus-request observer adopts the selected destination.
     var isRailVisible: Bool { !chromeHidden && (!usesPageButton || isExpanded || isOpening) }

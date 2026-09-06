@@ -155,6 +155,8 @@ struct NavigationRailView: View {
     /// Bumped when a Right press inside the rail resolved to nothing, so the rail
     /// gives focus back to the page.
     var focusReleaseToken: Int = 0
+    /// A page-button activation presents the full menu before focus arrives.
+    var opensExpanded: Bool = false
 
     @Environment(\.themePalette) private var palette
     @Environment(\.colorScheme) private var colorScheme
@@ -176,11 +178,14 @@ struct NavigationRailView: View {
     /// One numeric clock drives every animated dimension. A focus change is
     /// discrete; using that Boolean directly let newly revealed labels jump to
     /// their final layout before the icons completed their movement.
-    @State private var expansionProgress: CGFloat = 0
+    @State private var animatedExpansionProgress: CGFloat = 0
 
-    /// The rail is expanded exactly while it holds focus — "move focus into it to
-    /// open it", with no timers and no separate toggle to get out of sync.
-    private var isExpanded: Bool { focusedTarget != nil }
+    private var expansionProgress: CGFloat {
+        opensExpanded ? 1 : animatedExpansionProgress
+    }
+
+    /// Explicit page-button entry shows the full menu while focus catches up.
+    private var isExpanded: Bool { hasFocus || opensExpanded }
 
     /// Whether focus is currently inside the rail.
     ///
@@ -297,10 +302,12 @@ struct NavigationRailView: View {
         .focusSection()
         .accessibilityLabel(Text(Self.accessibilityTitle))
         .onChange(of: isExpanded) { _, expanded in
-            isExpandedOutward = expanded
             withAnimation(NavigationRailMetrics.expandAnimation) {
-                expansionProgress = expanded ? 1 : 0
+                animatedExpansionProgress = expanded ? 1 : 0
             }
+        }
+        .onChange(of: hasFocus) { _, focused in
+            isExpandedOutward = focused
         }
         .onDisappear { isExpandedOutward = false }
         // The shell's edge catcher took a Left press from the page. Claim focus for

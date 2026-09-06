@@ -11,17 +11,23 @@ final class NavigationRailPresentationTests: XCTestCase {
         XCTAssertFalse(presentation.isRailEnabled)
         XCTAssertEqual(presentation.contentInset, 0)
         XCTAssertEqual(presentation.headerHeight, NavigationRailMetrics.searchHeaderHeight)
+        XCTAssertTrue(presentation.shouldEnterSearchContent)
+        XCTAssertFalse(presentation.opensExpanded)
     }
 
     func testOpeningSearchRevealsTheRailBeforeRequestingFocus() {
         let opening = make(.search, opening: true)
         XCTAssertTrue(opening.isRailEnabled)
         XCTAssertTrue(opening.isRailVisible)
+        XCTAssertTrue(opening.opensExpanded)
+        XCTAssertFalse(opening.shouldEnterSearchContent)
         let expanded = make(.search, expanded: true)
         XCTAssertTrue(expanded.isRailEnabled)
         XCTAssertTrue(expanded.isRailVisible)
         XCTAssertEqual(expanded.contentInset, 0)
         XCTAssertEqual(expanded.headerHeight, opening.headerHeight)
+        XCTAssertFalse(expanded.shouldEnterSearchContent)
+        XCTAssertFalse(expanded.opensExpanded)
     }
 
     func testOtherRootDestinationsKeepPinnedNavigation() {
@@ -32,6 +38,8 @@ final class NavigationRailPresentationTests: XCTestCase {
             XCTAssertTrue(presentation.isRailEnabled)
             XCTAssertEqual(presentation.contentInset, NavigationRailMetrics.contentInset)
             XCTAssertEqual(presentation.headerHeight, 0)
+            XCTAssertFalse(presentation.shouldEnterSearchContent)
+            XCTAssertFalse(make(destination, opening: true).opensExpanded)
         }
     }
 
@@ -47,6 +55,8 @@ final class NavigationRailPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.contentInset, 0)
         XCTAssertFalse(presentation.showsPageButton)
         XCTAssertEqual(presentation.headerHeight, 0)
+        XCTAssertFalse(presentation.shouldEnterSearchContent)
+        XCTAssertFalse(presentation.opensExpanded)
     }
 
     private func make(
