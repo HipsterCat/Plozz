@@ -160,7 +160,12 @@ struct NavigationRailView: View {
 
     @Environment(\.themePalette) private var palette
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.resetFocus) private var resetFocus
+    @Namespace private var railFocusScope
     @FocusState private var focusedTarget: RailFocusTarget?
+    @State private var pendingFocusRequest: Int?
+    @State private var focusAdoptionTask: Task<Void, Never>?
     /// The last row that actually held focus, so an edge bumper can hand focus
     /// straight back to it.
     @State private var lastFocusedRow: RailFocusTarget?
@@ -241,7 +246,9 @@ struct NavigationRailView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let requestedFocus = pendingFocusRequest
+        let entryEnabled = isEnabled && !isReleasingFocus
+        return VStack(alignment: .leading, spacing: 0) {
             // Invisible focus walls. Pressing Up from the top row (or Down from
             // Settings) must do NOTHING — the rail is a list you leave sideways,
             // not by falling out of either end. The focus engine will happily jump
@@ -300,6 +307,18 @@ struct NavigationRailView: View {
         // nearest, and a Right press returns to the content rather than walking
         // through every remaining rail row.
         .focusSection()
+        .focusScope(railFocusScope)
+        .onGeometryChange(for: NavigationRailFocusReadiness.self) { geometry in
+            NavigationRailFocusReadiness(
+                request: requestedFocus,
+                size: geometry.size,
+                isEnabled: entryEnabled
+            )
+        } action: { readiness in
+            guard readiness.canAdoptFocus, readiness.request == pendingFocusRequest else { return }
+            pendingFocusRequest = nil
+            adoptFocus(.destination(selection), resetDefaultFocus: true)
+        }
         .accessibilityLabel(Text(Self.accessibilityTitle))
         .onChange(of: isExpanded) { _, expanded in
             withAnimation(NavigationRailMetrics.expandAnimation) {
@@ -309,12 +328,20 @@ struct NavigationRailView: View {
         .onChange(of: hasFocus) { _, focused in
             isExpandedOutward = focused
         }
-        .onDisappear { isExpandedOutward = false }
+        .onDisappear {
+            focusAdoptionTask?.cancel()
+            pendingFocusRequest = nil
+            isExpandedOutward = false
+        }
         // The shell's edge catcher took a Left press from the page. Claim focus for
         // the tab you are actually on — the catcher draws nothing, so nothing
         // flashes in between.
-        .onChange(of: focusRequestToken) { _, _ in
-            adoptFocus(.destination(selection))
+        .onChange(of: focusRequestToken) { _, request in
+            // The collapsed Search rail was disabled. Wait for enabled geometry,
+            // not just a run-loop yield, before requesting its selected row.
+            focusAdoptionTask?.cancel()
+            isReleasingFocus = false
+            pendingFocusRequest = request
         }
         // Right had nothing level with it to move to.
         .onChange(of: focusReleaseToken) { _, _ in
@@ -371,6 +398,8 @@ struct NavigationRailView: View {
     /// loading and has no focusable content yet: restoring them on a timer lets
     /// tvOS re-home focus back into the rail and reopen it.
     private func releaseFocusToPage() {
+        focusAdoptionTask?.cancel()
+        pendingFocusRequest = nil
         isReleasingFocus = true
         focusedTarget = nil
     }
@@ -406,11 +435,16 @@ struct NavigationRailView: View {
     ///
     /// Assigning `@FocusState` from inside its own `onChange` is dropped, so the
     /// hand-off has to wait for the current focus transaction to finish.
-    private func adoptFocus(_ target: RailFocusTarget) {
-        Task { @MainActor in
+    private func adoptFocus(_ target: RailFocusTarget, resetDefaultFocus: Bool = false) {
+        focusAdoptionTask?.cancel()
+        focusAdoptionTask = Task { @MainActor in
             isReleasingFocus = false
             await Task.yield()
+            guard !Task.isCancelled else { return }
             focusedTarget = target
+            if resetDefaultFocus {
+                resetFocus(in: railFocusScope)
+            }
         }
     }
 
@@ -553,6 +587,7 @@ struct NavigationRailView: View {
         .padding(.vertical, NavigationRailMetrics.itemVerticalPadding)
         .offset(x: animatedContentOffset)
         .focused($focusedTarget, equals: .destination(destination))
+        .prefersDefaultFocus(destination == selection, in: railFocusScope)
         .disabled(!isRowFocusable(.destination(destination)))
         .accessibilityLabel(label)
         .accessibilityAddTraits(selection == destination ? [.isSelected] : [])
@@ -670,6 +705,16 @@ struct NavigationRailView: View {
         defaultValue: "Navigation",
         comment: "VoiceOver label for the app's left navigation rail."
     )
+}
+
+struct NavigationRailFocusReadiness: Equatable {
+    let request: Int?
+    let size: CGSize
+    let isEnabled: Bool
+
+    var canAdoptFocus: Bool {
+        request != nil && isEnabled && size.width > 0 && size.height > 0
+    }
 }
 
 /// What can hold focus inside the rail. The profile row isn't a destination, so it
