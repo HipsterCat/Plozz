@@ -688,5 +688,71 @@ def main() -> int:
     return 1 if conflicts else 0
 
 
+def exec_under_build_lease() -> None:
+    """Restart through the shared shell wrapper before any extraction work."""
+    if os.environ.get("PLOZZ_BUILD_LEASE_WRAPPED") == "1":
+        required = (
+            "APPLE_BUILD_LEASE_MODE",
+            "APPLE_BUILD_LEASE_OWNER",
+            "APPLE_BUILD_LEASE_ID",
+            "APPLE_BUILD_LEASE_TOKEN",
+            "APPLE_BUILD_LEASE_LOCK_FD",
+            "APPLE_BUILD_LEASE_PROOF_FD",
+        )
+        if os.environ.get("APPLE_BUILD_LEASE_PROTOCOL") != "1" or any(
+            not os.environ.get(name) for name in required
+        ):
+            sys.exit("✗ Invalid inherited Apple build lease environment.")
+        try:
+            lock_fd = int(os.environ["APPLE_BUILD_LEASE_LOCK_FD"])
+            proof_fd = int(os.environ["APPLE_BUILD_LEASE_PROOF_FD"])
+        except ValueError:
+            sys.exit("✗ Invalid inherited Apple build lease descriptors.")
+        if lock_fd < 3 or proof_fd < 3 or lock_fd == proof_fd:
+            sys.exit("✗ Invalid inherited Apple build lease descriptors.")
+        validator = REPO / "tools/lib/apple_build_lease.py"
+        result = subprocess.run(
+            [
+                "/usr/bin/python3",
+                str(validator),
+                "validate",
+                "--mode",
+                os.environ["APPLE_BUILD_LEASE_MODE"],
+                "--owner",
+                os.environ["APPLE_BUILD_LEASE_OWNER"],
+                "--lease-id",
+                os.environ["APPLE_BUILD_LEASE_ID"],
+                "--token",
+                os.environ["APPLE_BUILD_LEASE_TOKEN"],
+                "--lock-fd",
+                str(lock_fd),
+                "--proof-fd",
+                str(proof_fd),
+                "--role-exit-code",
+            ],
+            pass_fds=(proof_fd, lock_fd),
+            check=False,
+        )
+        if result.returncode not in {0, 10}:
+            sys.exit("✗ Inherited Apple build lease validation failed.")
+        return
+    wrapper = REPO / "tools/with-apple-build-lease.sh"
+    env = dict(os.environ)
+    env["PLOZZ_BUILD_LEASE_WRAPPED"] = "1"
+    os.execve(
+        wrapper,
+        [
+            str(wrapper),
+            "plozz/l10n-sync",
+            "--",
+            sys.executable,
+            str(Path(__file__).resolve()),
+            *sys.argv[1:],
+        ],
+        env,
+    )
+
+
 if __name__ == "__main__":
+    exec_under_build_lease()
     sys.exit(main())

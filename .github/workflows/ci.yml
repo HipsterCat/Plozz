@@ -87,7 +87,7 @@ jobs:
       - name: Build (tvOS Simulator)
         run: |
           set -o pipefail
-          xcodebuild build \
+          tools/with-apple-build-lease.sh plozz/ci-tvos-build -- xcodebuild build \
             -project Plozz.xcodeproj \
             -scheme Plozz \
             -destination 'generic/platform=tvOS Simulator' \
