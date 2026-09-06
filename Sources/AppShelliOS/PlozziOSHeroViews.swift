@@ -256,12 +256,12 @@ struct PlozziOSHeroRequest {
     var actingName: String?
     var onRequest: (MediaItem) -> Void
     /// For a **series**: the loaded Seerr season-request availability (nil while it
-    /// loads), plus a per-season request callback. When both are present and there
-    /// is season content, the Request CTA becomes a season-picker menu ("Request
-    /// All Seasons" + per-season) instead of a one-tap whole-title request. Movies
-    /// (and series whose availability hasn't loaded yet) keep the one-tap button.
+    /// loads), plus per-season request/refresh callbacks. Series never fall back to
+    /// a whole-title request while coverage is unresolved.
     var seasonAvailability: MediaRequestAvailability? = nil
     var onRequestSeasons: (([Int]) -> Void)? = nil
+    var seasonRefreshFailed = false
+    var onRefreshSeasons: (() -> Void)? = nil
 }
 
 /// The shared Seerr request / download-status CTA for both the Home and detail
@@ -275,63 +275,107 @@ struct PlozziOSHeroRequestButton: View {
     let request: PlozziOSHeroRequest
 
     var body: some View {
-        switch request.cta {
-        case .request:
-            if item.kind == .series,
-               let onRequestSeasons = request.onRequestSeasons,
-               let availability = request.seasonAvailability,
-               availability.hasSeasonRequestContent {
+        if showsSeasonRequestControl,
+           let onRequestSeasons = request.onRequestSeasons {
+            if let availability = request.seasonAvailability {
+                let presentation = SeasonRequestPresentation(
+                    availability: availability,
+                    isSubmitting: request.isRequesting
+                )
+                let accessibilityHint =
+                    presentation.detail
+                    ?? "Choose seasons and review their request status."
+                let accessibilityHintText = request.actingName.map {
+                    Text(
+                        "Requests as \($0). Choose seasons and review their request status."
+                    )
+                } ?? Text(accessibilityHint)
                 Menu {
                     SeasonRequestMenuContent(
                         availability: availability,
+                        isSubmitting: request.isRequesting,
+                        refreshFailed: request.seasonRefreshFailed,
+                        onRefresh: request.onRefreshSeasons,
                         onRequest: onRequestSeasons
                     )
                 } label: {
-                    requestLabel
-                }
-                .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
-                .disabled(request.isRequesting)
-                .accessibilityLabel(
-                    request.actingName.map { "Request seasons as \($0)" }
-                        ?? "Request seasons"
-                )
-            } else {
-                Button {
-                    request.onRequest(item)
-                } label: {
-                    requestLabel
-                }
-                .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
-                .disabled(request.isRequesting)
-                .accessibilityLabel(
-                    request.actingName.map { "Request as \($0)" } ?? "Request"
-                )
-            }
-        case .requested:
-            statusPill {
-                Label("Requested", systemImage: "clock")
-            }
-        case let .downloading(progress):
-            statusPill {
-                HStack(spacing: 10) {
-                    Image(systemName: "arrow.down.circle")
-                    ResumeProgressCapsule(
-                        progress: progress,
-                        // The status pill uses the secondary (card) surface, so
-                        // the bar's ink tracks the *palette* lightness — dark ink
-                        // on a light theme, light ink on dark — not the raw
-                        // colour scheme (which left a dark bar on the dark pill).
-                        onLight: palette.isLight,
-                        width: 54,
-                        height: 5,
-                        floorsMinimumFill: false
+                    PlozziOSSeasonRequestSummaryLabel(
+                        presentation: presentation
                     )
-                    Text("\(Int((progress * 100).rounded()))%")
-                        .lineLimit(1)
                 }
+                .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
+                .accessibilityLabel(Text(presentation.title))
+                .accessibilityHint(accessibilityHintText)
+            } else if request.seasonRefreshFailed,
+                      let onRefreshSeasons = request.onRefreshSeasons {
+                Button(action: onRefreshSeasons) {
+                    Label("Retry Season Status", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
+            } else {
+                Button {} label: {
+                    Label("Loading Seasons…", systemImage: "clock")
+                }
+                .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
+                .disabled(true)
             }
-        case .play, .unavailable:
-            EmptyView()
+        } else {
+            switch request.cta {
+            case .request:
+                if item.kind == .series {
+                    Label("Season Status Unavailable", systemImage: "exclamationmark.circle")
+                        .font(.subheadline)
+                } else {
+                    Button {
+                        request.onRequest(item)
+                    } label: {
+                        requestLabel
+                    }
+                    .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
+                    .disabled(request.isRequesting)
+                    .accessibilityLabel(
+                        request.actingName.map { Text("Request as \($0)") }
+                            ?? Text("Request")
+                    )
+                }
+            case .requested:
+                statusPill {
+                    Label("Requested", systemImage: "clock")
+                }
+            case let .downloading(progress):
+                statusPill {
+                    HStack(spacing: 10) {
+                        Image(systemName: "arrow.down.circle")
+                        ResumeProgressCapsule(
+                            progress: progress,
+                            // The status pill uses the secondary (card) surface, so
+                            // the bar's ink tracks the *palette* lightness — dark ink
+                            // on a light theme, light ink on dark — not the raw
+                            // colour scheme (which left a dark bar on the dark pill).
+                            onLight: palette.isLight,
+                            width: 54,
+                            height: 5,
+                            floorsMinimumFill: false
+                        )
+                        Text("\(Int((progress * 100).rounded()))%")
+                            .lineLimit(1)
+                    }
+                }
+            case .play, .unavailable:
+                EmptyView()
+            }
+        }
+    }
+
+    private var showsSeasonRequestControl: Bool {
+        guard item.kind == .series, request.onRequestSeasons != nil else {
+            return false
+        }
+        switch request.cta {
+        case .play:
+            return false
+        case .request, .requested, .downloading, .unavailable:
+            return true
         }
     }
 
@@ -349,6 +393,27 @@ struct PlozziOSHeroRequestButton: View {
             ProgressView()
         } else {
             Label("Request", systemImage: "plus.circle")
+        }
+    }
+
+}
+
+struct PlozziOSSeasonRequestSummaryLabel: View {
+    let presentation: SeasonRequestPresentation
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: presentation.systemImage)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(presentation.title)
+                    .lineLimit(1)
+                if let detail = presentation.detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
         }
     }
 }

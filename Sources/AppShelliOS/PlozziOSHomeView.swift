@@ -21,6 +21,24 @@ private final class PlozziOSHomeHeroPullModel {
     }
 }
 
+extension PlozziOSAppModel {
+    var plozziOSSeasonRequestContextID: String {
+        let actor: String
+        switch activeSeerrRequestIdentity {
+        case .admin:
+            actor = "admin"
+        case let .user(id, server):
+            actor = "user:\(id):\(server?.canonicalURL ?? "unbound")"
+        }
+        return [
+            seerService.connectionRevision.uuidString,
+            seerService.serverIdentity?.canonicalURL ?? "disconnected",
+            profiles.activeProfileID,
+            actor
+        ].joined(separator: "|")
+    }
+}
+
 struct PlozziOSHomeLoadID: Equatable {
     let visibility: HomeLibraryVisibility
     let viewModelID: ObjectIdentifier
@@ -72,7 +90,12 @@ struct PlozziOSHomeView: View {
     @State private var heroRequestStatusSetAt: [String: Date] = [:]
     @State private var heroRequestConfirmItem: MediaItem?
     @State private var heroRequestConfirmSeasons: [Int]?
+    @State private var heroRequestConfirmContext: String?
     @State private var heroRequestError: LocalizedStringResource?
+    @State private var heroSeasonRequestStates: [String: SeasonRequestState] = [:]
+    @State private var heroSeasonRequestContext: String?
+    @State private var heroSeasonLookupFailures: Set<String> = []
+    @State private var heroSeasonLookupIDs: [String: UUID] = [:]
     @State private var watchlistIntentRevision = 0
     private let appModel: PlozziOSAppModel
     private let onAddServer: () -> Void
@@ -261,16 +284,22 @@ struct PlozziOSHomeView: View {
             "Request as Administrator?",
             isPresented: Binding(
                 get: { heroRequestConfirmItem != nil },
-                set: { if !$0 { heroRequestConfirmItem = nil } }
+                set: {
+                    if !$0 {
+                        heroRequestConfirmItem = nil
+                        heroRequestConfirmSeasons = nil
+                    }
+                }
             ),
             titleVisibility: .visible
         ) {
             Button("Request as Administrator") {
-                guard let item = heroRequestConfirmItem else { return }
+                guard let item = heroRequestConfirmItem,
+                      let context = heroRequestConfirmContext else { return }
                 let seasons = heroRequestConfirmSeasons
                 heroRequestConfirmItem = nil
                 heroRequestConfirmSeasons = nil
-                Task { await requestFromHero(item, seasons: seasons) }
+                Task { await requestFromHero(item, seasons: seasons, context: context) }
             }
             Button("Cancel", role: .cancel) {
                 heroRequestConfirmItem = nil
@@ -283,6 +312,9 @@ struct PlozziOSHomeView: View {
                 The request will use the unrestricted administrator account.
                 """
             )
+        }
+        .onChange(of: appModel.plozziOSSeasonRequestContextID) { _, _ in
+            ensureHeroSeasonRequestContext()
         }
         .alert(
             "Request Failed",
@@ -353,6 +385,24 @@ struct PlozziOSHomeView: View {
                         requestStatus: { heroRequestStatuses[$0.id] },
                         onRequest: beginHeroRequest,
                         onRequestSeasons: beginHeroSeasonRequest,
+                        seasonRequestState: {
+                            heroSeasonRequestContext
+                                == appModel.plozziOSSeasonRequestContextID
+                                ? heroSeasonRequestStates[
+                                    heroSeasonRequestKey(for: $0)
+                                ]
+                                : nil
+                        },
+                        seasonRefreshFailed: {
+                            heroSeasonRequestContext
+                                == appModel.plozziOSSeasonRequestContextID
+                                && heroSeasonLookupFailures.contains(
+                                    heroSeasonRequestKey(for: $0)
+                                )
+                        },
+                        onRefreshSeasonRequests: {
+                            await refreshHeroSeasonAvailability(for: $0)
+                        },
                         onPinnedItemsChanged: { heroPinnedItemIDs = $0 },
                         pullModel: heroPullModel
                     )
@@ -701,12 +751,14 @@ struct PlozziOSHomeView: View {
     /// profiles), confirm that unrestricted identity first. Legacy or mismatched
     /// user mappings go to the service's relink failure instead.
     private func beginHeroRequest(_ item: MediaItem) {
+        let context = appModel.plozziOSSeasonRequestContextID
         if appModel.activeSeerrRequestIdentity == .admin,
            appModel.profiles.profiles.count > 1 {
             heroRequestConfirmSeasons = nil
             heroRequestConfirmItem = item
+            heroRequestConfirmContext = context
         } else {
-            Task { await requestFromHero(item) }
+            Task { await requestFromHero(item, context: context) }
         }
     }
 
@@ -715,17 +767,37 @@ struct PlozziOSHomeView: View {
     /// (still routing through the admin confirm only for a genuinely unmapped
     /// profile).
     private func beginHeroSeasonRequest(_ item: MediaItem, _ seasons: [Int]) {
-        guard !seasons.isEmpty else { return }
+        ensureHeroSeasonRequestContext()
+        let context = appModel.plozziOSSeasonRequestContextID
+        let itemKey = heroSeasonRequestKey(for: item)
+        let eligible = Set(
+            heroSeasonRequestStates[itemKey]?.availability?
+                .requestableSeasonNumbers ?? []
+        )
+        let selected = Set(seasons).intersection(eligible).sorted()
+        guard !selected.isEmpty else {
+            Task { await refreshHeroSeasonAvailability(for: item) }
+            return
+        }
         if appModel.activeSeerrRequestIdentity == .admin,
            appModel.profiles.profiles.count > 1 {
-            heroRequestConfirmSeasons = seasons
+            heroRequestConfirmSeasons = selected
             heroRequestConfirmItem = item
+            heroRequestConfirmContext = context
         } else {
-            Task { await requestFromHero(item, seasons: seasons) }
+            Task { await requestFromHero(item, seasons: selected, context: context) }
         }
     }
 
-    private func requestFromHero(_ item: MediaItem, seasons: [Int]? = nil) async {
+    private func requestFromHero(
+        _ item: MediaItem,
+        seasons: [Int]? = nil,
+        context: String
+    ) async {
+        guard context == appModel.plozziOSSeasonRequestContextID else {
+            heroRequestError = "The request server or profile changed. Review the request and try again."
+            return
+        }
         guard appModel.seerService.isConfigured else {
             heroRequestError = "Connect Overseerr or Jellyseerr in Settings first."
             return
@@ -733,27 +805,106 @@ struct PlozziOSHomeView: View {
         isRequestingHero = true
         heroRequestError = nil
         defer { isRequestingHero = false }
+        ensureHeroSeasonRequestContext()
+        let requestContext = heroSeasonRequestContext
         let outcome = await appModel.seerService.request(
             item,
             seasons: seasons,
             identity: appModel.activeSeerrRequestIdentity
         )
+        guard context == appModel.plozziOSSeasonRequestContextID else { return }
         switch outcome {
         case let .success(status):
-            heroRequestStatuses[item.id] = status
-            heroRequestStatusSetAt[item.id] = Date()
-            await refreshFeaturedStatusOnce()
+            if let seasons {
+                guard heroSeasonRequestContext == requestContext else { return }
+                let itemKey = heroSeasonRequestKey(for: item)
+                heroSeasonRequestStates[
+                    itemKey,
+                    default: SeasonRequestState()
+                ].accept(seasons)
+                await refreshHeroSeasonAvailability(for: item)
+            } else {
+                heroRequestStatuses[item.id] = status
+                heroRequestStatusSetAt[item.id] = Date()
+                await refreshFeaturedStatusOnce()
+            }
         case .failure(.alreadyRequested):
-            // Seerr already tracks this title with a live (pending/approved)
-            // request — reflect that as "Requested" immediately, shielded only
-            // briefly (see `heroRequestOverrideGrace`) before the authoritative
-            // lookup takes over.
-            heroRequestStatuses[item.id] = .pending
-            heroRequestStatusSetAt[item.id] = Date()
-            await refreshFeaturedStatusOnce()
+            if let seasons {
+                guard heroSeasonRequestContext == requestContext else { return }
+                let refreshed = await refreshHeroSeasonAvailability(for: item)
+                let itemKey = heroSeasonRequestKey(for: item)
+                let stillRequestable = Set(
+                    heroSeasonRequestStates[itemKey]?.availability?
+                        .requestableSeasonNumbers ?? []
+                ).isDisjoint(with: seasons) == false
+                if !refreshed || stillRequestable {
+                    heroRequestError =
+                        "This season is already requested. Refresh status to see the latest state."
+                }
+            } else {
+                // Seerr already tracks this title with a live (pending/approved)
+                // request — reflect that as "Requested" immediately, shielded only
+                // briefly (see `heroRequestOverrideGrace`) before the authoritative
+                // lookup takes over.
+                heroRequestStatuses[item.id] = .pending
+                heroRequestStatusSetAt[item.id] = Date()
+                await refreshFeaturedStatusOnce()
+            }
         case let .failure(reason):
             heroRequestError = reason.userMessage
         }
+    }
+
+    private func ensureHeroSeasonRequestContext() {
+        let context = appModel.plozziOSSeasonRequestContextID
+        guard heroSeasonRequestContext != context else { return }
+        heroSeasonRequestContext = context
+        heroSeasonRequestStates = [:]
+        heroSeasonLookupFailures = []
+        heroSeasonLookupIDs = [:]
+        heroRequestConfirmItem = nil
+        heroRequestConfirmSeasons = nil
+        heroRequestConfirmContext = nil
+    }
+
+    @discardableResult
+    private func refreshHeroSeasonAvailability(
+        for item: MediaItem
+    ) async -> Bool {
+        ensureHeroSeasonRequestContext()
+        let context = heroSeasonRequestContext
+        let itemKey = heroSeasonRequestKey(for: item)
+        let lookupID = UUID()
+        heroSeasonLookupIDs[itemKey] = lookupID
+        guard item.kind == .series,
+              appModel.seerService.isConfigured else {
+            return false
+        }
+        let availability = await appModel.seerService
+            .requestAvailability(for: item)
+        guard !Task.isCancelled,
+              heroSeasonRequestContext == context,
+              appModel.plozziOSSeasonRequestContextID == context,
+              heroSeasonLookupIDs[itemKey] == lookupID,
+              heroItems.contains(where: {
+                  heroSeasonRequestKey(for: $0) == itemKey
+              }) else {
+            return false
+        }
+        guard let availability else {
+            heroSeasonLookupFailures.insert(itemKey)
+            return false
+        }
+        heroSeasonRequestStates[
+            itemKey,
+            default: SeasonRequestState()
+        ].apply(availability)
+        heroSeasonLookupFailures.remove(itemKey)
+        return true
+    }
+
+    private func heroSeasonRequestKey(for item: MediaItem) -> String {
+        SeasonRequestState.itemKey(for: item)
     }
 
     private func loadHero(from content: HomeViewModel.Content) async {
@@ -926,6 +1077,7 @@ private struct PlozziOSHomeHeroCarousel: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.plozziOSHeroContainerHeight) private var heroContainerHeight
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(HeroTrailerController.self) private var trailerController
     @State private var selectedItemID: String?
     @State private var dwellStart = Date()
@@ -960,14 +1112,14 @@ private struct PlozziOSHomeHeroCarousel: View {
     /// Per-season request handler for a featured **series** (item, chosen season
     /// numbers). When set, the series Request CTA becomes a season-picker menu.
     var onRequestSeasons: ((MediaItem, [Int]) -> Void)?
+    var seasonRequestState: (MediaItem) -> SeasonRequestState? = { _ in nil }
+    var seasonRefreshFailed: (MediaItem) -> Bool = { _ in false }
+    var onRefreshSeasonRequests: ((MediaItem) async -> Bool)?
     /// Reports the slides on screen, so a background curation can fold new media
     /// in without displacing what the viewer is looking at (see `HeroLiveMerge`).
     var onPinnedItemsChanged: (Set<String>) -> Void = { _ in }
     let pullModel: PlozziOSHomeHeroPullModel
 
-    /// Loaded Seerr season-request availability for featured discovery series,
-    /// keyed by item id, so the hero's Request menu can list per-season options.
-    @State private var heroSeasonAvailability: [String: MediaRequestAvailability] = [:]
     /// "New episode every Friday" for a returning series. The same shared store
     /// the tvOS hero uses — iPhone and iPad simply never adopted it.
     @State private var schedules = HeroScheduleLines()
@@ -1225,8 +1377,8 @@ private struct PlozziOSHomeHeroCarousel: View {
                 trailerController.stop(ifShowing: currentItem.id)
             }
         }
-        .task(id: currentItem?.id) {
-            await loadHeroSeasonAvailabilityIfNeeded()
+        .task(id: heroSeasonRefreshKey) {
+            await refreshVisibleHeroSeasonRequests()
         }
         // Everything already on disk, published before a single request, so a
         // returning viewer's badge is there on the first frame.
@@ -1248,24 +1400,50 @@ private struct PlozziOSHomeHeroCarousel: View {
 
     @Environment(PlozziOSAppModel.self) private var appModel
 
-    /// Lazily fetches Seerr season-request availability for the focused featured
-    /// series so the hero's Request CTA can offer a season picker. No-op for
-    /// movies, in-library items, when Seerr isn't configured, or when already
-    /// loaded for this item.
-    private func loadHeroSeasonAvailabilityIfNeeded() async {
+    private var heroSeasonRefreshKey: String {
+        let hasActiveRequests = currentItem.flatMap {
+            seasonRequestState($0)?.availability
+        }?.seasons.contains(where: \.isInFlight) == true
+        return [
+            appModel.plozziOSSeasonRequestContextID,
+            currentItem.map {
+                "\($0.stablePresentationID)|\($0.providerIDs["Tmdb"] ?? "")"
+            } ?? "_",
+            scenePhase == .active ? "active" : "inactive",
+            hasActiveRequests ? "in-flight" : "settled"
+        ].joined(separator: "|")
+    }
+
+    /// Refreshes the fronted series immediately, then polls only while at least
+    /// one season remains in flight. The view task is cancelled when Home or the
+    /// slide disappears, and foregrounding restarts it through the task key.
+    private func refreshVisibleHeroSeasonRequests() async {
         guard let item = currentItem,
               TitleClassifier.isDiscoveryRouting(
                 item,
                 identitySources: appModel.identityIndex.identitySourcesProvider(item)
               ),
               item.kind == .series,
+              item.providerIDs["Tmdb"] != nil,
               appModel.seerService.isConfigured,
-              heroSeasonAvailability[item.id] == nil else {
+              scenePhase == .active,
+              let onRefreshSeasonRequests else {
             return
         }
-        if let availability = await appModel.seerService.requestAvailability(for: item) {
-            heroSeasonAvailability[item.id] = availability
-        }
+        repeat {
+            _ = await onRefreshSeasonRequests(item)
+            guard !seasonRefreshFailed(item),
+                  seasonRequestState(item)?.availability?.seasons
+                    .contains(where: \.isInFlight) == true,
+                  !Task.isCancelled else {
+                return
+            }
+            do {
+                try await Task.sleep(for: .seconds(20))
+            } catch {
+                return
+            }
+        } while !Task.isCancelled
     }
 
     private var currentItem: MediaItem? {
@@ -1330,6 +1508,12 @@ private struct PlozziOSHomeHeroCarousel: View {
         }
         let availability = requestStatus(item) ?? item.availability
         let isSeries = item.kind == .series
+        let supportsSeasonRequests = isSeries
+            && item.providerIDs["Tmdb"] != nil
+            && appModel.seerService.isConfigured
+        let seasonState = supportsSeasonRequests
+            ? seasonRequestState(item)
+            : nil
         return PlozziOSHeroRequest(
             cta: MediaItem.heroCTA(
                 availability: availability,
@@ -1341,17 +1525,20 @@ private struct PlozziOSHomeHeroCarousel: View {
             isRequesting: isRequesting,
             actingName: appModel.activeSeerrRequestActingName,
             onRequest: onRequest,
-            seasonAvailability: isSeries ? heroSeasonAvailability[item.id] : nil,
-            onRequestSeasons: (isSeries ? onRequestSeasons : nil).map { handler in
+            seasonAvailability: seasonState?.availability,
+            onRequestSeasons: (
+                supportsSeasonRequests ? onRequestSeasons : nil
+            ).map { handler in
                 { seasons in
-                    // Optimistically reflect the picked seasons in the menu so the
-                    // rows flip to "Requested" immediately, then dispatch.
-                    if let current = heroSeasonAvailability[item.id] {
-                        heroSeasonAvailability[item.id] = current.markingRequested(seasons)
-                    }
                     handler(item, seasons)
                 }
-            }
+            },
+            seasonRefreshFailed:
+                supportsSeasonRequests && seasonRefreshFailed(item),
+            onRefreshSeasons: supportsSeasonRequests ? {
+                guard let onRefreshSeasonRequests else { return }
+                Task { _ = await onRefreshSeasonRequests(item) }
+            } : nil
         )
     }
 

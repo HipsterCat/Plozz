@@ -1316,6 +1316,10 @@ struct MainTabView: View {
             }
         )
         .environment(\.themeMusicController, themeMusicController)
+        .environment(
+            \.seasonRequestContextID,
+            "\(seer.connectionRevision)|\(activeProfile.id)|\(activeProfile.seerrUserID.map(String.init) ?? "admin")|\(activeProfile.seerrServerIdentity?.canonicalURL ?? "")"
+        )
         .environment(\.themeMusicSettings, themeMusicModel.settings)
         .environment(heroTrailerController)
         .environment(heroBackgroundModel)

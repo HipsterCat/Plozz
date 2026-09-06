@@ -1259,24 +1259,33 @@ struct DetailHeroView: View, Equatable {
 
     @ViewBuilder
     private func seriesRequestPill() -> some View {
-        if let seasonRequestAvailability, seasonRequestAvailability.hasSeasonRequestContent {
+        if let seasonRequestAvailability, !seasonRequestAvailability.seasons.isEmpty {
             let hasRequestable = !seasonRequestAvailability.requestableSeasonNumbers.isEmpty
-            let label = isRequestingSeasons
-                ? "Requesting…"
-                : (hasRequestable ? "Request Seasons" : "Season Requests")
+            let presentation = SeasonRequestPresentation(
+                availability: seasonRequestAvailability,
+                isSubmitting: isRequestingSeasons
+            )
             SeasonRequestMenu(
                 availability: seasonRequestAvailability,
                 requestAllTitle: "Request All Seasons",
+                isSubmitting: isRequestingSeasons,
+                refreshFailed: seasonRequestAvailabilityFailed,
+                onRefresh: onRetrySeasonRequestAvailability,
                 onRequest: { onRequestSeasons?($0) }
             ) {
-                Label(label, systemImage: "plus.circle")
+                Label(presentation.title, systemImage: presentation.systemImage)
             }
             .menuStyle(.button)
             .modifier(HeroActionButtonStyle(prominent: hasRequestable))
             .prefersDefaultFocus(true, in: heroActionsScope)
             .focused($heroActionRowFocus, equals: .request)
-            .disabled(onRequestSeasons == nil || isRequestingSeasons)
-            .accessibilityLabel(requestActingName.map { "\(label) as \($0)" } ?? label)
+            .disabled(onRequestSeasons == nil)
+            .accessibilityLabel(
+                requestActingName.map { Text("\(Text(presentation.title)) as \($0)") }
+                    ?? Text(presentation.title)
+            )
+            .accessibilityValue(Text(presentation.detail ?? ""))
+            .accessibilityHint("View season statuses or request missing seasons")
         } else if seasonRequestAvailabilityFailed {
             Button { onRetrySeasonRequestAvailability?() } label: {
                 Label("Retry Seasons", systemImage: "arrow.clockwise")

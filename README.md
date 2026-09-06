@@ -130,6 +130,11 @@ the administrator because a link is stale. Links saved by older versions need
 one confirmation. After replacing a Seerr database at the same address, relink
 profiles manually.
 
+TV requests track each season separately. The request button summarizes pending
+or processing seasons, while its menu shows individual season states and offers
+only missing, unrequested seasons. Requesting one season never marks the whole
+series as requested; failed requests remain visible for attention in Seerr.
+
 ## Getting started
 
 Plozz is in **public beta** on TestFlight.

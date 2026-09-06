@@ -126,6 +126,8 @@ struct HomeHeroView: View {
     @Environment(\.plozzNavigationContentInset) private var navigationContentInset
     @Environment(\.mediaItemActionContext) private var actionContext
     @Environment(\.plozzPinnedSidebarInteraction) private var pinnedSidebarInteraction
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.seasonRequestContextID) private var seasonRequestContextID
 
     /// The index of the slide currently fronted.
     /// Internal (not private) so the artwork extension in a sibling file can center
@@ -157,6 +159,13 @@ struct HomeHeroView: View {
     /// presented, plus its loaded availability (nil = hidden).
     @State private var seasonPickerItem: MediaItem?
     @State private var seasonPickerAvailability: MediaRequestAvailability?
+    @State private var seasonRequestStates: [String: SeasonRequestState] = [:]
+    @State private var seasonRequestContext: String?
+    @State private var seasonRequestingItems: Set<String> = []
+    @State private var seasonLookupFailures: Set<String> = []
+    @State private var seasonLookupIDs: [String: UUID] = [:]
+    @State private var seasonRefreshToken = 0
+    @State private var showingSeasonLookupFailure = false
     /// Which of the hero's two focus targets holds focus: the pill `row`, or the
     /// invisible `leftGuard` that sits just left of it. The guard exists so a Left
     /// press has an *internal* target and is captured by the hero instead of
@@ -389,6 +398,10 @@ struct HomeHeroView: View {
     /// The leading primary button for `item`, or `nil` when the slide offers no
     /// primary action (a not-owned featured title with Seerr disconnected).
     private func primaryButton(for item: MediaItem) -> HeroButton? {
+        if item.kind == .series, seerConnected, onRequestSeasons != nil,
+           !item.hasPlayableLibraryTarget() {
+            return .request
+        }
         switch heroCTA(for: item) {
         case .play: return .play
         case .request: return .request
@@ -520,6 +533,11 @@ struct HomeHeroView: View {
             presenting: seasonPickerAvailability
         ) { availability in
             seasonRequestButtons(for: availability)
+        }
+        .alert("Season Status Unavailable", isPresented: $showingSeasonLookupFailure) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Couldn’t load the season list. Try again before choosing which seasons to request.")
         }
         #if DEBUG
         .overlay(alignment: .topTrailing) { heroModeBadge }
@@ -659,6 +677,9 @@ struct HomeHeroView: View {
         .task(id: schedules.fetchKey(for: current)) {
             guard let item = current else { return }
             await schedules.refreshFronted(item)
+        }
+        .task(id: seasonRefreshKey) {
+            await refreshVisibleSeasonRequests()
         }
         // Provider logos are much smaller than backdrops, but still require a
         // network fetch plus decode/analysis. Warm them in likely paging order so
@@ -1238,7 +1259,12 @@ struct HomeHeroView: View {
                     seasonEpisodeText: HeroForegroundModelBuilder.seasonEpisodeButtonText(for: item)
                 )
             case .request:
-                return .init(kind: .request, prominent: isProminentPrimary(.request, for: item))
+                return .init(
+                    kind: .request,
+                    prominent: isProminentPrimary(.request, for: item),
+                    requestTitle: requestTitle(for: item),
+                    requestSystemImage: requestSystemImage(for: item)
+                )
             case .downloadStatus:
                 if case let .downloading(progress) = heroCTA(for: item) {
                     return .init(
@@ -1399,7 +1425,7 @@ struct HomeHeroView: View {
         let a11yActions: [(LocalizedStringResource, () -> Void)] = itemButtons.map { button in
             switch button {
             case .play: return (item.resumeProgressFraction != nil ? "Resume" : "Play", { onPlay(item) })
-            case .request: return ("Request", { performRequest(for: item) })
+            case .request: return (requestTitle(for: item), { performRequest(for: item) })
             case .downloadStatus: return (downloadStatusText(for: item), {})
             // Opens the SHOW, not the episode. "More info" about episode 4 of a
             // series the viewer is midway through is the series — that is where
@@ -1815,25 +1841,27 @@ struct HomeHeroView: View {
         }
     }
 
-    /// Sends a one-tap Seerr request for a not-owned featured title, flipping the
-    /// pill to a Requested/Downloading status immediately (optimistic) and then
-    /// reconciling with the server's returned availability. A failed request
-    /// clears the override so the Request button returns for a retry.
     private func performRequest(for item: MediaItem) {
-        // A featured series opens a native season picker (confirmation dialog) so
-        // you choose which seasons to request; movies (and series with no picker
-        // wiring, or none of whose seasons are requestable) request in one tap.
-        if item.kind == .series, let requestAvailability, onRequestSeasons != nil {
+        if item.kind == .series {
+            guard onRequestSeasons != nil else { return }
+            let key = SeasonRequestState.itemKey(for: item)
             noteInteraction()
+            if let availability = seasonRequestStates[key]?.availability, !availability.seasons.isEmpty {
+                seasonPickerAvailability = availability
+                seasonPickerItem = item
+                return
+            }
+            let context = seasonRequestContext
             Task {
-                let availability = await requestAvailability(item)
-                await MainActor.run {
-                    if let availability, availability.hasSeasonRequestContent {
-                        seasonPickerAvailability = availability
-                        seasonPickerItem = item
-                    } else {
-                        requestWholeTitle(item)
-                    }
+                await refreshSeasonAvailability(for: item)
+                guard seasonRequestContext == context,
+                      current.map({ SeasonRequestState.itemKey(for: $0) }) == key,
+                      isFrontmost else { return }
+                if let availability = seasonRequestStates[key]?.availability, !availability.seasons.isEmpty {
+                    seasonPickerAvailability = availability
+                    seasonPickerItem = item
+                } else {
+                    showingSeasonLookupFailure = true
                 }
             }
             return
@@ -1854,37 +1882,116 @@ struct HomeHeroView: View {
         }
     }
 
-    /// Native season-picker buttons: "Request All Seasons" (when more than one is
-    /// requestable) plus a button per requestable season. Already-requested / in-
-    /// flight seasons aren't actionable, so they're omitted (a confirmation dialog
-    /// only lists actions). Matches the detail hero's `SeasonRequestMenu` choices.
     @ViewBuilder
     private func seasonRequestButtons(for availability: MediaRequestAvailability) -> some View {
-        let requestable = availability.requestPickerSeasons.filter(\.isRequestable)
-        if requestable.count > 1 {
-            Button("Request All Seasons") {
-                requestSeasons(requestable.map(\.number))
-            }
-        }
-        ForEach(requestable) { season in
-            Button("Request \(season.title)") {
-                requestSeasons([season.number])
-            }
-        }
+        SeasonRequestMenuContent(
+            availability: availability,
+            isSubmitting: seasonPickerItem.map {
+                seasonRequestingItems.contains(SeasonRequestState.itemKey(for: $0))
+            } ?? false,
+            refreshFailed: seasonPickerItem.map {
+                seasonLookupFailures.contains(SeasonRequestState.itemKey(for: $0))
+            } ?? false,
+            onRefresh: { seasonRefreshToken += 1 },
+            onRequest: requestSeasons
+        )
         Button("Cancel", role: .cancel) { seasonPickerItem = nil }
     }
 
     private func requestSeasons(_ seasonNumbers: [Int]) {
-        guard let item = seasonPickerItem, let onRequestSeasons, !seasonNumbers.isEmpty else { return }
+        guard let item = seasonPickerItem, let onRequestSeasons else { return }
+        let key = SeasonRequestState.itemKey(for: item)
+        guard !seasonRequestingItems.contains(key) else { return }
+        let eligible = Set(seasonRequestStates[key]?.availability?.requestableSeasonNumbers ?? [])
+        let selected = Set(seasonNumbers).intersection(eligible).sorted()
         seasonPickerItem = nil
-        requestOverrides[item.id] = .pending
-        Task {
-            if let status = await onRequestSeasons(item, seasonNumbers) {
-                requestOverrides[item.id] = status
-            } else {
-                requestOverrides[item.id] = nil
-            }
+        guard !selected.isEmpty else {
+            seasonRefreshToken += 1
+            return
         }
+        let context = seasonRequestContext
+        seasonRequestingItems.insert(key)
+        Task {
+            let status = await onRequestSeasons(item, selected)
+            guard seasonRequestContext == context else { return }
+            if status != nil {
+                seasonRequestStates[key, default: SeasonRequestState()].accept(selected)
+            }
+            seasonRequestingItems.remove(key)
+            seasonRefreshToken += 1
+        }
+    }
+
+    private var seasonRefreshKey: String {
+        "\(seasonRequestContextID)|\(current.map { SeasonRequestState.itemKey(for: $0) } ?? "")|\(seerConnected)|\(isFrontmost)|\(scenePhase == .active)|\(seasonRefreshToken)"
+    }
+
+    private func refreshVisibleSeasonRequests() async {
+        let context = "\(seasonRequestContextID)|\(seerConnected)"
+        if seasonRequestContext != context {
+            seasonRequestContext = context
+            seasonRequestStates = [:]
+            seasonRequestingItems = []
+            seasonLookupFailures = []
+            seasonLookupIDs = [:]
+            seasonPickerItem = nil
+        }
+        guard isFrontmost, scenePhase == .active, seerConnected,
+              let item = current, item.kind == .series,
+              !item.hasPlayableLibraryTarget(), requestAvailability != nil else { return }
+        let key = SeasonRequestState.itemKey(for: item)
+        repeat {
+            await refreshSeasonAvailability(for: item)
+            guard !seasonLookupFailures.contains(key),
+                  seasonRequestStates[key]?.availability?.seasons.contains(where: \.isInFlight) == true,
+                  !Task.isCancelled else { return }
+            do { try await Task.sleep(for: .seconds(15)) }
+            catch { return }
+        } while !Task.isCancelled
+    }
+
+    private func refreshSeasonAvailability(for item: MediaItem) async {
+        guard let requestAvailability else { return }
+        let key = SeasonRequestState.itemKey(for: item)
+        let context = seasonRequestContext
+        let lookupID = UUID()
+        seasonLookupIDs[key] = lookupID
+        let availability = await requestAvailability(item)
+        guard !Task.isCancelled, seasonRequestContext == context,
+              seasonLookupIDs[key] == lookupID else { return }
+        if let availability {
+            seasonRequestStates[key, default: SeasonRequestState()].apply(availability)
+            seasonLookupFailures.remove(key)
+            if seasonPickerItem.map({ SeasonRequestState.itemKey(for: $0) }) == key {
+                seasonPickerAvailability = seasonRequestStates[key]?.availability
+            }
+        } else {
+            seasonLookupFailures.insert(key)
+        }
+    }
+
+    private func requestTitle(for item: MediaItem) -> LocalizedStringResource {
+        guard item.kind == .series else { return "Request" }
+        let key = SeasonRequestState.itemKey(for: item)
+        if let availability = seasonRequestStates[key]?.availability {
+            return SeasonRequestPresentation(
+                availability: availability,
+                isSubmitting: seasonRequestingItems.contains(key)
+            ).title
+        }
+        return seasonLookupFailures.contains(key) ? "Retry Seasons" : "Loading Seasons…"
+    }
+
+    private func requestSystemImage(for item: MediaItem) -> String {
+        guard item.kind == .series else { return "plus.circle" }
+        let key = SeasonRequestState.itemKey(for: item)
+        if let availability = seasonRequestStates[key]?.availability {
+            return SeasonRequestPresentation(
+                availability: availability,
+                isSubmitting: seasonRequestingItems.contains(key)
+            ).systemImage
+        }
+        return seasonLookupFailures.contains(key) ? "arrow.clockwise" : "clock"
     }
 
     /// Spoken/label text for a request/download status pill.
@@ -1928,7 +2035,7 @@ struct HomeHeroView: View {
         let name: LocalizedStringResource
         switch itemButtons[selectedButton] {
         case .play: name = item.resumeProgressFraction != nil ? "Resume" : "Play"
-        case .request: name = "Request"
+        case .request: name = requestTitle(for: item)
         case .downloadStatus: name = downloadStatusText(for: item)
         case .moreInfo: name = "More Info"
         case .watchlist:
@@ -1974,7 +2081,7 @@ struct HomeHeroView: View {
             }
         case .request:
             heroPill(selected: selected, prominent: isProminentPrimary(.request, for: item)) {
-                Label("Request", systemImage: "plus.circle")
+                Label(requestTitle(for: item), systemImage: requestSystemImage(for: item))
                     .font(.system(size: 28, weight: .semibold))
             }
         case .downloadStatus:

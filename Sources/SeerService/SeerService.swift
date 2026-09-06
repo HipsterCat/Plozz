@@ -312,11 +312,17 @@ public final class SeerService {
     /// Seerr's tracked seasons with the complete TMDB season list so Plozz can
     /// offer only seasons that are truly absent or already in flight.
     public func requestAvailability(for item: MediaItem) async -> MediaRequestAvailability? {
-        guard Self.hasUsableEndpoint(config),
+        let activeConfig = config
+        let activeRevision = connectionRevision
+        guard Self.hasUsableEndpoint(activeConfig),
               let mediaType = SeerMapper.requestMediaType(for: item),
-              let tmdbID = SeerMapper.tmdbID(for: item),
-              let details = try? await client.mediaDetails(mediaType: mediaType, tmdbID: tmdbID)
+              let tmdbID = SeerMapper.tmdbID(for: item)
         else { return nil }
+        let activeClient = SeerClient(config: activeConfig, http: http)
+        guard let details = try? await activeClient.mediaDetails(
+            mediaType: mediaType,
+            tmdbID: tmdbID
+        ), connectionRevision == activeRevision else { return nil }
         return SeerMapper.requestAvailability(from: details)
     }
 

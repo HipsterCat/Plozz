@@ -32,6 +32,8 @@ struct SeriesDetailView: View {
     let spoilerSettings: SpoilerSettings
     let onPlay: (MediaItem) -> Void
     let requestAvailability: MediaRequestAvailability?
+    let requestAvailabilityFailed: Bool
+    let onRefreshRequests: (() -> Void)?
     let isRequestingSeasons: Bool
     let onRequestSeasons: (([Int]) -> Void)?
     /// Switches this page to another server's copy of the show when the user picks
@@ -182,6 +184,8 @@ struct SeriesDetailView: View {
         spoilerSettings: SpoilerSettings,
         onPlay: @escaping (MediaItem) -> Void,
         requestAvailability: MediaRequestAvailability? = nil,
+        requestAvailabilityFailed: Bool = false,
+        onRefreshRequests: (() -> Void)? = nil,
         isRequestingSeasons: Bool = false,
         onRequestSeasons: (([Int]) -> Void)? = nil,
         onSelectServer: ((MediaSourceRef) -> Void)? = nil,
@@ -200,6 +204,8 @@ struct SeriesDetailView: View {
         self.spoilerSettings = spoilerSettings
         self.onPlay = onPlay
         self.requestAvailability = requestAvailability
+        self.requestAvailabilityFailed = requestAvailabilityFailed
+        self.onRefreshRequests = onRefreshRequests
         self.isRequestingSeasons = isRequestingSeasons
         self.onRequestSeasons = onRequestSeasons
         self.onSelectServer = onSelectServer
@@ -770,7 +776,7 @@ struct SeriesDetailView: View {
     // MARK: Season tabs
 
     private func seasonTabBar(onFocusEntered: @escaping () -> Void) -> some View {
-        let hasRequestAccessory = requestAvailability?.hasSeasonRequestContent == true
+        let hasRequestAccessory = requestAvailability?.hasSeasonRequestContent == true || requestAvailabilityFailed
         return ScrollViewReader { proxy in
             if hasRequestAccessory {
                 HStack(spacing: 18) {
@@ -912,21 +918,21 @@ struct SeriesDetailView: View {
     }
 
     private func seasonRequestMenu(onFocusEntered: @escaping () -> Void) -> some View {
-        let hasRequestable = !(requestAvailability?.requestableSeasonNumbers.isEmpty ?? true)
+        let presentation = SeasonRequestPresentation(
+            availability: requestAvailability ?? MediaRequestAvailability(status: .unknown),
+            isSubmitting: isRequestingSeasons
+        )
         return SeasonRequestMenu(
             availability: requestAvailability ?? MediaRequestAvailability(status: .unknown),
             requestAllTitle: "Request All Missing Seasons",
+            isSubmitting: isRequestingSeasons,
+            refreshFailed: requestAvailabilityFailed,
+            onRefresh: onRefreshRequests,
             onRequest: { onRequestSeasons?($0) }
         ) {
             Label(
-                SeriesRequestAccessoryPresentation.title(
-                    hasRequestable: hasRequestable,
-                    isRequesting: isRequestingSeasons
-                ),
-                systemImage: SeriesRequestAccessoryPresentation.systemImage(
-                    hasRequestable: hasRequestable,
-                    isRequesting: isRequestingSeasons
-                )
+                requestAvailability == nil && requestAvailabilityFailed ? "Retry Seasons" : presentation.title,
+                systemImage: presentation.systemImage
             )
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
@@ -935,12 +941,14 @@ struct SeriesDetailView: View {
         .buttonStyle(PlozzSeasonTabStyle(isSelected: false))
         .focusEffectDisabled()
         .focused($requestSeasonsFocused)
+        .accessibilityValue(Text(presentation.detail ?? ""))
+        .accessibilityHint("View season statuses or request missing seasons")
         // Before the active season receives focus, remove this geometrically-near
         // trailing control so DOWN from the hero cannot skip the active season.
         .disabled(!SeriesRequestFocusPolicy.accessoryEnabled(
             hasOwnedSeasons: !seasons.isEmpty,
             seasonBarEngaged: seasonBarEngaged,
-            hasRequestHandler: onRequestSeasons != nil && !isRequestingSeasons
+            hasRequestHandler: onRequestSeasons != nil
         ))
         .onChange(of: requestSeasonsFocused) { _, focused in
             if focused {
@@ -1863,17 +1871,6 @@ enum SeriesRequestFocusPolicy {
 
 }
 
-enum SeriesRequestAccessoryPresentation {
-    static func title(hasRequestable: Bool, isRequesting: Bool) -> LocalizedStringResource {
-        if isRequesting { return "Requesting…" }
-        return hasRequestable ? "Request More" : "Season Requests"
-    }
-
-    static func systemImage(hasRequestable: Bool, isRequesting: Bool) -> String {
-        hasRequestable && !isRequesting ? "plus.circle" : "clock.arrow.circlepath"
-    }
-}
-
 enum SeasonRequestHeroPresentation {
     static func inactiveTitle(availabilityLoaded: Bool, resolved: Bool) -> LocalizedStringResource {
         if availabilityLoaded { return "No Seasons to Request" }
@@ -1939,49 +1936,22 @@ private struct SeasonRequestBoundaryModifier: ViewModifier {
 struct SeasonRequestMenu<MenuLabel: View>: View {
     let availability: MediaRequestAvailability
     let requestAllTitle: String
+    var isSubmitting: Bool = false
+    var refreshFailed: Bool = false
+    var onRefresh: (() -> Void)? = nil
     let onRequest: ([Int]) -> Void
     @ViewBuilder let label: () -> MenuLabel
 
-    private var pickerSeasons: [MediaSeasonRequestState] {
-        availability.requestPickerSeasons
-    }
-
-    private var requestableSeasons: [MediaSeasonRequestState] {
-        pickerSeasons.filter(\.isRequestable)
-    }
-
     var body: some View {
         Menu {
-            if requestableSeasons.count > 1 {
-                Button(requestAllTitle) {
-                    onRequest(requestableSeasons.map(\.number))
-                }
-                Divider()
-            }
-            ForEach(pickerSeasons) { season in
-                if season.requestFailed {
-                    Button {
-                    } label: {
-                        Label("\(season.title) — Failed", systemImage: "exclamationmark.circle")
-                    }
-                    .disabled(true)
-                } else if season.isRequestable {
-                    Button("Request \(season.title)") {
-                        onRequest([season.number])
-                    }
-                } else {
-                    Button {
-                    } label: {
-                        Label {
-                            Text(verbatim: "\(season.title) — ")
-                                + Text(season.status == .processing ? "Processing" : "Requested")
-                        } icon: {
-                            Image(systemName: season.status == .processing ? "arrow.down.circle" : "clock")
-                        }
-                    }
-                    .disabled(true)
-                }
-            }
+            SeasonRequestMenuContent(
+                availability: availability,
+                requestAllTitle: requestAllTitle,
+                isSubmitting: isSubmitting,
+                refreshFailed: refreshFailed,
+                onRefresh: onRefresh,
+                onRequest: onRequest
+            )
         } label: {
             label()
         }

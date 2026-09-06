@@ -81,6 +81,8 @@ public struct ItemDetailView: View {
     /// it auto-scroll the page down on arrival. Mirrors `SeriesDetailView`.
     @FocusState private var playFocused: Bool
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.seasonRequestContextID) private var seasonRequestContextID
     @FocusState private var emptyBackFocused: Bool
 
     /// This device's capabilities, used only as a conservative ordering hint for
@@ -107,7 +109,10 @@ public struct ItemDetailView: View {
     /// Drives the "Request as Admin?" confirmation dialog for the unmapped case.
     @State private var showingAdminConfirm = false
     @State private var pendingAdminRequest: PendingRequestIntent?
-    @State private var seasonRequestAvailability: MediaRequestAvailability?
+    @State private var seasonRequestState = SeasonRequestState()
+    @State private var seasonRequestScope: String?
+    @State private var seasonRequestRefreshID = UUID()
+    private var seasonRequestAvailability: MediaRequestAvailability? { seasonRequestState.availability }
     @State private var seasonRequestAvailabilityResolved = false
     @State private var seasonRequestAvailabilityFailed = false
     @State private var seasonRequestRetryToken = 0
@@ -207,11 +212,13 @@ public struct ItemDetailView: View {
                     viewModel: viewModel,
                     spoilerSettings: spoilerSettings,
                     onPlay: onPlay,
-                    requestAvailability: seasonRequestAvailability?.markingAvailable(
+                    requestAvailability: seasonRequestAvailability?.markingPresentInLibrary(
                         detail.children.compactMap { child in
                             child.kind == .season || child.kind == .episode ? child.seasonNumber : nil
                         }
                     ),
+                    requestAvailabilityFailed: seasonRequestAvailabilityFailed,
+                    onRefreshRequests: { seasonRequestRetryToken += 1 },
                     isRequestingSeasons: isSeasonRequestInFlight,
                     onRequestSeasons: onRequestSeasons == nil ? nil : { seasons in
                         requestTapped(detail.item, seasons: seasons)
@@ -274,7 +281,7 @@ public struct ItemDetailView: View {
             }
         }
         .task(id: seasonRequestRefreshKey) {
-            await refreshSeasonRequestAvailability()
+            await refreshVisibleSeasonRequests()
         }
         .task(id: heroTrailerTaskID) {
             guard heroBackground.settings.detailMode == .trailer,
@@ -427,46 +434,82 @@ public struct ItemDetailView: View {
 
     private func performSeasonRequest(_ item: MediaItem, seasons: [Int]) {
         guard let onRequestSeasons, !seasons.isEmpty, !isSeasonRequestInFlight else { return }
-        let previous = seasonRequestAvailability
-        seasonRequestAvailability = previous?.markingRequested(seasons)
+        let eligible = Set(seasonRequestAvailability?.requestableSeasonNumbers ?? [])
+        let selected = Set(seasons).intersection(eligible).sorted()
+        guard !selected.isEmpty else {
+            seasonRequestRetryToken += 1
+            return
+        }
+        let scope = seasonRequestScope
         isSeasonRequestInFlight = true
         Task {
-            let result = await onRequestSeasons(item, seasons)
-            if !result.isSuccess {
-                seasonRequestAvailability = previous
-            }
+            let result = await onRequestSeasons(item, selected)
+            guard seasonRequestScope == scope else { return }
+            if result.isSuccess { seasonRequestState.accept(selected) }
             isSeasonRequestInFlight = false
+            seasonRequestRetryToken += 1
             if let title = result.failureTitle {
                 requestFailure = RequestFailureAlert(title: title, message: result.failureMessage)
             }
         }
     }
 
-    private var seasonRequestRefreshKey: String {
+    private var seasonRequestScopeKey: String {
         guard seerConnected,
               let item = viewModel.state.value?.item,
               item.kind == .series,
               item.providerIDs["Tmdb"] != nil
         else { return "disabled" }
+        return "\(seasonRequestContextID)|\(item.sourceAccountID ?? "_")|\(item.id)|\(item.providerIDs["Tmdb"] ?? "")"
+    }
+
+    private var seasonRequestRefreshKey: String {
         let sources = viewModel.sources.map(\.id).sorted().joined(separator: ",")
-        return "\(item.sourceAccountID ?? "_")|\(item.id)|\(item.providerIDs["Tmdb"] ?? "")|\(sources)|\(seasonRequestRetryToken)"
+        return "\(seasonRequestScopeKey)|\(sources)|\(seasonRequestRetryToken)|\(scenePhase == .active)|\(!hasChildOnTop)"
+    }
+
+    private func refreshVisibleSeasonRequests() async {
+        let scope = seasonRequestScopeKey
+        if seasonRequestScope != scope {
+            seasonRequestScope = scope
+            seasonRequestState.reset()
+            seasonRequestAvailabilityResolved = false
+            seasonRequestAvailabilityFailed = false
+            isSeasonRequestInFlight = false
+            pendingAdminRequest = nil
+            showingAdminConfirm = false
+        }
+        guard scenePhase == .active, !hasChildOnTop else { return }
+        repeat {
+            await refreshSeasonRequestAvailability()
+            guard !seasonRequestAvailabilityFailed,
+                  seasonRequestAvailability?.seasons.contains(where: \.isInFlight) == true,
+                  !Task.isCancelled else { return }
+            do { try await Task.sleep(for: .seconds(15)) }
+            catch { return }
+        } while !Task.isCancelled
     }
 
     private func refreshSeasonRequestAvailability() async {
-        guard seasonRequestRefreshKey != "disabled",
+        let scope = seasonRequestScopeKey
+        let refreshID = UUID()
+        seasonRequestRefreshID = refreshID
+        guard scope != "disabled",
               let item = viewModel.state.value?.item,
               let requestAvailabilityRefresh
         else {
-            seasonRequestAvailability = nil
+            seasonRequestState.reset()
             seasonRequestAvailabilityResolved = true
             seasonRequestAvailabilityFailed = false
             return
         }
-        seasonRequestAvailability = nil
-        seasonRequestAvailabilityResolved = false
-        seasonRequestAvailabilityFailed = false
+        if seasonRequestAvailability == nil {
+            seasonRequestAvailabilityResolved = false
+            seasonRequestAvailabilityFailed = false
+        }
         guard let availability = await requestAvailabilityRefresh(item) else {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, seasonRequestScope == scope,
+                  seasonRequestRefreshID == refreshID else { return }
             seasonRequestAvailabilityResolved = true
             seasonRequestAvailabilityFailed = true
             return
@@ -474,8 +517,9 @@ public struct ItemDetailView: View {
         let ownedSeasonNumbers = isDiscoveryItem
             ? Set<Int>()
             : await viewModel.ownedSeasonNumbersAcrossSources()
-        guard !Task.isCancelled else { return }
-        seasonRequestAvailability = availability.markingAvailable(Array(ownedSeasonNumbers))
+        guard !Task.isCancelled, seasonRequestScope == scope,
+              seasonRequestRefreshID == refreshID else { return }
+        seasonRequestState.apply(availability, presentInLibrary: Array(ownedSeasonNumbers))
         seasonRequestAvailabilityResolved = true
         seasonRequestAvailabilityFailed = false
     }

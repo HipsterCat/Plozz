@@ -175,9 +175,170 @@ final class SeerMapperTests: XCTestCase {
         XCTAssertEqual(availability.seasons.map(\.number), [1, 2, 3, 4])
         XCTAssertEqual(availability.seasons.map(\.status), [.available, .processing, .pending, .pending])
         XCTAssertEqual(availability.seasons.map(\.requestFailed), [false, false, false, true])
+        XCTAssertEqual(availability.seasons.map(\.requestStatus), [nil, .processing, nil, .failed])
         XCTAssertEqual(availability.seasons.map(\.title), ["The Beginning", "Season 2", "Season 3", "Season 4"])
         XCTAssertEqual(availability.requestableSeasonNumbers, [])
         XCTAssertEqual(availability.requestPickerSeasons.map(\.number), [2, 3, 4])
+    }
+
+    func testFailedParentDoesNotRegressAnExplicitlyCompletedSeason() {
+        let details = SeerMediaDetails(
+            mediaInfo: SeerMediaInfo(requests: [
+                SeerMediaRequest(status: 4, seasons: [
+                    SeerRequestedSeason(seasonNumber: 1, status: 5),
+                    SeerRequestedSeason(seasonNumber: 2, status: 2),
+                    SeerRequestedSeason(seasonNumber: 3, status: 4)
+                ])
+            ]),
+            seasons: (1...3).map { SeerSeasonSummary(seasonNumber: $0) }
+        )
+        let availability = SeerMapper.requestAvailability(from: details)
+        XCTAssertEqual(availability.seasons.map(\.requestStatus), [.completed, .failed, .failed])
+        XCTAssertEqual(availability.seasons.map(\.requestFailed), [false, true, true])
+        XCTAssertEqual(availability.requestableSeasonNumbers, [])
+    }
+
+    func testRequestAvailabilityDeduplicatesAndKeepsRequestedSeasonsMissingFromTMDBList() {
+        let details = SeerMediaDetails(
+            mediaInfo: SeerMediaInfo(
+                seasons: [
+                    SeerMediaSeason(seasonNumber: 1, status: 1),
+                    SeerMediaSeason(seasonNumber: 1, status: 5),
+                    SeerMediaSeason(seasonNumber: 2, status: 1)
+                ],
+                requests: [
+                    SeerMediaRequest(
+                        status: 2,
+                        seasons: [
+                            SeerRequestedSeason(seasonNumber: 2, status: 2),
+                            SeerRequestedSeason(seasonNumber: 7, status: 2),
+                            SeerRequestedSeason(seasonNumber: 7, status: 2)
+                        ]
+                    )
+                ]
+            ),
+            seasons: [
+                SeerSeasonSummary(seasonNumber: 1),
+                SeerSeasonSummary(name: "First", seasonNumber: 1),
+                SeerSeasonSummary(seasonNumber: 2)
+            ]
+        )
+
+        let availability = SeerMapper.requestAvailability(from: details)
+
+        XCTAssertEqual(availability.seasons.map(\.number), [1, 2, 7])
+        XCTAssertEqual(availability.seasons.map(\.status), [.available, .processing, .processing])
+        XCTAssertEqual(availability.seasons.map(\.requestStatus), [nil, .processing, .processing])
+        XCTAssertEqual(availability.seasons.map(\.title), ["First", "Season 2", "Season 7"])
+    }
+
+    func testRequestAvailabilityIncludesEveryHouseholdRequestRecord() {
+        let details = SeerMediaDetails(
+            mediaInfo: SeerMediaInfo(
+                requests: [
+                    SeerMediaRequest(
+                        status: 1,
+                        seasons: [SeerRequestedSeason(seasonNumber: 2, status: 1)]
+                    ),
+                    SeerMediaRequest(
+                        status: 2,
+                        seasons: [SeerRequestedSeason(seasonNumber: 7, status: 2)]
+                    )
+                ]
+            ),
+            seasons: [
+                SeerSeasonSummary(seasonNumber: 1),
+                SeerSeasonSummary(seasonNumber: 2),
+                SeerSeasonSummary(seasonNumber: 7)
+            ]
+        )
+
+        let availability = SeerMapper.requestAvailability(from: details)
+
+        XCTAssertEqual(availability.seasons.map(\.status), [.unknown, .pending, .processing])
+        XCTAssertEqual(availability.requestableSeasonNumbers, [1])
+    }
+
+    func testRequestMetadataWinsOverStaleScannerWithoutMaskingFailures() {
+        let details = SeerMediaDetails(
+            mediaInfo: SeerMediaInfo(
+                seasons: [
+                    SeerMediaSeason(seasonNumber: 1, status: 1),
+                    SeerMediaSeason(seasonNumber: 2, status: 2),
+                    SeerMediaSeason(seasonNumber: 3, status: 3),
+                    SeerMediaSeason(seasonNumber: 4, status: 5)
+                ],
+                requests: [
+                    SeerMediaRequest(
+                        status: 1,
+                        seasons: [SeerRequestedSeason(seasonNumber: 1, status: 1)]
+                    ),
+                    SeerMediaRequest(
+                        status: 4,
+                        seasons: [
+                            SeerRequestedSeason(seasonNumber: 2, status: 2),
+                            SeerRequestedSeason(seasonNumber: 3, status: 2),
+                            SeerRequestedSeason(seasonNumber: 4, status: 2)
+                        ]
+                    ),
+                    SeerMediaRequest(
+                        status: 2,
+                        is4k: true,
+                        seasons: [SeerRequestedSeason(seasonNumber: 5, status: 2)]
+                    )
+                ]
+            ),
+            seasons: (1...5).map { SeerSeasonSummary(seasonNumber: $0) }
+        )
+
+        let availability = SeerMapper.requestAvailability(from: details)
+
+        XCTAssertEqual(availability.seasons.map(\.status), [
+            .pending, .pending, .processing, .available, .unknown
+        ])
+        XCTAssertEqual(availability.seasons.map(\.requestStatus), [
+            .pending, .failed, .failed, nil, nil
+        ])
+        XCTAssertEqual(availability.seasons.map(\.requestFailed), [
+            false, true, true, false, false
+        ])
+        XCTAssertEqual(availability.requestableSeasonNumbers, [5])
+    }
+
+    func testPartialCoverageRetainsActiveWorkflowAndTerminalStatesBlockRequestAll() {
+        let details = SeerMediaDetails(
+            mediaInfo: SeerMediaInfo(
+                seasons: [
+                    SeerMediaSeason(seasonNumber: 1, status: 4)
+                ],
+                requests: [
+                    SeerMediaRequest(
+                        status: 2,
+                        seasons: [SeerRequestedSeason(seasonNumber: 1, status: 2)]
+                    ),
+                    SeerMediaRequest(
+                        status: 3,
+                        seasons: [SeerRequestedSeason(seasonNumber: 2, status: 3)]
+                    ),
+                    SeerMediaRequest(
+                        status: 5,
+                        seasons: [SeerRequestedSeason(seasonNumber: 3, status: 5)]
+                    )
+                ]
+            ),
+            seasons: (1...4).map { SeerSeasonSummary(seasonNumber: $0) }
+        )
+
+        let availability = SeerMapper.requestAvailability(from: details)
+        let partial = availability.seasons[0]
+
+        XCTAssertEqual(partial.status, .partiallyAvailable)
+        XCTAssertEqual(partial.requestStatus, .processing)
+        XCTAssertTrue(partial.isInFlight)
+        XCTAssertEqual(availability.seasons.map(\.requestStatus), [
+            .processing, .declined, .completed, nil
+        ])
+        XCTAssertEqual(availability.requestableSeasonNumbers, [4])
     }
 
     private func makeItem(kind: MediaItemKind, id: String = "seer:1", tmdb: String? = nil) -> MediaItem {
@@ -379,6 +540,37 @@ final class SeerServiceTests: XCTestCase {
         XCTAssertEqual(result?.seasons.map(\.number), [1, 2, 3])
         XCTAssertEqual(result?.seasons.map(\.status), [.available, .processing, .unknown])
         XCTAssertEqual(result?.requestableSeasonNumbers, [3])
+    }
+
+    func testRequestAvailabilityRejectsStaleCompletionAfterReconnect() async throws {
+        let http = SeerRecordingHTTPClient()
+        http.stub(
+            pathSuffix: "/tv/1396",
+            json: #"{"id":1396,"seasons":[{"seasonNumber":1}],"mediaInfo":{"status":2}}"#
+        )
+        http.stub(pathSuffix: "/status", json: #"{"version":"2.0"}"#)
+        http.suspend(pathSuffix: "/tv/1396")
+        let store = InMemorySeerConnectionStore(
+            connection: SeerConnection(baseURL: seerBaseURL, apiKey: "KEY")
+        )
+        let service = SeerService(connectionStore: store, http: http)
+        let item = MediaItem(
+            id: "seer:1396",
+            title: "Breaking Bad",
+            kind: .series,
+            providerIDs: ["Tmdb": "1396"]
+        )
+
+        let fetch = Task { await service.requestAvailability(for: item) }
+        await http.waitUntilSuspended(pathSuffix: "/tv/1396")
+        try store.save(
+            SeerConnection(baseURL: URL(string: "https://new.example.com")!, apiKey: "NEW")
+        )
+        await service.reloadConnection()
+        http.resume(pathSuffix: "/tv/1396")
+
+        let result = await fetch.value
+        XCTAssertNil(result)
     }
 
     func testAvailabilityIsUnknownForUntrackedTitle() async throws {

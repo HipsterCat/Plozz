@@ -134,6 +134,8 @@ enum HeroForegroundModelBuilder {
         var downloadProgress: Double? = nil
         /// Makes a fallback action read as the primary CTA even while unfocused.
         var prominent: Bool = false
+        var requestTitle: LocalizedStringResource? = nil
+        var requestSystemImage: String? = nil
     }
 
     /// The `  ·  `-joined metadata line for a slide, or `nil` when empty.
@@ -221,8 +223,12 @@ enum HeroForegroundModelBuilder {
             )
         case .request:
             return HeroForegroundModel.Pill(
-                kind: .request, text: "Request", systemImage: "plus.circle",
-                progress: nil, prominent: input.prominent
+                kind: .request,
+                text: input.requestTitle == nil ? "Request" : nil,
+                systemImage: input.requestSystemImage ?? "plus.circle",
+                progress: nil,
+                prominent: input.prominent,
+                localizedTitle: input.requestTitle
             )
         case .downloadStatus:
             if let progress = input.downloadProgress {

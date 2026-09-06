@@ -146,6 +146,7 @@ struct PlozziOSItemDetailView: View {
 private struct PlozziOSCanonicalItemDetailView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.themePalette) private var palette
     @Environment(HeroTrailerController.self) private var trailerController
     @Environment(PlozziOSAppModel.self) private var appModel
@@ -162,7 +163,12 @@ private struct PlozziOSCanonicalItemDetailView: View {
     @State private var isRequesting = false
     @State private var requestConfirmationItem: MediaItem?
     @State private var requestConfirmationSeasons: [Int]?
-    @State private var seasonRequestAvailability: MediaRequestAvailability?
+    @State private var requestConfirmationContext: String?
+    @State private var seasonRequestState = SeasonRequestState()
+    @State private var seasonRequestScope: String?
+    @State private var seasonRequestRefreshID = UUID()
+    @State private var seasonRequestRefreshFailed = false
+    @State private var seasonRequestRetryToken = 0
     @State private var requestStatusOverride: MediaAvailabilityStatus?
     @State private var sourceOverride: String?
     @State private var versionOverride: String?
@@ -389,11 +395,12 @@ private struct PlozziOSCanonicalItemDetailView: View {
             titleVisibility: .visible
         ) {
             Button("Request as Administrator") {
-                guard let item = requestConfirmationItem else { return }
+                guard let item = requestConfirmationItem,
+                      let context = requestConfirmationContext else { return }
                 let seasons = requestConfirmationSeasons
                 requestConfirmationItem = nil
                 requestConfirmationSeasons = nil
-                Task { await request(item, seasons: seasons) }
+                Task { await request(item, seasons: seasons, context: context) }
             }
             Button("Cancel", role: .cancel) {
                 requestConfirmationItem = nil
@@ -505,11 +512,18 @@ private struct PlozziOSCanonicalItemDetailView: View {
                         },
                         onHeroShowsSeriesChange: { seriesHeroShowsSeries = $0 },
                         onPlay: play,
-                        seasonRequestAvailability: isDiscoveryItem
-                            ? nil
-                            : seasonRequestAvailability,
+                        seasonRequestAvailability:
+                            currentSeasonRequestAvailability(for: detail),
+                        showsSeasonRequestControl:
+                            seerService?.isConfigured == true
+                                && detail.item.providerIDs["Tmdb"] != nil,
                         isRequestingSeasons: isRequesting,
+                        seasonRequestRefreshFailed:
+                            currentSeasonRequestRefreshFailed(for: detail),
                         seasonRequestError: requestError,
+                        onRefreshSeasonRequests: {
+                            seasonRequestRetryToken &+= 1
+                        },
                         onRequestSeasons: {
                             beginRequest(detail.item, seasons: $0)
                         }
@@ -591,8 +605,8 @@ private struct PlozziOSCanonicalItemDetailView: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .navigationTitle(Text(verbatim: ""))
-        .task(id: seasonRequestLookupID(for: detail)) {
-            await loadSeasonRequestAvailability(for: detail)
+        .task(id: seasonRequestRefreshKey(for: detail)) {
+            await refreshVisibleSeasonRequests(for: detail)
         }
         .task(id: isDiscoveryItem) {
             await pollDiscoveryStatus()
@@ -653,6 +667,10 @@ private struct PlozziOSCanonicalItemDetailView: View {
         guard isDiscoveryItem, item.kind == .movie || item.kind == .series else { return nil }
         let availability = requestStatusOverride ?? item.availability
         let isSeries = item.kind == .series
+        let detail = viewModel.state.value
+        let supportsSeasonRequests = isSeries
+            && item.providerIDs["Tmdb"] != nil
+            && seerService?.isConfigured == true
         return PlozziOSHeroRequest(
             cta: MediaItem.heroCTA(
                 availability: availability,
@@ -666,8 +684,21 @@ private struct PlozziOSCanonicalItemDetailView: View {
             isRequesting: isRequesting,
             actingName: appModel.activeSeerrRequestActingName,
             onRequest: { beginRequest($0) },
-            seasonAvailability: isSeries ? seasonRequestAvailability : nil,
-            onRequestSeasons: isSeries ? { beginRequest(item, seasons: $0) } : nil
+            seasonAvailability: supportsSeasonRequests
+                ? detail.flatMap {
+                    currentSeasonRequestAvailability(for: $0)
+                }
+                : nil,
+            onRequestSeasons: supportsSeasonRequests
+                ? { beginRequest(item, seasons: $0) }
+                : nil,
+            seasonRefreshFailed: supportsSeasonRequests
+                && detail.map {
+                    currentSeasonRequestRefreshFailed(for: $0)
+                } == true,
+            onRefreshSeasons: supportsSeasonRequests ? {
+                seasonRequestRetryToken &+= 1
+            } : nil
         )
     }
 
@@ -949,16 +980,46 @@ private struct PlozziOSCanonicalItemDetailView: View {
     }
 
     private func beginRequest(_ item: MediaItem, seasons: [Int]? = nil) {
+        let context = appModel.plozziOSSeasonRequestContextID
+        let selectedSeasons: [Int]?
+        if let seasons {
+            guard let detail = viewModel.state.value,
+                  seasonRequestScope == seasonRequestScopeKey(for: detail),
+                  SeasonRequestState.itemKey(for: item) == SeasonRequestState.itemKey(for: detail.item) else {
+                seasonRequestRetryToken &+= 1
+                return
+            }
+            let eligible = Set(
+                seasonRequestState.availability?.requestableSeasonNumbers ?? []
+            )
+            let selected = Set(seasons).intersection(eligible).sorted()
+            guard !selected.isEmpty else {
+                seasonRequestRetryToken &+= 1
+                return
+            }
+            selectedSeasons = selected
+        } else {
+            selectedSeasons = nil
+        }
         if appModel.activeSeerrRequestIdentity == .admin,
            appModel.profiles.profiles.count > 1 {
             requestConfirmationItem = item
-            requestConfirmationSeasons = seasons
+            requestConfirmationSeasons = selectedSeasons
+            requestConfirmationContext = context
         } else {
-            Task { await request(item, seasons: seasons) }
+            Task { await request(item, seasons: selectedSeasons, context: context) }
         }
     }
 
-    private func request(_ item: MediaItem, seasons: [Int]? = nil) async {
+    private func request(
+        _ item: MediaItem,
+        seasons: [Int]? = nil,
+        context: String
+    ) async {
+        guard context == appModel.plozziOSSeasonRequestContextID else {
+            requestError = "The request server or profile changed. Review the request and try again."
+            return
+        }
         guard let seerService else {
             requestError = "Connect Overseerr or Jellyseerr in Settings first."
             return
@@ -966,60 +1027,166 @@ private struct PlozziOSCanonicalItemDetailView: View {
         isRequesting = true
         requestError = nil
         defer { isRequesting = false }
+        let requestScope = seasonRequestScope
         let outcome = await seerService.request(
             item,
             seasons: seasons,
             identity: appModel.activeSeerrRequestIdentity
         )
+        guard context == appModel.plozziOSSeasonRequestContextID else { return }
         switch outcome {
         case let .success(status):
             if let seasons {
-                seasonRequestAvailability = seasonRequestAvailability?
-                    .markingRequested(seasons)
+                guard requestScope == seasonRequestScope else { return }
+                seasonRequestState.accept(seasons)
+                seasonRequestRetryToken &+= 1
+                await refreshSeasonRequestAvailability(for: item)
             } else {
                 requestStatusOverride = status
+                await viewModel.load()
             }
-            await viewModel.load()
         case .failure(.alreadyRequested):
-            // Seerr already tracks this title — the seeded availability was
-            // stale. Pull the real status so the CTA reflects reality instead of
-            // showing a misleading error.
-            if let status = await appModel.seerService.availability(for: item) {
-                requestStatusOverride = status.0
+            if let seasons {
+                guard requestScope == seasonRequestScope else { return }
+                let refreshed = await refreshSeasonRequestAvailability(for: item)
+                if refreshed { seasonRequestRetryToken &+= 1 }
+                let stillRequestable = Set(
+                    seasonRequestState.availability?
+                        .requestableSeasonNumbers ?? []
+                ).isDisjoint(with: seasons) == false
+                if !refreshed || stillRequestable {
+                    requestError =
+                        "This season is already requested. Refresh status to see the latest state."
+                }
+            } else {
+                // Seerr already tracks this title — the seeded availability was
+                // stale. Pull the real status so the CTA reflects reality instead of
+                // showing a misleading error.
+                if let status = await appModel.seerService.availability(for: item) {
+                    requestStatusOverride = status.0
+                }
+                await viewModel.load()
             }
-            await viewModel.load()
         case let .failure(reason):
             requestError = reason.userMessage
         }
     }
 
-    private func loadSeasonRequestAvailability(
+    private func refreshVisibleSeasonRequests(
         for detail: ItemDetailViewModel.Detail
     ) async {
-        guard detail.item.kind == .series,
-              let seerService,
-              seerService.isConfigured else {
-            seasonRequestAvailability = nil
-            return
+        let scope = seasonRequestScopeKey(for: detail)
+        if seasonRequestScope != scope {
+            seasonRequestScope = scope
+            seasonRequestState.reset()
+            seasonRequestRefreshFailed = false
+            requestConfirmationItem = nil
+            requestConfirmationSeasons = nil
+            requestConfirmationContext = nil
         }
-        seasonRequestAvailability = await seerService
-            .requestAvailability(for: detail.item)?
-            .markingAvailable(
-                detail.children.compactMap {
-                    $0.kind == .season || $0.kind == .episode
-                        ? $0.seasonNumber
-                        : nil
-                }
-            )
+        guard scope != "disabled", scenePhase == .active else { return }
+        repeat {
+            await refreshSeasonRequestAvailability(for: detail.item)
+            guard !seasonRequestRefreshFailed,
+                  seasonRequestState.availability?.seasons
+                    .contains(where: \.isInFlight) == true,
+                  !Task.isCancelled else {
+                return
+            }
+            do {
+                try await Task.sleep(for: .seconds(20))
+            } catch {
+                return
+            }
+        } while !Task.isCancelled
     }
 
-    private func seasonRequestLookupID(
+    @discardableResult
+    private func refreshSeasonRequestAvailability(
+        for item: MediaItem
+    ) async -> Bool {
+        guard let detail = viewModel.state.value,
+              detail.item.id == item.id else {
+            return false
+        }
+        let scope = seasonRequestScopeKey(for: detail)
+        let refreshID = UUID()
+        seasonRequestRefreshID = refreshID
+        guard scope != "disabled",
+              let seerService,
+              seerService.isConfigured else {
+            seasonRequestState.reset()
+            seasonRequestRefreshFailed = false
+            return false
+        }
+        let refreshed = await seerService.requestAvailability(for: item)
+        guard !Task.isCancelled,
+              seasonRequestScope == scope,
+              viewModel.state.value.map({ seasonRequestScopeKey(for: $0) }) == scope,
+              seasonRequestRefreshID == refreshID,
+              viewModel.state.value?.item.id == item.id else {
+            return false
+        }
+        guard let refreshed else {
+            seasonRequestRefreshFailed = true
+            return false
+        }
+        let presentSeasonNumbers = detail.children.compactMap {
+            $0.kind == .season || $0.kind == .episode
+                ? $0.seasonNumber
+                : nil
+        }
+        seasonRequestState.apply(
+            refreshed,
+            presentInLibrary: presentSeasonNumbers
+        )
+        seasonRequestRefreshFailed = false
+        return true
+    }
+
+    private func seasonRequestScopeKey(
+        for detail: ItemDetailViewModel.Detail
+    ) -> String {
+        guard detail.item.kind == .series,
+              detail.item.providerIDs["Tmdb"] != nil,
+              seerService?.isConfigured == true else {
+            return "disabled"
+        }
+        return [
+            appModel.plozziOSSeasonRequestContextID,
+            detail.item.sourceAccountID ?? "_",
+            detail.item.id,
+            detail.item.providerIDs["Tmdb"] ?? "_"
+        ].joined(separator: "|")
+    }
+
+    private func currentSeasonRequestAvailability(
+        for detail: ItemDetailViewModel.Detail
+    ) -> MediaRequestAvailability? {
+        seasonRequestScope == seasonRequestScopeKey(for: detail)
+            ? seasonRequestState.availability
+            : nil
+    }
+
+    private func currentSeasonRequestRefreshFailed(
+        for detail: ItemDetailViewModel.Detail
+    ) -> Bool {
+        seasonRequestScope == seasonRequestScopeKey(for: detail)
+            && seasonRequestRefreshFailed
+    }
+
+    private func seasonRequestRefreshKey(
         for detail: ItemDetailViewModel.Detail
     ) -> String {
         let seasons = detail.children.compactMap(\.seasonNumber)
             .map(String.init)
             .joined(separator: ",")
-        return "\(detail.item.id):\(seasons):\(seerService?.isConfigured == true)"
+        return [
+            seasonRequestScopeKey(for: detail),
+            seasons,
+            String(seasonRequestRetryToken),
+            scenePhase == .active ? "active" : "inactive"
+        ].joined(separator: "|")
     }
 
     private func requestFailureMessage(_ reason: SeerRequestFailure) -> LocalizedStringResource {
@@ -1279,70 +1446,35 @@ private struct PlozziOSRequestAction: View {
 private struct PlozziOSSeasonRequestMenu: View {
     let availability: MediaRequestAvailability
     let isRequesting: Bool
+    let refreshFailed: Bool
+    let onRefresh: () -> Void
     let onRequest: ([Int]) -> Void
 
-    private var seasons: [MediaSeasonRequestState] {
-        availability.requestPickerSeasons
-    }
-
-    private var requestableSeasons: [MediaSeasonRequestState] {
-        seasons.filter(\.isRequestable)
-    }
-
     var body: some View {
+        let presentation = SeasonRequestPresentation(
+            availability: availability,
+            isSubmitting: isRequesting
+        )
+        let accessibilityHint =
+            presentation.detail
+            ?? "Choose seasons and review their request status."
         Menu {
-            if requestableSeasons.count > 1 {
-                Button("Request All Missing Seasons") {
-                    onRequest(requestableSeasons.map(\.number))
-                }
-                Divider()
-            }
-
-            ForEach(seasons) { season in
-                if season.requestFailed {
-                    Label(
-                        "\(season.title) — Failed",
-                        systemImage: "exclamationmark.circle"
-                    )
-                } else if season.isRequestable {
-                    Button("Request \(season.title)") {
-                        onRequest([season.number])
-                    }
-                } else {
-                    Label {
-                        Text(verbatim: "\(season.title) — ") + Text(statusText(for: season))
-                    } icon: {
-                        Image(systemName: season.status == .processing ? "arrow.down.circle" : "clock")
-                    }
-                }
-            }
+            SeasonRequestMenuContent(
+                availability: availability,
+                isSubmitting: isRequesting,
+                refreshFailed: refreshFailed,
+                onRefresh: onRefresh,
+                onRequest: onRequest
+            )
         } label: {
-            if isRequesting {
-                ProgressView()
-                    .frame(width: 44, height: 44)
-            } else {
-                Image(systemName: "plus.rectangle.on.folder")
-                    .font(.headline)
-                    .frame(width: 44, height: 44)
-            }
+            PlozziOSSeasonRequestSummaryLabel(presentation: presentation)
+                .padding(.horizontal, 4)
+                .frame(minHeight: 44)
         }
         .buttonStyle(.bordered)
-        .buttonBorderShape(.circle)
-        .disabled(isRequesting || seasons.isEmpty)
-        .accessibilityLabel("Request missing seasons")
-    }
-
-    private func statusText(for season: MediaSeasonRequestState) -> LocalizedStringResource {
-        switch season.status {
-        case .processing:
-            "Processing"
-        case .available, .partiallyAvailable:
-            "Available"
-        case .pending:
-            "Requested"
-        case .unknown, .deleted:
-            season.requestFailed ? "Failed" : "Unavailable"
-        }
+        .buttonBorderShape(.capsule)
+        .accessibilityLabel(Text(presentation.title))
+        .accessibilityHint(Text(accessibilityHint))
     }
 }
 
@@ -1421,8 +1553,11 @@ private struct PlozziOSInlineSeriesBrowser: View {
     let onHeroShowsSeriesChange: (Bool) -> Void
     let onPlay: (MediaItem, Bool) -> Void
     let seasonRequestAvailability: MediaRequestAvailability?
+    let showsSeasonRequestControl: Bool
     let isRequestingSeasons: Bool
+    let seasonRequestRefreshFailed: Bool
     let seasonRequestError: LocalizedStringResource?
+    let onRefreshSeasonRequests: () -> Void
     let onRequestSeasons: ([Int]) -> Void
 
     init(
@@ -1435,8 +1570,11 @@ private struct PlozziOSInlineSeriesBrowser: View {
         onHeroShowsSeriesChange: @escaping (Bool) -> Void,
         onPlay: @escaping (MediaItem, Bool) -> Void,
         seasonRequestAvailability: MediaRequestAvailability?,
+        showsSeasonRequestControl: Bool,
         isRequestingSeasons: Bool,
+        seasonRequestRefreshFailed: Bool,
         seasonRequestError: LocalizedStringResource?,
+        onRefreshSeasonRequests: @escaping () -> Void,
         onRequestSeasons: @escaping ([Int]) -> Void
     ) {
         self.viewModel = viewModel
@@ -1448,8 +1586,11 @@ private struct PlozziOSInlineSeriesBrowser: View {
         self.onHeroShowsSeriesChange = onHeroShowsSeriesChange
         self.onPlay = onPlay
         self.seasonRequestAvailability = seasonRequestAvailability
+        self.showsSeasonRequestControl = showsSeasonRequestControl
         self.isRequestingSeasons = isRequestingSeasons
+        self.seasonRequestRefreshFailed = seasonRequestRefreshFailed
         self.seasonRequestError = seasonRequestError
+        self.onRefreshSeasonRequests = onRefreshSeasonRequests
         self.onRequestSeasons = onRequestSeasons
         _selectedSeasonID = State(
             initialValue: SeriesEpisodeEntry.seasonID(
@@ -1512,8 +1653,24 @@ private struct PlozziOSInlineSeriesBrowser: View {
                             PlozziOSSeasonRequestMenu(
                                 availability: seasonRequestAvailability,
                                 isRequesting: isRequestingSeasons,
+                                refreshFailed: seasonRequestRefreshFailed,
+                                onRefresh: onRefreshSeasonRequests,
                                 onRequest: onRequestSeasons
                             )
+                        } else if seasonRequestAvailability == nil,
+                                  showsSeasonRequestControl,
+                                  seasonRequestRefreshFailed {
+                            Button(
+                                "Retry Season Status",
+                                systemImage: "arrow.clockwise",
+                                action: onRefreshSeasonRequests
+                            )
+                            .buttonStyle(.bordered)
+                        } else if seasonRequestAvailability == nil,
+                                  showsSeasonRequestControl {
+                            Label("Loading Seasons…", systemImage: "clock")
+                                .font(.subheadline)
+                                .plozzForeground(.secondary)
                         }
                     }
                     .padding(.trailing, pageInset)
