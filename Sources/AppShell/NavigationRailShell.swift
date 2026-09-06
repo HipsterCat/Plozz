@@ -45,9 +45,11 @@ struct NavigationRailShell<Content: View>: View {
     @State private var railReturnToken = 0
     @State private var isOpeningNavigation = false
     @State private var searchContentFocusRequest = 0
+    @State private var hasEnteredSearchContent = false
 
     var body: some View {
         let hidden = chrome.isChromeHidden
+        let contentEntry = $hasEnteredSearchContent
         let presentation = NavigationRailPresentation(
             destination: selection,
             chromeHidden: hidden,
@@ -58,6 +60,14 @@ struct NavigationRailShell<Content: View>: View {
             content
                 // A reset into this scope excludes the page's navigation capsule.
                 .focusScope(contentFocusScopeID)
+                .background {
+                    SearchPageFocusObserver(
+                        isEnabled: presentation.shouldEnterSearchContent && !hasEnteredSearchContent,
+                        onFocusEntered: { contentEntry.wrappedValue = true }
+                    )
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                }
                 // Native Search owns its navigation bar. Reserve actual container
                 // space above it, rather than overlaying its field or keyboard.
                 .padding(.top, presentation.headerHeight)
@@ -87,6 +97,9 @@ struct NavigationRailShell<Content: View>: View {
                     title: NavigationRailView.searchTitle,
                     symbol: "magnifyingglass",
                     isNavigationExpanded: railExpanded || isOpeningNavigation,
+                    isFocusEnabled: presentation.isPageButtonEnabled(
+                        hasEnteredContent: hasEnteredSearchContent
+                    ),
                     onOpenNavigation: requestNavigationFocus
                 )
                 .padding(.leading, NavigationRailMetrics.expandedContentHorizontalPadding)
@@ -146,6 +159,7 @@ struct NavigationRailShell<Content: View>: View {
             if previous != destination {
                 chrome.resetForDestinationChange()
                 isOpeningNavigation = false
+                hasEnteredSearchContent = false
             }
             if destination == .search {
                 searchContentFocusRequest &+= 1
@@ -183,6 +197,7 @@ struct NavigationRailShell<Content: View>: View {
 
     private func requestNavigationFocus() {
         guard !chrome.isChromeHidden else { return }
+        hasEnteredSearchContent = false
         isOpeningNavigation = true
         focusRequestToken &+= 1
     }
@@ -198,6 +213,9 @@ struct NavigationRailPresentation: Equatable {
     var showsPageButton: Bool { !chromeHidden && usesPageButton }
     var opensExpanded: Bool { showsPageButton && isOpening }
     var shouldEnterSearchContent: Bool { showsPageButton && !isExpanded && !isOpening }
+    func isPageButtonEnabled(hasEnteredContent: Bool) -> Bool {
+        shouldEnterSearchContent && hasEnteredContent
+    }
     // UIKit cannot move focus into a fully transparent view. Reveal the rail
     // before its focus-request observer adopts the selected destination.
     var isRailVisible: Bool { !chromeHidden && (!usesPageButton || isExpanded || isOpening) }

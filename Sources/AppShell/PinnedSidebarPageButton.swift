@@ -7,6 +7,7 @@ struct PinnedSidebarPageButton: View {
     let title: LocalizedStringResource
     let symbol: String
     let isNavigationExpanded: Bool
+    let isFocusEnabled: Bool
     let onOpenNavigation: () -> Void
 
     var body: some View {
@@ -34,7 +35,7 @@ struct PinnedSidebarPageButton: View {
         // Preserve header geometry, and therefore the native search field, while
         // the expanded menu overlays the page.
         .opacity(isNavigationExpanded ? 0 : 1)
-        .disabled(isNavigationExpanded)
+        .disabled(isNavigationExpanded || !isFocusEnabled)
         .accessibilityHidden(isNavigationExpanded)
     }
 

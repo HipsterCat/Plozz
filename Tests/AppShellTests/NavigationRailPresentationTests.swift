@@ -30,6 +30,15 @@ final class NavigationRailPresentationTests: XCTestCase {
         XCTAssertFalse(expanded.opensExpanded)
     }
 
+    func testSearchCapsuleCannotWinEntryOrNavigationDismissal() {
+        let search = make(.search)
+        XCTAssertFalse(search.isPageButtonEnabled(hasEnteredContent: false))
+        XCTAssertTrue(search.isPageButtonEnabled(hasEnteredContent: true))
+        XCTAssertFalse(make(.search, opening: true).isPageButtonEnabled(hasEnteredContent: true))
+        XCTAssertFalse(make(.search, expanded: true).isPageButtonEnabled(hasEnteredContent: true))
+        XCTAssertFalse(make(.search).isPageButtonEnabled(hasEnteredContent: false))
+    }
+
     func testOtherRootDestinationsKeepPinnedNavigation() {
         for destination: NavigationRailDestination in [.home, .watchlist, .settings, .music, .allLibraries] {
             let presentation = make(destination)
