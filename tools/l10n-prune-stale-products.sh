@@ -18,6 +18,10 @@ APP_PATH="${1:-}"
 [[ -n "$APP_PATH" ]] || { echo "usage: $0 /path/to/Plozz.app" >&2; exit 2; }
 [[ -d "$APP_PATH" ]] || exit 0
 
+source tools/lib/apple-build-lease.sh
+acquire_apple_build_shared_lease "plozz/l10n-prune-stale-products"
+install_apple_build_lease_traps
+
 LANGUAGES="$(
   python3 - <<'PY'
 import json
