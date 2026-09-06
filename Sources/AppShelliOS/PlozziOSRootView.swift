@@ -797,6 +797,7 @@ private struct PlozziOSTabShell: View {
         }
 
         .tabViewStyle(.tabBarOnly)
+        .environment(sharedHomeViewModel)
         .onChange(of: appModel.settings.navigation.showsWatchlist) {
             _, showsWatchlist in
             selectedDestination = WatchlistNavigationPolicy.resolvedSelection(
