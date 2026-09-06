@@ -34,6 +34,11 @@ final class LocalMetadataPresence {
 /// store-owned `LocalMetadataPresence` box. The store's public read methods forward
 /// here after `ensureOpen()`, so these bodies assume an already-open connection.
 struct CatalogReadQueries {
+    /// Keeps every dynamic `IN`/`VALUES` statement comfortably below SQLite's
+    /// variable limit, including older catalog runtimes with the 999-variable
+    /// default. Physical-folder browsing can hand this type thousands of ids.
+    private static let browseHydrationBatchSize = 200
+
     let connection: CatalogConnection
     /// Value snapshot of the store's `normalizedMetadataReady` — whether the local
     /// metadata materialization has completed and normalized winners may be overlaid.
@@ -832,44 +837,374 @@ struct CatalogReadQueries {
     }
 
     func item(id: String) -> MediaItem? {
-        guard db != nil else { return nil }
-        if let mkey = ShareCatalogID.movieKey(forMovieID: id) {
-            return movieItem(key: mkey)
-        }
-        if let key = ShareCatalogID.seriesKey(forSeriesID: id) {
-            var title = key
-            var library: CatalogLibrary = .tv
-            var year: Int?
-            var found = false
-            query("""
-            SELECT series_title, library, (
-                SELECT b.year FROM assets b
-                WHERE b.series_key = ?1 AND b.kind='episode' AND b.year IS NOT NULL
-                GROUP BY b.year ORDER BY COUNT(*) DESC, b.year ASC LIMIT 1
-            ) FROM assets WHERE series_key=?1 AND kind='episode' LIMIT 1;
-            """,
-                  bind: { self.bindText($0, 1, key) }) { stmt in
-                if sqlite3_column_type(stmt, 0) != SQLITE_NULL { title = self.columnText(stmt, 0) ?? key; found = true }
-                library = CatalogLibrary(rawValue: self.columnText(stmt, 1) ?? "tv") ?? .tv
-                year = self.columnOptInt(stmt, 2)
+        browseItems(ids: [id])[id]
+    }
+
+    /// Resolve and hydrate catalog ids in bounded batches.
+    ///
+    /// The returned dictionary is keyed by the requested id, even when a legacy
+    /// alias resolves to a canonical logical movie whose `MediaItem.id` differs.
+    /// Duplicate inputs are hydrated once; unknown ids are omitted.
+    func browseItems(ids: [String]) -> [String: MediaItem] {
+        guard db != nil, !ids.isEmpty else { return [:] }
+
+        var seen = Set<String>()
+        let uniqueIDs = ids.filter { seen.insert($0).inserted }
+        var movieKeysByRequest: [String: String] = [:]
+        var seriesKeysByRequest: [String: String] = [:]
+        var seasonsByRequest: [String: (seriesKey: String, season: Int)] = [:]
+        var filePathsByRequest: [String: String] = [:]
+
+        for id in uniqueIDs {
+            if let key = ShareCatalogID.movieKey(forMovieID: id) {
+                movieKeysByRequest[id] = key
+            } else if let key = ShareCatalogID.seriesKey(forSeriesID: id) {
+                seriesKeysByRequest[id] = key
+            } else if let components = ShareCatalogID.seasonComponents(forSeasonID: id) {
+                seasonsByRequest[id] = components
+            } else if let relPath = ShareCatalogID.relPath(forFileID: id) {
+                filePathsByRequest[id] = relPath
             }
-            return found ? withEnrichment(ShareCatalogReadProjection.seriesItem(key: key, title: title, library: library, year: year)) : nil
         }
-        if let (key, season) = ShareCatalogID.seasonComponents(forSeasonID: id) {
-            return seasons(seriesKey: key).first { $0.seasonNumber == season }
+
+        let resolvedGroupsByKey = resolvedMovieGroupKeys(
+            Array(Set(movieKeysByRequest.values))
+        )
+        let directFilesByPath = baseFileItems(
+            relPaths: Array(Set(filePathsByRequest.values))
+        )
+        let missingFileIDs = filePathsByRequest.compactMap { requestID, relPath in
+            directFilesByPath[relPath] == nil ? requestID : nil
         }
-        if let relPath = ShareCatalogID.relPath(forFileID: id) {
-            var result: MediaItem?
+        let aliasGroupsByID = movieAliasGroups(for: missingFileIDs)
+        let resolvedAliasGroups = resolvedMovieGroupKeys(
+            Array(Set(aliasGroupsByID.values))
+        )
+        let canonicalAliasGroupsByID = aliasGroupsByID.mapValues {
+            resolvedAliasGroups[$0] ?? $0
+        }
+
+        let requiredGroups = Set(resolvedGroupsByKey.values)
+            .union(canonicalAliasGroupsByID.values)
+        let groupedMovies = baseMovieItems(groupKeys: Array(requiredGroups))
+        let seriesItems = baseSeriesItems(
+            keys: Array(Set(seriesKeysByRequest.values))
+        )
+        let seasonItems = baseSeasonItems(
+            requests: Array(seasonsByRequest.values)
+        )
+
+        var baseByRequest: [String: MediaItem] = [:]
+        var movieRepresentativeIDs: [String: String] = [:]
+
+        for (requestID, key) in movieKeysByRequest {
+            guard let group = resolvedGroupsByKey[key],
+                  let base = groupedMovies[group] else { continue }
+            baseByRequest[requestID] = base.item
+            movieRepresentativeIDs[base.item.id] = base.representativeID
+        }
+        for (requestID, key) in seriesKeysByRequest {
+            if let item = seriesItems[key] { baseByRequest[requestID] = item }
+        }
+        for (requestID, components) in seasonsByRequest {
+            let canonicalID = ShareCatalogID.season(
+                components.seriesKey,
+                components.season
+            )
+            if let item = seasonItems[canonicalID] {
+                baseByRequest[requestID] = item
+            }
+        }
+        for (requestID, relPath) in filePathsByRequest {
+            if let item = directFilesByPath[relPath] {
+                baseByRequest[requestID] = item
+            } else if let group = canonicalAliasGroupsByID[requestID],
+                      let base = groupedMovies[group] {
+                baseByRequest[requestID] = base.item
+                movieRepresentativeIDs[base.item.id] = base.representativeID
+            }
+        }
+
+        var uniqueBaseItems: [MediaItem] = []
+        var baseItemIDs = Set<String>()
+        for requestID in uniqueIDs {
+            guard let item = baseByRequest[requestID],
+                  baseItemIDs.insert(item.id).inserted else { continue }
+            uniqueBaseItems.append(item)
+        }
+
+        var hydratedByItemID: [String: MediaItem] = [:]
+        forEachQueryBatch(uniqueBaseItems) { batch in
+            for item in withEnrichment(
+                Array(batch),
+                movieRepresentativeIDs: movieRepresentativeIDs
+            ) {
+                hydratedByItemID[item.id] = item
+            }
+        }
+
+        return baseByRequest.reduce(into: [:]) { result, entry in
+            if let hydrated = hydratedByItemID[entry.value.id] {
+                result[entry.key] = hydrated
+            }
+        }
+    }
+
+    // MARK: - Item builders
+
+    private struct GroupedMovieBase {
+        var item: MediaItem
+        var representativeID: String
+    }
+
+    private struct MovieFileRow {
+        var relPath: String
+        var basename: String
+        var size: Int64
+        var title: String
+        var year: Int?
+    }
+
+    private func resolvedMovieGroupKeys(_ keys: [String]) -> [String: String] {
+        guard !keys.isEmpty else { return [:] }
+        var resolved: [String: String] = [:]
+
+        forEachQueryBatch(keys) { batch in
+            let values = Array(repeating: "(?)", count: batch.count).joined(separator: ",")
+            query("""
+            WITH requested(key) AS (VALUES \(values))
+            SELECT r.key, (
+                SELECT COALESCE(a.movie_group_key, a.movie_key)
+                FROM assets a
+                WHERE a.movie_key=r.key
+                LIMIT 1
+            )
+            FROM requested r;
+            """, bind: { stmt in
+                for (offset, key) in batch.enumerated() {
+                    self.bindText(stmt, Int32(offset + 1), key)
+                }
+            }) { stmt in
+                guard let key = self.columnText(stmt, 0),
+                      let group = self.columnText(stmt, 1) else { return }
+                resolved[key] = group
+            }
+        }
+
+        let unresolvedDirectGroups = keys.filter { resolved[$0] == nil }
+        forEachQueryBatch(unresolvedDirectGroups) { batch in
+            let placeholders = Array(repeating: "?", count: batch.count).joined(separator: ",")
+            query("""
+            SELECT DISTINCT movie_group_key FROM assets
+            WHERE library='movies' AND kind='movie'
+              AND movie_group_key IN (\(placeholders));
+            """, bind: { stmt in
+                for (offset, key) in batch.enumerated() {
+                    self.bindText(stmt, Int32(offset + 1), key)
+                }
+            }) { stmt in
+                guard let group = self.columnText(stmt, 0) else { return }
+                resolved[group] = group
+            }
+        }
+
+        let unresolvedAliases = keys.filter { resolved[$0] == nil }
+        for (alias, group) in movieAliasGroups(for: unresolvedAliases) {
+            resolved[alias] = group
+        }
+        return resolved
+    }
+
+    private func movieAliasGroups(for aliasIDs: [String]) -> [String: String] {
+        guard !aliasIDs.isEmpty else { return [:] }
+        var groups: [String: String] = [:]
+        forEachQueryBatch(aliasIDs) { batch in
+            let placeholders = Array(repeating: "?", count: batch.count).joined(separator: ",")
+            query("""
+            SELECT alias_id, group_key FROM movie_alias
+            WHERE alias_id IN (\(placeholders));
+            """, bind: { stmt in
+                for (offset, aliasID) in batch.enumerated() {
+                    self.bindText(stmt, Int32(offset + 1), aliasID)
+                }
+            }) { stmt in
+                guard let aliasID = self.columnText(stmt, 0),
+                      let group = self.columnText(stmt, 1) else { return }
+                groups[aliasID] = group
+            }
+        }
+        return groups
+    }
+
+    /// Build logical movies without decoration. All requested groups share the
+    /// same bounded asset reads, then one bulk overlay pass decorates the result.
+    private func baseMovieItems(groupKeys: [String]) -> [String: GroupedMovieBase] {
+        guard !groupKeys.isEmpty else { return [:] }
+        var filesByGroup: [String: [MovieFileRow]] = [:]
+
+        forEachQueryBatch(groupKeys) { batch in
+            let placeholders = Array(repeating: "?", count: batch.count).joined(separator: ",")
+            query("""
+            SELECT COALESCE(movie_group_key, movie_key) AS resolved_group,
+                   rel_path, basename, size, title, year
+            FROM assets
+            WHERE library='movies' AND kind='movie'
+              AND COALESCE(movie_group_key, movie_key) IN (\(placeholders))
+            ORDER BY resolved_group, rel_path;
+            """, bind: { stmt in
+                for (offset, group) in batch.enumerated() {
+                    self.bindText(stmt, Int32(offset + 1), group)
+                }
+            }) { stmt in
+                guard let group = self.columnText(stmt, 0) else { return }
+                let relPath = self.columnText(stmt, 1) ?? ""
+                filesByGroup[group, default: []].append(MovieFileRow(
+                    relPath: relPath,
+                    basename: self.columnText(stmt, 2) ?? relPath,
+                    size: sqlite3_column_int64(stmt, 3),
+                    title: self.columnText(stmt, 4) ?? group,
+                    year: self.columnOptInt(stmt, 5)
+                ))
+            }
+        }
+
+        return filesByGroup.reduce(into: [:]) { result, entry in
+            let (group, files) = entry
+            guard let representative = files.first else { return }
+            var versions = files.map {
+                Self.movieVersion(relPath: $0.relPath, basename: $0.basename, size: $0.size)
+            }.sortedForPicker()
+            if !versions.isEmpty { versions[0].isDefault = true }
+            let year = files.compactMap(\.year).max()
+            let item = MediaItem(
+                id: ShareCatalogID.movie(group),
+                title: representative.title,
+                kind: .movie,
+                productionYear: year,
+                libraryID: ShareCatalogID.moviesLibrary,
+                versions: versions
+            )
+            result[group] = GroupedMovieBase(
+                item: item,
+                representativeID: ShareCatalogID.file(representative.relPath)
+            )
+        }
+    }
+
+    private func baseSeriesItems(keys: [String]) -> [String: MediaItem] {
+        guard !keys.isEmpty else { return [:] }
+        var result: [String: MediaItem] = [:]
+
+        forEachQueryBatch(keys) { batch in
+            let values = Array(repeating: "(?)", count: batch.count).joined(separator: ",")
+            query("""
+            WITH requested(key) AS (VALUES \(values))
+            SELECT r.key, a.series_title, a.library, (
+                SELECT b.year FROM assets b
+                WHERE b.series_key=r.key AND b.kind='episode' AND b.year IS NOT NULL
+                GROUP BY b.year ORDER BY COUNT(*) DESC, b.year ASC LIMIT 1
+            )
+            FROM requested r
+            LEFT JOIN assets a ON a.rowid = (
+                SELECT candidate.rowid FROM assets candidate
+                WHERE candidate.series_key=r.key AND candidate.kind='episode'
+                LIMIT 1
+            );
+            """, bind: { stmt in
+                for (offset, key) in batch.enumerated() {
+                    self.bindText(stmt, Int32(offset + 1), key)
+                }
+            }) { stmt in
+                guard let key = self.columnText(stmt, 0),
+                      let title = self.columnText(stmt, 1) else { return }
+                let library = CatalogLibrary(
+                    rawValue: self.columnText(stmt, 2) ?? "tv"
+                ) ?? .tv
+                result[key] = ShareCatalogReadProjection.seriesItem(
+                    key: key,
+                    title: title,
+                    library: library,
+                    year: self.columnOptInt(stmt, 3)
+                )
+            }
+        }
+        return result
+    }
+
+    private func baseSeasonItems(
+        requests: [(seriesKey: String, season: Int)]
+    ) -> [String: MediaItem] {
+        guard !requests.isEmpty else { return [:] }
+        let requestedBySeries = Dictionary(grouping: requests) { $0.seriesKey }
+        var seriesRows: [String: (title: String, library: CatalogLibrary, seasons: Set<Int>)] = [:]
+
+        forEachQueryBatch(Array(requestedBySeries.keys)) { batch in
+            let placeholders = Array(repeating: "?", count: batch.count).joined(separator: ",")
+            query("""
+            SELECT series_key, COALESCE(season,1) AS s,
+                   MIN(series_title) AS canonical_title,
+                   MAX(CASE WHEN library='anime' THEN 1 ELSE 0 END) AS has_anime
+            FROM assets
+            WHERE series_key IN (\(placeholders)) AND kind='episode'
+            GROUP BY series_key, COALESCE(season,1)
+            ORDER BY series_key, s;
+            """, bind: { stmt in
+                for (offset, key) in batch.enumerated() {
+                    self.bindText(stmt, Int32(offset + 1), key)
+                }
+            }) { stmt in
+                guard let key = self.columnText(stmt, 0) else { return }
+                var row = seriesRows[key] ?? (key, .tv, [])
+                row.seasons.insert(Int(sqlite3_column_int64(stmt, 1)))
+                if let title = self.columnText(stmt, 2) { row.title = title }
+                if sqlite3_column_int64(stmt, 3) != 0 { row.library = .anime }
+                seriesRows[key] = row
+            }
+        }
+
+        var result: [String: MediaItem] = [:]
+        for (key, requested) in requestedBySeries {
+            guard let row = seriesRows[key] else { continue }
+            for request in requested where row.seasons.contains(request.season) {
+                let id = ShareCatalogID.season(key, request.season)
+                result[id] = MediaItem(
+                    id: id,
+                    title: "Season \(request.season)",
+                    kind: .season,
+                    parentTitle: row.title,
+                    seasonNumber: request.season,
+                    seriesID: ShareCatalogID.series(key),
+                    libraryID: ShareCatalogID.library(row.library)
+                )
+            }
+        }
+        return result
+    }
+
+    private func baseFileItems(relPaths: [String]) -> [String: MediaItem] {
+        guard !relPaths.isEmpty else { return [:] }
+        var result: [String: MediaItem] = [:]
+
+        forEachQueryBatch(relPaths) { batch in
+            let placeholders = Array(repeating: "?", count: batch.count).joined(separator: ",")
             query("""
             SELECT rel_path, title, kind, library, year, series_title, series_key, season, episode,
                    basename, size
-            FROM assets WHERE rel_path=?;
-            """, bind: { self.bindText($0, 1, relPath) }) { stmt in
+            FROM assets WHERE rel_path IN (\(placeholders));
+            """, bind: { stmt in
+                for (offset, relPath) in batch.enumerated() {
+                    self.bindText(stmt, Int32(offset + 1), relPath)
+                }
+            }) { stmt in
+                guard let relPath = self.columnText(stmt, 0) else { return }
                 let kind = self.columnText(stmt, 2) ?? "movie"
                 if kind == "episode" {
-                    result = ShareCatalogReadProjection.episodeItem(from: stmt, seriesKey: self.columnText(stmt, 6) ?? "")
+                    result[relPath] = ShareCatalogReadProjection.episodeItem(
+                        from: stmt,
+                        seriesKey: self.columnText(stmt, 6) ?? ""
+                    )
                 } else {
-                    result = MediaItem(
+                    result[relPath] = MediaItem(
                         id: ShareCatalogID.file(relPath),
                         title: self.columnText(stmt, 1) ?? relPath,
                         kind: .movie,
@@ -883,52 +1218,8 @@ struct CatalogReadQueries {
                     )
                 }
             }
-            if let result { return withEnrichment(result) }
-            if let group = movieAliasGroup(for: id) { return movieItem(key: group) }
-            return nil
         }
-        return nil
-    }
-
-    // MARK: - Item builders
-
-    /// Build the logical movie (`movie:<key>`) for a detail page: its files become
-    /// selectable ``MediaVersion``s (best-quality first, one flagged default), so
-    /// the version picker lets the user choose which file plays — the share's local
-    /// equivalent of the multi-file movie a Plex/Jellyfin server returns as one
-    /// item. A single-file movie exposes no versions (no picker). Enrichment is
-    /// applied via the group's representative file (see `movieEnrichmentKey`).
-    private func movieItem(key: String) -> MediaItem? {
-        let groupKey = resolvedMovieGroupKey(key)
-        var files: [(relPath: String, basename: String, size: Int64)] = []
-        var title: String?  // l10n:content — parsed media title from the local library scan
-        var year: Int?
-        query("""
-        SELECT rel_path, basename, size, title, year FROM assets
-        WHERE COALESCE(movie_group_key, movie_key)=?
-          AND library='movies' AND kind='movie' ORDER BY rel_path;
-        """, bind: { self.bindText($0, 1, groupKey) }) { stmt in
-            let rel = self.columnText(stmt, 0) ?? ""
-            files.append((rel, self.columnText(stmt, 1) ?? rel, sqlite3_column_int64(stmt, 2)))
-            if title == nil { title = self.columnText(stmt, 3) }
-            if let y = self.columnOptInt(stmt, 4) { year = max(year ?? y, y) }
-        }
-        guard !files.isEmpty else { return nil }
-        var versions = files.map { Self.movieVersion(relPath: $0.relPath, basename: $0.basename, size: $0.size) }
-            .sortedForPicker()
-        if !versions.isEmpty { versions[0].isDefault = true }
-        let item = MediaItem(
-            id: ShareCatalogID.movie(groupKey),
-            title: title ?? groupKey,
-            kind: .movie,
-            productionYear: year,
-            libraryID: ShareCatalogID.moviesLibrary,
-            // Retain even one named SMB version. The picker still requires >1,
-            // while same-account/cross-server merging can preserve its filename
-            // and quality instead of synthesizing an anonymous "Version".
-            versions: versions
-        )
-        return withEnrichment(item)
+        return result
     }
 
     /// The best default file to play for a logical movie when the caller named no
@@ -1184,45 +1475,46 @@ struct CatalogReadQueries {
                 return legacy
             }
         }
-        let itemIDs = records.keys.sorted()
-        let placeholders = Array(repeating: "?", count: itemIDs.count).joined(separator: ",")
-        let sql = """
-        SELECT item_id, field, source, value_json, source_url
-        FROM metadata_values
-        WHERE item_id IN (\(placeholders))
-        ORDER BY item_id, field,
-                 CASE WHEN source='legacyUnknown' THEN 1 ELSE 0 END,
-                 COALESCE(refreshed_at, 0) DESC;
-        """
-        var stmt: OpaquePointer?
         var provenanceByItem: [String: MetadataProvenance] = [:]
-        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
-            for (offset, itemID) in itemIDs.enumerated() {
-                bindText(stmt, Int32(offset + 1), itemID)
+        forEachQueryBatch(records.keys.sorted()) { batch in
+            let placeholders = Array(repeating: "?", count: batch.count).joined(separator: ",")
+            let sql = """
+            SELECT item_id, field, source, value_json, source_url
+            FROM metadata_values
+            WHERE item_id IN (\(placeholders))
+            ORDER BY item_id, field,
+                     CASE WHEN source='legacyUnknown' THEN 1 ELSE 0 END,
+                     COALESCE(refreshed_at, 0) DESC;
+            """
+            var stmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                for (offset, itemID) in batch.enumerated() {
+                    bindText(stmt, Int32(offset + 1), itemID)
+                }
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    guard let itemID = columnText(stmt, 0),
+                          let record = records[itemID],
+                          let fieldRaw = columnText(stmt, 1),
+                          let sourceRaw = columnText(stmt, 2),
+                          !sourceRaw.isEmpty,
+                          let valueJSON = columnText(stmt, 3) else { continue }
+                    let field = MetadataField(rawValue: fieldRaw)
+                    var provenance = provenanceByItem[itemID] ?? MetadataProvenance()
+                    guard provenance[field] == nil,
+                          ShareCatalogReadProjection.metadataValueMatches(
+                              field: field,
+                              valueJSON: valueJSON,
+                              record: record
+                          ) else { continue }
+                    provenance[field] = MetadataAttribution(
+                        source: MetadataSource(rawValue: sourceRaw),
+                        sourceURL: columnText(stmt, 4).flatMap(URL.init(string:))
+                    )
+                    provenanceByItem[itemID] = provenance
+                }
             }
-            while sqlite3_step(stmt) == SQLITE_ROW {
-                guard let itemID = columnText(stmt, 0),
-                      let record = records[itemID],
-                      let fieldRaw = columnText(stmt, 1),
-                      let sourceRaw = columnText(stmt, 2),
-                      !sourceRaw.isEmpty,
-                      let valueJSON = columnText(stmt, 3) else { continue }
-                let field = MetadataField(rawValue: fieldRaw)
-                var provenance = provenanceByItem[itemID] ?? MetadataProvenance()
-                guard provenance[field] == nil,
-                      ShareCatalogReadProjection.metadataValueMatches(
-                          field: field,
-                          valueJSON: valueJSON,
-                          record: record
-                      ) else { continue }
-                provenance[field] = MetadataAttribution(
-                    source: MetadataSource(rawValue: sourceRaw),
-                    sourceURL: columnText(stmt, 4).flatMap(URL.init(string:))
-                )
-                provenanceByItem[itemID] = provenance
-            }
+            sqlite3_finalize(stmt)
         }
-        sqlite3_finalize(stmt)
 
         return records.reduce(into: [:]) { result, entry in
             let (itemID, record) = entry
@@ -1248,14 +1540,10 @@ struct CatalogReadQueries {
         return hydratedEnrichmentRecords([itemID: record])[itemID]
     }
 
-    /// Overlay persisted enrichment onto a freshly-built item. Movies/series use
-    /// their own id; episodes/seasons inherit their series' art + ids (so an
-    /// episode card shows the show art and carries the ids merge needs).
-    private func withEnrichment(_ item: MediaItem) -> MediaItem {
-        withEnrichment([item]).first ?? item
-    }
-
-    private func enrichmentKey(for item: MediaItem) -> String? {
+    private func enrichmentKey(
+        for item: MediaItem,
+        movieRepresentativeIDs: [String: String]? = nil
+    ) -> String? {
         switch item.kind {
         case .series:
             return item.id
@@ -1264,7 +1552,7 @@ struct CatalogReadQueries {
             // group's REPRESENTATIVE file id (`f:<MIN(rel_path)>`) — where the
             // per-file enrichment pass already wrote art/ids — so resolve to that.
             // A legacy un-grouped `f:` movie id is its own enrichment key.
-            return movieEnrichmentKey(forID: item.id)
+            return movieRepresentativeIDs?[item.id] ?? movieEnrichmentKey(forID: item.id)
         case .season, .episode:
             return item.seriesID
         default:
@@ -1272,34 +1560,42 @@ struct CatalogReadQueries {
         }
     }
 
-    private func withEnrichment(_ items: [MediaItem]) -> [MediaItem] {
-        let keyed = items.map { item in (item, enrichmentKey(for: item)) }
+    private func withEnrichment(
+        _ items: [MediaItem],
+        movieRepresentativeIDs: [String: String]? = nil
+    ) -> [MediaItem] {
+        let keyed = items.map {
+            ($0, enrichmentKey(for: $0, movieRepresentativeIDs: movieRepresentativeIDs))
+        }
         let itemIDs = Array(Set(keyed.compactMap { $0.1 })).sorted()
         guard !itemIDs.isEmpty else { return withLocalOverlay(items) }
-        let placeholders = Array(repeating: "?", count: itemIDs.count).joined(separator: ",")
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, """
-        SELECT item_id, provider_ids_json, overview, genres_json, runtime,
-               poster_url, backdrop_url, logo_url, title, \(castColumn)
-        FROM enrichment WHERE item_id IN (\(placeholders));
-        """, -1, &stmt, nil) == SQLITE_OK else { return withLocalOverlay(items) }
-        for (offset, itemID) in itemIDs.enumerated() {
-            bindText(stmt, Int32(offset + 1), itemID)
-        }
         var records: [String: EnrichmentRecord] = [:]
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            guard let itemID = columnText(stmt, 0),
-                  let record = ShareCatalogReadProjection.enrichmentRecord(fromColumns: stmt, startingAt: 1) else {
-                continue
+        forEachQueryBatch(itemIDs) { batch in
+            let placeholders = Array(repeating: "?", count: batch.count).joined(separator: ",")
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, """
+            SELECT item_id, provider_ids_json, overview, genres_json, runtime,
+                   poster_url, backdrop_url, logo_url, title, \(castColumn)
+            FROM enrichment WHERE item_id IN (\(placeholders));
+            """, -1, &stmt, nil) == SQLITE_OK else { return }
+            for (offset, itemID) in batch.enumerated() {
+                bindText(stmt, Int32(offset + 1), itemID)
             }
-            records[itemID] = record
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                guard let itemID = columnText(stmt, 0),
+                      let record = ShareCatalogReadProjection.enrichmentRecord(
+                          fromColumns: stmt,
+                          startingAt: 1
+                      ) else { continue }
+                records[itemID] = record
+            }
+            sqlite3_finalize(stmt)
         }
-        sqlite3_finalize(stmt)
         let hydrated = hydratedEnrichmentRecords(records)
         return withLocalOverlay(keyed.map { item, itemID in
             guard let itemID, let record = hydrated[itemID] else { return item }
             return ShareCatalogReadProjection.applyEnrichment(item, record)
-        })
+        }, artworkKeys: movieRepresentativeIDs)
     }
 
     /// Overlays persisted LOCAL (`localNFO`/`filename`) metadata onto items —
@@ -1355,19 +1651,23 @@ struct CatalogReadQueries {
             return keys
         })).sorted()
         guard !keys.isEmpty else { return items }
-        let placeholders = Array(repeating: "?", count: keys.count).joined(separator: ",")
         var selections: [String: [ArtworkSelection]] = [:]
-        query("""
-        SELECT item_id,value_json FROM metadata_values
-        WHERE source='localArtwork' AND field LIKE 'artwork.%' AND item_id IN (\(placeholders))
-        ORDER BY item_id,field;
-        """, bind: { statement in
-            for (offset, key) in keys.enumerated() { self.bindText(statement, Int32(offset + 1), key) }
-        }) { statement in
-            guard let itemID = self.columnText(statement, 0),
-                  let json = self.columnText(statement, 1),
-                  let selection = CatalogJSON.decode(ArtworkSelection.self, json) else { return }
-            selections[itemID, default: []].append(selection)
+        forEachQueryBatch(keys) { batch in
+            let placeholders = Array(repeating: "?", count: batch.count).joined(separator: ",")
+            query("""
+            SELECT item_id,value_json FROM metadata_values
+            WHERE source='localArtwork' AND field LIKE 'artwork.%' AND item_id IN (\(placeholders))
+            ORDER BY item_id,field;
+            """, bind: { statement in
+                for (offset, key) in batch.enumerated() {
+                    self.bindText(statement, Int32(offset + 1), key)
+                }
+            }) { statement in
+                guard let itemID = self.columnText(statement, 0),
+                      let json = self.columnText(statement, 1),
+                      let selection = CatalogJSON.decode(ArtworkSelection.self, json) else { return }
+                selections[itemID, default: []].append(selection)
+            }
         }
         return keyed.map { item, key in
             var values = key.flatMap { selections[$0] } ?? []
@@ -1429,26 +1729,33 @@ struct CatalogReadQueries {
 
     private func localMetadataRows(itemIDs: [String]) -> [String: [MetadataField: ShareCatalogReadProjection.LocalFieldRow]] {
         guard !itemIDs.isEmpty, db != nil else { return [:] }
-        let placeholders = Array(repeating: "?", count: itemIDs.count).joined(separator: ",")
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, """
-        SELECT item_id, field, source, value_json FROM metadata_values
-        WHERE item_id IN (\(placeholders)) AND source IN ('localNFO','filename')
-        ORDER BY item_id, field, CASE WHEN source='localNFO' THEN 0 ELSE 1 END;
-        """, -1, &stmt, nil) == SQLITE_OK else { return [:] }
-        defer { sqlite3_finalize(stmt) }
-        for (offset, itemID) in itemIDs.enumerated() { bindText(stmt, Int32(offset + 1), itemID) }
         var out: [String: [MetadataField: ShareCatalogReadProjection.LocalFieldRow]] = [:]
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            guard let itemID = columnText(stmt, 0),
-                  let fieldRaw = columnText(stmt, 1),
-                  let sourceRaw = columnText(stmt, 2),
-                  let valueJSON = columnText(stmt, 3) else { continue }
-            let field = MetadataField(rawValue: fieldRaw)
-            var perItem = out[itemID] ?? [:]
-            guard perItem[field] == nil else { continue } // First row per field wins (localNFO ordered first).
-            perItem[field] = ShareCatalogReadProjection.LocalFieldRow(source: MetadataSource(rawValue: sourceRaw), valueJSON: valueJSON)
-            out[itemID] = perItem
+        forEachQueryBatch(itemIDs) { batch in
+            let placeholders = Array(repeating: "?", count: batch.count).joined(separator: ",")
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, """
+            SELECT item_id, field, source, value_json FROM metadata_values
+            WHERE item_id IN (\(placeholders)) AND source IN ('localNFO','filename')
+            ORDER BY item_id, field, CASE WHEN source='localNFO' THEN 0 ELSE 1 END;
+            """, -1, &stmt, nil) == SQLITE_OK else { return }
+            for (offset, itemID) in batch.enumerated() {
+                bindText(stmt, Int32(offset + 1), itemID)
+            }
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                guard let itemID = columnText(stmt, 0),
+                      let fieldRaw = columnText(stmt, 1),
+                      let sourceRaw = columnText(stmt, 2),
+                      let valueJSON = columnText(stmt, 3) else { continue }
+                let field = MetadataField(rawValue: fieldRaw)
+                var perItem = out[itemID] ?? [:]
+                guard perItem[field] == nil else { continue }
+                perItem[field] = ShareCatalogReadProjection.LocalFieldRow(
+                    source: MetadataSource(rawValue: sourceRaw),
+                    valueJSON: valueJSON
+                )
+                out[itemID] = perItem
+            }
+            sqlite3_finalize(stmt)
         }
         return out
     }
@@ -1502,6 +1809,22 @@ struct CatalogReadQueries {
         defer { sqlite3_finalize(stmt) }
         bindText(stmt, 1, library.rawValue)
         return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
+    }
+
+    private func forEachQueryBatch<Value>(
+        _ values: [Value],
+        _ body: (ArraySlice<Value>) -> Void
+    ) {
+        var start = values.startIndex
+        while start < values.endIndex {
+            let end = values.index(
+                start,
+                offsetBy: Self.browseHydrationBatchSize,
+                limitedBy: values.endIndex
+            ) ?? values.endIndex
+            body(values[start..<end])
+            start = end
+        }
     }
 
     // MARK: - Small SQLite helpers

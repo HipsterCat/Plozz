@@ -426,9 +426,12 @@ private struct PlozziOSLibraryItemCell: View {
     private var card: some View {
         Group {
             if let item = slot?.item, item.kind == .folder {
-                MediaFolderCardLabel(title: item.title)
+                MediaFolderCardLabel(item: item)
             } else {
-                PlozziOSPosterCard(item: slot?.item)
+                PlozziOSPosterCard(
+                    item: slot?.item,
+                    reservesSubtitleSpace: true
+                )
             }
         }
     }

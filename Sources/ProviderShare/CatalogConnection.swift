@@ -205,6 +205,10 @@ final class CatalogConnection {
         ON assets(COALESCE(movie_group_key, movie_key));
         """)
         apply("""
+        CREATE INDEX IF NOT EXISTS idx_assets_movie_parent
+        ON assets(library,kind,substr(rel_path,1,length(rel_path)-length(basename)-1));
+        """)
+        apply("""
         CREATE TABLE IF NOT EXISTS movie_alias(
             alias_id  TEXT PRIMARY KEY,
             group_key TEXT NOT NULL
@@ -379,7 +383,13 @@ final class CatalogConnection {
         );
         """)
         apply("CREATE INDEX IF NOT EXISTS idx_playable_inventory_parent ON playable_inventory(parent_dir);")
-        apply("CREATE INDEX IF NOT EXISTS idx_playable_inventory_scan ON playable_inventory(last_scan);")
+        // Folder safety checks need both keys; scan-only lookup rereads the
+        // entire inventory for every folder in a browse listing.
+        apply("""
+        CREATE INDEX IF NOT EXISTS idx_playable_inventory_scan_path
+        ON playable_inventory(last_scan,rel_path);
+        """)
+        apply("DROP INDEX IF EXISTS idx_playable_inventory_scan;")
         apply("PRAGMA user_version=4;")
         // One-shot repair: `attempts` was inflated by a bug, not by real background
         // retries. The fast-track path (an item the user opened) intentionally

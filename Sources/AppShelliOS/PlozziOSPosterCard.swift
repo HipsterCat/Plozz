@@ -13,6 +13,8 @@ struct PlozziOSPosterCard: View {
     /// callers that show already-watched or non-episode content stay unchanged;
     /// surfaces that can show unwatched episodes pass the profile's real settings.
     var spoilerSettings: SpoilerSettings = .default
+    /// Keeps grid rows aligned when neighboring cards have no metadata subtitle.
+    var reservesSubtitleSpace: Bool = false
     /// Draws the resume chip (play glyph + progress + time remaining) over the
     /// artwork, with an optional download badge — the same treatment tvOS uses.
     var showsResumeChip: Bool = false
@@ -30,7 +32,7 @@ struct PlozziOSPosterCard: View {
             style: style,
             spoilerSettings: spoilerSettings,
             showsSeriesArtwork: showsSeriesArtwork,
-            reservesSubtitleSpace: false,
+            reservesSubtitleSpace: reservesSubtitleSpace,
             statusCue: statusCue,
             showsResumeChip: showsResumeChip,
             downloadState: downloadState,

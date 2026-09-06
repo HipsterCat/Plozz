@@ -166,6 +166,7 @@ public struct LibraryBrowseView: View {
         .safeAreaInset(edge: .bottom) {
             if viewModel.state.value == nil, let library = viewModel.fileBrowserLibrary {
                 LibraryFileBrowseButton(library: library, onSelect: onSelect)
+                    .plozzActionButton()
                     .padding()
             }
         }
@@ -351,7 +352,6 @@ private struct LibraryFileBrowseButton: View {
             }
             onSelect(root)
         }
-        .plozzActionButton()
     }
 }
 
@@ -385,12 +385,9 @@ private struct LibraryGridCell: View {
         Group {
             if let item = slot?.item {
                 if item.kind == .folder {
-                    Button {
+                    MediaFolderCardLabel(item: item) {
                         onSelect(item)
-                    } label: {
-                        MediaFolderCardLabel(title: item.title, usesFocusSurface: true)
                     }
-                    .buttonStyle(SettingsCardButtonStyle())
                 } else {
                     PosterCardView(
                         item: item,

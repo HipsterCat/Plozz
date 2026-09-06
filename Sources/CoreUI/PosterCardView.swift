@@ -663,12 +663,7 @@ public struct PosterCardView: View {
     @ViewBuilder
     private var artwork: some View {
         if PosterCardPresentation.usesFolderArtwork(for: item.kind) {
-            FolderPlaceholderArtwork(
-                foreground: titleColor,
-                background: titleColor.opacity(0.08),
-                isFocused: isFocused,
-                iconSize: PosterCardPresentation.folderIconSize(for: style)
-            )
+            folderArtwork
         } else if showsSeriesArtwork {
             seriesArtwork
         } else if showsSpoilerSafePoster {
@@ -694,6 +689,32 @@ public struct PosterCardView: View {
         } else {
             realArtwork
         }
+    }
+
+    @ViewBuilder
+    private var folderArtwork: some View {
+        if artworkReferences.isEmpty {
+            folderPlaceholderArtwork
+        } else {
+            realArtwork
+                .overlay(alignment: .topTrailing) {
+                    FolderNavigationBadge(size: metrics.watchedBadgeSize)
+                        .padding(folderBadgeInset)
+                }
+        }
+    }
+
+    private var folderPlaceholderArtwork: some View {
+        FolderPlaceholderArtwork(
+            foreground: titleColor,
+            background: titleColor.opacity(0.08),
+            isFocused: isFocused,
+            iconSize: PosterCardPresentation.folderIconSize(for: style)
+        )
+    }
+
+    private var folderBadgeInset: CGFloat {
+        cardStyle == .borderless ? borderlessBadgeInset : 8
     }
 
     private var realArtwork: some View {
@@ -1331,6 +1352,27 @@ private struct FolderPlaceholderArtwork: View {
                     )
                 )
         }
+    }
+}
+
+/// Small navigation cue over recognized folder artwork. Its geometry mirrors the
+/// existing watched badge, but keeps a neutral scrim so it cannot be mistaken for
+/// playback state.
+private struct FolderNavigationBadge: View {
+    let size: CGFloat
+
+    var body: some View {
+        Image(systemName: "folder.fill")
+            .font(.system(size: size * 0.48, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(.black.opacity(0.72), in: Circle())
+            .overlay {
+                Circle()
+                    .strokeBorder(.white.opacity(0.4), lineWidth: max(1.5, size * 0.04))
+            }
+            .shadow(color: .black.opacity(0.4), radius: size * 0.08, y: size * 0.026)
+            .accessibilityHidden(true)
     }
 }
 

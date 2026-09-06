@@ -6,9 +6,9 @@ import CoreModels
 ///
 /// The live browser owns hierarchy and availability. This helper resolves files
 /// and adds logical catalog entities only when persisted path evidence proves a
-/// one-to-one identity. Promoted physical folders remain in the result so newly
-/// added descendants never become unreachable. Queries are batched and bounded;
-/// no network work occurs here.
+/// one-to-one identity. Unproven folders keep their navigation and may borrow
+/// artwork from structurally matching catalog content. Queries are batched and
+/// bounded; no network work occurs here.
 struct ShareCatalogBrowseProjection {
     private struct AssetRow {
         var relPath: String
@@ -55,7 +55,7 @@ struct ShareCatalogBrowseProjection {
 
     func project(
         _ items: [MediaItem],
-        resolve: (String) -> MediaItem?
+        resolve: ([String]) -> [String: MediaItem]
     ) -> [MediaItem] {
         guard !items.isEmpty else { return [] }
 
@@ -70,8 +70,7 @@ struct ShareCatalogBrowseProjection {
         var possibleSeasons: [SeasonCandidate] = []
 
         for folderPath in folderPaths {
-            guard completedFolders.contains(folderPath),
-                  let evidence = folderEvidence[folderPath],
+            guard let evidence = folderEvidence[folderPath],
                   evidence.assetCount > 0
             else { continue }
 
@@ -113,26 +112,31 @@ struct ShareCatalogBrowseProjection {
             )
         }
 
+        let targets: [String?] = items.map { live in
+            if let path = Self.folderPath(live) {
+                return folderTargets[path]
+            } else if let path = Self.filePath(live), let row = exactFiles[path] {
+                if row.kind == .movie, let group = row.groupKey {
+                    return ShareCatalogID.movie(group)
+                } else {
+                    return ShareCatalogID.file(path)
+                }
+            } else {
+                return nil
+            }
+        }
+        let catalogItems = resolve(unique(targets.compactMap { $0 }))
         var result: [MediaItem] = []
         result.reserveCapacity(items.count)
         var emittedCatalogIDs = Set<String>()
 
-        for live in items {
-            let targetID: String?
-            if let path = Self.folderPath(live) {
-                targetID = folderTargets[path]
-            } else if let path = Self.filePath(live), let row = exactFiles[path] {
-                if row.kind == .movie, let group = row.groupKey {
-                    targetID = ShareCatalogID.movie(group)
-                } else {
-                    targetID = ShareCatalogID.file(path)
-                }
-            } else {
-                targetID = nil
-            }
-
-            guard let targetID, let catalogItem = resolve(targetID) else {
+        for (live, targetID) in zip(items, targets) {
+            guard let targetID, let catalogItem = catalogItems[targetID] else {
                 result.append(live)
+                continue
+            }
+            if let folderPath = Self.folderPath(live), !completedFolders.contains(folderPath) {
+                result.append(Self.decoratingFolder(live, with: catalogItem))
                 continue
             }
             guard emittedCatalogIDs.insert(catalogItem.id).inserted else { continue }
@@ -532,6 +536,26 @@ struct ShareCatalogBrowseProjection {
         item.selectedVersionID = live.selectedVersionID
         item.selectedSourceAccountID = live.selectedSourceAccountID
         item.explicitSourceSelection = live.explicitSourceSelection
+        return item
+    }
+
+    /// Appearance is not proof of complete contents. Keep the raw folder identity
+    /// and action so pending scans and unclassified extras stay fully browsable.
+    private static func decoratingFolder(_ live: MediaItem, with catalog: MediaItem) -> MediaItem {
+        let posterReferences = catalog.artworkReferences(
+            for: catalog.kind == .season ? .seasonPoster : .poster
+        )
+        guard !posterReferences.isEmpty else { return live }
+        var item = live
+        item.posterURL = live.posterURL ?? catalog.posterURL
+        item.backdropURL = live.backdropURL ?? catalog.backdropURL
+        item.fallbackArtworkURL = live.fallbackArtworkURL ?? catalog.fallbackArtworkURL
+        item.productionYear = live.productionYear ?? catalog.productionYear
+        if item.artworkSelections.isEmpty {
+            item.artworkSelections = catalog.artworkSelections.filter { $0.placement != .poster }
+            item.artworkSelections.append(.init(placement: .poster, references: posterReferences))
+        }
+        item.artworkSourceAccountIDsByURL.merge(catalog.artworkSourceAccountIDsByURL) { live, _ in live }
         return item
     }
 

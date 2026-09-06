@@ -1,5 +1,6 @@
 import XCTest
 import CoreModels
+import SQLite3
 @testable import ProviderShare
 
 final class ShareCatalogBrowseProjectionTests: XCTestCase {
@@ -433,6 +434,182 @@ final class ShareCatalogBrowseProjectionTests: XCTestCase {
         XCTAssertEqual(projected.first?.kind, .folder)
     }
 
+    func testRecognizedMovieKeepsPosterAndFolderNavigationDuringRescan() async throws {
+        let store = ShareCatalogStore(accountKey: "rescan-poster", directory: try catalogDirectory())
+        let root = "Movies/Arrival (2016)"
+        let path = "\(root)/Arrival.2016.mkv"
+        await store.upsert([movie(path, title: "Arrival", year: 2016)], scanID: 1)
+        var metadata = EnrichmentRecord()
+        metadata.posterURL = URL(string: "https://example.com/arrival.jpg")
+        let saved = await store.saveEnrichment(itemID: ShareCatalogID.file(path), metadata, version: 18)
+        XCTAssertTrue(saved)
+        await completeScan(store, directories: [root])
+        let completed = await store.browseItems([folder(root)])
+        XCTAssertEqual(completed.first?.kind, .movie)
+
+        await store.invalidateCompletedDirectoryState()
+        var live = folder(root)
+        live.sourceAccountID = "local-share"
+        live.isFavorite = true
+        let duringScanItems = await store.browseItems([live])
+        let duringScan = try XCTUnwrap(duringScanItems.first)
+        XCTAssertEqual(duringScan.id, live.id)
+        XCTAssertEqual(duringScan.kind, .folder)
+        XCTAssertEqual(duringScan.title, live.title)
+        XCTAssertEqual(duringScan.sourceAccountID, live.sourceAccountID)
+        XCTAssertTrue(duringScan.isFavorite)
+        XCTAssertEqual(duringScan.posterURL, metadata.posterURL)
+        XCTAssertEqual(duringScan.productionYear, 2016)
+        XCTAssertTrue(duringScan.providerIDs.isEmpty, "a decorated folder must not acquire a movie identity")
+    }
+
+    func testRecognizedShowWithUnclassifiedContentKeepsPosterWithoutHidingFiles() async throws {
+        let store = ShareCatalogStore(accountKey: "extra-poster", directory: try catalogDirectory())
+        let root = "TV Shows/Animanimals"
+        let path = "\(root)/Season 01/E01.mkv"
+        await store.upsert([
+            episode(path, series: "Animanimals", season: 1, number: 1, metadataRoot: root)
+        ], scanID: 1)
+        var metadata = EnrichmentRecord()
+        metadata.posterURL = URL(string: "https://example.com/animanimals.jpg")
+        let saved = await store.saveEnrichment(
+            itemID: ShareCatalogID.series("animanimals"), metadata, version: 18
+        )
+        XCTAssertTrue(saved)
+        let inventorySaved = await store.upsertPlayablePaths(
+            [path, "\(root)/unclassified.mp4"], scanID: 1
+        )
+        XCTAssertTrue(inventorySaved)
+        await completeScan(store, directories: ["TV Shows", root])
+
+        let projected = await store.browseItems([folder("TV Shows"), folder(root)])
+        XCTAssertEqual(projected[0], folder("TV Shows"), "a library must not inherit one show's poster")
+        XCTAssertEqual(projected[1].id, "d:\(root)")
+        XCTAssertEqual(projected[1].kind, .folder)
+        XCTAssertEqual(projected[1].posterURL, metadata.posterURL)
+    }
+
+    func testUnpromotedSeasonRetainsExplicitArtworkAndItsSource() async throws {
+        let fixture = ShareCatalogSQLiteFixture()
+        defer { fixture.cleanup() }
+        let store = fixture.makeStore()
+        let root = "TV Shows/Animanimals/Season 01"
+        await store.upsert([
+            episode("\(root)/E01.mkv", series: "Animanimals", season: 1,
+                    number: 1, metadataRoot: "TV Shows/Animanimals")
+        ], scanID: 1)
+        let url = try XCTUnwrap(URL(string: "https://example.com/season.jpg"))
+        var season = MediaItem(
+            id: ShareCatalogID.season("animanimals", 1), title: "Season 1", kind: .season,
+            artworkSelections: [.init(placement: .seasonPoster, references: [.remote(url)])]
+        )
+        season.recordArtworkSource(accountID: "art-owner", for: [url])
+        let connection = CatalogConnection(url: fixture.catalogURL)
+        XCTAssertTrue(connection.ensureOpen(legacyMetadataMigration: { _ in true }))
+
+        let projected = ShareCatalogBrowseProjection(connection: connection)
+            .project([folder(root)], resolve: { ids in
+                Dictionary(uniqueKeysWithValues: ids.map { ($0, season) })
+            })
+        let decorated = try XCTUnwrap(projected.first)
+        XCTAssertEqual(decorated.id, "d:\(root)")
+        XCTAssertEqual(decorated.kind, .folder)
+        XCTAssertEqual(decorated.artworkReferences(for: .poster), [.remote(url)])
+        XCTAssertEqual(decorated.artworkSourceAccountID(for: url), "art-owner")
+    }
+
+    func testProjectionHydratesEachLogicalTargetOnceInOneBatch() async throws {
+        let fixture = ShareCatalogSQLiteFixture()
+        defer { fixture.cleanup() }
+        let store = fixture.makeStore()
+        let paths = ["Movies/Dune (2021)/Dune.1080p.mkv", "Movies/Dune (2021)/Dune.2160p.mkv"]
+        await store.upsert(paths.map { movie($0, title: "Dune", year: 2021) }, scanID: 1)
+        let connection = CatalogConnection(url: fixture.catalogURL)
+        XCTAssertTrue(connection.ensureOpen(legacyMetadataMigration: { _ in true }))
+        var requests: [[String]] = []
+        let target = ShareCatalogID.movie("dune-2021")
+        let projected = ShareCatalogBrowseProjection(connection: connection).project(
+            paths.map(file), resolve: { ids in
+                requests.append(ids)
+                return [target: MediaItem(id: target, title: "Dune", kind: .movie)]
+            }
+        )
+        XCTAssertEqual(requests, [[target]])
+        XCTAssertEqual(projected.map(\.id), [target])
+    }
+
+    func testFolderSafetyProofUsesBoundedInventoryLookupsInLargeCatalog() async throws {
+        let fixture = ShareCatalogSQLiteFixture()
+        defer { fixture.cleanup() }
+        let store = fixture.makeStore()
+        _ = await store.movieCount()
+        try fixture.execute("""
+        WITH RECURSIVE numbers(i) AS (
+          SELECT 0 UNION ALL SELECT i+1 FROM numbers WHERE i<14999
+        )
+        INSERT INTO assets(rel_path,basename,size,modified_at,first_seen_at,last_scan,
+                           kind,library,title,sort_title,year,movie_key,movie_title_key)
+        SELECT 'Movies/Film '||i||' (2020)/film.mkv','film.mkv',1000,0,0,1,
+               'movie','movies','Film '||i,'Film '||i,2020,'film-'||i||'-2020','film-'||i
+        FROM numbers;
+        INSERT INTO playable_inventory(rel_path,parent_dir,last_scan)
+        SELECT rel_path,substr(rel_path,1,length(rel_path)-length(basename)-1),last_scan FROM assets;
+        INSERT INTO dir_state(rel_path,modified_at,last_scan)
+        SELECT parent_dir,0,1 FROM playable_inventory;
+        """)
+        let inventoryComplete = await store.finalizePlayableInventory(inScan: 1)
+        XCTAssertTrue(inventoryComplete)
+        await store.markDirectoryStateComplete(scanID: 1)
+        try fixture.execute("""
+        CREATE INDEX IF NOT EXISTS idx_playable_inventory_scan ON playable_inventory(last_scan);
+        DROP INDEX IF EXISTS idx_playable_inventory_scan_path;
+        """)
+
+        let connection = CatalogConnection(url: fixture.catalogURL)
+        XCTAssertTrue(connection.ensureOpen(legacyMetadataMigration: { _ in true }))
+        XCTAssertEqual(try fixture.integer(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name='idx_playable_inventory_scan';"
+        ), 0, "opening an existing catalog must replace its scan-only index")
+        let db = try XCTUnwrap(connection.db)
+        let work = BrowseSQLWork()
+        sqlite3_trace_v2(db, UInt32(SQLITE_TRACE_PROFILE), { _, context, statement, _ in
+            guard let context, let statement else { return 0 }
+            let work = Unmanaged<BrowseSQLWork>.fromOpaque(context).takeUnretainedValue()
+            work.steps += Int(sqlite3_stmt_status(OpaquePointer(statement), SQLITE_STMTSTATUS_VM_STEP, 0))
+            return 0
+        }, Unmanaged.passUnretained(work).toOpaque())
+        defer { sqlite3_trace_v2(db, 0, nil, nil) }
+        let projected = ShareCatalogBrowseProjection(connection: connection).project(
+            (0..<150).map { folder("Movies/Film \($0) (2020)") },
+            resolve: { ids in
+                Dictionary(uniqueKeysWithValues: ids.map {
+                    ($0, MediaItem(id: $0, title: $0, kind: .movie))
+                })
+            }
+        )
+        XCTAssertEqual(projected.count, 150)
+        XCTAssertTrue(projected.allSatisfy { $0.kind == .movie })
+        XCTAssertLessThan(work.steps, 200_000, "each folder must not rescan the entire playable inventory")
+    }
+
+    func testMovieSidecarLookupUsesExactParentIncludingRootAndSpecialCharacters() async throws {
+        let store = ShareCatalogStore(accountKey: "movie-parent", directory: try catalogDirectory())
+        let root = "Movies/100%_Director's Cut (2020)"
+        let direct = "\(root)/film.mkv"
+        await store.upsert([
+            movie(direct, title: "Director's Cut", year: 2020),
+            movie("\(root)/Nested/Other (2021).mkv", title: "Other", year: 2021),
+            movie("Movies/100XADirector's Cut (2020)/Different.mkv", title: "Different", year: 2020),
+            movie("Root Film (2001).mkv", title: "Root Film", year: 2001),
+        ], scanID: 1)
+        let directRepresentative = await store.unambiguousMovieGroupRepresentative(inDirectory: root)
+        let rootRepresentative = await store.unambiguousMovieGroupRepresentative(inDirectory: "")
+        let absentRepresentative = await store.unambiguousMovieGroupRepresentative(inDirectory: "Absent")
+        XCTAssertEqual(directRepresentative, direct)
+        XCTAssertEqual(rootRepresentative, "Root Film (2001).mkv")
+        XCTAssertNil(absentRepresentative)
+    }
+
     func testCompletedScanWithUnclassifiedPlayableDescendantDoesNotPromoteFolder() async throws {
         let store = ShareCatalogStore(accountKey: "excluded-playable", directory: try catalogDirectory())
         let showRoot = "TV Shows/Animanimals"
@@ -457,6 +634,10 @@ final class ShareCatalogBrowseProjectionTests: XCTestCase {
         let projected = await store.browseItems([folder(showRoot)])
 
         XCTAssertEqual(projected, [folder(showRoot)])
+    }
+
+    private final class BrowseSQLWork {
+        var steps = 0
     }
 
     func testFolderPromotionKeepsIndependentlyOwnedCollectionsReachable() async throws {

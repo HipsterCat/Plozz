@@ -1682,7 +1682,11 @@ actor ShareCatalogStore {
         ensureOpen()
         guard db != nil else { return nil }
         var repsByGroup: [String: String] = [:]
-        query("SELECT rel_path, movie_key, movie_group_key FROM assets WHERE library='movies' AND kind='movie';") { stmt in
+        query("""
+        SELECT rel_path, movie_key, movie_group_key FROM assets
+        WHERE library='movies' AND kind='movie'
+          AND substr(rel_path,1,length(rel_path)-length(basename)-1)=?;
+        """, bind: { self.bindText($0, 1, dir) }) { stmt in
             guard let relPath = self.columnText(stmt, 0),
                   (relPath as NSString).deletingLastPathComponent == dir else { return }
             let key = self.columnText(stmt, 2) ?? self.columnText(stmt, 1) ?? relPath
@@ -2554,7 +2558,7 @@ actor ShareCatalogStore {
         ensureOpen()
         return ShareCatalogBrowseProjection(connection: connection).project(
             items,
-            resolve: { readQueries.item(id: $0) }
+            resolve: { readQueries.browseItems(ids: $0) }
         )
     }
 
