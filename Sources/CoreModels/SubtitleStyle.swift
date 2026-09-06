@@ -159,15 +159,30 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
 
     // MARK: Size & placement
 
+    /// Stored values describe the drawing anchor; labels describe where extra
+    /// lines grow, so a bottom anchor is presented as "Above".
     public enum VerticalAnchor: String, Codable, Sendable, Equatable, CaseIterable {
-        case automatic, top, center, bottom
+        case bottom, center, top
 
         public var displayName: LocalizedStringResource {
             switch self {
-            case .automatic: "Auto"
-            case .top: "Top"
+            case .bottom: "Above"
             case .center: "Center"
-            case .bottom: "Bottom"
+            case .top: "Below"
+            }
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            let value = try container.decode(String.self)
+            if value == "automatic" {
+                self = .bottom
+            } else if let anchor = Self(rawValue: value) {
+                self = anchor
+            } else {
+                throw DecodingError.dataCorruptedError(
+                    in: container, debugDescription: "Unknown subtitle vertical anchor: \(value)"
+                )
             }
         }
     }
@@ -181,7 +196,7 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
     /// Multiplier on the base caption size (1.0 == default).
     public var fontScale: Double
     /// Vertical position measured upward from the screen bottom. The chosen
-    /// anchor stays fixed as lines change; Auto interpolates across available travel.
+    /// anchor stays fixed as lines change.
     /// `0` aligns the block's bottom with the screen bottom, `1` aligns its top.
     /// Negative values deliberately move the block past the bottom edge.
     public var verticalPosition: Double

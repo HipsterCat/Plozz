@@ -83,7 +83,6 @@ private struct SubtitlePositionLayout: Layout {
 
     private var anchorFraction: CGFloat {
         switch verticalAnchor {
-        case .automatic: min(max(1 - verticalPosition, 0), 1)
         case .top: 0
         case .center: 0.5
         case .bottom: 1
@@ -113,9 +112,7 @@ private struct SubtitlePositionLayout: Layout {
         let height = heights.reduce(0, +) + spacing * CGFloat(last) - topInset - bottomInset
         let travel = bounds.height - height
         let origin: CGFloat
-        if verticalAnchor == .automatic {
-            origin = travel * (1 - verticalPosition)
-        } else if verticalPosition < 0 {
+        if verticalPosition < 0 {
             // Continue smoothly below 0% regardless of the selected anchor.
             origin = travel - bounds.height * verticalPosition
         } else {

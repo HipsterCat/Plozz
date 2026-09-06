@@ -1150,7 +1150,7 @@ private struct PlozziOSSubtitleAppearanceView: View {
                     }
                 )
                 Picker(
-                    "Vertical Anchor",
+                    "Extra Line Position",
                     selection: subtitleStyleBinding(viewModel, \.verticalAnchor)
                 ) {
                     ForEach(SubtitleStyle.VerticalAnchor.allCases, id: \.self) { anchor in

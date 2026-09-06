@@ -90,8 +90,8 @@ presents them as a single library rather than a set of tabs you switch between.
   opacity, background, shadow, position, and HDR brightness from inside the
   player. Position adjusts in 0.5% steps from -5% to 100%, with consistent sizing
   across fonts. 0% aligns to the bottom edge, 100% to the top; negative values allow cropping.
-  Choose a vertical anchor (Auto, Top, Center, or Bottom) to control how extra lines
-  expand. Bottom is the default.
+  Extra Line Position (Above, Center, or Below) controls how additional lines
+  expand. Above is the default.
 - **Two subtitle tracks at once** — for learning a language, or for a household
   that doesn't share one.
 - **Mark as watched** — a whole season, or everything up to a given episode.

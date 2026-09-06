@@ -117,7 +117,6 @@ final class SubtitleLineRenderingTests: XCTestCase {
                     var style = SubtitleStyle.default
                     style.fontFamily = family
                     style.verticalPosition = position
-                    style.verticalAnchor = .automatic
                     style.secondary = placement.map { .init(placement: $0) }
                     let frames = dialogueFrames(
                         style: style, primary: "A subtitle gyp", secondary: "A subtitle gyp", screen: screen
@@ -125,10 +124,10 @@ final class SubtitleLineRenderingTests: XCTestCase {
                     XCTAssertEqual(frames.count, placement == nil ? 1 : 2)
                     let top = try XCTUnwrap(frames.map(\.minY).min())
                     let bottom = try XCTUnwrap(frames.map(\.maxY).max())
-                    // Each reserved lane uses the same interpolation, so unused
-                    // lane height cannot leave a gap at either physical edge.
                     let blockHeight = bottom - top
-                    XCTAssertEqual(top, (screen.height - blockHeight) * (1 - position), accuracy: 1,
+                    let requestedTop = screen.height * (1 - position) - blockHeight
+                    let expectedTop = position < 0 ? requestedTop : max(0, requestedTop)
+                    XCTAssertEqual(top, expectedTop, accuracy: 1,
                                    "\(family) position=\(position) dual=\(String(describing: placement))")
                 }
             }
@@ -157,7 +156,6 @@ final class SubtitleLineRenderingTests: XCTestCase {
                         case .top: return top
                         case .center: return (top + bottom) / 2
                         case .bottom: return bottom
-                        case .automatic: XCTFail("Expected a fixed anchor"); return 0
                         }
                     }
                     XCTAssertEqual(try anchorY(short), try anchorY(long), accuracy: 1, "\(family) \(anchor)")
@@ -177,8 +175,7 @@ final class SubtitleLineRenderingTests: XCTestCase {
                 style.verticalPosition = position
                 let frames = dialogueFrames(style: style, primary: "A subtitle.", secondary: "", screen: screen)
                 let frame = try XCTUnwrap(frames.first)
-                let distance = anchor == .automatic ? screen.height - frame.height : screen.height
-                XCTAssertEqual(frame.maxY, screen.height - distance * position, accuracy: 1)
+                XCTAssertEqual(frame.maxY, screen.height * (1 - position), accuracy: 1)
             }
         }
     }

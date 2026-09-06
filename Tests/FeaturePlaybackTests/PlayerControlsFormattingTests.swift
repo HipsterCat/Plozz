@@ -75,6 +75,24 @@ final class PlayerControlsFormattingTests: XCTestCase {
         }
     }
 
+    func testExtraLinePositionLabelsMatchGrowthDirection() {
+        XCTAssertEqual(SubtitleStyle.VerticalAnchor.allCases, [.bottom, .center, .top])
+        XCTAssertEqual(String(localized: SubtitleStyle.VerticalAnchor.bottom.displayName), "Above")
+        XCTAssertEqual(String(localized: SubtitleStyle.VerticalAnchor.center.displayName), "Center")
+        XCTAssertEqual(String(localized: SubtitleStyle.VerticalAnchor.top.displayName), "Below")
+    }
+
+    func testRetiredAutoChoiceBecomesAboveWithoutResettingOtherSettings() throws {
+        let legacy = Data(#"{"verticalAnchor":"automatic","fontFamily":"fredoka","verticalPosition":0.065}"#.utf8)
+        let style = try JSONDecoder().decode(SubtitleStyle.self, from: legacy)
+        XCTAssertEqual(style.verticalAnchor, .bottom)
+        XCTAssertEqual(style.fontFamily, .fredoka)
+        XCTAssertEqual(style.verticalPosition, 0.065)
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            SubtitleStyle.VerticalAnchor.self, from: Data(#""unknown""#.utf8)
+        ))
+    }
+
     func testEveryVerticalAnchorPersistsPerProfile() throws {
         let suite = "SubtitleAnchorRoundTripTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
