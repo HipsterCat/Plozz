@@ -18,6 +18,237 @@ final class ItemDetailViewModelTests: XCTestCase {
         MediaItem(id: id, title: "Episode \(number)", kind: .episode, episodeNumber: number, resumePosition: resume)
     }
 
+    func testExternalDetailResolvesOwnedMovieAndSeriesWithoutAnIndex() async {
+        for providerKind in [ProviderKind.plex, .jellyfin] {
+            for kind in [MediaItemKind.movie, .series] {
+                let ids = providerKind == .plex
+                    ? ["PlexGuid": "plex://\(kind == .series ? "show" : "movie")/global-id"]
+                    : ["Tmdb": "84958"]
+                let seed = MediaItem(
+                    id: "discover-global-id",
+                    title: "Loki",
+                    kind: kind,
+                    productionYear: 2021,
+                    providerIDs: ids,
+                    availability: .unknown,
+                    locallyValidatedPlayableSource: false,
+                    sourceAccountID: "account"
+                )
+                let owned = MediaItem(
+                    id: "12001",
+                    title: "Loki",
+                    kind: kind,
+                    overview: "Library overview",
+                    productionYear: 2021,
+                    providerIDs: ids
+                )
+                let provider = FakeMediaProvider(
+                    allItems: [owned],
+                    kind: providerKind,
+                    accountID: "account"
+                )
+                provider.childrenByParent = [owned.id: [season("season-1", "Season 1")]]
+                let ratings = CapturingDiscoveryRatingsProvider()
+                let vm = ItemDetailViewModel(
+                    provider: provider,
+                    itemID: seed.id,
+                    initialItem: seed,
+                    isDiscoveryItem: true,
+                    externalMetadataResolver: { _, region in
+                        XCTFail("An owned title must load its real library metadata")
+                        return ExternalTitleMetadata(
+                            enrichment: MetadataEnrichment(),
+                            availability: ExternalTitleAvailability(regionCode: region)
+                        )
+                    },
+                    ratingsProvider: ratings,
+                    sourceAccountID: "account",
+                    onlineTrailerResolver: { _ in [] },
+                    playableVideoIDResolver: { _ in nil },
+                    trailerCache: TrailerResolutionCache(),
+                    alternateProviderResolver: { $0 == "account" ? provider : nil },
+                    crossServerSourceResolver: { external in
+                        await CrossServerSourceResolver.resolve(
+                            primary: external,
+                            otherAccountIDs: ["account"],
+                            search: { _, _ in [owned] }
+                        )
+                    }
+                )
+
+                XCTAssertTrue(vm.isDiscoveryItem)
+                await vm.load()
+
+                XCTAssertFalse(vm.isDiscoveryItem, "\(providerKind) \(kind)")
+                XCTAssertEqual(vm.state.value?.item.id, owned.id)
+                XCTAssertEqual(vm.state.value?.item.sourceAccountID, "account")
+                XCTAssertEqual(vm.state.value?.item.overview, "Library overview")
+                XCTAssertEqual(vm.state.value?.item.ownershipPresentation().canPlay, true)
+                XCTAssertEqual(vm.state.value?.item.ratings.map(\.source), [.imdb])
+                XCTAssertEqual(ratings.seenItem?.id, owned.id)
+                XCTAssertEqual(provider.itemCallCount(for: seed.id), 0)
+                XCTAssertEqual(
+                    vm.state.value?.children.map(\.id),
+                    kind == .series ? ["season-1"] : []
+                )
+                XCTAssertTrue(provider.requestedPages.isEmpty, "No catalogue scan is required")
+                vm.suspendEnrichment()
+            }
+        }
+    }
+
+    func testExternalDetailWithoutMatchingLibraryCopyStaysUnplayable() async {
+        let seed = MediaItem(
+            id: "external",
+            title: "Loki",
+            kind: .series,
+            providerIDs: ["Tmdb": "84958"],
+            locallyValidatedPlayableSource: false
+        )
+        let wrongMovie = MediaItem(
+            id: "movie",
+            title: "Loki",
+            kind: .movie,
+            providerIDs: ["Tmdb": "84958"]
+        )
+        let provider = FakeMediaProvider(allItems: [wrongMovie])
+        let vm = ItemDetailViewModel(
+            provider: provider,
+            itemID: seed.id,
+            initialItem: seed,
+            isDiscoveryItem: true,
+            externalMetadataResolver: { _, region in
+                ExternalTitleMetadata(
+                    enrichment: MetadataEnrichment(
+                        overview: SourcedValue(value: "External overview", source: .tmdb)
+                    ),
+                    availability: ExternalTitleAvailability(regionCode: region)
+                )
+            },
+            onlineTrailerResolver: { _ in [] },
+            playableVideoIDResolver: { _ in nil },
+            trailerCache: TrailerResolutionCache(),
+            alternateProviderResolver: { _ in provider },
+            crossServerSourceResolver: { external in
+                await CrossServerSourceResolver.resolve(
+                    primary: external,
+                    otherAccountIDs: ["account"],
+                    search: { _, _ in [wrongMovie] }
+                )
+            }
+        )
+
+        await vm.load()
+
+        XCTAssertTrue(vm.isDiscoveryItem)
+        XCTAssertEqual(vm.state.value?.item.id, seed.id)
+        XCTAssertEqual(vm.state.value?.item.overview, "External overview")
+        XCTAssertEqual(vm.state.value?.item.ownershipPresentation().canPlay, false)
+        XCTAssertTrue(provider.itemCallCounts.isEmpty)
+    }
+
+    func testDiscoveryOwnershipProbeIgnoresInactiveAndWrongKindSources() async {
+        let seed = MediaItem(
+            id: "external",
+            title: "Loki",
+            kind: .series,
+            locallyValidatedPlayableSource: false
+        )
+        let provider = FakeMediaProvider(allItems: [])
+        let vm = ItemDetailViewModel(
+            provider: provider,
+            itemID: seed.id,
+            initialItem: seed,
+            isDiscoveryItem: true,
+            externalMetadataResolver: { _, region in
+                ExternalTitleMetadata(
+                    enrichment: MetadataEnrichment(),
+                    availability: ExternalTitleAvailability(regionCode: region)
+                )
+            },
+            onlineTrailerResolver: { _ in [] },
+            playableVideoIDResolver: { _ in nil },
+            trailerCache: TrailerResolutionCache(),
+            alternateProviderResolver: { $0 == "active" ? provider : nil },
+            crossServerSourceResolver: { _ in [
+                MediaSourceRef(accountID: "removed", itemID: "show", kind: .series),
+                MediaSourceRef(accountID: "active", itemID: "movie", kind: .movie)
+            ] }
+        )
+
+        await vm.load()
+
+        XCTAssertTrue(vm.isDiscoveryItem)
+        XCTAssertTrue(provider.itemCallCounts.isEmpty)
+        XCTAssertEqual(vm.state.value?.item.ownershipPresentation().canPlay, false)
+    }
+
+    func testCancelledDiscoveryProbeCannotPromoteTheDetail() async {
+        let seed = MediaItem(
+            id: "external",
+            title: "Loki",
+            kind: .series,
+            locallyValidatedPlayableSource: false
+        )
+        let provider = FakeMediaProvider(allItems: [])
+        let entered = AsyncGate()
+        let release = AsyncGate()
+        let vm = ItemDetailViewModel(
+            provider: provider,
+            itemID: seed.id,
+            initialItem: seed,
+            isDiscoveryItem: true,
+            alternateProviderResolver: { _ in provider },
+            crossServerSourceResolver: { _ in
+                entered.open()
+                await release.wait()
+                return [MediaSourceRef(accountID: "account", itemID: "show", kind: .series)]
+            }
+        )
+        let load = Task { await vm.load() }
+        await entered.wait()
+        load.cancel()
+        release.open()
+        await load.value
+
+        XCTAssertTrue(vm.isDiscoveryItem)
+        XCTAssertEqual(vm.state.value?.item.id, seed.id)
+        XCTAssertTrue(provider.itemCallCounts.isEmpty)
+    }
+
+    func testDetailEnvironmentProbesLibraryAfterAnIndexMiss() async {
+        let provider = FakeMediaProvider(allItems: [])
+        let entered = AsyncGate()
+        let release = AsyncGate()
+        let environment = DetailOpenEnvironment(
+            resolveProvider: { _ in provider },
+            resolveOptionalProvider: { _ in provider },
+            identitySources: { _ in [] },
+            crossServerSourceResolver: { _ in
+                entered.open()
+                await release.wait()
+                return []
+            }
+        )
+        let vm = environment.makeViewModel(
+            for: MediaItem(
+                id: "external",
+                title: "Loki",
+                kind: .series,
+                locallyValidatedPlayableSource: false
+            ),
+            libraryOrigin: nil
+        )
+        let load = Task { await vm.load() }
+        await entered.wait()
+        load.cancel()
+        release.open()
+        await load.value
+
+        XCTAssertTrue(vm.isDiscoveryItem)
+        XCTAssertTrue(provider.itemCallCounts.isEmpty)
+    }
+
     func testDiscoveryLoadsRichMetadataWithoutCallingMediaProvider() async {
         var seed = MediaItem(
             id: "seer:movie:42",

@@ -16,7 +16,11 @@ private func searchWithDeadline(
         deadline: .now() + seconds,
         execute: timeout
     )
-    let result = await searchTask.value
+    let result = await withTaskCancellationHandler {
+        await searchTask.value
+    } onCancel: {
+        searchTask.cancel()
+    }
     timeout.cancel()
     return result
 }

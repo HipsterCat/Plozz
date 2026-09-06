@@ -153,7 +153,6 @@ struct SearchTab: View {
                 // request-focused discovery detail page rather than a library
                 // fetch. Search's "Not in Your Library" section only ever surfaces
                 // such titles (owned ones are filtered out).
-                let isDiscovery = detailEnvironment.isDiscovery(item)
                 ItemDetailView(
                     viewModel: detailEnvironment.makeViewModel(for: item, libraryOrigin: nil),
                     spoilerSettings: spoilerSettings,
@@ -166,7 +165,6 @@ struct SearchTab: View {
                     stackDepth: detailStackDepth,
                     heroTrailerResolver: makeHeroTrailerResolver(),
                     initialSeasonID: item.seasonID,
-                    isDiscoveryItem: isDiscovery,
                     seerConnected: seer.isConfigured,
                     onRequest: { item in
                         let outcome = await seer.request(item, actingUserID: activeSeerrUserID)

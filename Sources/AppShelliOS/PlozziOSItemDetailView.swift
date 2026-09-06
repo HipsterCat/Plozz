@@ -175,7 +175,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
     @State private var seriesHeroShowsSeries = false
     @State private var heroPullDistance: CGFloat = 0
     private let seerService: SeerService?
-    private let isDiscoveryItem: Bool
+    private var isDiscoveryItem: Bool { viewModel.isDiscoveryItem }
     private let initialSources: [MediaSourceRef]
     private let initialSeasonID: String?
     private let initialEpisode: MediaItem?
@@ -204,7 +204,6 @@ private struct PlozziOSCanonicalItemDetailView: View {
             item,
             identitySources: identitySources
         )
-        self.isDiscoveryItem = isDiscoveryItem
         let discoveryStatusRefresh:
             (@Sendable (MediaItem) async -> (MediaAvailabilityStatus, Double?)?)?
         if isDiscoveryItem {
@@ -245,12 +244,10 @@ private struct PlozziOSCanonicalItemDetailView: View {
                 alternateProviderResolver: { accountID in
                     appModel.accountsProviders.provider(forAccountID: accountID)
                 },
-                crossServerSourceResolver: isDiscoveryItem
-                    ? nil
-                    : crossServerSourceResolver(
-                        in: accounts,
-                        identitySources: identitySources
-                    ),
+                crossServerSourceResolver: crossServerSourceResolver(
+                    in: accounts,
+                    identitySources: identitySources
+                ),
                 relatedTitlesLoader:
                     relatedTitleLibrarySearch(in: accounts).map { search in
                         RelatedTitlesLoader(

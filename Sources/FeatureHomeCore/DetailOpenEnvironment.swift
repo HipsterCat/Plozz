@@ -158,10 +158,9 @@ public struct DetailOpenEnvironment {
     /// that supplied it has no idea what the viewer owns — that is a statement
     /// about the provider, not a finding about the library.
     ///
-    /// Public because the view layer decides the same thing when it builds the
-    /// page, and the two answers MUST agree: a view told `isDiscoveryItem: true`
-    /// while its model loads a real library item renders the request layout over
-    /// library data.
+    /// This is the initial, synchronous answer. The model probes for a library
+    /// copy after an index miss; views observe its `isDiscoveryItem` so a late
+    /// match restores the library layout as well as the data.
     public func isDiscovery(_ item: MediaItem) -> Bool {
         Self.isDiscovery(item, identitySources: identitySources)
     }
@@ -202,7 +201,7 @@ public struct DetailOpenEnvironment {
             originSourceAccountID: libraryOrigin,
             initialSources: sources,
             alternateProviderResolver: resolveOptionalProvider,
-            crossServerSourceResolver: isDiscovery ? nil : crossServerSourceResolver,
+            crossServerSourceResolver: crossServerSourceResolver,
             relatedTitlesLoader: makeRelatedTitlesLoader?(
                 Self.relatedTitlesDisplayMode(isDiscoveryItem: isDiscovery)
             ),

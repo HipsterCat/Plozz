@@ -228,13 +228,9 @@ public final class ItemDetailViewModel {
     private let provider: any MediaProvider
     private let itemID: String
     private let ratingsProvider: any ExternalRatingsProviding
-    /// A **discovery** item (a Seerr/Overseerr title that may not be in any
-    /// library). Its synthetic `seer:<tmdbId>` id isn't resolvable through a
-    /// `MediaProvider`, so `load()`/`reload()` skip the provider fetch and every
-    /// library-only enrichment (children, trailers, ratings, cross-server) and
-    /// simply keep the seeded `initialItem` — which already carries the TMDB
-    /// artwork + overview the discovery detail page shows.
-    private let isDiscoveryItem: Bool
+    /// External until a real library source is resolved. Both shells observe this
+    /// instead of freezing the index's ownership answer at navigation time.
+    public private(set) var isDiscoveryItem: Bool
     /// For a discovery item, fetches its current request/availability + download
     /// progress from Seerr (by TMDB id). Called on every `load()` so reopening a
     /// title requested in an earlier visit reflects the real "Requested"/
@@ -295,7 +291,7 @@ public final class ItemDetailViewModel {
     /// from any server. Empty for a single-server item. The primary source's
     /// versions/watch-state are seeded from the loaded detail; alternates are
     /// enriched off the critical path (see ``enrichAlternateSources``).
-    private let initialSources: [MediaSourceRef]
+    private var initialSources: [MediaSourceRef]
     /// Resolves an account id to its provider so alternate-server copies can be
     /// fetched for their versions/watch-state. Returns `nil` for unknown accounts
     /// (e.g. a server signed out since the merge).
@@ -306,8 +302,9 @@ public final class ItemDetailViewModel {
     /// server (e.g. a Home row that only one server put in "Recently Added") still
     /// gets a server picker. Given the loaded primary item it searches the other
     /// accounts, merges by ``MediaItemIdentity``, and returns every matching
-    /// server's ``MediaSourceRef``. `nil` outside multi-account flows. Runs off the
-    /// critical path of first paint.
+    /// server's ``MediaSourceRef``. Also resolves an external title's first library
+    /// copy when the index has no entry. Ordinary library details use it only for
+    /// off-critical-path picker enrichment.
     private let crossServerSourceResolver: (@Sendable (MediaItem) async -> [MediaSourceRef])?
 
     /// The enriched per-server sources for this title, primary first. Drives the
@@ -569,14 +566,13 @@ public final class ItemDetailViewModel {
     }
 
     public func load() async {
-        // Discovery items have synthetic ids no media server can resolve, but
-        // "not playable" does not mean "no useful detail." Skip only the library
-        // provider path; enrich the seed through provider-independent metadata,
-        // release/watch facts, ratings, online trailers, related titles and TV
-        // schedule.
-        guard !isDiscoveryItem else {
-            await loadDiscoveryDetail()
-            return
+        if isDiscoveryItem {
+            await resolveDiscoveryLibrarySource()
+            guard !Task.isCancelled else { return }
+            if isDiscoveryItem {
+                await loadDiscoveryDetail()
+                return
+            }
         }
         alternateSourceEnrichmentTask?.cancel()
         alternateSourceEnrichmentTask = nil
@@ -773,6 +769,52 @@ public final class ItemDetailViewModel {
         } catch {
             if isCurrent(), state.value == nil { state = .failed(.unknown("")) }
         }
+    }
+
+    /// An index miss is not proof of absence: a cold or capped catalogue can miss
+    /// a title that a targeted server search finds immediately (issue #33).
+    private func resolveDiscoveryLibrarySource() async {
+        guard let seed = state.value?.item,
+              seed.kind == .movie || seed.kind == .series,
+              let resolver = crossServerSourceResolver else { return }
+        let generation = sourceGeneration
+        let resolved = await resolver(seed)
+        guard !Task.isCancelled,
+              isDiscoveryItem,
+              sourceGeneration == generation,
+              state.value?.item.id == seed.id else { return }
+
+        let availableSources = resolved.compactMap { source -> MediaSourceRef? in
+            guard source.kind == nil || source.kind == seed.kind,
+                  let provider = alternateProviderResolver(source.accountID) else { return nil }
+            var source = source
+            source.locality = provider.connectionLocality
+            return source
+        }
+        guard let selected = CrossSourceSelector.bestSelection(
+            from: availableSources,
+            capabilities: .detected(),
+            preferring: originSourceAccountID
+        )?.source,
+              let provider = alternateProviderResolver(selected.accountID) else {
+            PlozzLog.app.info("Detail ownership probe: no active library source id=\(seed.id)")
+            return
+        }
+
+        invalidateSourceOperations()
+        activeProvider = provider
+        activeItemID = selected.itemID
+        activeSourceAccountID = selected.accountID
+        initialSources = availableSources
+        var owned = seed.selectingSource(selected)
+        owned.sources = availableSources
+        owned.availability = nil
+        owned.downloadProgress = nil
+        state = .loaded(Detail(item: owned, children: []))
+        isDiscoveryItem = false
+        PlozzLog.app.info(
+            "Detail ownership probe: resolved library source id=\(seed.id) libraryID=\(selected.itemID)"
+        )
     }
 
     /// Loads a synthetic external title without ever pretending its id belongs to
@@ -1666,7 +1708,8 @@ public final class ItemDetailViewModel {
     /// anything the viewer is actually looking at.
     private func loadRelatedTitles(for item: MediaItem) {
         guard let relatedTitlesLoader else { return }
-        Task { await relatedTitlesLoader.load(for: item) }
+        let mode = DetailOpenEnvironment.relatedTitlesDisplayMode(isDiscoveryItem: isDiscoveryItem)
+        Task { await relatedTitlesLoader.load(for: item, displayMode: mode) }
     }
 
     /// Fills ``upcomingSchedule`` from cache, then refreshes it in the background.

@@ -1049,7 +1049,6 @@ struct HomeTab: View {
         // titles (available/partiallyAvailable) are NOT discovery: they resolve to
         // a real library copy via the identity index, so they keep the normal
         // playable detail page.
-        let isDiscovery = detailEnvironment.isDiscovery(item)
         return ItemDetailView(
             viewModel: detailViewModels.value(forKey: "item:\(item.id)#\(libraryOrigin ?? "")") {
                 detailEnvironment.makeViewModel(for: item, libraryOrigin: libraryOrigin)
@@ -1065,7 +1064,6 @@ struct HomeTab: View {
             heroTrailerResolver: makeHeroTrailerResolver(),
             preservesHeroTrailerOnDisappear: true,
             initialSeasonID: item.seasonID,
-            isDiscoveryItem: isDiscovery,
             seerConnected: seer.isConfigured,
             onRequest: { item in
                 let outcome = await seer.request(item, actingUserID: activeSeerrUserID)
