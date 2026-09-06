@@ -110,6 +110,7 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
         var railHasFocus = false
         private var before: UIFocusItem?
         private var wasInRail = false
+        private var allowsFallback = false
         private var travel = SwipeTravel()
 
         override init(target: Any?, action: Selector?) {
@@ -126,6 +127,7 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
             before = NavigationRailEdgeCatcher.focusedItem(in: view)
             wasInRail = railHasFocus
+            allowsFallback = wasInRail || NavigationRailEdgeCatcher.permitsNavigationFallback(from: before)
             travel = SwipeTravel()
         }
 
@@ -137,7 +139,7 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
 
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
             HeroFocusDiagnostics.emit("sidebar touch ended travel=\(travel.translation) rail=\(wasInRail)")
-            if travel.direction == (wasInRail ? .right : .left) {
+            if allowsFallback, travel.direction == (wasInRail ? .right : .left) {
                 onSwipe?(before, wasInRail)
             }
             state = .failed
@@ -150,6 +152,7 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
         override func reset() {
             super.reset()
             before = nil
+            allowsFallback = false
             travel = SwipeTravel()
         }
 
@@ -231,6 +234,7 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
 
         func checkFocusAfterInput(before: UIFocusItem?, wasInRail: Bool) {
             guard let before else { return }
+            guard wasInRail || NavigationRailEdgeCatcher.permitsNavigationFallback(from: before) else { return }
             pendingCheck?.cancel()
             pendingCheck = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: Self.settleDelay)
@@ -239,6 +243,7 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
                 // Focus moved, so the press had a genuine use and neither the
                 // navigation nor the page needs to intervene.
                 guard NavigationRailEdgeCatcher.focusedItem(in: self.view) === before else { return }
+                guard wasInRail || NavigationRailEdgeCatcher.permitsNavigationFallback(from: before) else { return }
                 HeroFocusDiagnostics.emit("sidebar fallback \(wasInRail ? "leave" : "open")")
                 if wasInRail {
                     self.onLeaveNavigation?()
@@ -251,6 +256,22 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
         override func canPrevent(_ other: UIGestureRecognizer) -> Bool { false }
         override func canBePrevented(by other: UIGestureRecognizer) -> Bool { false }
 
+    }
+
+    /// Cursor movement does not change UIKit focus. Only offer navigation when
+    /// a text input was already at its leading edge, with no selected text.
+    static func permitsNavigationFallback(from item: UIFocusItem?) -> Bool {
+        guard let item else { return false }
+        var view = item as? UIView
+        while let current = view {
+            if let input = current as? any UITextInput {
+                guard let selection = input.selectedTextRange else { return false }
+                return selection.isEmpty
+                    && input.compare(selection.start, to: input.beginningOfDocument) == .orderedSame
+            }
+            view = current.superview
+        }
+        return true
     }
 
     private static func focusedItem(in view: UIView?) -> UIFocusItem? {
