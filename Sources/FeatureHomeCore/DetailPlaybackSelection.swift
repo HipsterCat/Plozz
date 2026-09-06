@@ -3,6 +3,20 @@ import CoreModels
 
 /// Platform-neutral detail-page server and media-version selection.
 public enum DetailPlaybackSelection {
+    public static func showsPlayPlaceholder(
+        for item: MediaItem,
+        hasPlayTarget: Bool,
+        childrenLoaded: Bool,
+        seasonLoadState: SeasonLoadState?
+    ) -> Bool {
+        guard !hasPlayTarget,
+              item.kind == .series || item.kind == .season,
+              item.hasPlayableLibraryTarget() else { return false }
+        if !childrenLoaded { return true }
+        if case .notLoaded? = seasonLoadState { return true }
+        return false
+    }
+
     public static func resumeItem(for item: MediaItem, in continueWatching: [MediaItem]) -> MediaItem? {
         guard let account = item.sourceAccountID else { return nil }
         return continueWatching.first { candidate in

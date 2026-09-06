@@ -598,6 +598,11 @@ public struct ItemDetailView: View {
                             let liveVersionID = self.effectiveVersionID(for: detail.item, in: liveVersions)
                             onPlay(self.playItem(for: detail.item, sources: liveSources, activeAccountID: liveSource?.accountID, versionID: liveVersionID))
                         } : nil,
+                        showsPlayPlaceholder: !usesExternalDetail && DetailPlaybackSelection.showsPlayPlaceholder(
+                            for: detail.item, hasPlayTarget: canPlay,
+                            childrenLoaded: detail.childrenLoaded,
+                            seasonLoadState: nil
+                        ),
                         playProgress: canPlay ? detail.item.resumeProgressFraction : nil,
                         playRemainingText: canPlay ? detail.item.resumeRemainingText : nil,
                         playSeasonEpisodeText: canPlay ? HeroForegroundModelBuilder.seasonEpisodeButtonText(for: detail.item) : nil,

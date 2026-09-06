@@ -137,6 +137,9 @@ public struct PlayResumeButtonLabel: View {
     /// How much of the resume trailing text to render. Defaults to `.full`; a
     /// width-constrained caller can request a shorter form to avoid wrapping.
     public var resumeTrailingStyle: ResumeTrailingStyle
+    public var isPlaceholder: Bool
+    /// Keeps a series' action row from shifting when its episode/progress arrives.
+    public var reservesProgressSpace: Bool
 
     /// Supplies the default bar height, which tracks the reader's text size.
     @Environment(\.plozzMetrics) private var metrics
@@ -150,7 +153,9 @@ public struct PlayResumeButtonLabel: View {
         spacing: CGFloat = 16,
         capsuleWidth: CGFloat = 75,
         barHeight: CGFloat? = nil,
-        resumeTrailingStyle: ResumeTrailingStyle = .full
+        resumeTrailingStyle: ResumeTrailingStyle = .full,
+        isPlaceholder: Bool = false,
+        reservesProgressSpace: Bool = false
     ) {
         self.title = title
         self.progress = progress
@@ -161,6 +166,8 @@ public struct PlayResumeButtonLabel: View {
         self.capsuleWidth = capsuleWidth
         self.barHeight = barHeight
         self.resumeTrailingStyle = resumeTrailingStyle
+        self.isPlaceholder = isPlaceholder
+        self.reservesProgressSpace = reservesProgressSpace
     }
 
     /// The in-progress fraction that switches the label to the resume form: a
@@ -200,6 +207,41 @@ public struct PlayResumeButtonLabel: View {
     }
 
     public var body: some View {
+        ZStack {
+            if reservesProgressSpace || isPlaceholder {
+                Text(title).hidden().accessibilityHidden(true)
+                placeholderContent.hidden().accessibilityHidden(true)
+            }
+            if isPlaceholder {
+                placeholderContent
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Text(title))
+            } else {
+                resolvedContent
+            }
+        }
+    }
+
+    private var placeholderContent: some View {
+        HStack(spacing: spacing) {
+            Image(systemName: "play.fill")
+            Capsule()
+                .fill(onLight ? Color.black.opacity(0.18) : Color.white.opacity(0.18))
+                .frame(width: capsuleWidth, height: barHeight ?? metrics.heroProgressBarHeight)
+            if resumeTrailingStyle != .hidden {
+                Text(title)
+                    .hidden()
+                    .frame(width: capsuleWidth * (resumeTrailingStyle == .full ? 2.5 : 1.5))
+                    .overlay {
+                        Capsule()
+                            .fill(onLight ? Color.black.opacity(0.18) : Color.white.opacity(0.18))
+                            .frame(height: barHeight ?? metrics.heroProgressBarHeight)
+                    }
+            }
+        }
+    }
+
+    private var resolvedContent: some View {
         HStack(spacing: spacing) {
             Image(systemName: "play.fill")
             if let resumeProgress {

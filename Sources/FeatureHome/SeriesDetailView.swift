@@ -422,6 +422,13 @@ struct SeriesDetailView: View {
                         spoilerSettings: spoilerSettings,
                         playTitle: playTarget.map { viewModel.playButtonTitle(for: $0) },
                         onPlay: playTarget.map { target in { onPlay(target.selectingVersion(effectivePlayVersionID)) } },
+                        showsPlayPlaceholder: DetailPlaybackSelection.showsPlayPlaceholder(
+                            for: series,
+                            hasPlayTarget: playTarget != nil,
+                            childrenLoaded: viewModel.state.value?.childrenLoaded ?? false,
+                            seasonLoadState: (selectedSeasonID ?? seasons.first?.id)
+                                .map { viewModel.seasonLoadState(for: $0) }
+                        ),
                         playProgress: playTarget?.resumeProgressFraction,
                         playRemainingText: playTarget?.resumeRemainingText,
                         playSeasonEpisodeText: playTarget.flatMap { HeroForegroundModelBuilder.seasonEpisodeButtonText(for: $0) },

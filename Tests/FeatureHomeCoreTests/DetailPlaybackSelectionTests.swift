@@ -5,6 +5,33 @@ import CoreModels
 /// An episode's preference key is its SERIES', so a per-file id stored there can
 /// only ever match the one episode it was saved from.
 final class DetailPlaybackSelectionTests: XCTestCase {
+    func testPlayPlaceholderIsOnlyForAnUnresolvedOwnedContainer() {
+        let show = MediaItem(id: "show", title: "Show", kind: .series)
+        XCTAssertTrue(DetailPlaybackSelection.showsPlayPlaceholder(
+            for: show, hasPlayTarget: false, childrenLoaded: false, seasonLoadState: nil
+        ))
+        XCTAssertTrue(DetailPlaybackSelection.showsPlayPlaceholder(
+            for: show, hasPlayTarget: false, childrenLoaded: true, seasonLoadState: .notLoaded
+        ))
+        XCTAssertFalse(DetailPlaybackSelection.showsPlayPlaceholder(
+            for: show, hasPlayTarget: true, childrenLoaded: false, seasonLoadState: .notLoaded
+        ))
+        for state in [SeasonLoadState?.none, .some(.loaded([])), .some(.failed)] {
+            XCTAssertFalse(DetailPlaybackSelection.showsPlayPlaceholder(
+                for: show, hasPlayTarget: false, childrenLoaded: true, seasonLoadState: state
+            ))
+        }
+        var external = show
+        external.locallyValidatedPlayableSource = false
+        XCTAssertFalse(DetailPlaybackSelection.showsPlayPlaceholder(
+            for: external, hasPlayTarget: false, childrenLoaded: false, seasonLoadState: nil
+        ))
+        let movie = MediaItem(id: "movie", title: "Movie", kind: .movie)
+        XCTAssertFalse(DetailPlaybackSelection.showsPlayPlaceholder(
+            for: movie, hasPlayTarget: true, childrenLoaded: false, seasonLoadState: nil
+        ))
+    }
+
     func testEpisodeMetadataEnrichmentKeepsTheContinueWatchingProgress() {
         let resume = MediaItem(
             id: "episode", title: "Episode", kind: .episode,

@@ -361,6 +361,7 @@ struct PlozziOSDetailHeroSection: View {
     let item: MediaItem
     let backdropItem: MediaItem
     let playableItem: MediaItem?
+    var showsPlayPlaceholder: Bool = false
     let downloadItem: MediaItem?
     let sources: [MediaSourceRef]
     /// The air-schedule badge for a series, resolved by the detail page.
@@ -414,6 +415,7 @@ struct PlozziOSDetailHeroSection: View {
                 item: item,
                 rootItem: backdropItem,
                 playableItem: playableItem,
+                showsPlayPlaceholder: showsPlayPlaceholder,
                 downloadItem: downloadItem,
                 sources: sources,
                 scheduleLine: scheduleLine,
@@ -1676,6 +1678,7 @@ private struct PlozziOSDetailHeroForeground: View {
     let item: MediaItem
     let rootItem: MediaItem
     let playableItem: MediaItem?
+    var showsPlayPlaceholder: Bool = false
     let downloadItem: MediaItem?
     let sources: [MediaSourceRef]
     /// The air-schedule badge for a series, resolved by the detail page.
@@ -2120,25 +2123,28 @@ private struct PlozziOSDetailHeroForeground: View {
     private func playActionButton(
         resume: PlayResumeButtonLabel.ResumeTrailingStyle = .full
     ) -> some View {
-        if let playableItem {
+        if playableItem != nil || showsPlayPlaceholder {
             Button {
-                onPlay(playableItem, false)
+                if let playableItem { onPlay(playableItem, false) }
             } label: {
                 PlayResumeButtonLabel(
                     title: "Play",
-                    progress: playableItem.resumeProgressFraction,
-                    remainingText: playableItem.resumeRemainingText,
-                    seasonEpisodeText: seasonEpisodeText(for: playableItem),
+                    progress: playableItem?.resumeProgressFraction,
+                    remainingText: playableItem?.resumeRemainingText,
+                    seasonEpisodeText: playableItem.flatMap { seasonEpisodeText(for: $0) },
                     onLight: colorScheme == .dark,
                     spacing: 10,
                     capsuleWidth: 60,
-                    resumeTrailingStyle: resume
+                    resumeTrailingStyle: resume,
+                    isPlaceholder: playableItem == nil,
+                    reservesProgressSpace: rootItem.kind == .series || rootItem.kind == .season
                 )
                 // ViewThatFits can only collapse lower-priority actions when the
                 // Play label reports its readable width instead of truncating.
                 .fixedSize(horizontal: true, vertical: false)
             }
             .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
+            .disabled(playableItem == nil)
         }
     }
 

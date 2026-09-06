@@ -167,6 +167,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
     @State private var sourceOverride: String?
     @State private var versionOverride: String?
     @State private var seriesPlayTarget: MediaItem?
+    @State private var hasResolvedSeriesPlayTarget = false
     @State private var presentsSeriesDownloads = false
     /// Whether the hero describes the **show** rather than `seriesPlayTarget`.
     ///
@@ -414,6 +415,19 @@ private struct PlozziOSCanonicalItemDetailView: View {
             : (seriesPlayTarget ?? detail.item)
         let playableHeroTarget = seriesPlayTarget.map(playbackItem(for:))
             ?? detailPlayableItem(for: detail.item)
+        let seasons = detail.children.filter { $0.kind == .season }
+        let openingSeasonID = SeriesResume.openingSeasonID(
+            seasons: seasons, episodes: [],
+            selectedSeasonID: nil, preserveSelection: false,
+            initialSeasonID: initialSeasonID, initialEpisode: initialEpisode,
+            resumeEpisode: viewModel.serverResumeEpisode
+        )
+        let showsPlayPlaceholder = !isDiscoveryItem && !hasResolvedSeriesPlayTarget
+            && DetailPlaybackSelection.showsPlayPlaceholder(
+                for: detail.item, hasPlayTarget: playableHeroTarget != nil,
+                childrenLoaded: detail.childrenLoaded,
+                seasonLoadState: openingSeasonID.map { viewModel.seasonLoadState(for: $0) }
+            )
         let options = isDiscoveryItem
             ? DetailPlaybackOptions(
                 sources: [],
@@ -436,6 +450,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
                     item: heroTarget,
                     backdropItem: detail.item,
                     playableItem: playableHeroTarget,
+                    showsPlayPlaceholder: showsPlayPlaceholder,
                     downloadItem: playableHeroTarget,
                     sources: options.sources,
                     scheduleLine: isDiscoveryItem
@@ -484,7 +499,10 @@ private struct PlozziOSCanonicalItemDetailView: View {
                         looseEpisodes: detail.children.filter { $0.kind == .episode },
                         initialSeasonID: initialSeasonID,
                         initialEpisode: initialEpisode,
-                        onPlayTargetChange: { seriesPlayTarget = $0 },
+                        onPlayTargetChange: {
+                            seriesPlayTarget = $0
+                            hasResolvedSeriesPlayTarget = true
+                        },
                         onHeroShowsSeriesChange: { seriesHeroShowsSeries = $0 },
                         onPlay: play,
                         seasonRequestAvailability: isDiscoveryItem
