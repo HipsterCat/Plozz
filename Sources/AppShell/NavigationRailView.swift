@@ -157,6 +157,8 @@ struct NavigationRailView: View {
     var focusReleaseToken: Int = 0
     /// A page-button activation presents the full menu before focus arrives.
     var opensExpanded: Bool = false
+    /// Search uses the capsule's shared morphing surface instead of a second panel.
+    var usesPageButtonSurface: Bool = false
 
     @Environment(\.themePalette) private var palette
     @Environment(\.colorScheme) private var colorScheme
@@ -186,7 +188,7 @@ struct NavigationRailView: View {
     @State private var animatedExpansionProgress: CGFloat = 0
 
     private var expansionProgress: CGFloat {
-        opensExpanded ? 1 : animatedExpansionProgress
+        usesPageButtonSurface || opensExpanded ? 1 : animatedExpansionProgress
     }
 
     /// Explicit page-button entry shows the full menu while focus catches up.
@@ -646,10 +648,16 @@ struct NavigationRailView: View {
 
     private var expandedBackdrop: some View {
         Color.clear
-            .plozzGlassPanel(
-                cornerRadius: NavigationRailMetrics.expandedPanelCornerRadius,
-                scrimOpacity: 0.08
-            )
+            .overlay {
+                if !usesPageButtonSurface {
+                    Color.clear
+                        .plozzGlassPanel(
+                            cornerRadius: NavigationRailMetrics.expandedPanelCornerRadius,
+                            scrimOpacity: 0.08
+                        )
+                }
+            }
+            .anchorPreference(key: NavigationGlassAnchors.self, value: .bounds) { [.menu: $0] }
             .padding(.horizontal, NavigationRailMetrics.expandedPanelLayoutInset)
             .padding(
                 .vertical,

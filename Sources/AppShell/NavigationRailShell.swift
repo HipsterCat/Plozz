@@ -33,6 +33,7 @@ struct NavigationRailShell<Content: View>: View {
     /// the initial pick, which would open the navigation every time the app launches
     /// or the viewer switches destination.
     @Namespace private var focusScopeID
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var pinnedSidebarInteraction = PlozzPinnedSidebarInteraction()
     /// Whether focus is inside the rail, reported up from it.
     @State private var railExpanded = false
@@ -43,6 +44,7 @@ struct NavigationRailShell<Content: View>: View {
     @State private var railReturnToken = 0
     @State private var isOpeningNavigation = false
     @State private var hasEnteredSearchContent = false
+    @State private var isPageButtonFocused = false
 
     var body: some View {
         let hidden = chrome.isChromeHidden
@@ -87,70 +89,90 @@ struct NavigationRailShell<Content: View>: View {
                 // same transaction and immediately close the rail again.
                 .prefersDefaultFocus(!railExpanded && !isOpeningNavigation, in: focusScopeID)
 
-            if presentation.showsPageButton {
-                PinnedSidebarPageButton(
-                    title: NavigationRailView.searchTitle,
-                    symbol: "magnifyingglass",
-                    isNavigationExpanded: railExpanded || isOpeningNavigation,
-                    isFocusEnabled: presentation.isPageButtonEnabled(
-                        hasEnteredContent: hasEnteredSearchContent
-                    ),
-                    onOpenNavigation: requestNavigationFocus
-                )
-                .padding(.leading, NavigationRailMetrics.expandedContentHorizontalPadding)
-                .padding(.top, NavigationRailMetrics.pageButtonTopInset)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .ignoresSafeArea(edges: .leading)
-            }
-
-            // Left opens the navigation from unresolved page edges, and Right leaves
-            // it from unresolved rail edges. The Home hero disables this fallback
-            // while focused because its logical button moves share one UIKit focus
-            // item; it explicitly requests the rail only at its true leading edge.
-            // Search only allows the edge fallback from results, never its keyboard.
-            if !hidden {
-                NavigationRailEdgeCatcher(
-                    onOpenNavigation: requestNavigationFocus,
-                    onLeaveNavigation: { railReturnToken &+= 1 },
-                    railHasFocus: railExpanded,
-                    isEnabled: presentation.isEdgeNavigationEnabled(
-                        searchResultsHaveFocus: pinnedSidebarInteraction.searchResultsHaveFocus
+            ZStack(alignment: .leading) {
+                if presentation.showsPageButton {
+                    PinnedSidebarPageButton(
+                        title: NavigationRailView.searchTitle,
+                        symbol: "magnifyingglass",
+                        isNavigationExpanded: railExpanded || isOpeningNavigation,
+                        isFocusEnabled: presentation.isPageButtonEnabled(
+                            hasEnteredContent: hasEnteredSearchContent
+                        ),
+                        onOpenNavigation: requestNavigationFocus
                     )
-                        && !pinnedSidebarInteraction.heroHasFocus
-                )
-                .frame(width: 0, height: 0)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
+                    .padding(.leading, NavigationRailMetrics.expandedContentHorizontalPadding)
+                    .padding(.top, NavigationRailMetrics.pageButtonTopInset)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .ignoresSafeArea(edges: .leading)
+                }
 
-            if !hidden {
-                NavigationRailView(
-                    profile: profile,
-                    entries: entries,
-                    showsWatchlist: showsWatchlist,
-                    showsMusic: showsMusic,
-                    selection: $selection,
-                    isExpandedOutward: $railExpanded,
-                    onOpenProfileSwitcher: onOpenProfileSwitcher,
-                    focusRequestToken: focusRequestToken,
-                    focusReleaseToken: railReturnToken,
-                    opensExpanded: presentation.opensExpanded
-                )
-                // Keep the focus-request observer mounted while Search hides the
-                // collapsed rail. Invisible rows must not compete with its keyboard.
-                .disabled(!presentation.isRailEnabled)
-                .opacity(presentation.isRailVisible ? 1 : 0)
-                .accessibilityHidden(!presentation.isRailEnabled)
-                // Breaks out of the title-safe area so the icons sit in the empty
-                // margin down the side of the picture rather than inside the
-                // page's own content column.
-                .ignoresSafeArea(edges: .leading)
-                .transition(.move(edge: .leading).combined(with: .opacity))
+                // Left opens unresolved result/page edges; Right returns from
+                // navigation. Hero controls and the Search keyboard own their input.
+                if !hidden {
+                    NavigationRailEdgeCatcher(
+                        onOpenNavigation: requestNavigationFocus,
+                        onLeaveNavigation: { railReturnToken &+= 1 },
+                        railHasFocus: railExpanded,
+                        isEnabled: presentation.isEdgeNavigationEnabled(
+                            searchResultsHaveFocus: pinnedSidebarInteraction.searchResultsHaveFocus
+                        ) && !pinnedSidebarInteraction.heroHasFocus
+                    )
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                }
+
+                if !hidden {
+                    NavigationRailView(
+                        profile: profile,
+                        entries: entries,
+                        showsWatchlist: showsWatchlist,
+                        showsMusic: showsMusic,
+                        selection: $selection,
+                        isExpandedOutward: $railExpanded,
+                        onOpenProfileSwitcher: onOpenProfileSwitcher,
+                        focusRequestToken: focusRequestToken,
+                        focusReleaseToken: railReturnToken,
+                        opensExpanded: presentation.opensExpanded,
+                        usesPageButtonSurface: presentation.showsPageButton
+                    )
+                    // Keep the focus-request observer mounted while Search hides
+                    // the collapsed rail, but exclude invisible rows from focus.
+                    .disabled(!presentation.isRailEnabled)
+                    .opacity(presentation.isRailVisible ? 1 : 0)
+                    .animation(
+                        reduceMotion ? nil : .easeInOut(duration: 0.22),
+                        value: presentation.isRailVisible
+                    )
+                    .accessibilityHidden(!presentation.isRailEnabled)
+                    .ignoresSafeArea(edges: .leading)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                }
+            }
+            .onPreferenceChange(NavigationGlassButtonFocus.self) { focused in
+                isPageButtonFocused = focused
+            }
+            .backgroundPreferenceValue(NavigationGlassAnchors.self) { anchors in
+                GeometryReader { geometry in
+                    if presentation.showsPageButton,
+                       let button = anchors[.button],
+                       let menu = anchors[.menu],
+                       NavigationGlassMorphGeometry(
+                           button: geometry[button], menu: geometry[menu]
+                       ).isUsable {
+                        NavigationGlassMorph(
+                            buttonFrame: geometry[button],
+                            menuFrame: geometry[menu],
+                            isExpanded: railExpanded || isOpeningNavigation,
+                            isButtonFocused: isPageButtonFocused
+                        )
+                    }
+                }
             }
         }
         .focusScope(focusScopeID)
-        .animation(.easeInOut(duration: 0.26), value: hidden)
-        .animation(NavigationRailMetrics.expandAnimation, value: railExpanded)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: hidden)
+        .animation(reduceMotion ? nil : NavigationRailMetrics.expandAnimation, value: railExpanded)
         .onChange(of: selection, initial: true) { previous, destination in
             // The outgoing destination's stack is torn down without reporting, so
             // without this the rail would stay hidden after leaving a detail page
