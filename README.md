@@ -123,6 +123,13 @@ presents them as a single library rather than a set of tabs you switch between.
   TV, anime, and music.
 - **Seerr** — request something you don't have without leaving search.
 
+Seerr profile links belong to the server where you chose that user. Reconnecting
+to the same address, including after an API-key change, keeps those links.
+Switching servers requires relinking in Settings; requests never fall back to
+the administrator because a link is stale. Links saved by older versions need
+one confirmation. After replacing a Seerr database at the same address, relink
+profiles manually.
+
 ## Getting started
 
 Plozz is in **public beta** on TestFlight.

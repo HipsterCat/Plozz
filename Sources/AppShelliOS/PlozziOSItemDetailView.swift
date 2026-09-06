@@ -522,7 +522,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
                         availability: requestStatusOverride ?? detail.item.availability ?? .unknown,
                         isRequesting: isRequesting,
                         errorMessage: requestError,
-                        actingName: appModel.activeSeerrUserName,
+                        actingName: appModel.activeSeerrRequestActingName,
                         onRequest: { beginRequest($0) }
                     )
                     .padding(.horizontal, pageInset)
@@ -664,7 +664,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
                 seerConnected: appModel.seerService.isConfigured
             ),
             isRequesting: isRequesting,
-            actingName: appModel.activeSeerrUserName,
+            actingName: appModel.activeSeerrRequestActingName,
             onRequest: { beginRequest($0) },
             seasonAvailability: isSeries ? seasonRequestAvailability : nil,
             onRequestSeasons: isSeries ? { beginRequest(item, seasons: $0) } : nil
@@ -949,7 +949,8 @@ private struct PlozziOSCanonicalItemDetailView: View {
     }
 
     private func beginRequest(_ item: MediaItem, seasons: [Int]? = nil) {
-        if appModel.activeSeerrUserID == nil, appModel.profiles.profiles.count > 1 {
+        if appModel.activeSeerrRequestIdentity == .admin,
+           appModel.profiles.profiles.count > 1 {
             requestConfirmationItem = item
             requestConfirmationSeasons = seasons
         } else {
@@ -968,7 +969,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
         let outcome = await seerService.request(
             item,
             seasons: seasons,
-            actingUserID: appModel.activeSeerrUserID
+            identity: appModel.activeSeerrRequestIdentity
         )
         switch outcome {
         case let .success(status):

@@ -15,12 +15,22 @@ public struct SeerUser: Identifiable, Equatable, Sendable {
     /// Fully-resolved avatar URL (relative Overseerr paths are resolved against
     /// the server base URL; absolute URLs like Gravatar pass through).
     public let avatarURL: URL?
+    /// Canonical endpoint whose server-local `id` belongs to. `nil` marks a
+    /// legacy/unverified value that must not be used for requests.
+    public let serverIdentity: SeerServerIdentity?
 
-    public init(id: Int, name: String, subtitle: String? = nil, avatarURL: URL? = nil) {  // l10n:content — see `subtitle` above
+    public init(
+        id: Int,
+        name: String,
+        subtitle: String? = nil,
+        avatarURL: URL? = nil,
+        serverIdentity: SeerServerIdentity? = nil
+    ) {  // l10n:content — see `subtitle` above
         self.id = id
         self.name = name
         self.subtitle = subtitle
         self.avatarURL = avatarURL
+        self.serverIdentity = serverIdentity
     }
 }
 
@@ -28,7 +38,11 @@ extension SeerUser {
     /// Maps an internal DTO to the public model, resolving the avatar against the
     /// Seerr `baseURL` (Overseerr often returns a relative `/avatarproxy/…` path;
     /// Gravatar returns an absolute URL).
-    static func from(_ dto: SeerUserDTO, baseURL: URL?) -> SeerUser {
+    static func from(
+        _ dto: SeerUserDTO,
+        baseURL: URL?,
+        serverIdentity: SeerServerIdentity? = nil
+    ) -> SeerUser {
         let name = [dto.displayName, dto.username, dto.plexUsername, dto.jellyfinUsername, dto.email]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first(where: { !$0.isEmpty }) ?? "User \(dto.id)"
@@ -49,7 +63,13 @@ extension SeerUser {
             return URL(string: path, relativeTo: baseURL)?.absoluteURL
         }
 
-        return SeerUser(id: dto.id, name: name, subtitle: subtitleCandidate, avatarURL: avatar)
+        return SeerUser(
+            id: dto.id,
+            name: name,
+            subtitle: subtitleCandidate,
+            avatarURL: avatar,
+            serverIdentity: serverIdentity
+        )
     }
 }
 
@@ -87,6 +107,9 @@ public enum SeerRequestFailure: Equatable, Sendable {
     /// The `X-API-User` didn't resolve to a real Seerr user (stale/deleted
     /// mapping). Recovery: re-link the profile in Settings.
     case invalidActingUser
+    /// The profile's server-local user ID is legacy/unverified or belongs to a
+    /// different Seerr endpoint. It must be explicitly relinked.
+    case mappingNeedsRelink
     /// The server couldn't be reached (transport failure / timeout).
     case unreachable
     /// Something else went wrong; carries the server message when present.
@@ -138,6 +161,8 @@ public enum SeerRequestFailure: Equatable, Sendable {
             return "This title has already been requested."
         case .invalidActingUser:
             return "The linked Seerr user no longer exists. Update the profile mapping in Settings."
+        case .mappingNeedsRelink:
+            return "Relink this profile’s Seerr user in Settings before requesting."
         case .unreachable:
             return "Couldn’t reach the Seerr server."
         case let .unknown(message):

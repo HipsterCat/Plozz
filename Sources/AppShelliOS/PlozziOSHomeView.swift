@@ -697,10 +697,11 @@ struct PlozziOSHomeView: View {
 
 
     /// One-tap Seerr request from the Home hero, mirroring the detail hero. When
-    /// the active profile isn't linked to a Seerr user (and there are multiple
-    /// profiles), confirm the admin-account fallback first.
+    /// the active profile explicitly requests as admin (and there are multiple
+    /// profiles), confirm that unrestricted identity first. Legacy or mismatched
+    /// user mappings go to the service's relink failure instead.
     private func beginHeroRequest(_ item: MediaItem) {
-        if appModel.activeSeerrUserID == nil,
+        if appModel.activeSeerrRequestIdentity == .admin,
            appModel.profiles.profiles.count > 1 {
             heroRequestConfirmSeasons = nil
             heroRequestConfirmItem = item
@@ -711,11 +712,11 @@ struct PlozziOSHomeView: View {
 
     /// Season-scoped counterpart to `beginHeroRequest` for a featured series: the
     /// hero's season picker has already chosen `seasons`, so request exactly those
-    /// (still routing through the admin-fallback confirm when the active profile
-    /// isn't linked to a Seerr user).
+    /// (still routing through the admin confirm only for a genuinely unmapped
+    /// profile).
     private func beginHeroSeasonRequest(_ item: MediaItem, _ seasons: [Int]) {
         guard !seasons.isEmpty else { return }
-        if appModel.activeSeerrUserID == nil,
+        if appModel.activeSeerrRequestIdentity == .admin,
            appModel.profiles.profiles.count > 1 {
             heroRequestConfirmSeasons = seasons
             heroRequestConfirmItem = item
@@ -735,7 +736,7 @@ struct PlozziOSHomeView: View {
         let outcome = await appModel.seerService.request(
             item,
             seasons: seasons,
-            actingUserID: appModel.activeSeerrUserID
+            identity: appModel.activeSeerrRequestIdentity
         )
         switch outcome {
         case let .success(status):
@@ -1338,7 +1339,7 @@ private struct PlozziOSHomeHeroCarousel: View {
                 seerConnected: appModel.seerService.isConfigured
             ),
             isRequesting: isRequesting,
-            actingName: appModel.activeSeerrUserName,
+            actingName: appModel.activeSeerrRequestActingName,
             onRequest: onRequest,
             seasonAvailability: isSeries ? heroSeasonAvailability[item.id] : nil,
             onRequestSeasons: (isSeries ? onRequestSeasons : nil).map { handler in

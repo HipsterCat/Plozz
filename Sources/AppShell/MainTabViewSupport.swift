@@ -128,6 +128,11 @@ func seerRequestResult(_ outcome: SeerRequestOutcome, actingName: String?) -> Me
                 title: "Seerr User Not Found",
                 message: .copy("The linked Seerr user no longer exists. Re-link this profile in Settings ▸ Everyone ▸ Seerr.")
             )
+        case .mappingNeedsRelink:
+            return .failure(
+                title: "Relink Seerr User",
+                message: .copy(reason.userMessage)
+            )
         case .unreachable:
             return .failure(
                 title: "Can’t Reach Seerr",

@@ -33,6 +33,9 @@ public enum SeerConnectionPhase: Equatable, Sendable {
 @Observable
 public final class SeerService {
     public private(set) var phase: SeerConnectionPhase = .unknown
+    /// Changes whenever the adopted connection is replaced. Views can use this
+    /// as a reload key without observing the secret-bearing config itself.
+    public private(set) var connectionRevision = UUID()
 
     @ObservationIgnored private var config: SeerConfig
     /// The shared **household** connection store (URL + admin key), backed in
@@ -45,13 +48,21 @@ public final class SeerService {
     /// contexts with nothing to migrate (tests/previews).
     @ObservationIgnored private let legacyCredentialStore: SeerCredentialStoring?
     @ObservationIgnored private let http: HTTPClient
+    /// Invalidates in-flight lifecycle work without changing the revision of the
+    /// last successfully adopted connection.
+    @ObservationIgnored private var connectionAttemptGeneration: UInt64 = 0
 
     /// Cached default Radarr/Sonarr servers, used ONLY by the admin (unmapped)
     /// request path to seed `serverId`/`profileId`/`rootFolder` (a mapped user
-    /// lets Overseerr apply their own defaults). The double optional distinguishes
-    /// "not fetched" (`nil`) from "fetched, none found" (`.some(nil)`).
-    @ObservationIgnored private var cachedRadarr: SeerServiceServer??
-    @ObservationIgnored private var cachedSonarr: SeerServiceServer??
+    /// lets Overseerr apply their own defaults). Each entry is tied to the
+    /// connection revision that fetched it.
+    @ObservationIgnored private var cachedRadarr: ServerCache?
+    @ObservationIgnored private var cachedSonarr: ServerCache?
+
+    private struct ServerCache {
+        let revision: UUID
+        let server: SeerServiceServer?
+    }
 
     public init(
         connectionStore: SeerConnectionStoring,
@@ -70,10 +81,22 @@ public final class SeerService {
     /// this is the reliable, immediately-correct-at-launch signal for "there is a
     /// Seerr to request from" — and it flips to hide Request if the user
     /// disconnects Seerr while stale featured items are still on screen.
-    public var isConfigured: Bool { config.isConfigured }
+    public var isConfigured: Bool {
+        _ = connectionRevision
+        return Self.hasUsableEndpoint(config)
+    }
 
     /// The saved server URL, for pre-filling the Settings field on re-entry.
-    public var savedBaseURLString: String? { config.baseURL?.absoluteString }
+    public var savedBaseURLString: String? {
+        _ = connectionRevision
+        return config.baseURL?.absoluteString
+    }
+
+    /// Canonical endpoint identity used to bind profile-level Seerr user IDs.
+    public var serverIdentity: SeerServerIdentity? {
+        _ = connectionRevision
+        return config.baseURL.flatMap(SeerServerIdentity.init(baseURL:))
+    }
 
     private var client: SeerClient { SeerClient(config: config, http: http) }
 
@@ -81,6 +104,14 @@ public final class SeerService {
         guard let connection = store.load() else { return SeerConfig() }
         // Acting user is per-request now, never baked into the connection config.
         return SeerConfig(baseURL: connection.baseURL, apiKey: connection.apiKey, userId: nil)
+    }
+
+    private static func hasUsableEndpoint(_ config: SeerConfig) -> Bool {
+        config.isConfigured && config.baseURL.flatMap(SeerServerIdentity.init(baseURL:)) != nil
+    }
+
+    private static var invalidAddressMessage: LocalizedStringResource {
+        "Enter a valid HTTP or HTTPS server address without credentials or a query."
     }
 
     // MARK: - Lifecycle
@@ -110,8 +141,14 @@ public final class SeerService {
             namespaces: namespaces
         )
         if result.didPromote {
-            config = Self.loadConfig(from: connectionStore)
-            await refreshStatus()
+            let attempt = beginConnectionIntent()
+            let loaded = Self.loadConfig(from: connectionStore)
+            replaceConfig(with: loaded)
+            await probe(
+                configSnapshot: loaded,
+                revision: connectionRevision,
+                attempt: attempt
+            )
         }
         return result
     }
@@ -124,38 +161,55 @@ public final class SeerService {
     /// would otherwise stay invisible until the next launch. Call this after
     /// installing a connection out-of-band.
     public func reloadConnection() async {
-        config = Self.loadConfig(from: connectionStore)
-        await refreshStatus()
+        let attempt = beginConnectionIntent()
+        let loaded = Self.loadConfig(from: connectionStore)
+        replaceConfig(with: loaded)
+        await probe(
+            configSnapshot: loaded,
+            revision: connectionRevision,
+            attempt: attempt
+        )
     }
 
     /// Resolves the current status: probes `/api/v1/status` when a connection is
     /// saved (so the Settings row reflects reachability). Safe to call repeatedly.
     public func refreshStatus() async {
-        guard config.isConfigured else { phase = .unconfigured; return }
-        await probe()
+        await probe(
+            configSnapshot: config,
+            revision: connectionRevision,
+            attempt: connectionAttemptGeneration
+        )
     }
 
     /// Validates + saves the household connection ("Connect / Test"). Probes the
     /// server first and only persists when it responds; a bad URL/key surfaces as
-    /// `.failed` and nothing is stored. (`userId` is ignored — acting user is
-    /// per-profile now; the parameter is kept for source compatibility.)
-    public func connect(baseURL: URL, apiKey: String, userId: Int? = nil) async {
+    /// `.failed` and nothing is stored.
+    public func connect(baseURL: URL, apiKey: String) async {
+        let attempt = beginConnectionIntent()
         let trial = SeerConfig(baseURL: baseURL, apiKey: apiKey, userId: nil)
         guard trial.isConfigured else {
             phase = .failed("Enter both a server address and an API key.")
             return
         }
+        guard trial.baseURL.flatMap(SeerServerIdentity.init(baseURL:)) != nil else {
+            phase = .failed(Self.invalidAddressMessage)
+            return
+        }
         phase = .connecting
         do {
             let status = try await SeerClient(config: trial, http: http).status()
-            // Reachable — persist to the shared household slot and adopt.
+            guard connectionAttemptGeneration == attempt else { return }
             let connection = SeerConnection(baseURL: baseURL, apiKey: trial.apiKey ?? apiKey)
-            try? connectionStore.save(connection)
-            config = trial
-            cachedRadarr = nil
-            cachedSonarr = nil
+            do {
+                try connectionStore.save(connection)
+            } catch {
+                phase = .failed("Couldn’t save the Seerr connection.")
+                return
+            }
+            replaceConfig(with: trial)
             phase = .connected(summary: Self.summary(from: status))
         } catch {
+            guard connectionAttemptGeneration == attempt else { return }
             phase = .failed(Self.message(for: error))
         }
     }
@@ -163,21 +217,51 @@ public final class SeerService {
     /// Disconnects: clears the shared household connection and resets to
     /// unconfigured (for the whole household).
     public func disconnect() {
-        try? connectionStore.clear()
-        config = SeerConfig()
-        cachedRadarr = nil
-        cachedSonarr = nil
-        phase = .unconfigured
+        _ = beginConnectionIntent()
+        do {
+            try connectionStore.clear()
+            replaceConfig(with: SeerConfig())
+            phase = .unconfigured
+        } catch {
+            phase = .failed("Couldn’t remove the Seerr connection.")
+        }
     }
 
-    private func probe() async {
+    private func probe(configSnapshot: SeerConfig, revision: UUID, attempt: UInt64) async {
+        guard configSnapshot.isConfigured else {
+            if connectionAttemptGeneration == attempt, connectionRevision == revision {
+                phase = .unconfigured
+            }
+            return
+        }
+        guard Self.hasUsableEndpoint(configSnapshot) else {
+            if connectionAttemptGeneration == attempt, connectionRevision == revision {
+                phase = .failed(Self.invalidAddressMessage)
+            }
+            return
+        }
         phase = .connecting
         do {
-            let status = try await client.status()
+            let status = try await SeerClient(config: configSnapshot, http: http).status()
+            guard connectionAttemptGeneration == attempt, connectionRevision == revision else { return }
             phase = .connected(summary: Self.summary(from: status))
         } catch {
+            guard connectionAttemptGeneration == attempt, connectionRevision == revision else { return }
             phase = .failed(Self.message(for: error))
         }
+    }
+
+    @discardableResult
+    private func beginConnectionIntent() -> UInt64 {
+        connectionAttemptGeneration &+= 1
+        return connectionAttemptGeneration
+    }
+
+    private func replaceConfig(with newConfig: SeerConfig) {
+        config = newConfig
+        cachedRadarr = nil
+        cachedSonarr = nil
+        connectionRevision = UUID()
     }
 
     private static func summary(from status: SeerStatus) -> LocalizedStringResource {
@@ -198,7 +282,7 @@ public final class SeerService {
     /// instance, mapped to `MediaItem`s and capped at `limit`. Returns `[]` when
     /// unconfigured so the hero seam is inert until a server is connected.
     public func trending(limit: Int) async throws -> [MediaItem] {
-        guard config.isConfigured, limit > 0 else { return [] }
+        guard Self.hasUsableEndpoint(config), limit > 0 else { return [] }
         let page = try await client.trending()
         return SeerMapper.mediaItems(from: page, limit: limit)
     }
@@ -206,7 +290,7 @@ public final class SeerService {
     /// Multi-search for movies/TV via Seerr's discovery backend.
     public func search(_ query: String) async throws -> [MediaItem] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard config.isConfigured, !trimmed.isEmpty else { return [] }
+        guard Self.hasUsableEndpoint(config), !trimmed.isEmpty else { return [] }
         let page = try await client.search(query: trimmed)
         return SeerMapper.mediaItems(from: page)
     }
@@ -228,7 +312,7 @@ public final class SeerService {
     /// Seerr's tracked seasons with the complete TMDB season list so Plozz can
     /// offer only seasons that are truly absent or already in flight.
     public func requestAvailability(for item: MediaItem) async -> MediaRequestAvailability? {
-        guard config.isConfigured,
+        guard Self.hasUsableEndpoint(config),
               let mediaType = SeerMapper.requestMediaType(for: item),
               let tmdbID = SeerMapper.tmdbID(for: item),
               let details = try? await client.mediaDetails(mediaType: mediaType, tmdbID: tmdbID)
@@ -242,12 +326,17 @@ public final class SeerService {
     /// Fetched as **admin** (the acting user only matters for `request`), paged to
     /// completion, and sorted by display name. Returns `[]` when unconfigured.
     public func users() async throws -> [SeerUser] {
-        guard config.isConfigured else { return [] }
+        let activeConfig = config
+        let activeRevision = connectionRevision
+        guard Self.hasUsableEndpoint(activeConfig) else { return [] }
+        let activeClient = SeerClient(config: activeConfig, http: http)
+        let activeServerIdentity = activeConfig.baseURL.flatMap(SeerServerIdentity.init(baseURL:))
         var collected: [SeerUserDTO] = []
         var skip = 0
         let take = 100
         while true {
-            let page = try await client.users(take: take, skip: skip)
+            let page = try await activeClient.users(take: take, skip: skip)
+            guard connectionRevision == activeRevision else { throw CancellationError() }
             collected.append(contentsOf: page.results)
             skip += page.results.count
             // Terminate on an empty/short page always. When the server reports a
@@ -259,9 +348,14 @@ public final class SeerService {
             if let total = page.pageInfo?.results, collected.count >= total { break }
             if skip > 5000 { break } // safety cap for pathological instances
         }
-        let base = config.baseURL
         return collected
-            .map { SeerUser.from($0, baseURL: base) }
+            .map {
+                SeerUser.from(
+                    $0,
+                    baseURL: activeConfig.baseURL,
+                    serverIdentity: activeServerIdentity
+                )
+            }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
@@ -285,9 +379,7 @@ public final class SeerService {
     @ObservationIgnored
     public var refusesAdminRequests: () -> Bool = { false }
 
-    /// One-tap request for a not-in-library title, made **as** `actingUserID`
-    /// (that Seerr user's quota / approval flow / default quality profile), or as
-    /// admin when `nil`.
+    /// One-tap request for a not-in-library title, made as the supplied identity.
     ///
     /// - **Mapped user:** omits `serverId`/`profileId`/`rootFolder` so Overseerr
     ///   applies *that user's* defaults (never silently seeds the admin default —
@@ -302,10 +394,24 @@ public final class SeerService {
     public func request(
         _ item: MediaItem,
         seasons: [Int]? = nil,
-        actingUserID: Int? = nil
+        identity: SeerRequestIdentity = .admin
     ) async -> SeerRequestOutcome {
-        guard config.isConfigured else { return .failure(.unknown("Seerr isn’t connected.")) }
-        if actingUserID == nil, refusesAdminRequests() {
+        // Snapshot first. Requests already in flight are intentionally allowed to
+        // finish against this endpoint after a reconnect, but a mapping must
+        // match this captured endpoint before any HTTP/default lookup occurs.
+        let activeConfig = config
+        let activeRevision = connectionRevision
+        guard activeConfig.isConfigured else { return .failure(.unknown("Seerr isn’t connected.")) }
+        let activeServerIdentity = activeConfig.baseURL.flatMap(SeerServerIdentity.init(baseURL:))
+        guard activeServerIdentity != nil else {
+            return .failure(
+                .unknown("The saved Seerr server address is invalid. Update it in Settings.")
+            )
+        }
+        guard !identity.requiresRelink(to: activeServerIdentity) else {
+            return .failure(.mappingNeedsRelink)
+        }
+        if identity == .admin, refusesAdminRequests() {
             return .failure(.unknown("Ask a grown-up to request this."))
         }
         guard let mediaType = SeerMapper.requestMediaType(for: item),
@@ -317,19 +423,14 @@ public final class SeerService {
         if isTV, let requestedSeasons, requestedSeasons.isEmpty {
             return .failure(.unknown("Choose at least one season to request."))
         }
-        // Snapshot the connection at call start so this request is internally
-        // consistent: a reconnect/disconnect that reentrantly changes `config`
-        // across the default-lookup await can't make us fetch defaults from one
-        // Seerr and POST the request to another. Everything below uses this one
-        // client + config snapshot.
-        let activeConfig = config
         let activeClient = SeerClient(config: activeConfig, http: http)
+        let actingUserID = identity.userID
 
-        // Only the admin (unmapped) path seeds a server; a mapped user lets
+        // Only the admin path seeds a server; a mapped user lets
         // Overseerr resolve their own defaults from the omitted body.
-        let server: SeerServiceServer? = actingUserID == nil
-            ? (isTV ? await defaultSonarr(using: activeClient, configSnapshot: activeConfig)
-                    : await defaultRadarr(using: activeClient, configSnapshot: activeConfig))
+        let server: SeerServiceServer? = identity == .admin
+            ? (isTV ? await defaultSonarr(using: activeClient, revision: activeRevision)
+                    : await defaultRadarr(using: activeClient, revision: activeRevision))
             : nil
 
         let body = SeerRequestBody(
@@ -461,25 +562,31 @@ public final class SeerService {
         }
     }
 
-    private func defaultRadarr(using client: SeerClient, configSnapshot: SeerConfig) async -> SeerServiceServer? {
-        if let cached = cachedRadarr { return cached }
+    private func defaultRadarr(using client: SeerClient, revision: UUID) async -> SeerServiceServer? {
+        if let cachedRadarr, cachedRadarr.revision == revision {
+            return cachedRadarr.server
+        }
         // Only cache a *successful* fetch. A transient failure (timeout, 401,
         // network blip) must stay uncached so the next request retries — caching
         // it would masquerade as "no servers" and permanently drop the default
         // serverId/profileId/rootFolder for the rest of the session.
         guard let resolved = try? await client.radarrServers() else { return nil }
         let chosen = Self.pickDefault(resolved)
-        // Don't pollute the cache with a snapshot that no longer matches the live
-        // connection (a reconnect during the fetch already cleared the cache).
-        if config == configSnapshot { cachedRadarr = .some(chosen) }
+        if connectionRevision == revision {
+            cachedRadarr = ServerCache(revision: revision, server: chosen)
+        }
         return chosen
     }
 
-    private func defaultSonarr(using client: SeerClient, configSnapshot: SeerConfig) async -> SeerServiceServer? {
-        if let cached = cachedSonarr { return cached }
+    private func defaultSonarr(using client: SeerClient, revision: UUID) async -> SeerServiceServer? {
+        if let cachedSonarr, cachedSonarr.revision == revision {
+            return cachedSonarr.server
+        }
         guard let resolved = try? await client.sonarrServers() else { return nil }
         let chosen = Self.pickDefault(resolved)
-        if config == configSnapshot { cachedSonarr = .some(chosen) }
+        if connectionRevision == revision {
+            cachedSonarr = ServerCache(revision: revision, server: chosen)
+        }
         return chosen
     }
 
