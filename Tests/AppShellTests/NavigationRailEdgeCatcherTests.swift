@@ -83,5 +83,44 @@ final class NavigationRailEdgeCatcherTests: XCTestCase {
         XCTAssertNil(installer.recognizer.view)
         XCTAssertNil(installer.swipeRecognizer.view)
     }
+
+    func testLeftInsideTextFieldDoesNotOpenNavigation() throws {
+        let field = UITextField()
+        field.text = "Search"
+        let cursor = try XCTUnwrap(field.position(from: field.beginningOfDocument, offset: 3))
+        field.selectedTextRange = field.textRange(from: cursor, to: cursor)
+        XCTAssertFalse(NavigationRailEdgeCatcher.permitsNavigationFallback(from: field))
+
+        field.selectedTextRange = field.textRange(
+            from: field.beginningOfDocument,
+            to: field.endOfDocument
+        )
+        XCTAssertFalse(NavigationRailEdgeCatcher.permitsNavigationFallback(from: field))
+    }
+
+    func testLeftAtStartOfTextFieldCanOpenNavigation() {
+        let field = UITextField()
+        field.text = "Search"
+        field.selectedTextRange = field.textRange(
+            from: field.beginningOfDocument,
+            to: field.beginningOfDocument
+        )
+        XCTAssertTrue(NavigationRailEdgeCatcher.permitsNavigationFallback(from: field))
+    }
+
+    func testTextInputChildKeepsCursorNavigation() throws {
+        let field = UITextField()
+        field.text = "Search"
+        let child = UIView()
+        field.addSubview(child)
+        let cursor = try XCTUnwrap(field.position(from: field.beginningOfDocument, offset: 2))
+        field.selectedTextRange = field.textRange(from: cursor, to: cursor)
+        XCTAssertFalse(NavigationRailEdgeCatcher.permitsNavigationFallback(from: child))
+    }
+
+    func testOrdinaryFocusTargetsAllowEdgeNavigation() {
+        XCTAssertTrue(NavigationRailEdgeCatcher.permitsNavigationFallback(from: UIButton()))
+        XCTAssertFalse(NavigationRailEdgeCatcher.permitsNavigationFallback(from: nil))
+    }
 }
 #endif

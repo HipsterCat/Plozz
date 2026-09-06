@@ -12,6 +12,8 @@ public struct SearchView: View {
     private let onSelect: (MediaItem) -> Void
 
     @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.plozzPinnedSidebarInteraction) private var pinnedSidebarInteraction
+    @FocusState private var focusedResultID: String?
 
     public init(
         viewModel: SearchViewModel,
@@ -28,6 +30,12 @@ public struct SearchView: View {
         content
             .searchable(text: $viewModel.query, prompt: "Search movies, shows, and episodes")
             .task(id: viewModel.query) { await viewModel.search() }
+            .onChange(of: focusedResultID, initial: true) { _, resultID in
+                pinnedSidebarInteraction?.setSearchResultsFocused(resultID != nil)
+            }
+            .onDisappear {
+                pinnedSidebarInteraction?.setSearchResultsFocused(false)
+            }
             .onReceive(NotificationCenter.default.publisher(for: .mediaItemDidMutate)) { note in
                 if let mutation = MediaItemMutation.from(note) {
                     viewModel.applyWatchedState(mutation)
@@ -79,6 +87,7 @@ public struct SearchView: View {
                                 ) {
                                     onSelect(item)
                                 }
+                                .focused($focusedResultID, equals: item.stablePresentationID)
                             }
                         }
                         .padding(.horizontal, PlozzTheme.Metrics.screenPadding)

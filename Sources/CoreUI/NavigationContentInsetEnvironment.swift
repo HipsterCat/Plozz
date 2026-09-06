@@ -34,6 +34,7 @@ private struct PlozzPinnedSidebarInteractionKey: EnvironmentKey {
 /// pinned sidebar without coupling feature modules to AppShell.
 public final class PlozzPinnedSidebarInteraction: ObservableObject {
     @Published public private(set) var heroHasFocus = false
+    @Published public private(set) var searchResultsHaveFocus = false
     @Published public private(set) var openRequest = 0
 
     public init() {}
@@ -41,6 +42,12 @@ public final class PlozzPinnedSidebarInteraction: ObservableObject {
     @MainActor
     public func setHeroFocused(_ focused: Bool) {
         heroHasFocus = focused
+    }
+
+    @MainActor
+    public func setSearchResultsFocused(_ focused: Bool) {
+        guard searchResultsHaveFocus != focused else { return }
+        searchResultsHaveFocus = focused
     }
 
     @MainActor
