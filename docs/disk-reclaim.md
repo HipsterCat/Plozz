@@ -7,7 +7,7 @@ uncertain.
 
 ## Current rollout status: destructive cleanup disabled
 
-Two independent gates must remain closed until every owner listed below is
+Two existing activation gates must remain closed until every owner listed below is
 ported or administratively disabled:
 
 1. `~/.config/smart-disk-maintenance/SUSPENDED` must be absent.
@@ -17,7 +17,7 @@ ported or administratively disabled:
 The machine currently uses `SUSPENDED`. This repository does not remove it,
 create the rollout policy, enable a scheduler, or authorize cleanup.
 
-The required rollout file is intentionally all-or-nothing:
+The legacy rollout file is intentionally all-or-nothing:
 
 ```text
 protocol=1
@@ -42,8 +42,16 @@ Only `plozz-current-writers` is implemented by this change. Remaining blockers:
 - older Plozz worktrees containing pre-interlock scripts;
 - current and older Mozz writer entrypoints;
 - current and older Twozz writer entrypoints;
+- current and older Hozz writer entrypoints;
 - direct/manual Xcode, raw `xcodebuild`, and third-party build tools;
-- installed global cleanup entrypoints and policy-update tooling.
+- installed global cleanup entrypoints and reviewed owner evidence.
+
+The exact legacy file cannot express Hozz or time-bounded owner holds. Its wire
+format remains frozen for existing readers. **It is not sufficient authorization
+for global cleanup.** The separate [attested maintenance-window policy](apple-maintenance-windows.md)
+adds Hozz, current/legacy inventories, exact release-manifest scope, and explicit
+human approval. Its updater writes only the companion file under the conflicting
+policy lock; it never enables the legacy gate or removes suspension.
 
 Until those owners are coordinated, keep `SUSPENDED`, keep broad schedules
 disabled, and do not create the rollout file. The interlock alone is not a claim
@@ -134,7 +142,7 @@ After cleanup acquires exclusive ownership, the previous checks still run:
 These checks catch uncooperative or unexpected activity, but they do not replace
 the cooperative lease. Process sampling alone has a start-after-check race.
 
-The policy lock is held shared for the whole cleanup lane. Future tooling that
+The policy lock is held shared for the whole cleanup lane. Tooling that
 changes `SUSPENDED` or rollout policy must take the conflicting exclusive policy
 lock. Per-delete verification also confirms the marker is still absent and the
 opened policy/coordination files retain the same inode and content. Manual file
