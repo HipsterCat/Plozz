@@ -2,6 +2,37 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/034",
+      "version": "2026.9.6",
+      "build": 34,
+      "releasedAt": "2026-09-06",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Subtitle Extra Line Position control"
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            "Missing titles in Continue Watching",
+            "Play and Resume buttons on show pages",
+            "Library titles incorrectly shown as unavailable",
+            "Subtitle positioning and downloaded subtitles on replay",
+            {
+              "text": "First-generation Siri Remote swipes and edge clicks",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Pinned Sidebar swipe navigation",
+              "platforms": ["tvOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/033",
       "version": "2026.9.3",
       "build": 33,
