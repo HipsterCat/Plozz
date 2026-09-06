@@ -188,6 +188,12 @@ public final class HomeViewModel {
     /// cached rows remain visible; Continue Watching uses a row placeholder until
     /// fresh content publishes once.
     public private(set) var isShowingCachedSnapshot = false
+    @ObservationIgnored private var hasReceivedLiveContent = false
+    /// Detail opens reuse the live Home row, not a persisted launch placeholder.
+    public var continueWatchingForDetail: [MediaItem] {
+        let content = state.value
+        return hasReceivedLiveContent ? content?.continueWatching ?? [] : []
+    }
     /// A network aggregation is replacing the visible snapshot. Unlike `state`,
     /// this remains true during stale-while-revalidate so cached rows can explain
     /// that their complete live contents are still arriving.
@@ -674,6 +680,7 @@ public final class HomeViewModel {
             isShowingCachedSnapshot = false
             return
         }
+        hasReceivedLiveContent = true
         isShowingCachedSnapshot = false
         state = content.isEmpty && watchlistLoadingPlaceholderCount == 0
             ? .empty

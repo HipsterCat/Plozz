@@ -50,6 +50,9 @@ public final class ItemDetailViewModel {
         /// Regional release/watch facts for a synthetic external title. `nil` on
         /// ordinary library details and when no provider could answer.
         public var externalAvailability: ExternalTitleAvailability?
+        /// Published with the detail so cached seasons and a later live resume
+        /// answer cannot become independent, inconsistently observed states.
+        public var serverResumeEpisode: MediaItem?
     }
 
     public private(set) var state: LoadState<Detail> = .idle
@@ -78,13 +81,10 @@ public final class ItemDetailViewModel {
     /// reports nothing at all.
     ///
     /// The Continue Watching feed asks the server directly and gets it right —
-    /// it is the same data behind the Home rail. `nil` when the show has no
-    /// resume point, which is a real answer meaning "start from the beginning".
-    /// Deliberately not observed: it is resolved *before* the children publish
-    /// that makes the page render its seasons, so a view reading it during that
-    /// render already sees the settled value. Tracking it would spend one of this
-    /// type's observable-property budget for no additional invalidation.
-    @ObservationIgnored public private(set) var serverResumeEpisode: MediaItem?
+    /// it is the same data behind the Home rail. `nil` until known, or when the
+    /// server has no resume point. Observed through `state`: cached seasons can
+    /// render before this live answer without changing their ids when it arrives.
+    public var serverResumeEpisode: MediaItem? { state.value?.serverResumeEpisode }
 
 
     /// empty array — cached deliberately, so a season that genuinely cannot be
@@ -458,6 +458,7 @@ public final class ItemDetailViewModel {
         provider: any MediaProvider,
         itemID: String,
         initialItem: MediaItem? = nil,
+        initialResumeEpisode: MediaItem? = nil,
         isDiscoveryItem: Bool = false,
         discoveryStatusRefresh: (@Sendable (MediaItem) async -> (MediaAvailabilityStatus, Double?)?)? = nil,
         externalMetadataResolver: @escaping @Sendable (MediaItem, String) async -> ExternalTitleMetadata = {
@@ -512,7 +513,14 @@ public final class ItemDetailViewModel {
         // in place without ever dropping back to a loading/skeleton state.
         if let initialItem {
             let seeded = sourceAccountID.map(initialItem.taggingSource) ?? initialItem
-            self.state = .loaded(Detail(item: seeded, children: []))
+            let resume = initialResumeEpisode.flatMap { episode -> MediaItem? in
+                guard episode.kind == .episode,
+                      episode.locallyValidatedPlayableSource,
+                      episode.seriesID == itemID,
+                      episode.sourceAccountID == self.activeSourceAccountID else { return nil }
+                return episode
+            }
+            self.state = .loaded(Detail(item: seeded, children: [], serverResumeEpisode: resume))
         }
     }
 
@@ -676,7 +684,8 @@ public final class ItemDetailViewModel {
                     item: taggedItem,
                     children: seededChildren,
                     childrenLoaded: state.value?.childrenLoaded ?? false,
-                    upcomingSchedule: state.value?.upcomingSchedule
+                    upcomingSchedule: state.value?.upcomingSchedule,
+                    serverResumeEpisode: serverResumeEpisode
                 ))
                 hasPaintedFreshDetail = true
                 seedSources(from: taggedItem)
@@ -701,12 +710,12 @@ public final class ItemDetailViewModel {
                 async let resumeTask = fetchServerResumeEpisode(for: item, provider: loadProvider)
                 let (fetchedChildren, resume) = await (childrenTask, resumeTask)
                 guard !Task.isCancelled, isCurrent() else { return }
-                serverResumeEpisode = resume
                 state = .loaded(Detail(
                     item: taggedItem,
                     children: fetchedChildren.map(tagged),
                     childrenLoaded: true,
-                    upcomingSchedule: state.value?.upcomingSchedule
+                    upcomingSchedule: state.value?.upcomingSchedule,
+                    serverResumeEpisode: resume.map(tagged)
                 ))
                 // Deliberately after the state publish: the schedule is decoration,
                 // and must never hold up the page. Cache read first (instant), then
@@ -1558,7 +1567,8 @@ public final class ItemDetailViewModel {
             item: tagged(item),
             children: children.map(tagged),
             childrenLoaded: true,
-            upcomingSchedule: upcomingSchedule
+            upcomingSchedule: upcomingSchedule,
+            serverResumeEpisode: serverResumeEpisode
         ))
         loadUpcomingSchedule(for: item)
         startStreamProbeEnrichment(
@@ -1905,6 +1915,10 @@ public final class ItemDetailViewModel {
 
     private func invalidateSourceOperations() {
         sourceGeneration += 1
+        if var detail = state.value, detail.serverResumeEpisode != nil {
+            detail.serverResumeEpisode = nil
+            state = .loaded(detail)
+        }
         seasonLoadingResumeSourceGeneration = nil
         snapshotRestoreTask?.cancel()
         snapshotRestoreTask = nil
@@ -1937,7 +1951,8 @@ public final class ItemDetailViewModel {
             item: item,
             children: snapshot.children.map(tagged),
             childrenLoaded: true,
-            upcomingSchedule: snapshot.upcomingSchedule
+            upcomingSchedule: snapshot.upcomingSchedule,
+            serverResumeEpisode: serverResumeEpisode
         ))
         if snapshot.sources.count > 1 {
             let restored = prunedToActiveAccounts(snapshot.sources)
@@ -1980,7 +1995,8 @@ public final class ItemDetailViewModel {
                 item: detail.item,
                 children: snapshot.children.map(tagged),
                 childrenLoaded: true,
-                upcomingSchedule: detail.upcomingSchedule ?? snapshot.upcomingSchedule
+                upcomingSchedule: detail.upcomingSchedule ?? snapshot.upcomingSchedule,
+                serverResumeEpisode: detail.serverResumeEpisode
             ))
         } else if var detail = state.value,
                   detail.upcomingSchedule == nil,

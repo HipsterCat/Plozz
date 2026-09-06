@@ -215,7 +215,13 @@ struct SeriesDetailView: View {
         let seasonID = initialEpisode?.seasonID ?? initialSeasonID
         let initialSeason = seasonID.flatMap { id in seasons.first { $0.id == id } }
         _selectedSeasonID = State(initialValue: initialSeason?.id)
-        _heroItem = State(initialValue: initialSeason ?? series)
+        _heroItem = State(initialValue:
+            SeriesEpisodeEntry.openingSeed(
+                for: series, initialEpisode: initialEpisode,
+                initialSeasonID: initialSeasonID, resumeEpisode: viewModel.serverResumeEpisode
+            )
+                ?? initialSeason ?? series
+        )
         _railTargetID = State(initialValue: initialEpisode?.id)
     }
 
@@ -257,7 +263,7 @@ struct SeriesDetailView: View {
             // loaded yet); keying on the season ids re-runs this the moment they
             // arrive so a series/episode entry (selectedSeasonID still nil) picks
             // its first season and loads episodes instead of staying empty.
-            .task(id: seasonSetKey) { await prepareInitialSeason() }
+            .task(id: initialSeasonPreparationKey) { await prepareInitialSeason() }
             // Keep the series-level hero in sync with the active server: when an
             // in-place cross-server switch re-points `series` to the other server's
             // copy while the hero is showing the show itself (no episode fronted),
@@ -1143,6 +1149,11 @@ struct SeriesDetailView: View {
         return "\(series.sourceAccountID ?? "_")#\(series.id)#\(seasonIDs)"
     }
 
+    private var initialSeasonPreparationKey: String {
+        let resume = viewModel.serverResumeEpisode
+        return "\(seasonSetKey)#\(resume?.id ?? "")#\(resume?.resumePosition ?? 0)"
+    }
+
     /// Warms the **currently selected** season so its episode thumbnails are
     /// synchronously seedable on first render (no gray placeholder flash). Runs
     /// whenever the selected season's episodes arrive or change.
@@ -1501,7 +1512,15 @@ struct SeriesDetailView: View {
             return
         }
         selectedSeasonID = id
+        if !hasUserDirectedFocus,
+           let seed = SeriesEpisodeEntry.openingSeed(
+               for: series, initialEpisode: initialEpisode,
+               initialSeasonID: initialSeasonID, resumeEpisode: viewModel.serverResumeEpisode
+           ) {
+            heroItem = seed
+        }
         await viewModel.loadEpisodes(for: id)
+        guard !Task.isCancelled, selectedSeasonID == id else { return }
         await resolveRestingHero(in: id)
     }
 
@@ -1587,42 +1606,15 @@ struct SeriesDetailView: View {
 
     private func resolvedInitialSeasonID() -> String? {
         Self.logSeasonResolution(seasons, resume: viewModel.serverResumeEpisode)
-        if let id = selectedSeasonID, seasons.contains(where: { $0.id == id }) { return id }
-        if let id = initialSeasonID, seasons.contains(where: { $0.id == id }) { return id }
-        if let id = initialEpisode?.seasonID, seasons.contains(where: { $0.id == id }) { return id }
-        if let number = initialEpisode?.seasonNumber,
-           let match = seasons.first(where: { $0.seasonNumber == number }) {
-            return match.id
-        }
-        // The server's own answer, from the same Continue Watching feed the Home
-        // rail uses. It outranks anything inferred from the season containers,
-        // which on a real library came back with no watch state at all — no
-        // played flag, no percentage, no recency — leaving the inference to fall
-        // through to "the first season in the list".
-        if let resume = viewModel.serverResumeEpisode {
-            if let id = resume.seasonID, seasons.contains(where: { $0.id == id }) {
-                return id
-            }
-            if let number = resume.seasonNumber,
-               let match = seasons.first(where: { $0.seasonNumber == number }) {
-                return match.id
-            }
-        }
-        // No explicit hint (plain series open): land on the season the user is
-        // watching, using the same next-up rule the rest of the app uses, applied
-        // to the seasons themselves. Never Season 1 unless it genuinely is next up.
-        //
-        // A **finished** show is the exception: `nextUp` falls through to the last
-        // season when everything is watched, which would open on the finale. A
-        // finished series starts over instead — behaviourally identical to one
-        // never started — so it opens on the first real season. `restartSeason`
-        // skips specials, because season 0 sorts ahead of season 1 and "start
-        // from the beginning" should not land on a Christmas special.
-        if SeriesResume.isFinished(seasons: seasons, episodes: stampedLooseEpisodes) {
-            return SeriesResume.restartSeason(in: seasons)?.id ?? seasons.first?.id
-        }
-        if let resume = SeriesResume.nextUp(in: seasons) { return resume.id }
-        return seasons.first?.id
+        return SeriesResume.openingSeasonID(
+            seasons: seasons,
+            episodes: stampedLooseEpisodes,
+            selectedSeasonID: selectedSeasonID,
+            preserveSelection: hasUserDirectedFocus,
+            initialSeasonID: initialSeasonID,
+            initialEpisode: initialEpisode,
+            resumeEpisode: viewModel.serverResumeEpisode
+        )
     }
 
     /// Settles what the hero describes, once the episodes it needs are loaded.
@@ -1659,14 +1651,14 @@ struct SeriesDetailView: View {
             pool = seasons.isEmpty ? stampedLooseEpisodes : []
         }
 
-        if let resume = viewModel.serverResumeEpisode,
+        if let resume = initialEpisode ?? (initialSeasonID == nil ? viewModel.serverResumeEpisode : nil),
                   let loaded = SeriesEpisodeEntry.episode(
                       matching: resume,
                       in: pool
                   ) {
             // The server named the episode to resume; prefer the loaded copy so
             // the hero carries full metadata and badges.
-            heroItem = loaded
+            heroItem = DetailPlaybackSelection.applyingResumeItem(resume, to: loaded)
         } else {
             guard !pool.isEmpty else { return }
             heroItem = SeriesResume.restingHero(

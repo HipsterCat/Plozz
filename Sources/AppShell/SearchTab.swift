@@ -57,6 +57,7 @@ struct SearchTab: View {
     let enqueueWatchMutation: (WatchMutation) -> Void
     let watchBridge: WatchOutboxBridge
     let identitySources: @Sendable (MediaItem) -> [MediaSourceRef]
+    let continueWatchingSnapshot: @MainActor () -> [MediaItem]
     /// Persist an in-player subtitle-appearance edit to the profile store.
     let onSubtitleStyleChanged: (SubtitleStyle) -> Void
     /// Hosted on the root `TabView` (see `MainTabView`) for reliable presentation,
@@ -238,24 +239,11 @@ struct SearchTab: View {
             }
             .navigationDestination(for: EpisodeContextRoute.self) { route in
                 ItemDetailView(
-                    viewModel: ItemDetailViewModel(
-                        provider: resolveProvider(route.sourceAccountID, in: accounts),
-                        itemID: route.seriesID,
-                        // Seed the hero from the tapped episode for INSTANT first
-                        // paint instead of a centered spinner while the series
-                        // resolves (load() swaps in the full series page in place).
-                        initialItem: route.episode,
-                        ratingsProvider: ratingsProvider,
+                    viewModel: detailEnvironment.makeSeriesContextViewModel(
+                        seriesID: route.seriesID,
+                        seed: route.episode,
                         sourceAccountID: route.sourceAccountID,
-                        // The fronted page IS the series, so it gets the same
-                        // cross-server "…" picker a directly-opened series does.
-                        alternateProviderResolver: { resolveOptionalProvider($0, in: accounts) },
-                        crossServerSourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
-                        relatedTitlesLoader: makeRelatedTitlesLoader(
-                            in: accounts,
-                            identitySources: identitySources
-                        ),
-                        snapshotCache: detailSnapshotCache
+                        originAccountID: nil
                     ),
                     spoilerSettings: spoilerSettings,
                     onPlay: { requestPlay($0) },
@@ -279,24 +267,11 @@ struct SearchTab: View {
             }
             .navigationDestination(for: SeasonContextRoute.self) { route in
                 ItemDetailView(
-                    viewModel: ItemDetailViewModel(
-                        provider: resolveProvider(route.sourceAccountID, in: accounts),
-                        itemID: route.seriesID,
-                        // Seed the hero from the tapped season for INSTANT first
-                        // paint instead of a centered spinner while the series
-                        // resolves.
-                        initialItem: route.season,
-                        ratingsProvider: ratingsProvider,
+                    viewModel: detailEnvironment.makeSeriesContextViewModel(
+                        seriesID: route.seriesID,
+                        seed: route.season,
                         sourceAccountID: route.sourceAccountID,
-                        // The fronted page IS the series, so it gets the same
-                        // cross-server "…" picker a directly-opened series does.
-                        alternateProviderResolver: { resolveOptionalProvider($0, in: accounts) },
-                        crossServerSourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
-                        relatedTitlesLoader: makeRelatedTitlesLoader(
-                            in: accounts,
-                            identitySources: identitySources
-                        ),
-                        snapshotCache: detailSnapshotCache
+                        originAccountID: nil
                     ),
                     spoilerSettings: spoilerSettings,
                     onPlay: { requestPlay($0) },
@@ -353,6 +328,7 @@ struct SearchTab: View {
             resolveOptionalProvider: { resolveOptionalProvider($0, in: accounts) },
             identitySources: identitySources,
             crossServerSourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
+            continueWatchingSnapshot: continueWatchingSnapshot,
             ratingsProvider: ratingsProvider,
             discoveryStatusRefresh: { await seer.availability(for: $0) },
             makeRelatedTitlesLoader: {

@@ -48,6 +48,7 @@ final class HomeViewModelSnapshotHydrationTests: XCTestCase {
         let vm = makeViewModel(provider: FakeMediaProvider(allItems: []), contentStore: store)
         // Painted from cache BEFORE any load — no network, no skeleton.
         XCTAssertEqual(loadedContent(vm)?.continueWatching.map(\.id), ["cachedA", "cachedB"])
+        XCTAssertTrue(vm.continueWatchingForDetail.isEmpty, "A launch cache is not a current resume answer")
     }
 
     func testNoCacheLeavesIdleForNormalLoadingState() {
@@ -72,6 +73,7 @@ final class HomeViewModelSnapshotHydrationTests: XCTestCase {
 
         XCTAssertEqual(provider.librariesCallCount, 1, "The silent refresh actually re-aggregated")
         XCTAssertEqual(loadedContent(vm)?.continueWatching.map(\.id), ["freshA", "freshB"], "Fresh content swapped in")
+        XCTAssertEqual(vm.continueWatchingForDetail.map(\.id), ["freshA", "freshB"])
     }
 
     func testSilentRefreshNeverEntersLoadingState() async {
@@ -115,6 +117,7 @@ final class HomeViewModelSnapshotHydrationTests: XCTestCase {
         let vm = makeViewModel(provider: provider, contentStore: store)
 
         await vm.loadIfNeeded(for: .default)
+        XCTAssertTrue(vm.continueWatchingForDetail.isEmpty, "Revealing a fallback row is not a live resume answer")
 
         XCTAssertEqual(
             loadedContent(vm)?.continueWatching.map(\.id), ["cachedA", "cachedB"],

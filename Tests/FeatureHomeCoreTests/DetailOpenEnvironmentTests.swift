@@ -4,6 +4,30 @@ import CoreModels
 
 @MainActor
 final class DetailOpenEnvironmentTests: XCTestCase {
+    func testSelectingAnIndexRefForTheSameMoviePreservesImmediateResumeProgress() {
+        let movie = MediaItem(
+            id: "movie", title: "Movie", kind: .movie,
+            runtime: 2_000, resumePosition: 800, playedPercentage: 0.4,
+            sourceAccountID: "plex"
+        )
+        let membership = MediaSourceRef(accountID: "plex", itemID: movie.id, kind: .movie)
+        let seeded = DetailOpenEnvironment.initialItem(for: movie, selectedSource: membership)
+        XCTAssertEqual(seeded.resumePosition, 800)
+        XCTAssertEqual(seeded.resumeProgressFraction, 0.4)
+    }
+
+    func testSelectingAnotherSourceDoesNotCopyTheOriginalMovieProgress() {
+        let movie = MediaItem(
+            id: "movie", title: "Movie", kind: .movie,
+            resumePosition: 800, sourceAccountID: "plex"
+        )
+        let alternate = MediaSourceRef(accountID: "jellyfin", itemID: "other-movie", kind: .movie)
+        let seeded = DetailOpenEnvironment.initialItem(for: movie, selectedSource: alternate)
+        XCTAssertEqual(seeded.id, alternate.itemID)
+        XCTAssertEqual(seeded.sourceAccountID, alternate.accountID)
+        XCTAssertNil(seeded.resumePosition)
+    }
+
     func testInitialSelectionUsesLiveLocalityBeforeDetailConstruction() {
         let item = MediaItem(
             id: "remote-series",

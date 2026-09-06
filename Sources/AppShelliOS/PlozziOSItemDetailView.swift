@@ -11,6 +11,7 @@ import TraktService
 import SwiftUI
 
 struct PlozziOSItemDetailView: View {
+    @Environment(HomeViewModel.self) private var homeViewModel: HomeViewModel?
     let appModel: PlozziOSAppModel
     let provider: any MediaProvider
     let item: MediaItem
@@ -102,6 +103,7 @@ struct PlozziOSItemDetailView: View {
             appModel: appModel,
             provider: provider,
             item: resolvedItem,
+            continueWatching: homeViewModel?.continueWatchingForDetail ?? [],
             seerService: seerService,
             originSourceAccountID: originSourceAccountID,
             initialSeasonID: contextItem.kind == .season
@@ -188,6 +190,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
         appModel: PlozziOSAppModel,
         provider: any MediaProvider,
         item: MediaItem,
+        continueWatching: [MediaItem] = [],
         seerService: SeerService? = nil,
         originSourceAccountID: String? = nil,
         initialSeasonID: String? = nil,
@@ -198,7 +201,6 @@ private struct PlozziOSCanonicalItemDetailView: View {
         self.initialSeasonID = initialSeasonID
         self.initialEpisode = initialEpisode
         self.presentsEpisodeAsSubject = presentsEpisodeAsSubject
-        _seriesPlayTarget = State(initialValue: initialEpisode)
         let identitySources = appModel.identityIndex.identitySourcesProvider
         let isDiscoveryItem = DetailOpenEnvironment.isDiscovery(
             item,
@@ -224,7 +226,14 @@ private struct PlozziOSCanonicalItemDetailView: View {
         )
         let initialSources = selection.sources
         let selectedSource = selection.selected
-        let selectedItem = selectedSource.map { item.selectingSource($0) } ?? item
+        let selectedItem = DetailOpenEnvironment.initialItem(for: item, selectedSource: selectedSource)
+        let resume = DetailPlaybackSelection.resumeItem(for: selectedItem, in: continueWatching)
+        _seriesPlayTarget = State(initialValue:
+            SeriesEpisodeEntry.openingSeed(
+                for: selectedItem, initialEpisode: initialEpisode,
+                initialSeasonID: initialSeasonID, resumeEpisode: resume
+            )
+        )
         let selectedProvider = selectedSource.flatMap {
             appModel.accountsProviders.provider(forAccountID: $0.accountID)
         } ?? provider
@@ -234,7 +243,8 @@ private struct PlozziOSCanonicalItemDetailView: View {
             initialValue: ItemDetailViewModel(
                 provider: selectedProvider,
                 itemID: selectedSource?.itemID ?? item.id,
-                initialItem: selectedItem,
+                initialItem: DetailPlaybackSelection.applyingResumeItem(resume, to: selectedItem),
+                initialResumeEpisode: selectedItem.kind == .series ? resume : nil,
                 isDiscoveryItem: isDiscoveryItem,
                 discoveryStatusRefresh: discoveryStatusRefresh,
                 ratingsProvider: RatingsServiceFactory.make(),
@@ -1370,11 +1380,13 @@ private struct PlozziOSInlineSeriesBrowser: View {
     /// The season the resting target was settled from, so browsing elsewhere
     /// leaves the hero where the viewer actually is.
     @State private var resolvedSeasonID: String?
+    @State private var hasInteractedWithEpisodeBrowser = false
 
     let viewModel: ItemDetailViewModel
     let seasons: [MediaItem]
     let looseEpisodes: [MediaItem]
     let initialEpisode: MediaItem?
+    let initialSeasonID: String?
     let onPlayTargetChange: (MediaItem?) -> Void
     /// Whether the hero should describe the show rather than the play target.
     let onHeroShowsSeriesChange: (Bool) -> Void
@@ -1402,6 +1414,7 @@ private struct PlozziOSInlineSeriesBrowser: View {
         self.seasons = seasons
         self.looseEpisodes = looseEpisodes
         self.initialEpisode = initialEpisode
+        self.initialSeasonID = initialSeasonID
         self.onPlayTargetChange = onPlayTargetChange
         self.onHeroShowsSeriesChange = onHeroShowsSeriesChange
         self.onPlay = onPlay
@@ -1433,6 +1446,7 @@ private struct PlozziOSInlineSeriesBrowser: View {
                                             isSelected:
                                                 season.id == selectedSeasonID
                                         ) {
+                                            hasInteractedWithEpisodeBrowser = true
                                             selectedSeasonID = season.id
                                         }
                                         .id(season.id)
@@ -1489,18 +1503,21 @@ private struct PlozziOSInlineSeriesBrowser: View {
                         && selectedSeasonID != nil
                         && displayedEpisodes == nil,
                     currentEpisodeID: railTargetID,
+                    onInteraction: { hasInteractedWithEpisodeBrowser = true },
                     onPlay: onPlay
                 )
             }
-            .onChange(of: seasons.map(\.id), initial: true) { _, ids in
-                if selectedSeasonID == nil
-                    || !ids.contains(selectedSeasonID ?? "") {
-                    selectedSeasonID = SeriesEpisodeEntry.seasonID(
-                        initialEpisode: initialEpisode ?? viewModel.serverResumeEpisode,
-                        initialSeasonID: nil,
-                        seasons: seasons
-                    )
-                }
+            .onChange(of: openingSelectionKey, initial: true) { _, _ in
+                let ids = seasons.map(\.id)
+                selectedSeasonID = SeriesResume.openingSeasonID(
+                    seasons: seasons,
+                    episodes: looseEpisodes,
+                    selectedSeasonID: selectedSeasonID,
+                    preserveSelection: hasInteractedWithEpisodeBrowser,
+                    initialSeasonID: initialSeasonID,
+                    initialEpisode: initialEpisode,
+                    resumeEpisode: viewModel.serverResumeEpisode
+                )
                 // A different set of season ids means a different server backing
                 // this show, so the resume point has to be resolved again against
                 // the new source. Leaving the pin in place left the Play button
@@ -1509,6 +1526,16 @@ private struct PlozziOSInlineSeriesBrowser: View {
                 if !ids.contains(resolvedSeasonID ?? "") {
                     resolvedSeasonID = nil
                     railTargetID = nil
+                }
+                if !hasInteractedWithEpisodeBrowser,
+                   let series = viewModel.state.value?.item,
+                   let seed = SeriesEpisodeEntry.openingSeed(
+                       for: series, initialEpisode: initialEpisode,
+                       initialSeasonID: initialSeasonID, resumeEpisode: viewModel.serverResumeEpisode
+                   ) {
+                    resolvedSeasonID = nil
+                    onPlayTargetChange(seed)
+                    onHeroShowsSeriesChange(false)
                 }
             }
             .task(id: selectedSeasonID) {
@@ -1521,6 +1548,11 @@ private struct PlozziOSInlineSeriesBrowser: View {
                 publishPlayTarget()
             }
         }
+    }
+
+    private var openingSelectionKey: String {
+        let resume = viewModel.serverResumeEpisode
+        return "\(seasons.map(\.id).joined(separator: ","))#\(resume?.id ?? "")#\(resume?.resumePosition ?? 0)"
     }
 
     private var displayedEpisodes: [MediaItem]? {
@@ -1575,13 +1607,14 @@ private struct PlozziOSInlineSeriesBrowser: View {
         // loaded empty array, which still publishes.
         guard let displayedEpisodes else { return }
         // An explicitly opened episode outranks the resume point.
+        let openingEpisode = initialEpisode ?? (initialSeasonID == nil ? viewModel.serverResumeEpisode : nil)
         if let loaded = SeriesEpisodeEntry.episode(
-            matching: initialEpisode,
+            matching: openingEpisode,
             in: displayedEpisodes
         ) {
             resolvedSeasonID = selectedSeasonID
             railTargetID = loaded.id
-            onPlayTargetChange(loaded)
+            onPlayTargetChange(DetailPlaybackSelection.applyingResumeItem(openingEpisode, to: loaded))
             onHeroShowsSeriesChange(false)
             return
         }
@@ -2666,17 +2699,20 @@ private struct PlozziOSInlineEpisodeRail: View {
     let episodes: [MediaItem]?
     let isLoading: Bool
     var currentEpisodeID: String? = nil
+    let onInteraction: () -> Void
     let onPlay: (MediaItem, Bool) -> Void
 
     init(
         episodes: [MediaItem]?,
         isLoading: Bool,
         currentEpisodeID: String? = nil,
+        onInteraction: @escaping () -> Void = {},
         onPlay: @escaping (MediaItem, Bool) -> Void
     ) {
         self.episodes = episodes
         self.isLoading = isLoading
         self.currentEpisodeID = currentEpisodeID
+        self.onInteraction = onInteraction
         self.onPlay = onPlay
         _scrollPositionID = State(initialValue: currentEpisodeID)
     }
@@ -2718,6 +2754,11 @@ private struct PlozziOSInlineEpisodeRail: View {
             )
             .scrollIndicators(.hidden)
             .scrollClipDisabled()
+            .onScrollPhaseChange { _, phase in
+                if phase == .tracking || phase == .interacting {
+                    onInteraction()
+                }
+            }
             .onChange(of: currentEpisodeID, initial: true) { _, target in
                 guard let target else { return }
                 scrollPositionID = target

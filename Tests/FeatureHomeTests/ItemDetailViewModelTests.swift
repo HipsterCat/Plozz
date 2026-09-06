@@ -2,10 +2,125 @@ import XCTest
 import CoreModels
 import MetadataKit
 import RatingsService
+import Observation
 @testable import FeatureHome
 
 @MainActor
 final class ItemDetailViewModelTests: XCTestCase {
+    func testDetailFactorySeedsTheCurrentEpisodeAndMovieProgressBeforeAnyLoad() {
+        let provider = FakeMediaProvider(allItems: [], kind: .plex)
+        let show = MediaItem(id: "show", title: "Show", kind: .series, sourceAccountID: "plex")
+        let episode = MediaItem(
+            id: "s4e1", title: "Resume", kind: .episode,
+            seasonNumber: 4, episodeNumber: 1,
+            seriesID: show.id, seasonID: "s4",
+            runtime: 3_000, resumePosition: 867,
+            sourceAccountID: "plex"
+        )
+        let movie = MediaItem(id: "movie", title: "Movie", kind: .movie, sourceAccountID: "plex")
+        var movieResume = movie
+        movieResume.runtime = 2_000
+        movieResume.resumePosition = 800
+        movieResume.playedPercentage = 0.4
+        let environment = DetailOpenEnvironment(
+            resolveProvider: { _ in provider },
+            resolveOptionalProvider: { _ in provider },
+            identitySources: { item in [
+                MediaSourceRef(accountID: "plex", itemID: item.id, kind: item.kind)
+            ] },
+            crossServerSourceResolver: nil,
+            continueWatchingSnapshot: { [episode, movieResume] }
+        )
+
+        let seriesVM = environment.makeViewModel(for: show, libraryOrigin: nil)
+        XCTAssertEqual(seriesVM.serverResumeEpisode?.id, "s4e1")
+        XCTAssertEqual(seriesVM.serverResumeEpisode?.resumePosition, 867)
+        XCTAssertEqual(
+            SeriesEpisodeEntry.playableSeed(seriesVM.serverResumeEpisode, for: show)?.id,
+            episode.id
+        )
+
+        let movieVM = environment.makeViewModel(for: movie, libraryOrigin: nil)
+        XCTAssertEqual(movieVM.state.value?.item.resumePosition, 800)
+        XCTAssertEqual(movieVM.state.value?.item.resumeProgressFraction, 0.4)
+        let contextVM = environment.makeSeriesContextViewModel(
+            seriesID: show.id, seed: episode,
+            sourceAccountID: "plex", originAccountID: nil
+        )
+        XCTAssertEqual(contextVM.serverResumeEpisode?.id, "s4e1")
+        XCTAssertTrue(provider.itemCallCounts.isEmpty, "Resume is available synchronously, before network work")
+    }
+
+    func testResumeSeedFromAnotherAccountOrSeriesIsRejected() {
+        let show = MediaItem(id: "show", title: "Show", kind: .series, sourceAccountID: "plex")
+        let provider = FakeMediaProvider(allItems: [], kind: .plex)
+        for (account, seriesID) in [("other", "show"), ("plex", "other-show")] {
+            let resume = MediaItem(
+                id: "episode", title: "Episode", kind: .episode,
+                seriesID: seriesID, resumePosition: 867, sourceAccountID: account
+            )
+            let vm = ItemDetailViewModel(
+                provider: provider, itemID: show.id, initialItem: show,
+                initialResumeEpisode: resume, sourceAccountID: "plex"
+            )
+            XCTAssertNil(vm.serverResumeEpisode)
+        }
+    }
+
+    func testResumeArrivalIsObservedAfterCachedSeasonsHaveAlreadyRendered() async {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("resume-arrival-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = DetailSnapshotCache(directory: directory)
+        let show = MediaItem(
+            id: "show", title: "Show", kind: .series,
+            overview: "Overview", sourceAccountID: "plex"
+        )
+        let seasons = [1, 4].map { (number: Int) in
+            MediaItem(id: "s\(number)", title: "Season \(number)", kind: .season, seasonNumber: number)
+        }
+        let resume = MediaItem(
+            id: "s4e1", title: "Resume", kind: .episode,
+            seasonNumber: 4, episodeNumber: 1,
+            seriesID: show.id, seasonID: "s4", resumePosition: 867
+        )
+        await cache.store(.init(item: show, children: seasons), for: "plex|show")
+        let gate = AsyncGate()
+        let provider = FakeMediaProvider(allItems: [show], kind: .plex)
+        provider.itemGate = [show.id: { await gate.wait() }]
+        provider.childrenByParent = [show.id: seasons]
+        provider.continueWatchingItems = [resume]
+        let vm = ItemDetailViewModel(
+            provider: provider,
+            itemID: show.id,
+            initialItem: show,
+            sourceAccountID: "plex",
+            onlineTrailerResolver: { _ in [] },
+            playableVideoIDResolver: { _ in nil },
+            trailerCache: TrailerResolutionCache(),
+            snapshotCache: cache
+        )
+        let load = Task { await vm.load() }
+        await waitUntil { vm.state.value?.children.count == 2 }
+        XCTAssertEqual(vm.state.value?.children.map(\.id), ["s1", "s4"])
+        XCTAssertNil(vm.serverResumeEpisode)
+        let changed = LockedFlag()
+        withObservationTracking {
+            _ = vm.serverResumeEpisode
+        } onChange: {
+            changed.set()
+        }
+        gate.open()
+        await load.value
+
+        XCTAssertTrue(changed.value, "Identical season ids must not hide the arriving resume point")
+        XCTAssertEqual(vm.serverResumeEpisode?.seasonNumber, 4)
+        XCTAssertEqual(vm.serverResumeEpisode?.episodeNumber, 1)
+        XCTAssertEqual(vm.serverResumeEpisode?.resumePosition, 867)
+        XCTAssertEqual(vm.serverResumeEpisode?.sourceAccountID, "plex")
+        vm.suspendEnrichment()
+    }
+
     private func series(_ id: String) -> MediaItem {
         MediaItem(id: id, title: "Avatar", kind: .series)
     }

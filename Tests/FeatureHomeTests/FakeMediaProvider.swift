@@ -125,7 +125,11 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
     /// Items returned by `continueWatching(limit:)` — empty by default so existing
     /// tests are unaffected; a test that exercises the Continue Watching row sets it.
     var continueWatchingItems: [MediaItem] = []
-    func continueWatching(limit: Int) async throws -> [MediaItem] { Array(continueWatchingItems.prefix(limit)) }
+    var continueWatchingGate: (@Sendable () async -> Void)?
+    func continueWatching(limit: Int) async throws -> [MediaItem] {
+        await continueWatchingGate?()
+        return Array(continueWatchingItems.prefix(limit))
+    }
     func latest(limit: Int) async throws -> [MediaItem] { [] }
     func item(id: String) async throws -> MediaItem {
         withLock { _itemCallCounts[id, default: 0] += 1 }

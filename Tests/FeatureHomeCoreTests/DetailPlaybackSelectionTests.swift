@@ -5,6 +5,38 @@ import CoreModels
 /// An episode's preference key is its SERIES', so a per-file id stored there can
 /// only ever match the one episode it was saved from.
 final class DetailPlaybackSelectionTests: XCTestCase {
+    func testEpisodeMetadataEnrichmentKeepsTheContinueWatchingProgress() {
+        let resume = MediaItem(
+            id: "episode", title: "Episode", kind: .episode,
+            runtime: 3_000, resumePosition: 867, playedPercentage: 0.289,
+            sourceAccountID: "plex"
+        )
+        var loaded = resume
+        loaded.resumePosition = nil
+        loaded.playedPercentage = nil
+        loaded.overview = "Full episode overview"
+        let enriched = DetailPlaybackSelection.applyingResumeItem(resume, to: loaded)
+        XCTAssertEqual(enriched.overview, "Full episode overview")
+        XCTAssertEqual(enriched.resumePosition, 867)
+        XCTAssertEqual(enriched.resumeProgressFraction, 0.289)
+    }
+
+    func testContinueWatchingLookupIsScopedToTheSelectedSourceAndTitle() {
+        let show = MediaItem(id: "show", title: "Show", kind: .series, sourceAccountID: "plex")
+        let episode = MediaItem(
+            id: "episode", title: "Episode", kind: .episode,
+            seriesID: show.id, sourceAccountID: "plex"
+        )
+        var otherAccount = episode
+        otherAccount.sourceAccountID = "other"
+        var otherSeries = episode
+        otherSeries.seriesID = "other-show"
+        var external = episode
+        external.locallyValidatedPlayableSource = false
+        XCTAssertNil(DetailPlaybackSelection.resumeItem(for: show, in: [otherAccount, otherSeries, external]))
+        XCTAssertEqual(DetailPlaybackSelection.resumeItem(for: show, in: [episode])?.id, episode.id)
+    }
+
     func testAnEpisodeIgnoresAStoredFileIDAndUsesTheRememberedKind() {
         // The bug this guards: picking a version on episode 3 stored that file's
         // id under the series key, so replaying episode 3 returned it while every
