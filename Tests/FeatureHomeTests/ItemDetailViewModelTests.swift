@@ -7,6 +7,60 @@ import Observation
 
 @MainActor
 final class ItemDetailViewModelTests: XCTestCase {
+    func testResumePublishesEarlyWithoutChoosingASeasonBeforeItArrives() async {
+        for holdResume in [true, false] {
+            let show = MediaItem(
+                id: "show", title: "Show", kind: .series,
+                overview: "Overview", sourceAccountID: "plex"
+            )
+            let season = MediaItem(id: "s4", title: "Season 4", kind: .season, seasonNumber: 4)
+            let resume = MediaItem(
+                id: "s4e1", title: "Episode", kind: .episode,
+                seasonNumber: 4, episodeNumber: 1, seriesID: show.id,
+                seasonID: season.id, resumePosition: 867
+            )
+            let provider = FakeMediaProvider(allItems: [show], kind: .plex)
+            provider.childrenByParent = [show.id: [season]]
+            provider.continueWatchingItems = [resume]
+            let gate = AsyncGate()
+            if holdResume {
+                provider.continueWatchingGate = { await gate.wait() }
+            } else {
+                provider.childrenGate = [show.id: { _ in await gate.wait() }]
+            }
+            let vm = ItemDetailViewModel(
+                provider: provider, itemID: show.id, initialItem: show,
+                sourceAccountID: "plex",
+                onlineTrailerResolver: { _ in [] },
+                playableVideoIDResolver: { _ in nil },
+                trailerCache: TrailerResolutionCache()
+            )
+            let load = Task { await vm.load() }
+            if holdResume {
+                await waitUntil { provider.childrenCallCount[show.id] == 1 }
+                XCTAssertEqual(vm.state.value?.childrenLoaded, false)
+                XCTAssertEqual(vm.state.value?.children.map(\.id), [])
+                XCTAssertNil(vm.serverResumeEpisode)
+            } else {
+                await waitUntil { vm.serverResumeEpisode != nil }
+                XCTAssertEqual(vm.serverResumeEpisode?.id, resume.id)
+                XCTAssertEqual(
+                    SeriesEpisodeEntry.openingSeed(
+                        for: show, initialEpisode: nil, initialSeasonID: nil,
+                        resumeEpisode: vm.serverResumeEpisode
+                    )?.resumePosition,
+                    867
+                )
+                XCTAssertEqual(vm.state.value?.childrenLoaded, false)
+            }
+            gate.open()
+            await load.value
+            XCTAssertEqual(vm.serverResumeEpisode?.id, resume.id)
+            XCTAssertEqual(vm.state.value?.children.map(\.id), ["s4"])
+            vm.suspendEnrichment()
+        }
+    }
+
     func testDetailFactorySeedsTheCurrentEpisodeAndMovieProgressBeforeAnyLoad() {
         let provider = FakeMediaProvider(allItems: [], kind: .plex)
         let show = MediaItem(id: "show", title: "Show", kind: .series, sourceAccountID: "plex")

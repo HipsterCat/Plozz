@@ -1505,13 +1505,6 @@ struct SeriesDetailView: View {
             await frontSwitchTarget(target)
             return
         }
-        // No seasons at all (a flat "loose episode" show): just front any target
-        // episode and let the loose-episode rail show.
-        guard let id = resolvedInitialSeasonID() else {
-            await resolveRestingHero(in: nil)
-            return
-        }
-        selectedSeasonID = id
         if !hasUserDirectedFocus,
            let seed = SeriesEpisodeEntry.openingSeed(
                for: series, initialEpisode: initialEpisode,
@@ -1519,6 +1512,13 @@ struct SeriesDetailView: View {
            ) {
             heroItem = seed
         }
+        // No seasons at all (a flat "loose episode" show): just front any target
+        // episode and let the loose-episode rail show.
+        guard let id = resolvedInitialSeasonID() else {
+            await resolveRestingHero(in: nil)
+            return
+        }
+        selectedSeasonID = id
         await viewModel.loadEpisodes(for: id)
         guard !Task.isCancelled, selectedSeasonID == id else { return }
         await resolveRestingHero(in: id)

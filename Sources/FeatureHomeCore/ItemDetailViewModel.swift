@@ -699,23 +699,22 @@ public final class ItemDetailViewModel {
                 // await — so navigating away cancels it instead of letting the
                 // multi-server search fan-out starve the next page's `provider.item`.
                 startSpeculativeEnrichment(for: item)
-                // Children fill in off the critical path of first paint; merge them
-                // in (same item identity ⇒ no hero flicker) when they arrive.
-                // Both in flight together: the resume lookup must be settled
-                // BEFORE the children publish, because that publish is what makes
-                // the page resolve its opening season — and that decision needs
-                // the server's answer. First paint already happened above, so this
-                // costs nothing the user sees.
-                async let childrenTask = fetchChildren(loadProvider, of: item.id)
-                async let resumeTask = fetchServerResumeEpisode(for: item, provider: loadProvider)
-                let (fetchedChildren, resume) = await (childrenTask, resumeTask)
+                // Play can use the resume answer before the season list arrives.
+                // Keep season selection gated on that answer so it never settles
+                // on Season 1 while the real resume target is still pending.
+                async let resumeTask: Void = publishServerResumeEpisode(
+                    for: item, provider: loadProvider,
+                    sourceGeneration: loadSourceGeneration
+                )
+                let fetchedChildren = await fetchChildren(loadProvider, of: item.id)
+                await resumeTask
                 guard !Task.isCancelled, isCurrent() else { return }
                 state = .loaded(Detail(
                     item: taggedItem,
                     children: fetchedChildren.map(tagged),
                     childrenLoaded: true,
                     upcomingSchedule: state.value?.upcomingSchedule,
-                    serverResumeEpisode: resume.map(tagged)
+                    serverResumeEpisode: serverResumeEpisode
                 ))
                 // Deliberately after the state publish: the schedule is decoration,
                 // and must never hold up the page. Cache read first (instant), then
@@ -1752,6 +1751,20 @@ public final class ItemDetailViewModel {
         detail.upcomingSchedule = record
         state = .loaded(detail)
         persistSnapshot()
+    }
+
+    private func publishServerResumeEpisode(
+        for item: MediaItem,
+        provider: any MediaProvider,
+        sourceGeneration: UInt64
+    ) async {
+        guard item.kind == .series else { return }
+        let resume = await fetchServerResumeEpisode(for: item, provider: provider)
+        guard !Task.isCancelled,
+              isStillLoaded(item, sourceGeneration: sourceGeneration),
+              var detail = state.value else { return }
+        detail.serverResumeEpisode = resume.map(tagged)
+        state = .loaded(detail)
     }
 
     private func fetchServerResumeEpisode(

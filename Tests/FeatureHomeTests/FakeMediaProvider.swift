@@ -130,7 +130,11 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
         await continueWatchingGate?()
         return Array(continueWatchingItems.prefix(limit))
     }
-    func latest(limit: Int) async throws -> [MediaItem] { [] }
+    var latestGate: (@Sendable () async -> Void)?
+    func latest(limit: Int) async throws -> [MediaItem] {
+        await latestGate?()
+        return []
+    }
     func item(id: String) async throws -> MediaItem {
         withLock { _itemCallCounts[id, default: 0] += 1 }
         if let gate = itemGate?[id] {

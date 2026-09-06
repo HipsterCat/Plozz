@@ -342,6 +342,16 @@ private struct PlozziOSCanonicalItemDetailView: View {
             }
         }
         .task { await viewModel.load() }
+        .onChange(of: viewModel.serverResumeEpisode) { _, resume in
+            guard seriesPlayTarget == nil,
+                  let series = viewModel.state.value?.item,
+                  let seed = SeriesEpisodeEntry.openingSeed(
+                      for: series, initialEpisode: initialEpisode,
+                      initialSeasonID: initialSeasonID, resumeEpisode: resume
+                  ) else { return }
+            seriesPlayTarget = seed
+            seriesHeroShowsSeries = false
+        }
         .alert(
             Text(verbatim: "Seerr"),
             isPresented: Binding(
