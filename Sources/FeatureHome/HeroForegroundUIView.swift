@@ -26,6 +26,7 @@ final class HeroForegroundUIView: UIView {
         rootView: AnyView(EmptyView())
     )
     private let pillsContainer = UIView()
+    var contentLocale: Locale = .current
     /// Effect-less host: dots/pill render directly over the hero with no capsule.
     private let dotsContainer = UIVisualEffectView(effect: nil)
     private let useGauge = HeroForegroundConfig.useGauge
@@ -383,7 +384,7 @@ final class HeroForegroundUIView: UIView {
         for (i, pillView) in pillViews.enumerated() {
             if i < model.pills.count {
                 let selected = model.heroFocused && i == model.selectedIndex
-                pillView.configure(model.pills[i], selected: selected)
+                pillView.configure(model.pills[i], selected: selected, locale: contentLocale)
                 pillView.isHidden = false
             } else {
                 pillView.isHidden = true

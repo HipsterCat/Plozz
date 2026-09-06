@@ -1,5 +1,8 @@
 import XCTest
 import CoreModels
+#if canImport(UIKit)
+import UIKit
+#endif
 @testable import FeatureHome
 
 /// Pure-logic coverage for the env-gated imperative UIKit hero foreground's value
@@ -60,8 +63,24 @@ final class HeroForegroundModelTests: XCTestCase {
         let pill = Builder.pill(for: .init(
             kind: .play, isStarting: true, seasonEpisodeText: "S1, E1"
         ))
-        XCTAssertEqual(pill.text, "Start watching · S1, E1")
+        XCTAssertNotNil(pill.localizedTitle)
+        XCTAssertEqual(pill.text, " · S1, E1")
     }
+
+#if canImport(UIKit)
+    @MainActor
+    func testStartWatchingPillResolvesCopyAtTheUIKitBoundary() {
+        let pill = Builder.pill(for: .init(
+            kind: .play, isStarting: true, seasonEpisodeText: "S1, E1"
+        ))
+        let view = HeroForegroundPillView(frame: .zero)
+        view.configure(pill, selected: false, locale: Locale(identifier: "en"))
+        XCTAssertEqual(
+            view.subviews.compactMap { $0 as? UILabel }.first?.text,
+            "Start watching · S1, E1"
+        )
+    }
+#endif
 
     func testInProgressFirstEpisodeKeepsTheResumePill() {
         let pill = Builder.pill(for: .init(

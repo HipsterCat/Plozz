@@ -46,6 +46,7 @@ struct HeroForegroundRepresentable: UIViewRepresentable {
             ? .forceRightToLeft
             : .forceLeftToRight
         context.coordinator.view = view
+        context.coordinator.locale = context.environment.locale
         context.coordinator.logoFallbacks = logoFallbacks
         context.coordinator.logoReferences = logoReferences
         context.coordinator.backgroundSamplers = backgroundSamplers
@@ -61,6 +62,7 @@ struct HeroForegroundRepresentable: UIViewRepresentable {
             ? .forceRightToLeft
             : .forceLeftToRight
         context.coordinator.view = uiView
+        context.coordinator.locale = context.environment.locale
         context.coordinator.logoFallbacks = logoFallbacks
         context.coordinator.logoReferences = logoReferences
         context.coordinator.backgroundSamplers = backgroundSamplers
@@ -82,9 +84,11 @@ struct HeroForegroundRepresentable: UIViewRepresentable {
 @MainActor
 final class HeroForegroundCoordinator {
     weak var view: HeroForegroundUIView?
+    var locale: Locale = .current
 
     /// The model currently rendered on screen. A same-value re-apply is skipped.
     private var appliedModel: HeroForegroundModel?
+    private var appliedLocale: Locale?
     /// Whether the description block is currently shown (mirrors `metadataVisible`).
     private var appliedMetadataVisible = true
     private var configuredWidth: CGFloat = 0
@@ -147,6 +151,7 @@ final class HeroForegroundCoordinator {
     func apply(_ model: HeroForegroundModel, metadataVisible: Bool) {
         guard let view else { return }
         let unchanged = appliedModel == model && appliedMetadataVisible == metadataVisible
+            && appliedLocale == locale
         guard !unchanged else { return }
 
         let slideChanged = appliedModel?.itemID != model.itemID
@@ -154,6 +159,8 @@ final class HeroForegroundCoordinator {
         generation &+= 1
         let gen = generation
         appliedModel = model
+        appliedLocale = locale
+        view.contentLocale = locale
         appliedMetadataVisible = metadataVisible
         prepared[model.itemID] = model
 
