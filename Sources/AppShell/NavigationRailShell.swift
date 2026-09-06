@@ -44,6 +44,8 @@ struct NavigationRailShell<Content: View>: View {
     @State private var railReturnToken = 0
     @State private var isOpeningNavigation = false
     @State private var hasEnteredSearchContent = false
+    @State private var hasEnteredHomeHero = false
+    @State private var homeHeroNavigation: HomeHeroNavigationState = .absent
 
     var body: some View {
         let hidden = chrome.isChromeHidden
@@ -52,7 +54,8 @@ struct NavigationRailShell<Content: View>: View {
             destination: selection,
             chromeHidden: hidden,
             isExpanded: railExpanded,
-            isOpening: isOpeningNavigation
+            isOpening: isOpeningNavigation,
+            homeHero: homeHeroNavigation
         )
         return ZStack(alignment: .leading) {
             content
@@ -82,6 +85,14 @@ struct NavigationRailShell<Content: View>: View {
                 )
                 .environment(\.plozzPinnedSidebarActive, true)
                 .environment(\.plozzPinnedSidebarInteraction, pinnedSidebarInteraction)
+                .onPreferenceChange(HomeHeroNavigationPreference.self) { state in
+                    homeHeroNavigation = state
+                    if state != .hero {
+                        hasEnteredHomeHero = false
+                    } else if pinnedSidebarInteraction.heroHasFocus {
+                        hasEnteredHomeHero = true
+                    }
+                }
                 // Content is the scope's preferred focus ONLY while the rail does
                 // not hold focus. Opening the rail changes its focusable subtree;
                 // leaving this unconditional can re-assert content focus in the
@@ -91,11 +102,12 @@ struct NavigationRailShell<Content: View>: View {
             ZStack(alignment: .leading) {
                 if presentation.showsPageButton {
                     PinnedSidebarPageButton(
-                        title: NavigationRailView.searchTitle,
-                        symbol: "magnifyingglass",
+                        title: selection == .home ? NavigationRailView.homeTitle : NavigationRailView.searchTitle,
+                        symbol: selection == .home ? "house.fill" : "magnifyingglass",
                         isNavigationExpanded: railExpanded || isOpeningNavigation,
                         isFocusEnabled: presentation.isPageButtonEnabled(
-                            hasEnteredContent: hasEnteredSearchContent
+                            hasEnteredContent: hasEnteredSearchContent,
+                            hasEnteredHero: hasEnteredHomeHero
                         ),
                         onOpenNavigation: requestNavigationFocus
                     )
@@ -184,6 +196,7 @@ struct NavigationRailShell<Content: View>: View {
                 chrome.resetForDestinationChange()
                 isOpeningNavigation = false
                 hasEnteredSearchContent = false
+                hasEnteredHomeHero = false
                 pinnedSidebarInteraction.setSearchResultsFocused(false)
             }
         }
@@ -199,11 +212,17 @@ struct NavigationRailShell<Content: View>: View {
         .onChange(of: pinnedSidebarInteraction.openRequest) { _, _ in
             requestNavigationFocus()
         }
+        .onChange(of: pinnedSidebarInteraction.heroHasFocus) { _, focused in
+            if focused, selection == .home {
+                hasEnteredHomeHero = true
+            }
+        }
     }
 
     private func requestNavigationFocus() {
         guard !chrome.isChromeHidden else { return }
         hasEnteredSearchContent = false
+        hasEnteredHomeHero = false
         isOpeningNavigation = true
         focusRequestToken &+= 1
     }
@@ -214,26 +233,32 @@ struct NavigationRailPresentation: Equatable {
     let chromeHidden: Bool
     let isExpanded: Bool
     let isOpening: Bool
+    var homeHero: HomeHeroNavigationState = .absent
 
-    var usesPageButton: Bool { destination == .search }
+    var usesPageButton: Bool { destination == .search || (destination == .home && homeHero == .hero) }
     var showsPageButton: Bool { !chromeHidden && usesPageButton }
     var opensExpanded: Bool { showsPageButton && isOpening }
-    var shouldEnterSearchContent: Bool { showsPageButton && !isExpanded && !isOpening }
+    var shouldEnterSearchContent: Bool { destination == .search && showsPageButton && !isExpanded && !isOpening }
     func isEdgeNavigationEnabled(searchResultsHaveFocus: Bool = false) -> Bool {
         !chromeHidden && (
-            !usesPageButton || isExpanded || (!isOpening && searchResultsHaveFocus)
+            destination != .search || isExpanded || (!isOpening && searchResultsHaveFocus)
         )
     }
-    func isPageButtonEnabled(hasEnteredContent: Bool) -> Bool {
-        shouldEnterSearchContent && hasEnteredContent
+    func isPageButtonEnabled(hasEnteredContent: Bool, hasEnteredHero: Bool = false) -> Bool {
+        guard showsPageButton, !isExpanded, !isOpening else { return false }
+        return destination == .search ? hasEnteredContent : hasEnteredHero
     }
     // UIKit cannot move focus into a fully transparent view. Reveal the rail
     // before its focus-request observer adopts the selected destination.
     var isRailVisible: Bool { !chromeHidden && (!usesPageButton || isExpanded || isOpening) }
     var isRailEnabled: Bool { isRailVisible }
-    var headerHeight: CGFloat { showsPageButton ? NavigationRailMetrics.searchHeaderHeight : 0 }
+    var headerHeight: CGFloat {
+        showsPageButton && destination == .search ? NavigationRailMetrics.searchHeaderHeight : 0
+    }
     var contentInset: CGFloat {
-        chromeHidden || usesPageButton ? 0 : NavigationRailMetrics.contentInset
+        // Home rows retain their gutter through the hero's recede transition;
+        // HomeView overrides the inset only inside the full-bleed hero.
+        chromeHidden || destination == .search ? 0 : NavigationRailMetrics.contentInset
     }
 }
 #endif

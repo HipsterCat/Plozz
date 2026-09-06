@@ -157,7 +157,7 @@ struct NavigationRailView: View {
     var focusReleaseToken: Int = 0
     /// A page-button activation presents the full menu before focus arrives.
     var opensExpanded: Bool = false
-    /// Search keeps full menu geometry while its shared surface morphs to a capsule.
+    /// Compact navigation keeps full menu geometry while its surface morphs to a capsule.
     var usesPageButtonSurface: Bool = false
 
     @Environment(\.themePalette) private var palette
@@ -661,7 +661,7 @@ struct NavigationRailView: View {
 
     // MARK: - Copy
 
-    private static let homeTitle = LocalizedStringResource(
+    static let homeTitle = LocalizedStringResource(
         "navigationRail.home",
         defaultValue: "Home",
         comment: "Navigation rail destination."
