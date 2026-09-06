@@ -29,6 +29,8 @@ enum NavigationRailMetrics {
     /// foreground to the full screen width by design, and a safe-area inset leaves
     /// that column exactly where it was — under the icons.
     static let contentInset: CGFloat = 64
+    static let searchHeaderHeight: CGFloat = 80
+    static let pageButtonTopInset: CGFloat = 12
 
     /// Width the rail grows to once focus enters it.
     static let expandedWidth: CGFloat = 426
@@ -626,7 +628,7 @@ struct NavigationRailView: View {
         defaultValue: "Home",
         comment: "Navigation rail destination."
     )
-    private static let searchTitle = LocalizedStringResource(
+    static let searchTitle = LocalizedStringResource(
         "navigationRail.search",
         defaultValue: "Search",
         comment: "Navigation rail destination."

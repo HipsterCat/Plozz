@@ -41,11 +41,21 @@ struct NavigationRailShell<Content: View>: View {
     /// Bumped each time a Right press inside the rail resolves to nothing, so focus
     /// returns to the page.
     @State private var railReturnToken = 0
+    @State private var isOpeningNavigation = false
 
     var body: some View {
         let hidden = chrome.isChromeHidden
+        let presentation = NavigationRailPresentation(
+            destination: selection,
+            chromeHidden: hidden,
+            isExpanded: railExpanded,
+            isOpening: isOpeningNavigation
+        )
         return ZStack(alignment: .leading) {
             content
+                // Native Search owns its navigation bar. Reserve actual container
+                // space above it, rather than overlaying its field or keyboard.
+                .padding(.top, presentation.headerHeight)
                 // The rail makes room for itself by PUBLISHING an inset, never by
                 // insetting this container.
                 //
@@ -57,7 +67,7 @@ struct NavigationRailShell<Content: View>: View {
                 // artwork alone.
                 .environment(
                     \.plozzNavigationContentInset,
-                    hidden ? 0 : NavigationRailMetrics.contentInset
+                    presentation.contentInset
                 )
                 .environment(\.plozzPinnedSidebarActive, true)
                 .environment(\.plozzPinnedSidebarInteraction, pinnedSidebarInteraction)
@@ -65,8 +75,20 @@ struct NavigationRailShell<Content: View>: View {
                 // not hold focus. Opening the rail changes its focusable subtree;
                 // leaving this unconditional can re-assert content focus in the
                 // same transaction and immediately close the rail again.
-                .prefersDefaultFocus(!railExpanded, in: focusScopeID)
+                .prefersDefaultFocus(!railExpanded && !isOpeningNavigation, in: focusScopeID)
 
+            if presentation.showsPageButton {
+                PinnedSidebarPageButton(
+                    title: NavigationRailView.searchTitle,
+                    symbol: "magnifyingglass",
+                    isNavigationExpanded: railExpanded || isOpeningNavigation,
+                    onOpenNavigation: requestNavigationFocus
+                )
+                .padding(.leading, NavigationRailMetrics.expandedContentHorizontalPadding)
+                .padding(.top, NavigationRailMetrics.pageButtonTopInset)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .ignoresSafeArea(edges: .leading)
+            }
 
             // Left opens the navigation from unresolved page edges, and Right leaves
             // it from unresolved rail edges. The Home hero disables this fallback
@@ -74,7 +96,7 @@ struct NavigationRailShell<Content: View>: View {
             // item; it explicitly requests the rail only at its true leading edge.
             if !hidden {
                 NavigationRailEdgeCatcher(
-                    onOpenNavigation: { focusRequestToken &+= 1 },
+                    onOpenNavigation: requestNavigationFocus,
                     onLeaveNavigation: { railReturnToken &+= 1 },
                     railHasFocus: railExpanded,
                     isEnabled: !pinnedSidebarInteraction.heroHasFocus
@@ -96,6 +118,11 @@ struct NavigationRailShell<Content: View>: View {
                     focusRequestToken: focusRequestToken,
                     focusReleaseToken: railReturnToken
                 )
+                // Keep the focus-request observer mounted while Search hides the
+                // collapsed rail. Invisible rows must not compete with its keyboard.
+                .disabled(!presentation.isRailEnabled)
+                .opacity(presentation.isRailVisible ? 1 : 0)
+                .accessibilityHidden(!presentation.isRailEnabled)
                 // Breaks out of the title-safe area so the icons sit in the empty
                 // margin down the side of the picture rather than inside the
                 // page's own content column.
@@ -111,10 +138,44 @@ struct NavigationRailShell<Content: View>: View {
             // without this the rail would stay hidden after leaving a detail page
             // by switching destinations rather than by pressing Back.
             chrome.resetForDestinationChange()
+            isOpeningNavigation = false
+        }
+        .onChange(of: railExpanded) { _, _ in
+            isOpeningNavigation = false
+        }
+        .onChange(of: hidden) { _, hidden in
+            if hidden {
+                isOpeningNavigation = false
+                railExpanded = false
+            }
         }
         .onChange(of: pinnedSidebarInteraction.openRequest) { _, _ in
-            focusRequestToken &+= 1
+            requestNavigationFocus()
         }
+    }
+
+    private func requestNavigationFocus() {
+        guard !chrome.isChromeHidden else { return }
+        isOpeningNavigation = true
+        focusRequestToken &+= 1
+    }
+}
+
+struct NavigationRailPresentation: Equatable {
+    let destination: NavigationRailDestination
+    let chromeHidden: Bool
+    let isExpanded: Bool
+    let isOpening: Bool
+
+    var usesPageButton: Bool { destination == .search }
+    var showsPageButton: Bool { !chromeHidden && usesPageButton }
+    // UIKit cannot move focus into a fully transparent view. Reveal the rail
+    // before its focus-request observer adopts the selected destination.
+    var isRailVisible: Bool { !chromeHidden && (!usesPageButton || isExpanded || isOpening) }
+    var isRailEnabled: Bool { isRailVisible }
+    var headerHeight: CGFloat { showsPageButton ? NavigationRailMetrics.searchHeaderHeight : 0 }
+    var contentInset: CGFloat {
+        chromeHidden || usesPageButton ? 0 : NavigationRailMetrics.contentInset
     }
 }
 #endif
