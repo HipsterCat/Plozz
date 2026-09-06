@@ -4,6 +4,13 @@ import CoreModels
 import CoreNetworking
 import MetadataKit
 
+struct ShareScanResumeCheckpoint: Sendable, Equatable {
+    let scanGeneration: UUID
+    let scanID: Int64
+    let frontierJSON: String
+    let savedAt: TimeInterval
+}
+
 /// SQLite-backed catalog for one share — the persistent index that lets a share
 /// answer `latest()`, `search()`, and browse **Movies / TV Shows / Anime**
 /// instantly, without a live SMB walk on the Home hot path.
@@ -37,7 +44,10 @@ actor ShareCatalogStore {
     private let connection: CatalogConnection
     /// Bridge so the store's existing raw `sqlite3_*` call sites read the connection's
     /// handle unchanged; the connection owns its lifetime (open/close).
-    private var db: OpaquePointer? { connection.db }
+    private var db: OpaquePointer? {
+        guard !isSuspended else { return nil }
+        return connection.db
+    }
     /// Transaction-bound series reconciler over the same actor-confined connection.
     /// A cheap value type constructed on demand; it holds no state of its own and
     /// only runs while the store's actor is executing a catalog transaction.
@@ -66,6 +76,11 @@ actor ShareCatalogStore {
     private var normalizedMetadataReady = false
     private var lifecycleRevision: UInt64 = 0
     private var isSuspended = false
+    private var suspendedCheckpointGeneration: UUID?
+    private var suspendedCheckpointValues: [String: String] = [:]
+    private var suspendedReadWaiters: [
+        UUID: CheckedContinuation<Bool, Never>
+    ] = [:]
     private var didEmitCatalogDiagnostics = false
     /// Cached "does ANY local (NFO/filename) metadata_values row exist" check —
     /// avoids a real query on every read-path call (`withLocalOverlay`/grid sort
@@ -90,11 +105,11 @@ actor ShareCatalogStore {
         assetRowsLoaded: 0,
         maximumRowsPerPass: 0
     )
+    private let writeChunkBoundary: (@Sendable () async -> Void)?
 
     /// Bounded catalog writes keep the actor cooperative with Home/grid/search
     /// reads while a large share is scanning.
     private static let writeChunkSize = 200
-
     /// - Parameters:
     ///   - accountKey: stable per-share id (`server.id`) — names the DB file so two
     ///     shares keep separate catalogs. Shares the key with `ShareWatchStore`.
@@ -105,7 +120,8 @@ actor ShareCatalogStore {
         enrichmentSaveFailurePoint: EnrichmentSaveFailurePoint? = nil,
         metadataConfig: @escaping @Sendable () -> MetadataEnrichmentConfig = {
             MetadataEnrichmentConfig()
-        }
+        },
+        writeChunkBoundary: (@Sendable () async -> Void)? = nil
     ) {
         let base = directory ?? Self.defaultDirectory()
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
@@ -114,6 +130,7 @@ actor ShareCatalogStore {
         self.connection = CatalogConnection(url: fileURL)
         self.enrichmentSaveFailurePoint = enrichmentSaveFailurePoint
         self.metadataConfig = metadataConfig
+        self.writeChunkBoundary = writeChunkBoundary
     }
 
     // MARK: - Open / schema
@@ -146,24 +163,147 @@ actor ShareCatalogStore {
 
     /// Prevents any late foreground worker from reopening the catalog, then closes
     /// the actor-confined handle so suspension cannot catch SQLite holding a lock.
-    func prepareForSuspension(revision: UInt64) {
-        guard revision >= lifecycleRevision else { return }
+    /// A scanner-owned checkpoint snapshot is retained in memory only; it is
+    /// flushed on resume, never by reopening SQLite after this method returns.
+    /// Returns `false` for a stale lifecycle request or when caller-owned SQLite
+    /// work still makes the handle non-idle; callers must not treat that as closed.
+    @discardableResult
+    func prepareForSuspension(
+        revision: UInt64,
+        checkpoint: ShareScanResumeCheckpoint? = nil
+    ) -> Bool {
+        guard revision >= lifecycleRevision else { return false }
         lifecycleRevision = revision
+        if !isSuspended {
+            suspendedCheckpointGeneration = nil
+            suspendedCheckpointValues.removeAll()
+        }
+        if let checkpoint {
+            let expectedGeneration = activeScanGeneration ?? suspendedCheckpointGeneration
+            if checkpoint.scanGeneration == expectedGeneration,
+               checkpoint.scanID > 0,
+               !checkpoint.frontierJSON.isEmpty,
+               checkpoint.savedAt.isFinite {
+                suspendedCheckpointGeneration = checkpoint.scanGeneration
+                suspendedCheckpointValues = [
+                    "resume_scan_id": String(checkpoint.scanID),
+                    "resume_frontier": checkpoint.frontierJSON,
+                    "resume_saved_at": String(checkpoint.savedAt)
+                ]
+            } else {
+                PlozzLog.boot("share.catalog rejected suspension checkpoint")
+            }
+        }
         isSuspended = true
-        pendingMergedSeriesLocalRepairs.removeAll()
-        localMetadataPresence.cached = nil
-        normalizedMetadataReady = false
-        _ = connection.closeForSuspension()
+        activeScanGeneration = nil
+        connection.setAccessSuspended(true)
+        return connection.closeForSuspension()
     }
 
-    /// Re-enables lazy opening after the process has an active scene again.
-    func resumeAfterSuspension(revision: UInt64) {
-        guard revision >= lifecycleRevision else { return }
+    /// Flushes any cancellation checkpoint before reopening the read gate. This is
+    /// synchronous actor work: no reader can observe the temporary ungated state
+    /// until the checkpoint has committed or the store has returned to suspension.
+    @discardableResult
+    func resumeAfterSuspension(revision: UInt64) -> Bool {
+        guard revision >= lifecycleRevision else { return false }
         lifecycleRevision = revision
+        guard isSuspended else { return true }
+        guard connection.isClosed else { return false }
         isSuspended = false
+        connection.setAccessSuspended(false)
+        guard flushSuspendedCheckpoint() else {
+            isSuspended = true
+            connection.setAccessSuspended(true)
+            _ = connection.closeForSuspension()
+            return false
+        }
+        suspendedCheckpointGeneration = nil
+        let waiters = Array(suspendedReadWaiters.values)
+        suspendedReadWaiters.removeAll()
+        waiters.forEach { $0.resume(returning: true) }
+        return true
     }
 
     func isSuspendedForTesting() -> Bool { isSuspended }
+    func suspendedReadWaiterCountForTesting() -> Int {
+        suspendedReadWaiters.count
+    }
+    func schemaMigrationAttemptCountForTesting() -> Int {
+        connection.schemaMigrationAttemptCount
+    }
+
+    private func flushSuspendedCheckpoint() -> Bool {
+        guard !suspendedCheckpointValues.isEmpty else { return true }
+        ensureOpen()
+        guard db != nil else { return false }
+        let values = suspendedCheckpointValues
+        let committed = connection.withImmediateTransaction {
+            for (key, value) in values {
+                guard connection.runUpdate(
+                    """
+                    INSERT INTO meta(key,value) VALUES(?,?)
+                    ON CONFLICT(key) DO UPDATE SET value=excluded.value;
+                    """,
+                    bind: {
+                        CatalogConnection.bindText($0, 1, key)
+                        CatalogConnection.bindText($0, 2, value)
+                    }
+                ) else { return false }
+            }
+            return true
+        }
+        if committed {
+            suspendedCheckpointValues.removeAll()
+        }
+        return committed
+    }
+
+    /// Suspended foreground reads wait without touching SQLite. Cancellation
+    /// removes the waiter and returns the method's neutral value to a caller that
+    /// has already abandoned the result.
+    private func waitUntilResumed() async -> Bool {
+        while isSuspended {
+            guard !Task.isCancelled else { return false }
+            let id = UUID()
+            let resumed = await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    if Task.isCancelled {
+                        continuation.resume(returning: false)
+                    } else if !isSuspended {
+                        continuation.resume(returning: true)
+                    } else {
+                        suspendedReadWaiters[id] = continuation
+                    }
+                }
+            } onCancel: {
+                Task { await self.cancelSuspendedReadWaiter(id) }
+            }
+            guard resumed else { return false }
+        }
+        return !Task.isCancelled
+    }
+
+    private func cancelSuspendedReadWaiter(_ id: UUID) {
+        suspendedReadWaiters.removeValue(forKey: id)?.resume(returning: false)
+    }
+
+    private func withCatalogRead<T: Sendable>(
+        unavailable: T,
+        _ body: () -> T
+    ) async -> T {
+        guard await waitUntilResumed() else { return unavailable }
+        ensureOpen()
+        guard db != nil else { return unavailable }
+        return body()
+    }
+
+    private func yieldAtWriteChunkBoundary() async {
+        if let writeChunkBoundary {
+            await writeChunkBoundary()
+        } else {
+            await Task.yield()
+        }
+    }
 
     /// One-shot catalog telemetry, emitted the first time anything opens this
     /// store. Off unless the process was launched with `PLZXFAN_STDOUT=1`, so a
@@ -191,19 +331,36 @@ actor ShareCatalogStore {
     /// `first_seen_at` for rows already present (so "date added" = first discovery,
     /// never a re-scan), and refreshes size/mtime/parse/library. Idempotent.
     func activateScanGeneration(_ generation: UUID) {
+        guard !isSuspended else { return }
         activeScanGeneration = generation
     }
 
-    func invalidateScanGeneration() {
+    private func clearScanGeneration() {
         activeScanGeneration = nil
+        suspendedCheckpointGeneration = nil
+        suspendedCheckpointValues.removeAll()
+    }
+
+    /// A delayed lifecycle drain may invalidate only the revision it was created
+    /// under; it cannot clear a replacement scan activated after foreground resume.
+    @discardableResult
+    func invalidateScanGeneration(
+        revision expectedRevision: UInt64,
+        scanGeneration: UUID? = nil
+    ) -> Bool {
+        guard expectedRevision == lifecycleRevision else { return false }
+        if let scanGeneration, activeScanGeneration != scanGeneration { return false }
+        clearScanGeneration()
+        return true
     }
 
     func nextScanID(for generation: UUID) -> Int64? {
-        guard activeScanGeneration == generation else { return nil }
+        guard admits(generation) else { return nil }
         let current = Int64(meta("scan_counter") ?? "0") ?? 0
         let next = current + 1
-        setMeta("scan_counter", String(next))
-        return next
+        return setMeta("scan_counter", String(next), scanGeneration: generation)
+            ? next
+            : nil
     }
 
     func upsert(
@@ -213,7 +370,9 @@ actor ShareCatalogStore {
         scanGeneration: UUID? = nil
     ) async {
         ensureOpen()
-        guard admits(scanGeneration), db != nil, !assets.isEmpty else { return }
+        let operationRevision = lifecycleRevision
+        guard admits(scanGeneration, lifecycleRevision: operationRevision),
+              db != nil, !assets.isEmpty else { return }
         let started = Date()
         var slowestChunkMs = 0
         let sql = """
@@ -237,22 +396,24 @@ actor ShareCatalogStore {
             ELSE NULL
           END;
         """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            return
-        }
-        defer { sqlite3_finalize(stmt) }
-
         // Preload the series-merge alias map once so a reconciled typo key stays
         // folded across re-scans without a per-row lookup in the hot write loop.
         let seriesAliases = reconciler.seriesMergeMap()
 
         var index = 0
         while index < assets.count {
-            guard admits(scanGeneration) else { return }
+            guard admits(
+                scanGeneration,
+                lifecycleRevision: operationRevision
+            ) else { return }
             let end = min(index + Self.writeChunkSize, assets.count)
             let chunkStarted = Date()
             let committed = connection.withImmediateTransaction {
+                var stmt: OpaquePointer?
+                guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                    return false
+                }
+                defer { sqlite3_finalize(stmt) }
                 for a in assets[index..<end] {
                     guard !Task.isCancelled else { return false }
                     sqlite3_reset(stmt)
@@ -296,7 +457,7 @@ actor ShareCatalogStore {
             }
             slowestChunkMs = max(slowestChunkMs, Int(Date().timeIntervalSince(chunkStarted) * 1_000))
             index = end
-            if index < assets.count { await Task.yield() }
+            if index < assets.count { await yieldAtWriteChunkBoundary() }
         }
         reassociateArtwork(afterUpserting: assets)
         if slowestChunkMs >= 20 {
@@ -340,7 +501,9 @@ actor ShareCatalogStore {
     /// version later does not churn watch-state or deep-link ids.
     func rebuildMovieGroups(scanGeneration: UUID? = nil) async {
         ensureOpen()
-        guard admits(scanGeneration), db != nil else { return }
+        let operationRevision = lifecycleRevision
+        guard admits(scanGeneration, lifecycleRevision: operationRevision),
+              db != nil else { return }
         let started = Date()
 
         var rows: [ScanCatalogWriter.MovieGroupingRow] = []
@@ -369,11 +532,21 @@ actor ShareCatalogStore {
         let plan: ScanCatalogWriter.MovieGroupingPlan = await Task.detached(priority: .utility) {
             ScanCatalogWriter.movieGroupingPlan(rows: rows)
         }.value
-        guard admits(scanGeneration) else { return }
+        guard admits(
+            scanGeneration,
+            lifecycleRevision: operationRevision
+        ) else { return }
         let computeMs = Int(Date().timeIntervalSince(computeStarted) * 1_000)
 
-        await persistMovieAliases(plan.aliases, scanGeneration: scanGeneration)
-        guard admits(scanGeneration) else { return }
+        await persistMovieAliases(
+            plan.aliases,
+            scanGeneration: scanGeneration,
+            lifecycleRevision: operationRevision
+        )
+        guard admits(
+            scanGeneration,
+            lifecycleRevision: operationRevision
+        ) else { return }
 
         guard !plan.assignments.isEmpty else {
             PlozzLog.boot(
@@ -381,19 +554,25 @@ actor ShareCatalogStore {
             )
             return
         }
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "UPDATE assets SET movie_group_key=? WHERE rel_path=?;", -1, &stmt, nil) == SQLITE_OK else {
-            return
-        }
-        defer { sqlite3_finalize(stmt) }
-
         var index = 0
         var slowestChunkMs = 0
         while index < plan.assignments.count {
-            guard admits(scanGeneration) else { return }
+            guard admits(
+                scanGeneration,
+                lifecycleRevision: operationRevision
+            ) else { return }
             let end = min(index + Self.writeChunkSize, plan.assignments.count)
             let chunkStarted = Date()
             let committed = connection.withImmediateTransaction {
+                var stmt: OpaquePointer?
+                guard sqlite3_prepare_v2(
+                    db,
+                    "UPDATE assets SET movie_group_key=? WHERE rel_path=?;",
+                    -1,
+                    &stmt,
+                    nil
+                ) == SQLITE_OK else { return false }
+                defer { sqlite3_finalize(stmt) }
                 for assignment in plan.assignments[index..<end] {
                     guard !Task.isCancelled else { return false }
                     sqlite3_reset(stmt)
@@ -411,7 +590,9 @@ actor ShareCatalogStore {
             }
             slowestChunkMs = max(slowestChunkMs, Int(Date().timeIntervalSince(chunkStarted) * 1_000))
             index = end
-            if index < plan.assignments.count { await Task.yield() }
+            if index < plan.assignments.count {
+                await yieldAtWriteChunkBoundary()
+            }
         }
         PlozzLog.boot(
             "share.catalog regroup rows=\(rows.count) changed=\(plan.assignments.count) compute=\(computeMs)ms total=\(Int(Date().timeIntervalSince(started) * 1_000))ms maxChunk=\(slowestChunkMs)ms"
@@ -443,21 +624,31 @@ actor ShareCatalogStore {
 
     private func persistMovieAliases(
         _ aliases: [ScanCatalogWriter.MovieAlias],
-        scanGeneration: UUID?
+        scanGeneration: UUID?,
+        lifecycleRevision operationRevision: UInt64
     ) async {
-        guard admits(scanGeneration), !aliases.isEmpty else { return }
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, """
-        INSERT INTO movie_alias(alias_id, group_key) VALUES(?,?)
-        ON CONFLICT(alias_id) DO UPDATE SET group_key=excluded.group_key;
-        """, -1, &stmt, nil) == SQLITE_OK else { return }
-        defer { sqlite3_finalize(stmt) }
-
+        guard admits(scanGeneration, lifecycleRevision: operationRevision),
+              !aliases.isEmpty else { return }
         var index = 0
         while index < aliases.count {
-            guard admits(scanGeneration) else { return }
+            guard admits(
+                scanGeneration,
+                lifecycleRevision: operationRevision
+            ) else { return }
             let end = min(index + Self.writeChunkSize, aliases.count)
             let committed = connection.withImmediateTransaction {
+                var stmt: OpaquePointer?
+                guard sqlite3_prepare_v2(
+                    db,
+                    """
+                    INSERT INTO movie_alias(alias_id, group_key) VALUES(?,?)
+                    ON CONFLICT(alias_id) DO UPDATE SET group_key=excluded.group_key;
+                    """,
+                    -1,
+                    &stmt,
+                    nil
+                ) == SQLITE_OK else { return false }
+                defer { sqlite3_finalize(stmt) }
                 for alias in aliases[index..<end] {
                     guard !Task.isCancelled else { return false }
                     sqlite3_reset(stmt)
@@ -469,7 +660,7 @@ actor ShareCatalogStore {
             }
             guard committed else { return }
             index = end
-            if index < aliases.count { await Task.yield() }
+            if index < aliases.count { await yieldAtWriteChunkBoundary() }
         }
     }
 
@@ -486,29 +677,48 @@ actor ShareCatalogStore {
         _ = sqlite3_step(stmt)
     }
 
-    func setMeta(_ key: String, _ value: String, scanGeneration: UUID? = nil) {
+    @discardableResult
+    func setMeta(_ key: String, _ value: String, scanGeneration: UUID? = nil) -> Bool {
+        guard !isSuspended else { return false }
         ensureOpen()
-        guard admits(scanGeneration), db != nil else { return }
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value;", -1, &stmt, nil) == SQLITE_OK else { return }
-        defer { sqlite3_finalize(stmt) }
-        bindText(stmt, 1, key)
-        bindText(stmt, 2, value)
-        _ = sqlite3_step(stmt)
+        guard admits(scanGeneration), db != nil else { return false }
+        let saved = connection.runUpdate(
+            """
+            INSERT INTO meta(key,value) VALUES(?,?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value;
+            """,
+            bind: {
+                CatalogConnection.bindText($0, 1, key)
+                CatalogConnection.bindText($0, 2, value)
+            }
+        )
+        if !saved {
+            PlozzLog.boot("share.catalog metadata write failed key=\(key)")
+        }
+        return saved
     }
 
     func meta(_ key: String) -> String? {  // l10n:content — SQL query text embedded in the function body, not user-facing prose
         ensureOpen()
         guard db != nil else { return nil }
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "SELECT value FROM meta WHERE key=?;", -1, &stmt, nil) == SQLITE_OK else { return nil }
-        defer { sqlite3_finalize(stmt) }
-        bindText(stmt, 1, key)
-        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
-        return columnText(stmt, 0)
+        var value: String?
+        connection.query(
+            "SELECT value FROM meta WHERE key=?;",
+            bind: { CatalogConnection.bindText($0, 1, key) }
+        ) {
+            value = CatalogConnection.columnText($0, 0)
+        }
+        return value
     }
 
-    private func admits(_ scanGeneration: UUID?) -> Bool {
+    private func admits(
+        _ scanGeneration: UUID?,
+        lifecycleRevision expectedRevision: UInt64? = nil
+    ) -> Bool {
+        guard !isSuspended,
+              expectedRevision == nil || expectedRevision == lifecycleRevision else {
+            return false
+        }
         guard let scanGeneration else { return true }
         return activeScanGeneration == scanGeneration
     }
@@ -536,40 +746,40 @@ actor ShareCatalogStore {
                         itemID: itemID
                       ) else { return false }
             }
-            setMeta(Self.artworkReferenceContextMetaKey, marker)
-            return true
+            return setMeta(Self.artworkReferenceContextMetaKey, marker)
         }
     }
 
-    func artworkLocator(for reference: NetworkArtworkReference) -> NetworkFileLocator? {
-        ensureOpen()
-        guard let context = artworkReferenceContext,
-              context.accountID == reference.accountID,
-              context.credentialRevision == reference.credentialRevision,
-              let resolved = artworkRepo.resolve(
-                catalogArtworkID: reference.catalogArtworkID
-              ),
-              reference.sourceRevision == opaqueArtworkRevision(
-                accountID: context.accountID,
-                path: resolved.relPath,
-                fingerprint: artworkSourceFingerprint(
-                    fingerprint: resolved.fingerprint,
-                    scanGenerationBound: resolved.scanGenerationBound,
-                    lastScan: resolved.lastScan
+    func artworkLocator(for reference: NetworkArtworkReference) async -> NetworkFileLocator? {
+        await withCatalogRead(unavailable: nil) {
+            guard let context = artworkReferenceContext,
+                context.accountID == reference.accountID,
+                context.credentialRevision == reference.credentialRevision,
+                let resolved = artworkRepo.resolve(
+                  catalogArtworkID: reference.catalogArtworkID
+                ),
+                reference.sourceRevision == opaqueArtworkRevision(
+                  accountID: context.accountID,
+                  path: resolved.relPath,
+                  fingerprint: artworkSourceFingerprint(
+                      fingerprint: resolved.fingerprint,
+                      scanGenerationBound: resolved.scanGenerationBound,
+                      lastScan: resolved.lastScan
+                  )
                 )
-              )
-        else { return nil }
-        return try? NetworkFileLocator(
-            accountID: reference.accountID,
-            sourceID: reference.accountID,
-            credentialRevision: reference.credentialRevision,
-            relativePath: resolved.relPath,
-            representation: reference.representation,
-            formatHint: MediaFormatHint(
-                container: (resolved.relPath as NSString).pathExtension,
-                mimeType: reference.contentType
+            else { return nil }
+            return try? NetworkFileLocator(
+                accountID: reference.accountID,
+                sourceID: reference.accountID,
+                credentialRevision: reference.credentialRevision,
+                relativePath: resolved.relPath,
+                representation: reference.representation,
+                formatHint: MediaFormatHint(
+                  container: (resolved.relPath as NSString).pathExtension,
+                  mimeType: reference.contentType
+                )
             )
-        )
+        }
     }
 
     // MARK: - Local artwork inventory (Step 4)
@@ -1195,7 +1405,9 @@ actor ShareCatalogStore {
         scanGeneration: UUID? = nil
     ) async {
         ensureOpen()
-        guard admits(scanGeneration), db != nil, !sidecars.isEmpty else { return }
+        let operationRevision = lifecycleRevision
+        guard admits(scanGeneration, lifecycleRevision: operationRevision),
+              db != nil, !sidecars.isEmpty else { return }
         let sql = """
         INSERT INTO local_metadata_files(
           rel_path, parent_dir, basename, kind, size, modified_at,
@@ -1228,16 +1440,20 @@ actor ShareCatalogStore {
           END,
           updated_at=excluded.updated_at;
         """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        defer { sqlite3_finalize(stmt) }
-
         var index = 0
         while index < sidecars.count {
-            guard admits(scanGeneration) else { return }
+            guard admits(
+                scanGeneration,
+                lifecycleRevision: operationRevision
+            ) else { return }
             let end = min(index + Self.writeChunkSize, sidecars.count)
             var affectedItemIDs = Set<String>()
             let committed = connection.withImmediateTransaction {
+                var stmt: OpaquePointer?
+                guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                    return false
+                }
+                defer { sqlite3_finalize(stmt) }
                 for sidecar in sidecars[index..<end] {
                     guard !Task.isCancelled else { return false }
                     let fingerprintEvaluation = ShareSidecarFingerprintPolicy.evaluate(
@@ -1291,7 +1507,7 @@ actor ShareCatalogStore {
                 _ = materializeCachedLocalMetadata(itemID: itemID)
             }
             index = end
-            if index < sidecars.count { await Task.yield() }
+            if index < sidecars.count { await yieldAtWriteChunkBoundary() }
         }
     }
 
@@ -1735,7 +1951,9 @@ actor ShareCatalogStore {
     /// directory is now unambiguous.
     func reconcileSidecarAssociations(scanGeneration: UUID? = nil) async {
         ensureOpen()
-        guard admits(scanGeneration), db != nil else { return }
+        let operationRevision = lifecycleRevision
+        guard admits(scanGeneration, lifecycleRevision: operationRevision),
+              db != nil else { return }
         var files: [PendingLocalMetadataFile] = []
         query("SELECT \(LocalMetadataRepository.pendingLocalMetadataFileColumns) FROM local_metadata_files ORDER BY rel_path;") { stmt in
             if let file = self.localRepo.materializePendingLocalMetadataFile(stmt) {
@@ -1743,7 +1961,10 @@ actor ShareCatalogStore {
             }
         }
         for file in files {
-            guard admits(scanGeneration) else { return }
+            guard admits(
+                scanGeneration,
+                lifecycleRevision: operationRevision
+            ) else { return }
             let facts = localMetadataAssociationFacts(for: file)
             let desiredItemID = ShareLocalMetadataAssociationPolicy.itemID(
                 for: file.kind,
@@ -1774,7 +1995,7 @@ actor ShareCatalogStore {
             for itemID in Set([file.processedItemID, desiredItemID].compactMap { $0 }) {
                 _ = materializeCachedLocalMetadata(itemID: itemID)
             }
-            await Task.yield()
+            await yieldAtWriteChunkBoundary()
         }
     }
 
@@ -2449,122 +2670,163 @@ actor ShareCatalogStore {
     // SQL/rationale comments live with each method in `CatalogReadQueries.swift`.
 
     /// Whether the catalog has any indexed content yet (false on a fresh share).
-    func isEmpty() -> Bool { ensureOpen(); return readQueries.isEmpty() }
+    func isEmpty() async -> Bool {
+        await withCatalogRead(unavailable: true) { readQueries.isEmpty() }
+    }
 
     /// Per-library counts so `libraries()` can hide an indexed library with no content.
-    func libraryCounts() -> (movies: Int, tvSeries: Int, animeSeries: Int) {
-        ensureOpen()
-        return readQueries.libraryCounts()
+    func libraryCounts() async -> (movies: Int, tvSeries: Int, animeSeries: Int) {
+        await withCatalogRead(unavailable: (0, 0, 0)) {
+            readQueries.libraryCounts()
+        }
     }
 
     /// Per-source provenance-row counts (Step 6 diagnostics). Lazy/on-demand.
-    func metadataCountPerSource() -> [MetadataSource: Int] {
-        ensureOpen(); return readQueries.metadataCountPerSource()
+    func metadataCountPerSource() async -> [MetadataSource: Int] {
+        await withCatalogRead(unavailable: [:]) {
+            readQueries.metadataCountPerSource()
+        }
     }
 
     /// Recently added: movies + one entry per series, newest first (Home hot path).
-    func latest(limit: Int) -> [MediaItem] { ensureOpen(); return readQueries.latest(limit: limit) }
+    func latest(limit: Int) async -> [MediaItem] {
+        await withCatalogRead(unavailable: []) { readQueries.latest(limit: limit) }
+    }
 
     /// Free-text search across movie/episode/series titles.
-    func search(query q: String, limit: Int) -> [MediaItem] {
-        ensureOpen(); return readQueries.search(query: q, limit: limit)
+    func search(query q: String, limit: Int) async -> [MediaItem] {
+        await withCatalogRead(unavailable: []) {
+            readQueries.search(query: q, limit: limit)
+        }
     }
 
     /// Movie items for the Movies grid (paged, grouped, enrichment overlaid).
-    func movies(offset: Int, limit: Int) -> [MediaItem] {
-        ensureOpen(); return readQueries.movies(offset: offset, limit: limit)
+    func movies(offset: Int, limit: Int) async -> [MediaItem] {
+        await withCatalogRead(unavailable: []) {
+            readQueries.movies(offset: offset, limit: limit)
+        }
     }
 
     /// Distinct series items for a TV/Anime library, alphabetical (paged).
-    func series(in library: CatalogLibrary, offset: Int, limit: Int) -> [MediaItem] {
-        ensureOpen(); return readQueries.series(in: library, offset: offset, limit: limit)
+    func series(in library: CatalogLibrary, offset: Int, limit: Int) async -> [MediaItem] {
+        await withCatalogRead(unavailable: []) {
+            readQueries.series(in: library, offset: offset, limit: limit)
+        }
     }
 
     /// Exact number of distinct logical movies (for the grid's `totalCount`).
-    func movieCount() -> Int { ensureOpen(); return readQueries.movieCount() }
+    func movieCount() async -> Int {
+        await withCatalogRead(unavailable: 0) { readQueries.movieCount() }
+    }
 
     /// Exact number of distinct series in a TV/Anime library (zero for movies).
-    func seriesCount(in library: CatalogLibrary) -> Int {
-        ensureOpen(); return readQueries.seriesCount(in: library)
+    func seriesCount(in library: CatalogLibrary) async -> Int {
+        await withCatalogRead(unavailable: 0) {
+            readQueries.seriesCount(in: library)
+        }
     }
 
     /// Season container items for a series.
-    func seasons(seriesKey: String) -> [MediaItem] {
-        ensureOpen(); return readQueries.seasons(seriesKey: seriesKey)
+    func seasons(seriesKey: String) async -> [MediaItem] {
+        await withCatalogRead(unavailable: []) {
+            readQueries.seasons(seriesKey: seriesKey)
+        }
     }
 
     /// Every episode file in a series, keyed for watch-state lookup and grouped by
     /// season and logical episode, so season containers can carry rolled-up state.
-    func episodeWatchIdentities(seriesKey: String) -> [(season: Int, logicalKey: String, fileID: String)] {
-        ensureOpen(); return readQueries.episodeWatchIdentities(seriesKey: seriesKey)
+    func episodeWatchIdentities(seriesKey: String) async -> [(season: Int, logicalKey: String, fileID: String)] {
+        await withCatalogRead(unavailable: []) {
+            readQueries.episodeWatchIdentities(seriesKey: seriesKey)
+        }
     }
 
     /// On-disk episode-title fingerprints for content-based series disambiguation.
     func episodeTitleHints(seriesKey: String, limit: Int = 12) -> [(season: Int, episode: Int, title: String)] {
-        ensureOpen(); return readQueries.episodeTitleHints(seriesKey: seriesKey, limit: limit)
+        ensureOpen()
+        guard db != nil else { return [] }
+        return readQueries.episodeTitleHints(seriesKey: seriesKey, limit: limit)
     }
 
     /// Distinct richer FILENAME-derived series titles (extra TVDB search candidates).
     func seriesSearchTitleAlternates(seriesKey: String, storedTitle: String, sampleLimit: Int = 24) -> [String] {
         ensureOpen()
-        return readQueries.seriesSearchTitleAlternates(seriesKey: seriesKey, storedTitle: storedTitle, sampleLimit: sampleLimit)
+        guard db != nil else { return [] }
+        return readQueries.seriesSearchTitleAlternates(
+            seriesKey: seriesKey,
+            storedTitle: storedTitle,
+            sampleLimit: sampleLimit
+        )
     }
 
     /// The explicit TheTVDB id a series' folder/filenames declared via `[tvdb-####]`.
     func seriesEmbeddedTVDBID(seriesKey: String) -> String? {
-        ensureOpen(); return readQueries.seriesEmbeddedTVDBID(seriesKey: seriesKey)
+        ensureOpen()
+        guard db != nil else { return nil }
+        return readQueries.seriesEmbeddedTVDBID(seriesKey: seriesKey)
     }
 
     /// Episode items for one season of a series.
-    func episodes(seriesKey: String, season: Int) -> [MediaItem] {
-        ensureOpen(); return readQueries.episodes(seriesKey: seriesKey, season: season)
+    func episodes(seriesKey: String, season: Int) async -> [MediaItem] {
+        await withCatalogRead(unavailable: []) {
+            readQueries.episodes(seriesKey: seriesKey, season: season)
+        }
     }
 
     /// Resolve any catalog id to a rich `MediaItem`, or `nil` if unknown here.
-    func item(id: String) -> MediaItem? { ensureOpen(); return readQueries.item(id: id) }
+    func item(id: String) async -> MediaItem? {
+        await withCatalogRead(unavailable: nil) { readQueries.item(id: id) }
+    }
 
-    func itemsWithPerson(id personID: String?, name: String, limit: Int) -> [MediaItem] {
-        ensureOpen()
-        return readQueries.itemsWithPerson(id: personID, name: name, limit: limit)
+    func itemsWithPerson(id personID: String?, name: String, limit: Int) async -> [MediaItem] {
+        await withCatalogRead(unavailable: []) {
+            readQueries.itemsWithPerson(id: personID, name: name, limit: limit)
+        }
     }
 
     /// The best default file to play for a logical movie when no version is named.
-    func defaultMovieRelPath(forKey key: String) -> String? {
-        ensureOpen(); return readQueries.defaultMovieRelPath(forKey: key)
+    func defaultMovieRelPath(forKey key: String) async -> String? {
+        await withCatalogRead(unavailable: nil) {
+            readQueries.defaultMovieRelPath(forKey: key)
+        }
     }
 
     /// Canonical watch-state id for a leaf id (folds movie files into `movie:<key>`).
-    func canonicalItemID(_ id: String) -> String {
-        ensureOpen(); return readQueries.canonicalItemID(id)
+    func canonicalItemID(_ id: String) async -> String {
+        await withCatalogRead(unavailable: id) { readQueries.canonicalItemID(id) }
     }
 
     /// Stored watch-state ids for the requested items, mapped to their canonical ids.
-    func watchStateAliases(for itemIDs: [String]) -> [String: String] {
-        ensureOpen(); return readQueries.watchStateAliases(for: itemIDs)
+    func watchStateAliases(for itemIDs: [String]) async -> [String: String] {
+        await withCatalogRead(unavailable: [:]) {
+            readQueries.watchStateAliases(for: itemIDs)
+        }
     }
 
     /// Whether a legacy/raw `f:` id still has a live catalog row.
-    func containsFileAsset(id: String) -> Bool {
-        ensureOpen(); return readQueries.containsFileAsset(id: id)
+    func containsFileAsset(id: String) async -> Bool {
+        await withCatalogRead(unavailable: false) {
+            readQueries.containsFileAsset(id: id)
+        }
     }
 
     func extras(ownerID: String) async -> [MediaExtra] {
-        ensureOpen()
-        return extraRepo.extras(ownerID: ownerID)
+        await withCatalogRead(unavailable: []) { extraRepo.extras(ownerID: ownerID) }
     }
 
     func extra(fileID: String) async -> MediaExtra? {
-        ensureOpen()
-        return extraRepo.extra(fileID: fileID)
+        await withCatalogRead(unavailable: nil) { extraRepo.extra(fileID: fileID) }
     }
 
     func extraResumeBehavior(fileID: String) async -> Bool? {
-        ensureOpen()
-        return extraRepo.extra(fileID: fileID)?.supportsResume
+        await withCatalogRead(unavailable: nil) {
+            extraRepo.extra(fileID: fileID)?.supportsResume
+        }
     }
 
     func extraCount() -> Int {
         ensureOpen()
+        guard db != nil else { return 0 }
         return extraRepo.count()
     }
 

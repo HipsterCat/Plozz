@@ -122,13 +122,12 @@ public final class HomeViewModel {
                 && libraries.isEmpty && librarySections.isEmpty
         }
 
-        /// A copy bounded for launch persistence. Ordinary Home preview rows keep
-        /// only enough cards for the first paint, while Watchlist keeps its complete
-        /// presentation: unlike the previews, that same snapshot backs a dedicated
-        /// browse destination and must not strand navigation at 30 items.
+        /// Bounds discovery previews for launch persistence, not Continue Watching.
+        /// The complete resume row must survive a relaunch or failed refresh.
+        /// Watchlist likewise keeps its separate full-browsing budget.
         func bounded(perRow: Int, watchlistLimit: Int) -> Content {
             Content(
-                continueWatching: Array(continueWatching.prefix(perRow)),
+                continueWatching: continueWatching,
                 latest: Array(latest.prefix(perRow)),
                 watchlist: Array(watchlist.prefix(watchlistLimit)),
                 libraries: libraries,
@@ -188,6 +187,21 @@ public final class HomeViewModel {
     /// cached rows remain visible; Continue Watching uses a row placeholder until
     /// fresh content publishes once.
     public private(set) var isShowingCachedSnapshot = false
+    @ObservationIgnored private var hasReceivedLiveContent = false
+    @ObservationIgnored private var detailResumeByAccount: [String: [MediaItem]] = [:]
+    /// Detail opens can use a server's native episode ids before the other servers
+    /// finish, and after the visible row merges those copies into a single card.
+    public var continueWatchingForDetail: [MediaItem] {
+        let content = state.value
+        let visible = hasReceivedLiveContent ? content?.continueWatching ?? [] : []
+        let native = accounts.flatMap { detailResumeByAccount[$0.account.id] ?? [] }
+        let visibility = currentVisibility()
+        var seen = Set<String>()
+        return (visible + native).filter { item in
+            item.isVisibleOnHome(isLibraryVisible: { visibility.isVisibleOnHome($0) })
+                && seen.insert("\(item.sourceAccountID ?? ""):\(item.id)").inserted
+        }
+    }
     /// A network aggregation is replacing the visible snapshot. Unlike `state`,
     /// this remains true during stale-while-revalidate so cached rows can explain
     /// that their complete live contents are still arriving.
@@ -509,6 +523,7 @@ public final class HomeViewModel {
         }
         isLoading = true
         isRefreshing = true
+        detailResumeByAccount = [:]
         defer {
             isLoading = false
             if wantsReloadAfterCurrent {
@@ -526,6 +541,10 @@ public final class HomeViewModel {
         let accounts = self.accounts
         let identitySources = self.identitySources
         let policy = self.policy
+        let receiveResume: @Sendable (String, [MediaItem]) async -> Void = { [weak self] accountID, items in
+            guard !Task.isCancelled else { return }
+            await self?.receiveDetailResume(items, accountID: accountID)
+        }
         // What the viewer is looking at right now. A just-played card lives here and
         // nowhere else until the servers catch up, so it has to be offered to the
         // reconciler — which decides, on evidence, whether it has earned its place.
@@ -550,7 +569,10 @@ public final class HomeViewModel {
         let content: Content
         if visibility.mergeLibrariesOnHome {
             let aggregationTask = Task.detached(priority: .userInitiated) {
-                await aggregator.content(from: accounts, policy: policy, visibility: visibility, identitySources: identitySources)
+                await aggregator.content(
+                    from: accounts, policy: policy, visibility: visibility,
+                    identitySources: identitySources, onContinueWatching: receiveResume
+                )
             }
             self.aggregationTask = aggregationTask
             let merged = await aggregationTask.value
@@ -600,7 +622,10 @@ public final class HomeViewModel {
             // full library inventory feeds the Libraries tiles, and each library the
             // user opted rows into contributes a block below.
             let unmergedTask = Task.detached(priority: .userInitiated) {
-                await aggregator.unmergedContent(from: accounts, policy: policy, visibility: visibility, identitySources: identitySources)
+                await aggregator.unmergedContent(
+                    from: accounts, policy: policy, visibility: visibility,
+                    identitySources: identitySources, onContinueWatching: receiveResume
+                )
             }
             self.unmergedTask = unmergedTask
             let unmerged = await unmergedTask.value
@@ -674,6 +699,7 @@ public final class HomeViewModel {
             isShowingCachedSnapshot = false
             return
         }
+        hasReceivedLiveContent = true
         isShowingCachedSnapshot = false
         state = content.isEmpty && watchlistLoadingPlaceholderCount == 0
             ? .empty
@@ -712,12 +738,31 @@ public final class HomeViewModel {
         }
     }
 
+    private func receiveDetailResume(_ items: [MediaItem], accountID: String) async {
+        let pending = await pendingWatchMutations()
+        let recency = await recentlyAppliedRecency()
+        guard !Task.isCancelled,
+              accounts.contains(where: { $0.account.id == accountID }) else { return }
+        detailResumeByAccount[accountID] = Self.reconcileContinueWatching(
+            items, pending: pending, appliedRecency: recency
+        ).filter { $0.sourceAccountID == accountID }
+    }
+
     /// Applies a watched-state or watchlist mutation to the loaded rows **in
     /// place** so affected cards immediately reflect their new state. A title marked
     /// watched leaves Continue Watching immediately; other rows retain the card and
     /// flip its badge without a refetch. A watchlist add/remove also inserts/removes
     /// the title from the Watchlist row.
     public func applyWatchedState(_ mutation: MediaItemMutation) {
+        for (accountID, items) in detailResumeByAccount {
+            detailResumeByAccount[accountID] = items.compactMap { item in
+                if mutation.targets(item),
+                   mutation.played == true || (mutation.resumePosition == 0 && mutation.played != false) {
+                    return nil
+                }
+                return apply(mutation, to: item)
+            }
+        }
         guard case var .loaded(content) = state else {
             // A play that arrives before Home has any content to update is
             // discarded outright — there is no row to change and nothing here

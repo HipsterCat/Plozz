@@ -50,6 +50,9 @@ public final class ItemDetailViewModel {
         /// Regional release/watch facts for a synthetic external title. `nil` on
         /// ordinary library details and when no provider could answer.
         public var externalAvailability: ExternalTitleAvailability?
+        /// Published with the detail so cached seasons and a later live resume
+        /// answer cannot become independent, inconsistently observed states.
+        public var serverResumeEpisode: MediaItem?
     }
 
     public private(set) var state: LoadState<Detail> = .idle
@@ -78,13 +81,10 @@ public final class ItemDetailViewModel {
     /// reports nothing at all.
     ///
     /// The Continue Watching feed asks the server directly and gets it right —
-    /// it is the same data behind the Home rail. `nil` when the show has no
-    /// resume point, which is a real answer meaning "start from the beginning".
-    /// Deliberately not observed: it is resolved *before* the children publish
-    /// that makes the page render its seasons, so a view reading it during that
-    /// render already sees the settled value. Tracking it would spend one of this
-    /// type's observable-property budget for no additional invalidation.
-    @ObservationIgnored public private(set) var serverResumeEpisode: MediaItem?
+    /// it is the same data behind the Home rail. `nil` until known, or when the
+    /// server has no resume point. Observed through `state`: cached seasons can
+    /// render before this live answer without changing their ids when it arrives.
+    public var serverResumeEpisode: MediaItem? { state.value?.serverResumeEpisode }
 
 
     /// empty array — cached deliberately, so a season that genuinely cannot be
@@ -228,13 +228,9 @@ public final class ItemDetailViewModel {
     private let provider: any MediaProvider
     private let itemID: String
     private let ratingsProvider: any ExternalRatingsProviding
-    /// A **discovery** item (a Seerr/Overseerr title that may not be in any
-    /// library). Its synthetic `seer:<tmdbId>` id isn't resolvable through a
-    /// `MediaProvider`, so `load()`/`reload()` skip the provider fetch and every
-    /// library-only enrichment (children, trailers, ratings, cross-server) and
-    /// simply keep the seeded `initialItem` — which already carries the TMDB
-    /// artwork + overview the discovery detail page shows.
-    private let isDiscoveryItem: Bool
+    /// External until a real library source is resolved. Both shells observe this
+    /// instead of freezing the index's ownership answer at navigation time.
+    public private(set) var isDiscoveryItem: Bool
     /// For a discovery item, fetches its current request/availability + download
     /// progress from Seerr (by TMDB id). Called on every `load()` so reopening a
     /// title requested in an earlier visit reflects the real "Requested"/
@@ -295,7 +291,7 @@ public final class ItemDetailViewModel {
     /// from any server. Empty for a single-server item. The primary source's
     /// versions/watch-state are seeded from the loaded detail; alternates are
     /// enriched off the critical path (see ``enrichAlternateSources``).
-    private let initialSources: [MediaSourceRef]
+    private var initialSources: [MediaSourceRef]
     /// Resolves an account id to its provider so alternate-server copies can be
     /// fetched for their versions/watch-state. Returns `nil` for unknown accounts
     /// (e.g. a server signed out since the merge).
@@ -306,8 +302,9 @@ public final class ItemDetailViewModel {
     /// server (e.g. a Home row that only one server put in "Recently Added") still
     /// gets a server picker. Given the loaded primary item it searches the other
     /// accounts, merges by ``MediaItemIdentity``, and returns every matching
-    /// server's ``MediaSourceRef``. `nil` outside multi-account flows. Runs off the
-    /// critical path of first paint.
+    /// server's ``MediaSourceRef``. Also resolves an external title's first library
+    /// copy when the index has no entry. Ordinary library details use it only for
+    /// off-critical-path picker enrichment.
     private let crossServerSourceResolver: (@Sendable (MediaItem) async -> [MediaSourceRef])?
 
     /// The enriched per-server sources for this title, primary first. Drives the
@@ -461,6 +458,7 @@ public final class ItemDetailViewModel {
         provider: any MediaProvider,
         itemID: String,
         initialItem: MediaItem? = nil,
+        initialResumeEpisode: MediaItem? = nil,
         isDiscoveryItem: Bool = false,
         discoveryStatusRefresh: (@Sendable (MediaItem) async -> (MediaAvailabilityStatus, Double?)?)? = nil,
         externalMetadataResolver: @escaping @Sendable (MediaItem, String) async -> ExternalTitleMetadata = {
@@ -515,7 +513,14 @@ public final class ItemDetailViewModel {
         // in place without ever dropping back to a loading/skeleton state.
         if let initialItem {
             let seeded = sourceAccountID.map(initialItem.taggingSource) ?? initialItem
-            self.state = .loaded(Detail(item: seeded, children: []))
+            let resume = initialResumeEpisode.flatMap { episode -> MediaItem? in
+                guard episode.kind == .episode,
+                      episode.locallyValidatedPlayableSource,
+                      episode.seriesID == itemID,
+                      episode.sourceAccountID == self.activeSourceAccountID else { return nil }
+                return episode
+            }
+            self.state = .loaded(Detail(item: seeded, children: [], serverResumeEpisode: resume))
         }
     }
 
@@ -569,14 +574,13 @@ public final class ItemDetailViewModel {
     }
 
     public func load() async {
-        // Discovery items have synthetic ids no media server can resolve, but
-        // "not playable" does not mean "no useful detail." Skip only the library
-        // provider path; enrich the seed through provider-independent metadata,
-        // release/watch facts, ratings, online trailers, related titles and TV
-        // schedule.
-        guard !isDiscoveryItem else {
-            await loadDiscoveryDetail()
-            return
+        if isDiscoveryItem {
+            await resolveDiscoveryLibrarySource()
+            guard !Task.isCancelled else { return }
+            if isDiscoveryItem {
+                await loadDiscoveryDetail()
+                return
+            }
         }
         alternateSourceEnrichmentTask?.cancel()
         alternateSourceEnrichmentTask = nil
@@ -680,7 +684,8 @@ public final class ItemDetailViewModel {
                     item: taggedItem,
                     children: seededChildren,
                     childrenLoaded: state.value?.childrenLoaded ?? false,
-                    upcomingSchedule: state.value?.upcomingSchedule
+                    upcomingSchedule: state.value?.upcomingSchedule,
+                    serverResumeEpisode: serverResumeEpisode
                 ))
                 hasPaintedFreshDetail = true
                 seedSources(from: taggedItem)
@@ -694,23 +699,22 @@ public final class ItemDetailViewModel {
                 // await — so navigating away cancels it instead of letting the
                 // multi-server search fan-out starve the next page's `provider.item`.
                 startSpeculativeEnrichment(for: item)
-                // Children fill in off the critical path of first paint; merge them
-                // in (same item identity ⇒ no hero flicker) when they arrive.
-                // Both in flight together: the resume lookup must be settled
-                // BEFORE the children publish, because that publish is what makes
-                // the page resolve its opening season — and that decision needs
-                // the server's answer. First paint already happened above, so this
-                // costs nothing the user sees.
-                async let childrenTask = fetchChildren(loadProvider, of: item.id)
-                async let resumeTask = fetchServerResumeEpisode(for: item, provider: loadProvider)
-                let (fetchedChildren, resume) = await (childrenTask, resumeTask)
+                // Play can use the resume answer before the season list arrives.
+                // Keep season selection gated on that answer so it never settles
+                // on Season 1 while the real resume target is still pending.
+                async let resumeTask: Void = publishServerResumeEpisode(
+                    for: item, provider: loadProvider,
+                    sourceGeneration: loadSourceGeneration
+                )
+                let fetchedChildren = await fetchChildren(loadProvider, of: item.id)
+                await resumeTask
                 guard !Task.isCancelled, isCurrent() else { return }
-                serverResumeEpisode = resume
                 state = .loaded(Detail(
                     item: taggedItem,
                     children: fetchedChildren.map(tagged),
                     childrenLoaded: true,
-                    upcomingSchedule: state.value?.upcomingSchedule
+                    upcomingSchedule: state.value?.upcomingSchedule,
+                    serverResumeEpisode: serverResumeEpisode
                 ))
                 // Deliberately after the state publish: the schedule is decoration,
                 // and must never hold up the page. Cache read first (instant), then
@@ -773,6 +777,52 @@ public final class ItemDetailViewModel {
         } catch {
             if isCurrent(), state.value == nil { state = .failed(.unknown("")) }
         }
+    }
+
+    /// An index miss is not proof of absence: a cold or capped catalogue can miss
+    /// a title that a targeted server search finds immediately (issue #33).
+    private func resolveDiscoveryLibrarySource() async {
+        guard let seed = state.value?.item,
+              seed.kind == .movie || seed.kind == .series,
+              let resolver = crossServerSourceResolver else { return }
+        let generation = sourceGeneration
+        let resolved = await resolver(seed)
+        guard !Task.isCancelled,
+              isDiscoveryItem,
+              sourceGeneration == generation,
+              state.value?.item.id == seed.id else { return }
+
+        let availableSources = resolved.compactMap { source -> MediaSourceRef? in
+            guard source.kind == nil || source.kind == seed.kind,
+                  let provider = alternateProviderResolver(source.accountID) else { return nil }
+            var source = source
+            source.locality = provider.connectionLocality
+            return source
+        }
+        guard let selected = CrossSourceSelector.bestSelection(
+            from: availableSources,
+            capabilities: .detected(),
+            preferring: originSourceAccountID
+        )?.source,
+              let provider = alternateProviderResolver(selected.accountID) else {
+            PlozzLog.app.info("Detail ownership probe: no active library source id=\(seed.id)")
+            return
+        }
+
+        invalidateSourceOperations()
+        activeProvider = provider
+        activeItemID = selected.itemID
+        activeSourceAccountID = selected.accountID
+        initialSources = availableSources
+        var owned = seed.selectingSource(selected)
+        owned.sources = availableSources
+        owned.availability = nil
+        owned.downloadProgress = nil
+        state = .loaded(Detail(item: owned, children: []))
+        isDiscoveryItem = false
+        PlozzLog.app.info(
+            "Detail ownership probe: resolved library source id=\(seed.id) libraryID=\(selected.itemID)"
+        )
     }
 
     /// Loads a synthetic external title without ever pretending its id belongs to
@@ -1516,7 +1566,8 @@ public final class ItemDetailViewModel {
             item: tagged(item),
             children: children.map(tagged),
             childrenLoaded: true,
-            upcomingSchedule: upcomingSchedule
+            upcomingSchedule: upcomingSchedule,
+            serverResumeEpisode: serverResumeEpisode
         ))
         loadUpcomingSchedule(for: item)
         startStreamProbeEnrichment(
@@ -1666,7 +1717,8 @@ public final class ItemDetailViewModel {
     /// anything the viewer is actually looking at.
     private func loadRelatedTitles(for item: MediaItem) {
         guard let relatedTitlesLoader else { return }
-        Task { await relatedTitlesLoader.load(for: item) }
+        let mode = DetailOpenEnvironment.relatedTitlesDisplayMode(isDiscoveryItem: isDiscoveryItem)
+        Task { await relatedTitlesLoader.load(for: item, displayMode: mode) }
     }
 
     /// Fills ``upcomingSchedule`` from cache, then refreshes it in the background.
@@ -1701,15 +1753,28 @@ public final class ItemDetailViewModel {
         persistSnapshot()
     }
 
+    private func publishServerResumeEpisode(
+        for item: MediaItem,
+        provider: any MediaProvider,
+        sourceGeneration: UInt64
+    ) async {
+        guard item.kind == .series else { return }
+        let resume = await fetchServerResumeEpisode(for: item, provider: provider)
+        guard !Task.isCancelled,
+              isStillLoaded(item, sourceGeneration: sourceGeneration),
+              var detail = state.value else { return }
+        detail.serverResumeEpisode = resume.map(tagged)
+        state = .loaded(detail)
+    }
+
     private func fetchServerResumeEpisode(
         for item: MediaItem,
         provider: any MediaProvider
     ) async -> MediaItem? {
         guard item.kind == .series else { return nil }
-        // A generous limit: the feed is ordered by recency across the whole
-        // library, and this series' entry can sit well down it for someone who
-        // watches a lot of different shows.
-        guard let feed = try? await provider.continueWatching(limit: 60) else { return nil }
+        // The series may sit anywhere in the unlimited Home row. A preview-sized
+        // lookup must not make an older show's detail page restart at episode one.
+        guard let feed = try? await provider.continueWatching(limit: .max) else { return nil }
         return feed.first { $0.seriesID == item.id }
     }
 
@@ -1862,6 +1927,10 @@ public final class ItemDetailViewModel {
 
     private func invalidateSourceOperations() {
         sourceGeneration += 1
+        if var detail = state.value, detail.serverResumeEpisode != nil {
+            detail.serverResumeEpisode = nil
+            state = .loaded(detail)
+        }
         seasonLoadingResumeSourceGeneration = nil
         snapshotRestoreTask?.cancel()
         snapshotRestoreTask = nil
@@ -1894,7 +1963,8 @@ public final class ItemDetailViewModel {
             item: item,
             children: snapshot.children.map(tagged),
             childrenLoaded: true,
-            upcomingSchedule: snapshot.upcomingSchedule
+            upcomingSchedule: snapshot.upcomingSchedule,
+            serverResumeEpisode: serverResumeEpisode
         ))
         if snapshot.sources.count > 1 {
             let restored = prunedToActiveAccounts(snapshot.sources)
@@ -1937,7 +2007,8 @@ public final class ItemDetailViewModel {
                 item: detail.item,
                 children: snapshot.children.map(tagged),
                 childrenLoaded: true,
-                upcomingSchedule: detail.upcomingSchedule ?? snapshot.upcomingSchedule
+                upcomingSchedule: detail.upcomingSchedule ?? snapshot.upcomingSchedule,
+                serverResumeEpisode: detail.serverResumeEpisode
             ))
         } else if var detail = state.value,
                   detail.upcomingSchedule == nil,
@@ -2449,6 +2520,6 @@ public final class ItemDetailViewModel {
 
     /// Label for the primary action button, reflecting resume vs. play.
     public func playButtonTitle(for item: MediaItem) -> LocalizedStringResource {
-        "Play"
+        item.playActionTitle
     }
 }

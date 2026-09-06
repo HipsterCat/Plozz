@@ -28,8 +28,6 @@ import UIKit
 @MainActor
 @Observable
 final class PlozziOSAppModel {
-    static let shared = PlozziOSAppModel()
-
     private struct HeroTrailerCacheEntry {
         let source: HeroTrailerSource?
         let expiresAt: Date
@@ -283,17 +281,30 @@ final class PlozziOSAppModel {
     let requiresLaunchProfileSelection: Bool
     private(set) var settings: PlozziOSSettingsModel
     @ObservationIgnored
-    private var backgroundWorkRevision: UInt64 = 0
-    @ObservationIgnored
     private var applicationIsActive = true
     @ObservationIgnored
-    private var activeSceneIDs = Set<UUID>()
-    @ObservationIgnored
-    private var hasObservedSceneActivity = false
-    @ObservationIgnored
-    private var lifecycleTransitionTask: Task<Void, Never>?
-    @ObservationIgnored
     private var downloadProfileGeneration = 0
+    @ObservationIgnored
+    private var sceneSessionIDs: [String: UUID] = [:]
+    @ObservationIgnored
+    private var sceneNotificationTokens: [NSObjectProtocol] = []
+    @ObservationIgnored
+    private lazy var applicationLifecycle = ApplicationSceneLifecycle(
+        initiallyActive: applicationIsActive,
+        makeSuspensionLease: { expiration in
+            Self.makeSuspensionLease(expiration: expiration)
+        },
+        operation: { [weak self] transition in
+            await self?.applyApplicationActivity(transition)
+        },
+        expirationOperation: { [weak self] transition in
+            guard let self else { return }
+            PlozzLog.boot(
+                "ios.lifecycle suspension lease expired revision=\(transition.revision)"
+            )
+            await self.applyApplicationActivity(transition)
+        }
+    )
     private(set) var seriesTrackStore: SeriesTrackPreferenceStore
     private(set) var versionPreferences: VersionPreferenceStore
     private(set) var downloads: PlozziOSDownloadsModel
@@ -782,6 +793,7 @@ final class PlozziOSAppModel {
         heroTrailerCache.removeAll()
         accountsProviders.reloadAccounts()
         applyCrashReportingPreference()
+        observeApplicationScenes()
     }
 
     func provider(for item: MediaItem) -> (any MediaProvider)? {
@@ -838,51 +850,87 @@ final class PlozziOSAppModel {
         mediaShareRescanService.rescan(accountID: accountID)
     }
 
-    func setScene(_ sceneID: UUID, isActive: Bool) {
-        if isActive {
-            activeSceneIDs.insert(sceneID)
-        } else {
-            activeSceneIDs.remove(sceneID)
+    private func observeApplicationScenes() {
+        for name in [
+            UIScene.didActivateNotification,
+            UIScene.willDeactivateNotification,
+            UIScene.didEnterBackgroundNotification,
+            UIScene.didDisconnectNotification
+        ] {
+            sceneNotificationTokens.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] notification in
+                MainActor.assumeIsolated {
+                    self?.refreshApplicationScenes(notification: notification)
+                }
+            })
         }
-        scheduleApplicationActivity(active: !activeSceneIDs.isEmpty)
+        refreshApplicationScenes(notification: nil)
     }
 
-    func removeScene(_ sceneID: UUID) {
-        activeSceneIDs.remove(sceneID)
-        scheduleApplicationActivity(active: !activeSceneIDs.isEmpty)
+    private func refreshApplicationScenes(notification: Notification?) {
+        let changedScene = notification?.object as? UIScene
+        let changedID = changedScene?.session.persistentIdentifier
+        var scenes: [UUID: Bool] = [:]
+        var connected = Set<String>()
+        for scene in UIApplication.shared.connectedScenes {
+            let sessionID = scene.session.persistentIdentifier
+            if sessionID == changedID,
+               notification?.name == UIScene.didDisconnectNotification { continue }
+            connected.insert(sessionID)
+            let id = sceneSessionIDs[sessionID] ?? UUID()
+            sceneSessionIDs[sessionID] = id
+            if sessionID == changedID {
+                scenes[id] = notification?.name == UIScene.didActivateNotification
+            } else {
+                scenes[id] = scene.activationState == .foregroundActive
+            }
+        }
+        sceneSessionIDs = sceneSessionIDs.filter { connected.contains($0.key) }
+        if let transition = applicationLifecycle.replaceScenes(scenes) {
+            applicationIsActive = transition.isActive
+        }
     }
 
-    private func scheduleApplicationActivity(active: Bool) {
-        guard !hasObservedSceneActivity || applicationIsActive != active else {
-            return
-        }
-        hasObservedSceneActivity = true
-        applicationIsActive = active
-        backgroundWorkRevision &+= 1
-        let revision = backgroundWorkRevision
-        let previousTransition = lifecycleTransitionTask
-        previousTransition?.cancel()
-
-        let suspensionLease = active ? nil : PlozziOSBackgroundTaskLease(
-            name: "Plozz suspension drain"
-        ) { [weak self] in
-            guard let self, self.backgroundWorkRevision == revision else { return }
-            PlozzLog.boot("ios.lifecycle suspension drain expired revision=\(revision)")
-            self.lifecycleTransitionTask?.cancel()
-        }
-        let mediaShareRuntime = mediaShareRuntime
+    private func applyApplicationActivity(
+        _ transition: ApplicationActivityTransition
+    ) async {
         let downloads = downloads
-        lifecycleTransitionTask = Task { @MainActor [weak self] in
-            defer { suspensionLease?.end() }
-            await previousTransition?.value
-            guard let self, self.backgroundWorkRevision == revision else { return }
+        async let mediaShareTransition: Void =
+            mediaShareRuntime.setBackgroundWorkAllowed(
+                transition.isActive,
+                revision: transition.revision
+            )
+        async let downloadTransition: Void =
+            downloads.setApplicationActive(
+                transition.isActive,
+                revision: transition.revision
+            )
+        _ = await (mediaShareTransition, downloadTransition)
+    }
 
-            async let mediaShareTransition: Void =
-                mediaShareRuntime.setBackgroundWorkAllowed(active, revision: revision)
-            async let downloadTransition: Void =
-                downloads.setApplicationActive(active)
-            _ = await (mediaShareTransition, downloadTransition)
+    private static func makeSuspensionLease(
+        expiration: @escaping @MainActor @Sendable () -> Void
+    ) -> ApplicationLifecycleLease? {
+        let lease = ApplicationLifecycleLease(expiration: expiration)
+        let identifier = UIApplication.shared.beginBackgroundTask(
+            withName: "Plozz suspension safety"
+        ) {
+            // UIKit documents background-task expiration handlers as main-thread
+            // callbacks. Run inline so the assertion is ended in that callback,
+            // rather than relying on another task that may not be scheduled.
+            MainActor.assumeIsolated {
+                lease.expire()
+            }
         }
+        guard identifier != .invalid else {
+            lease.end()
+            return nil
+        }
+        lease.installEndAction {
+            UIApplication.shared.endBackgroundTask(identifier)
+        }
+        return lease
     }
 
     /// Media-share account ids signed in on this device. Scopes the Settings
@@ -2628,35 +2676,6 @@ final class PlozziOSAppModel {
             guard generation == postAddPresentationGeneration else { return }
             presentLibrarySelection(accountIDs: accountIDs)
         }
-    }
-}
-
-@MainActor
-private final class PlozziOSBackgroundTaskLease {
-    private var identifier: UIBackgroundTaskIdentifier = .invalid
-    private let expiration: @MainActor @Sendable () -> Void
-
-    init(
-        name: String,
-        expiration: @escaping @MainActor @Sendable () -> Void
-    ) {
-        self.expiration = expiration
-        identifier = UIApplication.shared.beginBackgroundTask(
-            withName: name
-        ) { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.expiration()
-                self.end()
-            }
-        }
-    }
-
-    func end() {
-        guard identifier != .invalid else { return }
-        let ending = identifier
-        identifier = .invalid
-        UIApplication.shared.endBackgroundTask(ending)
     }
 }
 

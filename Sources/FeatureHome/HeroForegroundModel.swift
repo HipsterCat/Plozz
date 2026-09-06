@@ -77,6 +77,9 @@ struct HeroForegroundModel: Equatable {
         let progress: Double?
         /// Whether this pill is the fallback primary CTA even while unfocused.
         var prominent: Bool = false
+        /// App copy remains unresolved until the UIKit presentation boundary.
+        /// When present, `text` is the content-only suffix (episode numbering).
+        var localizedTitle: LocalizedStringResource? = nil
     }
 
     /// Paging-indicator state for the renderer (count + fronted index) plus the
@@ -116,6 +119,7 @@ enum HeroForegroundModelBuilder {
         var resumeProgress: Double? = nil
         /// For `.play`: whether the item is resumable (Play vs Resume label).
         var isResume: Bool = false
+        var isStarting: Bool = false
         /// For `.play`: the remaining-time text ("20m") shown in the resume form.
         /// When present alongside an in-range ``resumeProgress`` the pill renders the
         /// glyph + inline progress bar + this text (no "Resume" word), matching
@@ -194,8 +198,21 @@ enum HeroForegroundModelBuilder {
             }
             // Plain pill: base label with the episode appended when known
             // ("Play S21, E8"), else just "Resume"/"Play".
+            let startsWatching = input.isStarting && !input.isResume
+            if startsWatching {
+                return HeroForegroundModel.Pill(
+                    kind: .play,
+                    text: input.seasonEpisodeText.map { " · " + $0 },
+                    systemImage: "play.fill",
+                    progress: nil,
+                    localizedTitle: LocalizedStringResource(
+                        "Start watching",
+                        comment: "Play an unstarted first episode. The season and episode numbers follow this label."
+                    )
+                )
+            }
             let base = input.isResume ? "Resume" : "Play"
-            let plain = input.seasonEpisodeText.map { "\(base) \($0)" } ?? base
+            let plain = input.seasonEpisodeText.map { base + " " + $0 } ?? base
             return HeroForegroundModel.Pill(
                 kind: .play,
                 text: plain,

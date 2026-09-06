@@ -137,7 +137,9 @@ final class SubtitleLineView: UIView {
 
     func measure(maxWidth: CGFloat) -> CGSize {
         guard let c = config else { return .zero }
-        if let l = layout, layoutWidth == maxWidth { return l.totalSize }
+        if let l = layout, layoutWidth == maxWidth || l.totalSize.width == maxWidth {
+            return l.totalSize
+        }
         let l = buildLayout(c, maxWidth: maxWidth)
         layout = l
         layoutWidth = maxWidth
@@ -155,7 +157,11 @@ final class SubtitleLineView: UIView {
     override func draw(_ rect: CGRect) {
         guard let c = config, let ctx = UIGraphicsGetCurrentContext() else { return }
         let l: Layout
-        if let cached = layout, layoutWidth == bounds.width {
+        // SwiftUI gives the view its measured (ink-tight) width, not necessarily
+        // the wider wrapping proposal. Re-shaping at that smaller width wraps a
+        // second time and draws extra lines above the height we just measured.
+        if let cached = layout,
+           layoutWidth == bounds.width || cached.totalSize.width == bounds.width {
             l = cached
         } else {
             l = buildLayout(c, maxWidth: bounds.width)
@@ -187,8 +193,9 @@ final class SubtitleLineView: UIView {
         //    blurred/offset copy shows behind everything else.
         if let sh = c.shadow {
             ctx.saveGState()
-            ctx.setShadow(offset: CGSize(width: sh.offset.width, height: -sh.offset.height),
-                          blur: sh.blur, color: sh.color.cgColor)
+            // UIKit shadow offsets stay in device space even after the text
+            // coordinate flip; positive height still means down on screen.
+            ctx.setShadow(offset: sh.offset, blur: sh.blur, color: sh.color.cgColor)
             ctx.addPath(path)
             ctx.setFillColor(c.fill.cgColor)
             ctx.fillPath()
@@ -233,23 +240,20 @@ final class SubtitleLineView: UIView {
         let attr = makeAttributed(c, font: font)
         let fs = CTFramesetterCreateWithAttributedString(attr)
 
-        // How far drawing reaches beyond the glyph ink, per side: the outline is
-        // stroked at 2× width centred on the contour, so it extends `outlineWidth`
-        // outward; the shadow extends by its blur plus its directional offset; and
-        // a generous margin (scaled with the font) absorbs glyph ink that spills
-        // past the typographic box — italic lean, CJK/accent side bearings — and
-        // gives big borders/shadows room so they are never clipped.
+        // Outline and shadow are independent passes over the same glyphs, so
+        // reserve their maximum reach, not their sum plus an invisible margin.
         let strokeOut = max(0, c.outlineWidth)
         let sh = shadowOutsets(c)
-        let margin = max(ceil(c.fontSize * 0.2), 8)
-        let padL = strokeOut + sh.left + margin
-        let padR = strokeOut + sh.right + margin
-        let padT = strokeOut + sh.top + margin
-        let padB = strokeOut + sh.bottom + margin
+        let padL = max(strokeOut, sh.left)
+        let padR = max(strokeOut, sh.right)
+        let padT = max(strokeOut, sh.top)
+        let padB = max(strokeOut, sh.bottom)
 
-        // Reserve the horizontal pad so a full-width line plus its overflow still
-        // fits the proposed width (the view never has to exceed `maxWidth`).
-        let textMax = max(1, maxWidth - padL - padR)
+        // Leave horizontal shaping room for italic overhangs and fallback glyphs.
+        // This constrains wrapping only; it is not added to the drawn bounds.
+        let overhang = max(ceil(c.fontSize * 0.2), 8)
+        let backgroundPad = c.background?.horizontalPadding ?? 0
+        let textMax = max(1, maxWidth - max(padL, backgroundPad) - max(padR, backgroundPad) - 2 * overhang)
         var fitRange = CFRange()
         let suggested = CTFramesetterSuggestFrameSizeWithConstraints(
             fs, CFRange(location: 0, length: attr.length), nil,
@@ -264,10 +268,10 @@ final class SubtitleLineView: UIView {
             CGPath(rect: boxRect, transform: nil), nil)
         let (rawPath, rawColorGlyphs) = Self.combinedGlyphPath(frame: frame)
 
-        // Real drawn extent = the typographic box unioned with the vector-glyph
-        // ink and any colour-glyph (emoji) boxes. Glyph ink routinely exceeds the
-        // advance box, which is the root cause of the edge clipping.
-        var ink = boxRect
+        // Font ascent/descent/leading are layout metrics, not visible padding.
+        // Anchor to actual ink (including fallback/colour glyphs), otherwise
+        // OpenDyslexic's oversized descent keeps 0% far above the screen edge.
+        var ink = CGRect.null
         if !rawPath.isEmpty { ink = ink.union(rawPath.boundingBoxOfPath) }
         for cg in rawColorGlyphs {
             var g = cg.glyph
@@ -276,6 +280,9 @@ final class SubtitleLineView: UIView {
             if !b.isNull, b.width > 0, b.height > 0 {
                 ink = ink.union(b.offsetBy(dx: cg.position.x, dy: cg.position.y))
             }
+        }
+        guard !ink.isNull else {
+            return Layout(path: rawPath, totalSize: .zero, colorGlyphs: [], background: nil)
         }
 
         // Grow the ink by the per-side reach to get the full drawn rect, union in
@@ -288,7 +295,7 @@ final class SubtitleLineView: UIView {
             height: ink.height + padT + padB)
         var bgPre: CGRect?
         if let bg = c.background {
-            let r = boxRect.insetBy(dx: -bg.horizontalPadding, dy: -bg.verticalPadding)
+            let r = ink.insetBy(dx: -bg.horizontalPadding, dy: -bg.verticalPadding)
             bgPre = r
             drawn = drawn.union(r)
         }
@@ -311,9 +318,8 @@ final class SubtitleLineView: UIView {
                       background: background)
     }
 
-    /// How far the soft shadow reaches beyond the glyph ink on each side. `draw`
-    /// negates the vertical offset (UIKit→Core Text flip), so a positive
-    /// `offset.height` pushes the shadow toward the view's bottom.
+    /// How far the soft shadow reaches beyond the glyph ink on each side.
+    /// A positive `offset.height` pushes it toward the view's bottom.
     private func shadowOutsets(_ c: Config) -> UIEdgeInsets {
         guard let sh = c.shadow else { return .zero }
         let blur = max(0, sh.blur)
@@ -463,24 +469,49 @@ final class SubtitleLineView: UIView {
         // to a real system face instead of tofu when the chosen Latin font — or
         // even SF — lacks the glyph. Universal coverage, any language, any font.
         let baseFont = CTFontCreateWithFontDescriptor(baseDescriptor, size, nil)
+        // Equal point sizes do not mean equal visible sizes. Keep the default
+        // Atkinson cap height, scaling each face uniformly (never distorting its
+        // letterforms). makeAttributed restores fallback runs to nominal size.
+        let reference = CTFontCreateWithName("AtkinsonHyperlegible-Regular" as CFString, size, nil)
+        let capHeight = CTFontGetCapHeight(baseFont)
+        let normalizedSize = capHeight > 0
+            ? size * CTFontGetCapHeight(reference) / capHeight
+            : size
         let systemDefault =
             (CTFontCopyDefaultCascadeListForLanguages(baseFont, nil) as? [CTFontDescriptor]) ?? []
         let cascade = curated + systemDefault
         let withCascade = CTFontDescriptorCreateCopyWithAttributes(
             baseDescriptor,
             [kCTFontCascadeListAttribute: cascade] as CFDictionary)
-        return CTFontCreateWithFontDescriptor(withCascade, size, nil)
+        return CTFontCreateWithFontDescriptor(withCascade, normalizedSize, nil)
     }
 
     private func makeAttributed(_ c: Config, font: CTFont) -> NSAttributedString {
         let para = NSMutableParagraphStyle()
         para.alignment = c.alignment
         para.lineBreakMode = .byWordWrapping
-        return NSAttributedString(string: c.text, attributes: [
+        let attributed = NSMutableAttributedString(string: c.text, attributes: [
             kCTFontAttributeName as NSAttributedString.Key: font,
             .foregroundColor: c.fill,
             .paragraphStyle: para
         ])
+        // Core Text scales cascade fonts to the base size even when their
+        // descriptors specify a size. Pin resolved fallback runs explicitly so
+        // switching to OpenDyslexic doesn't shrink CJK, Arabic or emoji.
+        let line = CTLineCreateWithAttributedString(attributed)
+        let baseName = CTFontCopyPostScriptName(font) as String
+        for run in CTLineGetGlyphRuns(line) as! [CTRun] {
+            let attributes = CTRunGetAttributes(run) as NSDictionary
+            let runFont = attributes[kCTFontAttributeName] as! CTFont
+            guard CTFontCopyPostScriptName(runFont) as String != baseName else { continue }
+            let range = CTRunGetStringRange(run)
+            attributed.addAttribute(
+                kCTFontAttributeName as NSAttributedString.Key,
+                value: CTFontCreateCopyWithAttributes(runFont, c.fontSize, nil, nil),
+                range: NSRange(location: range.location, length: range.length)
+            )
+        }
+        return attributed
     }
 }
 #endif

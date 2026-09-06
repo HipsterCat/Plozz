@@ -47,7 +47,7 @@ public struct ItemDetailView: View {
     /// server/version pickers, watchlist/watched actions) instead of the library
     /// detail layout, and a season/series discovery title is NOT routed into
     /// `SeriesDetailView` (which expects real library seasons/episodes).
-    private let isDiscoveryItem: Bool
+    private var isDiscoveryItem: Bool { viewModel.isDiscoveryItem }
     /// Whether Seerr is currently connected — gates the discovery Request pill.
     private let seerConnected: Bool
     /// One-tap Seerr request for a not-in-library discovery title. Returns a
@@ -145,7 +145,6 @@ public struct ItemDetailView: View {
         preservesHeroTrailerOnDisappear: Bool = false,
         initialSeasonID: String? = nil,
         initialEpisode: MediaItem? = nil,
-        isDiscoveryItem: Bool = false,
         seerConnected: Bool = false,
         onRequest: ((MediaItem) async -> MediaRequestActionResult)? = nil,
         requestAvailabilityRefresh: (@Sendable (MediaItem) async -> MediaRequestAvailability?)? = nil,
@@ -166,7 +165,6 @@ public struct ItemDetailView: View {
         self.preservesHeroTrailerOnDisappear = preservesHeroTrailerOnDisappear
         self.initialSeasonID = initialSeasonID
         self.initialEpisode = initialEpisode
-        self.isDiscoveryItem = isDiscoveryItem
         self.seerConnected = seerConnected
         self.onRequest = onRequest
         self.requestAvailabilityRefresh = requestAvailabilityRefresh
@@ -600,6 +598,11 @@ public struct ItemDetailView: View {
                             let liveVersionID = self.effectiveVersionID(for: detail.item, in: liveVersions)
                             onPlay(self.playItem(for: detail.item, sources: liveSources, activeAccountID: liveSource?.accountID, versionID: liveVersionID))
                         } : nil,
+                        showsPlayPlaceholder: !usesExternalDetail && DetailPlaybackSelection.showsPlayPlaceholder(
+                            for: detail.item, hasPlayTarget: canPlay,
+                            childrenLoaded: detail.childrenLoaded,
+                            seasonLoadState: nil
+                        ),
                         playProgress: canPlay ? detail.item.resumeProgressFraction : nil,
                         playRemainingText: canPlay ? detail.item.resumeRemainingText : nil,
                         playSeasonEpisodeText: canPlay ? HeroForegroundModelBuilder.seasonEpisodeButtonText(for: detail.item) : nil,

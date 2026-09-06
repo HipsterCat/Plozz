@@ -122,6 +122,13 @@ public enum PlexOfflineTranscodeURLBuilder {
 /// in DTOs; mapping to `CoreModels` happens in `PlexProvider`. Mirrors the role
 /// of `JellyfinClient` for the Plex backend.
 public struct PlexClient: Sendable {
+    /// Marks a full-feed failure after this endpoint already supplied a decoded
+    /// page. Falling back at that point could replace the authoritative hub with
+    /// onDeck and resurrect titles the viewer dismissed.
+    struct ResumeFeedPagingFailure: Error {
+        let underlying: Error
+    }
+
     /// Resolves (and self-heals) the working server base URL. Browsing requests
     /// go through it so a saved-but-now-unreachable connection transparently
     /// fails over to a reachable one.
@@ -325,31 +332,31 @@ public struct PlexClient: Sendable {
 
     /// `GET /library/onDeck` — Continue Watching.
     func onDeck(limit: Int) async throws -> [PlexMetadata] {
-        try await decodeStreamEnriched(
+        if limit == Int.max {
+            return try await exhaustiveResumeFeed(
+                path: "/library/onDeck",
+                acceptsNestedHubs: false,
+                streamEnriched: true
+            )
+        }
+        return try await decodeStreamEnriched(
             PlexMediaContainerResponse.self,
             path: "/library/onDeck",
             query: containerQuery(start: 0, size: limit)
         ).MediaContainer.Metadata ?? []
     }
 
-    /// Shows across every section ordered by most-recently-viewed first — the Plex
-    /// mirror of ``JellyfinClient/recentlyWatchedSeries(userID:limit:)``. A
-    /// just-finished series' *next* episode arrives on `onDeck` with no
-    /// `lastViewedAt` of its own (it's unwatched), so Continue Watching can't rank
-    /// the show by real recency; this lets the provider stamp that episode with its
-    /// series' `lastViewedAt`, keyed by the series `ratingKey` (an episode's
-    /// `grandparentRatingKey`). `type=2` selects shows; never-viewed shows sort last
-    /// (Plex omits `lastViewedAt`). Best-effort — a failure yields an empty map and
-    /// Continue Watching falls back to unstamped ordering.
-    func recentlyViewedShows(limit: Int) async throws -> [PlexMetadata] {
-        let query = [
-            URLQueryItem(name: "type", value: "2"),
-            URLQueryItem(name: "X-Plex-Container-Start", value: "0"),
-            URLQueryItem(name: "X-Plex-Container-Size", value: String(max(0, limit))),
-            URLQueryItem(name: "sort", value: "lastViewedAt:desc")
-        ]
-        let endpoint = Endpoint(path: "/library/all", queryItems: query, headers: headers)
-        return try await decode(PlexMediaContainerResponse.self, endpoint).MediaContainer.Metadata ?? []
+    /// Fetches exact metadata records in bounded batches chosen by the caller.
+    /// Plex accepts comma-separated rating keys on the metadata route.
+    func metadata(ratingKeys: [String]) async throws -> [PlexMetadata] {
+        guard !ratingKeys.isEmpty else { return [] }
+        let endpoint = Endpoint(
+            path: "/library/metadata/\(ratingKeys.joined(separator: ","))",
+            queryItems: [URLQueryItem(name: "includeGuids", value: "1")],
+            headers: headers
+        )
+        return try await decode(PlexMediaContainerResponse.self, endpoint)
+            .MediaContainer.Metadata ?? []
     }
 
     /// `GET /library/all?guid={guid}` — the library item matching a global id,
@@ -558,25 +565,29 @@ public struct PlexClient: Sendable {
     }
 
     /// `GET /hubs/home/continueWatching` — the **actual** Continue Watching hub
-    /// the Plex apps render, as opposed to the older `/library/onDeck` feed this
-    /// client reads for the row.
+    /// the Plex apps render, as opposed to the older `/library/onDeck` feed.
     ///
     /// The two are not the same list and are not meant to be. The hub is the one
     /// that honours Plex's "Remove from Continue Watching": dismissing a title
     /// records an exclusion the hub applies and `onDeck` knows nothing about, so a
     /// dismissed title keeps its `viewOffset` and keeps coming back through
-    /// `onDeck` forever. The hub also excludes next-up suggestions that `onDeck`
-    /// happily volunteers.
+    /// `onDeck` forever.
     ///
-    /// Read **only** by the diagnostics path, to diff the two lists and prove
-    /// which of them a wrong row came from. Nothing user-facing consumes it, so
-    /// this cannot change what the row shows. Older servers may not route the
-    /// `home` variant; the caller falls back.
+    /// Older servers may not route the `home` variant; the provider falls back to
+    /// the plain hub and then the legacy feed only when an endpoint fails.
     func continueWatchingHub(limit: Int, homeVariant: Bool = true) async throws -> [PlexMetadata] {
+        let path = homeVariant ? "/hubs/home/continueWatching" : "/hubs/continueWatching"
+        if limit == Int.max {
+            return try await exhaustiveResumeFeed(
+                path: path,
+                acceptsNestedHubs: true,
+                streamEnriched: false
+            )
+        }
         let container = try await decode(
             PlexMediaContainerResponse.self,
             Endpoint(
-                path: homeVariant ? "/hubs/home/continueWatching" : "/hubs/continueWatching",
+                path: path,
                 queryItems: containerQuery(start: 0, size: limit),
                 headers: headers
             )
@@ -588,6 +599,168 @@ public struct PlexClient: Sendable {
             return hubs.flatMap { $0.Metadata ?? [] }
         }
         return container.Metadata ?? []
+    }
+
+    private struct ResumeFeedPage {
+        let items: [PlexMetadata]
+        let size: Int?
+        let totalSize: Int?
+        let offset: Int?
+        let more: Bool?
+    }
+
+    /// Reads every item from a Continue Watching-style endpoint without ever
+    /// turning `Int.max` into an HTTP window size. Completion comes from the
+    /// server's total/more metadata or an empty page; malformed, repeated, and
+    /// non-advancing pages fail rather than publishing a partial list.
+    private func exhaustiveResumeFeed(
+        path: String,
+        acceptsNestedHubs: Bool,
+        streamEnriched: Bool
+    ) async throws -> [PlexMetadata] {
+        let pageSize = 100
+        var collected: [PlexMetadata] = []
+        var seenIdentifiers: Set<String> = []
+        var start = 0
+        var expectedTotal: Int?
+        var receivedResponse = false
+
+        do {
+            while true {
+                try Task.checkCancellation()
+                let container: PlexMediaContainer
+                if streamEnriched {
+                    container = try await decodeStreamEnriched(
+                        PlexMediaContainerResponse.self,
+                        path: path,
+                        query: containerQuery(start: start, size: pageSize)
+                    ).MediaContainer
+                } else {
+                    container = try await decode(
+                        PlexMediaContainerResponse.self,
+                        Endpoint(
+                            path: path,
+                            queryItems: containerQuery(start: start, size: pageSize),
+                            headers: headers
+                        )
+                    ).MediaContainer
+                }
+                receivedResponse = true
+
+                let page = resumeFeedPage(
+                    from: container,
+                    acceptsNestedHubs: acceptsNestedHubs
+                )
+                if let total = page.totalSize {
+                    guard total >= 0 else { throw AppError.invalidResponse }
+                    if let expectedTotal {
+                        guard total == expectedTotal else {
+                            throw AppError.invalidResponse
+                        }
+                    } else {
+                        expectedTotal = total
+                    }
+                }
+                if let size = page.size {
+                    guard size >= 0, size == page.items.count else {
+                        throw AppError.invalidResponse
+                    }
+                }
+                if let offset = page.offset {
+                    guard offset == start else { throw AppError.invalidResponse }
+                }
+
+                guard !page.items.isEmpty else {
+                    let totalIsIncomplete = expectedTotal.map { start < $0 } ?? false
+                    if page.more == true || totalIsIncomplete {
+                        throw AppError.invalidResponse
+                    }
+                    return collected
+                }
+
+                for item in page.items {
+                    let identifiers = resumeFeedIdentifiers(item)
+                    guard !identifiers.isEmpty,
+                          seenIdentifiers.isDisjoint(with: identifiers) else {
+                        throw AppError.invalidResponse
+                    }
+                    seenIdentifiers.formUnion(identifiers)
+                }
+                collected.append(contentsOf: page.items)
+
+                let (nextStart, overflow) = start.addingReportingOverflow(page.items.count)
+                guard !overflow, nextStart > start else {
+                    throw AppError.invalidResponse
+                }
+                start = nextStart
+
+                if let expectedTotal {
+                    guard start <= expectedTotal else {
+                        throw AppError.invalidResponse
+                    }
+                    if start == expectedTotal {
+                        guard page.more != true else {
+                            throw AppError.invalidResponse
+                        }
+                        return collected
+                    }
+                    if page.more == false {
+                        throw AppError.invalidResponse
+                    }
+                } else if page.more == false {
+                    return collected
+                }
+            }
+        } catch let cancellation as CancellationError {
+            throw cancellation
+        } catch AppError.cancelled {
+            throw AppError.cancelled
+        } catch {
+            guard receivedResponse else { throw error }
+            throw ResumeFeedPagingFailure(underlying: error)
+        }
+    }
+
+    private func resumeFeedPage(
+        from container: PlexMediaContainer,
+        acceptsNestedHubs: Bool
+    ) -> ResumeFeedPage {
+        if acceptsNestedHubs, let hubs = container.Hub, !hubs.isEmpty {
+            let items = hubs.flatMap { $0.Metadata ?? [] }
+            if hubs.count == 1, let hub = hubs.first {
+                return ResumeFeedPage(
+                    items: items,
+                    size: hub.size,
+                    totalSize: hub.totalSize,
+                    offset: hub.offset,
+                    more: hub.more
+                )
+            }
+            return ResumeFeedPage(
+                items: items,
+                size: nil,
+                totalSize: nil,
+                offset: nil,
+                more: hubs.allSatisfy { $0.more == false } ? false : nil
+            )
+        }
+        return ResumeFeedPage(
+            items: container.Metadata ?? [],
+            size: container.size,
+            totalSize: container.totalSize,
+            offset: container.offset,
+            more: nil
+        )
+    }
+
+    private func resumeFeedIdentifiers(_ item: PlexMetadata) -> Set<String> {
+        Set(
+            [item.ratingKey, item.guid, item.key]
+                .compactMap { value in
+                    guard let value, !value.isEmpty else { return nil }
+                    return value
+                }
+        )
     }
 
     /// `GET /library/sections/{id}/firstCharacter` — the section's title

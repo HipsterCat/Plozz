@@ -82,6 +82,11 @@ targets:
         # MARKETING_VERSION build setting so the app and Top Shelf extension match.
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # Expose Siri Remote touch position for first-generation edge clicks.
+        GCSupportedGameControllers:
+          - ProfileName: MicroGamepad
+          - ProfileName: DirectionalGamepad
+        GCSupportsMultipleMicroGamepads: true
         # Export-compliance answer, baked in so App Store Connect never shows
         # "Missing Compliance" and external TestFlight distribution isn't blocked.
         # Plozz only uses standard/exempt encryption (HTTPS/TLS, SMB) and no

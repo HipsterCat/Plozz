@@ -52,7 +52,8 @@ public struct HomeAggregator: Sendable {
         watchlistLimit: Int = 10_000,
         visibility: HomeLibraryVisibility = .default,
         forceLibraryScoping: Bool = false,
-        identitySources: @Sendable (MediaItem) -> [MediaSourceRef] = { _ in [] }
+        identitySources: @Sendable (MediaItem) -> [MediaSourceRef] = { _ in [] },
+        onContinueWatching: @escaping @Sendable (String, [MediaItem]) async -> Void = { _, _ in }
     ) async -> Content {
         let continueWatchingLimit = continueWatchingLimit ?? policy.rowLimit
         let clock = ContinuousClock()
@@ -64,7 +65,11 @@ public struct HomeAggregator: Sendable {
                 continueWatchingLimit: continueWatchingLimit,
                 latestLimit: latestLimit,
                 visibility: visibility,
-                forceLibraryScoping: forceLibraryScoping
+                forceLibraryScoping: forceLibraryScoping,
+                onContinueWatching: { accountID, items in
+                    guard !Task.isCancelled else { return }
+                    await onContinueWatching(accountID, policy.curated(items))
+                }
             )
             PlozzLog.boot("HomeAgg.account id=\(resolved.account.id) provider=\(resolved.account.server.provider) ms=\(Self.elapsedMS(from: accountStarted, to: clock.now)) cw=\(result.continueWatching.count) latest=\(result.latest.count) wl=\(result.watchlist.count) libs=\(result.libraries.count)")
             return result
@@ -80,10 +85,8 @@ public struct HomeAggregator: Sendable {
         let serverInfo = accounts.sourceServerInfo()
         let resolve: (String) -> SourceServerInfo? = { serverInfo[$0] }
 
-        // Retire stale next-up suggestions BEFORE the merge, so the row's limited
-        // slots are filled with titles worth showing instead of being spent on
-        // suggestions for series abandoned months ago. In-progress titles are never
-        // touched — see `ContinueWatchingPolicy`.
+        // Home keeps the entire provider feed. Apply restrictions only when a
+        // caller explicitly opts in; recency sorting below never removes titles.
         let curatedContinueWatching = perAccount.map { policy.curated($0.continueWatching) }
         Self.logContinueWatchingCuration(perAccount.map(\.continueWatching), curated: curatedContinueWatching)
         Self.logContinueWatchingMergeInputs(curatedContinueWatching)
@@ -249,7 +252,8 @@ public struct HomeAggregator: Sendable {
         watchlistLimit: Int = 10_000,
         perLibraryLimit: Int = 20,
         visibility: HomeLibraryVisibility = .default,
-        identitySources: @Sendable (MediaItem) -> [MediaSourceRef] = { _ in [] }
+        identitySources: @Sendable (MediaItem) -> [MediaSourceRef] = { _ in [] },
+        onContinueWatching: @escaping @Sendable (String, [MediaItem]) async -> Void = { _, _ in }
     ) async -> UnmergedContent {
         // Global rows + full (tagged) library inventory come from the merged path,
         // so Continue Watching / Watchlist stay identical to merged mode — including
@@ -261,7 +265,8 @@ public struct HomeAggregator: Sendable {
             latestLimit: latestLimit,
             watchlistLimit: watchlistLimit,
             visibility: visibility,
-            identitySources: identitySources
+            identitySources: identitySources,
+            onContinueWatching: onContinueWatching
         )
 
         // Libraries that are visible on Home AND have at least one opted-in row.
@@ -459,10 +464,18 @@ public struct HomeAggregator: Sendable {
         continueWatchingLimit: Int,
         latestLimit: Int,
         visibility: HomeLibraryVisibility,
-        forceLibraryScoping: Bool = false
+        forceLibraryScoping: Bool = false,
+        onContinueWatching: @Sendable (String, [MediaItem]) async -> Void
     ) async -> AccountContent {
         let accountID = resolved.account.id
         let provider = resolved.provider
+        func publishResume(_ items: [MediaItem]) async {
+            guard !Task.isCancelled else { return }
+            let playable = items.filter {
+                $0.kind == .movie || $0.kind == .episode || $0.kind == .video
+            }
+            await onContinueWatching(accountID, playable.map { $0.taggingSource(accountID) })
+        }
 
         // Take the library-scoped fetch path when either:
         //  - the account has a library that is disabled (not on Home) — scoping
@@ -501,11 +514,13 @@ public struct HomeAggregator: Sendable {
             async let resume = try? provider.continueWatching(limit: continueWatchingLimit, inLibraries: visibleLibraryIDs)
             async let recent = try? provider.latest(limit: latestLimit, inLibraries: visibleLibraryIDs)
             cw = (await resume) ?? []
+            await publishResume(cw)
             lt = (await recent) ?? []
         } else {
             async let resume = try? provider.continueWatching(limit: continueWatchingLimit)
             async let recent = try? provider.latest(limit: latestLimit)
             cw = (await resume) ?? []
+            await publishResume(cw)
             lt = (await recent) ?? []
             rawLibs = (await libs) ?? []
         }

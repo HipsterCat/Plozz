@@ -126,6 +126,12 @@ final class LocalArtworkDerivedCacheTests: XCTestCase {
         let suspendedUsage = await cache.usageBytes()
         XCTAssertFalse(suspended)
         XCTAssertEqual(suspendedUsage, 0)
+        let manifestIsOpen = await cache.manifestIsOpenForTesting()
+        XCTAssertFalse(manifestIsOpen)
+        var observer: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(fixture.directory.appendingPathComponent("manifest.sqlite").path, &observer), SQLITE_OK)
+        defer { sqlite3_close(observer) }
+        XCTAssertEqual(sqlite3_exec(observer, "BEGIN EXCLUSIVE; COMMIT;", nil, nil, nil), SQLITE_OK)
         await cache.store(
             image,
             key: "blocked",
@@ -136,6 +142,7 @@ final class LocalArtworkDerivedCacheTests: XCTestCase {
         )
 
         await cache.setBackgroundWorkAllowed(true, revision: 1)
+        await cache.setBackgroundWorkAllowed(true, revision: 2)
         let staleResumeAllowed = await cache.backgroundWorkAllowedForTesting()
         XCTAssertFalse(staleResumeAllowed)
         await cache.setBackgroundWorkAllowed(true, revision: 3)
@@ -150,6 +157,94 @@ final class LocalArtworkDerivedCacheTests: XCTestCase {
             sourceFingerprint: "blocked"
         )
         XCTAssertNil(blocked)
+    }
+
+    func testSuspendedPurgesRunBeforeFirstResumedRead() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let cache = LocalArtworkDerivedCache(directory: fixture.directory)
+        let image = try Self.image(color: .red)
+        for (key, account, revision) in [
+            ("a1", "a", "one"), ("a2", "a", "two"),
+            ("b1", "b", "one"), ("c1", "c", "one"),
+        ] {
+            await cache.store(image, key: key, accountID: account, credentialRevision: revision,
+                              sourceFingerprint: key, variant: .posterCard)
+        }
+        await cache.setBackgroundWorkAllowed(false, revision: 1)
+        await cache.purge(accountID: "a", credentialRevision: "one")
+        await cache.purge(accountID: "b")
+        let openWhileSuspended = await cache.manifestIsOpenForTesting()
+        XCTAssertFalse(openWhileSuspended)
+        await cache.setBackgroundWorkAllowed(true, revision: 2)
+        let purgedRevision = await cache.data(for: "a1", accountID: "a", credentialRevision: "one", sourceFingerprint: "a1")
+        let retainedRevision = await cache.data(for: "a2", accountID: "a", credentialRevision: "two", sourceFingerprint: "a2")
+        let purgedAccount = await cache.data(for: "b1", accountID: "b", credentialRevision: "one", sourceFingerprint: "b1")
+        let retainedAccount = await cache.data(for: "c1", accountID: "c", credentialRevision: "one", sourceFingerprint: "c1")
+        XCTAssertNil(purgedRevision)
+        XCTAssertNotNil(retainedRevision)
+        XCTAssertNil(purgedAccount)
+        XCTAssertNotNil(retainedAccount)
+    }
+
+    func testSuspendedClearAndBudgetReductionAreNotLost() async throws {
+        for clear in [true, false] {
+            let fixture = try Fixture()
+            defer { fixture.cleanup() }
+            let cache = LocalArtworkDerivedCache(directory: fixture.directory)
+            await cache.store(try Self.image(color: .blue), key: "old", accountID: "a",
+                              credentialRevision: "one", sourceFingerprint: "old", variant: .posterCard)
+            await cache.setBackgroundWorkAllowed(false, revision: 1)
+            if clear { await cache.clear() } else { await cache.setByteCap(0) }
+            let openWhileSuspended = await cache.manifestIsOpenForTesting()
+            XCTAssertFalse(openWhileSuspended)
+            await cache.setBackgroundWorkAllowed(true, revision: 2)
+            let usage = await cache.usageBytes()
+            XCTAssertEqual(usage, 0)
+            let old = await cache.data(for: "old", accountID: "a", credentialRevision: "one", sourceFingerprint: "old")
+            XCTAssertNil(old)
+        }
+    }
+
+    func testBusyManifestReopenDoesNotDestroyExistingArtwork() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let cache = LocalArtworkDerivedCache(directory: fixture.directory)
+        await cache.store(try Self.image(color: .green), key: "old", accountID: "a",
+                          credentialRevision: "one", sourceFingerprint: "old", variant: .posterCard)
+        await cache.setBackgroundWorkAllowed(false, revision: 1)
+        var observer: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(fixture.directory.appendingPathComponent("manifest.sqlite").path, &observer), SQLITE_OK)
+        defer { sqlite3_close(observer) }
+        XCTAssertEqual(sqlite3_exec(observer, "BEGIN EXCLUSIVE;", nil, nil, nil), SQLITE_OK)
+        await cache.setBackgroundWorkAllowed(true, revision: 2)
+        let busy = await cache.data(for: "old", accountID: "a", credentialRevision: "one", sourceFingerprint: "old")
+        XCTAssertNil(busy)
+        XCTAssertEqual(sqlite3_exec(observer, "COMMIT;", nil, nil, nil), SQLITE_OK)
+        let retained = await cache.data(for: "old", accountID: "a", credentialRevision: "one", sourceFingerprint: "old")
+        XCTAssertNotNil(retained)
+    }
+
+    func testFailedDeferredPurgeIsRetriedBeforeArtworkCanBeRead() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let cache = LocalArtworkDerivedCache(directory: fixture.directory)
+        await cache.store(try Self.image(color: .green), key: "old", accountID: "a",
+                          credentialRevision: "one", sourceFingerprint: "old", variant: .posterCard)
+        await cache.setBackgroundWorkAllowed(false, revision: 1)
+        await cache.purge(accountID: "a")
+        var observer: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(fixture.directory.appendingPathComponent("manifest.sqlite").path, &observer), SQLITE_OK)
+        defer { sqlite3_close(observer) }
+        XCTAssertEqual(sqlite3_exec(observer, "BEGIN IMMEDIATE;", nil, nil, nil), SQLITE_OK)
+        await cache.setBackgroundWorkAllowed(true, revision: 2)
+        let blocked = await cache.data(for: "old", accountID: "a", credentialRevision: "one", sourceFingerprint: "old")
+        XCTAssertNil(blocked)
+        XCTAssertEqual(sqlite3_exec(observer, "COMMIT;", nil, nil, nil), SQLITE_OK)
+        let purged = await cache.data(for: "old", accountID: "a", credentialRevision: "one", sourceFingerprint: "old")
+        XCTAssertNil(purged)
+        let usage = await cache.usageBytes()
+        XCTAssertEqual(usage, 0)
     }
 
     func testAccountAndCredentialRevisionPurgesAreScoped() async throws {

@@ -1,7 +1,47 @@
 import XCTest
+import Foundation
 import CoreModels
 import CoreNetworking
 @testable import ProviderJellyfin
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+
+private struct RecencyCancellationHTTPClient: HTTPClient {
+    enum Form: CaseIterable, Sendable {
+        case appError
+        case cancellationError
+    }
+
+    let form: Form
+    private let stub: StubHTTPClient
+
+    init(form: Form) {
+        self.form = form
+        let stub = StubHTTPClient()
+        stub.stub(
+            pathSuffix: "/Users/u1/Items/Resume",
+            json: #"{"Items":[],"TotalRecordCount":0}"#
+        )
+        stub.stub(
+            pathSuffix: "/Shows/NextUp",
+            json: #"{"Items":[{"Id":"next1","Type":"Episode","SeriesId":"series1"}],"TotalRecordCount":1}"#
+        )
+        self.stub = stub
+    }
+
+    func send(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
+        if endpoint.path.hasSuffix("/Users/u1/Items") {
+            switch form {
+            case .appError:
+                throw AppError.cancelled
+            case .cancellationError:
+                throw CancellationError()
+            }
+        }
+        return try await stub.send(endpoint, baseURL: baseURL)
+    }
+}
 
 final class JellyfinDeviceProfileTests: XCTestCase {
     func testAuthorizationHeaderFormat() {
@@ -263,8 +303,12 @@ final class JellyfinProviderMappingTests: XCTestCase {
         )
 
         let query = try XCTUnwrap(stub.queryItems(forPathSuffix: "/Users/u1/Items"))
+        XCTAssertEqual(query.first(where: { $0.name == "Ids" })?.value, "series-x")
         XCTAssertEqual(query.first(where: { $0.name == "IncludeItemTypes" })?.value, "Series")
-        XCTAssertEqual(query.first(where: { $0.name == "SortBy" })?.value, "DatePlayed")
+        XCTAssertNil(
+            query.first(where: { $0.name == "SortBy" }),
+            "Recency enrichment must target feed series ids instead of scanning every watched series"
+        )
     }
 
     func testContinueWatchingLeavesInProgressTimestampUntouchedBySeriesStamp() async throws {
@@ -296,6 +340,7 @@ final class JellyfinProviderMappingTests: XCTestCase {
 
     func testContinueWatchingDegradesToResumeWhenNextUpFails() async throws {
         // /Shows/NextUp is intentionally not stubbed -> StubHTTPClient throws notFound.
+        // The provider logs that endpoint failure and preserves Resume.
         let stub = StubHTTPClient()
         stub.stub(pathSuffix: "/Users/u1/Items/Resume", json: """
         {"Items":[{"Id":"resume1","Name":"In Progress","Type":"Movie",
@@ -305,7 +350,7 @@ final class JellyfinProviderMappingTests: XCTestCase {
 
         let items = try await provider.continueWatching(limit: 10)
         XCTAssertEqual(items.map(\.id), ["resume1"],
-                       "A NextUp failure must silently degrade to resume-only, never break Continue Watching")
+                       "A NextUp failure must degrade to resume-only, never break Continue Watching")
     }
 
     /// r6-jf-precap regression: Resume alone fills `limit`, and a just-finished
@@ -343,6 +388,220 @@ final class JellyfinProviderMappingTests: XCTestCase {
         XCTAssertTrue(items.contains { $0.id == "resumeNew" })
         XCTAssertFalse(items.contains { $0.id == "resumeOld" },
                        "The oldest item is the one dropped by the cap, not the just-watched NextUp")
+    }
+
+    func testUnlimitedContinueWatchingDrainsResumeAndNextUpWithBoundedPages() async throws {
+        let stub = StubHTTPClient()
+        let resumeFirst = (0..<100).map {
+            #"{"Id":"resume-\#($0)","Name":"Resume \#($0)","Type":"Movie"}"#
+        }.joined(separator: ",")
+        let resumeSecond = (100..<130).map {
+            #"{"Id":"resume-\#($0)","Name":"Resume \#($0)","Type":"Movie"}"#
+        }.joined(separator: ",")
+        let nextUp = (0..<75).map {
+            #"{"Id":"next-\#($0)","Name":"Episode \#($0)","Type":"Episode","SeriesId":"series-\#($0)","UserData":{"LastPlayedDate":"2026-01-01T00:00:00Z"}}"#
+        }.joined(separator: ",")
+        stub.stubSequence(pathSuffix: "/Users/u1/Items/Resume", jsons: [
+            #"{"Items":[\#(resumeFirst)],"TotalRecordCount":130}"#,
+            #"{"Items":[\#(resumeSecond)],"TotalRecordCount":130}"#
+        ])
+        stub.stub(pathSuffix: "/Shows/NextUp", json: #"{"Items":[\#(nextUp)],"TotalRecordCount":75}"#)
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+
+        let items = try await provider.continueWatching(limit: Int.max)
+
+        XCTAssertEqual(items.count, 205)
+        XCTAssertEqual(Set(items.map(\.id)).count, 205)
+        let requests = Array(zip(stub.sentPaths, stub.sentQueryItems))
+        let resumeQueries = requests
+            .filter { $0.0.hasSuffix("/Users/u1/Items/Resume") }
+            .map { $0.1 }
+        XCTAssertEqual(
+            resumeQueries.compactMap { $0.first { $0.name == "StartIndex" }?.value },
+            ["0", "100"]
+        )
+        let nextUpQuery = try XCTUnwrap(
+            requests.first { $0.0.hasSuffix("/Shows/NextUp") }?.1
+        )
+        XCTAssertEqual(
+            nextUpQuery.first { $0.name == "StartIndex" }?.value,
+            "0"
+        )
+        XCTAssertTrue(
+            requests
+                .filter {
+                    $0.0.hasSuffix("/Users/u1/Items/Resume")
+                        || $0.0.hasSuffix("/Shows/NextUp")
+                }
+                .allSatisfy {
+                    $0.1.first { $0.name == "Limit" }?.value == "100"
+                },
+            "Unlimited mode must use bounded HTTP page sizes"
+        )
+        XCTAssertFalse(
+            stub.sentQueryItems.flatMap { $0 }.contains {
+                $0.name == "Limit" && $0.value == String(Int.max)
+            }
+        )
+    }
+
+    func testUnlimitedResumeHandlesMissingTotalsAndShortServerPages() async throws {
+        let stub = StubHTTPClient()
+        stub.stubSequence(pathSuffix: "/Users/u1/Items/Resume", jsons: [
+            #"{"Items":[{"Id":"r1","Type":"Movie"},{"Id":"r2","Type":"Movie"}]}"#,
+            #"{"Items":[{"Id":"r3","Type":"Movie"}]}"#,
+            #"{"Items":[]}"#
+        ])
+        stub.stub(pathSuffix: "/Shows/NextUp", json: #"{"Items":[]}"#)
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+
+        let items = try await provider.continueWatching(limit: Int.max)
+
+        XCTAssertEqual(items.map(\.id), ["r1", "r2", "r3"])
+        let starts = Array(zip(stub.sentPaths, stub.sentQueryItems))
+            .filter { $0.0.hasSuffix("/Users/u1/Items/Resume") }
+            .compactMap { $0.1.first { $0.name == "StartIndex" }?.value }
+        XCTAssertEqual(starts, ["0", "2", "3"])
+    }
+
+    func testFiniteContinueWatchingKeepsSingleRequestBehavior() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/Users/u1/Items/Resume", json: """
+        {"Items":[{"Id":"r1","Name":"Resume","Type":"Movie"}],"TotalRecordCount":20}
+        """)
+        stub.stub(pathSuffix: "/Shows/NextUp", json: #"{"Items":[],"TotalRecordCount":20}"#)
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+
+        _ = try await provider.continueWatching(limit: 7)
+
+        let requests = Array(zip(stub.sentPaths, stub.sentQueryItems)).filter {
+            $0.0.hasSuffix("/Users/u1/Items/Resume") || $0.0.hasSuffix("/Shows/NextUp")
+        }
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertTrue(requests.allSatisfy {
+            $0.1.first { $0.name == "Limit" }?.value == "7"
+        })
+        XCTAssertTrue(requests.allSatisfy {
+            !$0.1.contains { $0.name == "StartIndex" }
+        })
+    }
+
+    func testContinueWatchingKeepsNextUpWhenResumeFails() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/Users/u1/Items/Resume", json: "{}", status: 500)
+        stub.stub(pathSuffix: "/Shows/NextUp", json: """
+        {"Items":[{"Id":"next1","Name":"Episode 2","Type":"Episode","SeriesId":"series1",
+        "UserData":{"LastPlayedDate":"2026-01-01T00:00:00Z"}}],"TotalRecordCount":1}
+        """)
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+
+        let items = try await provider.continueWatching(limit: 10)
+
+        XCTAssertEqual(items.map(\.id), ["next1"])
+    }
+
+    func testUnlimitedResumeRejectsRepeatedNonAdvancingPage() async throws {
+        let stub = StubHTTPClient()
+        stub.stubSequence(pathSuffix: "/Users/u1/Items/Resume", jsons: [
+            #"{"Items":[{"Id":"r1","Type":"Movie"}]}"#,
+            #"{"Items":[{"Id":"r1","Type":"Movie"}]}"#
+        ])
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+
+        do {
+            _ = try await provider.client.resumeItems(userID: "u1", limit: Int.max)
+            XCTFail("Expected a repeated page to fail closed")
+        } catch {
+            XCTAssertEqual(error as? AppError, .invalidResponse)
+        }
+    }
+
+    func testSeriesRecencyTargetsFeedIDsInBatchesAndKeepsMissingDateLast() async throws {
+        let stub = StubHTTPClient()
+        let seriesIDs = (0..<51).map { "series-\($0)" }
+        let sortedIDs = seriesIDs.sorted()
+        let firstBatch = sortedIDs.prefix(50).map {
+            #"{"Id":"\#($0)","Name":"Series","Type":"Series","UserData":{"LastPlayedDate":"2026-01-01T00:00:00Z"}}"#
+        }.joined(separator: ",")
+        let missingDateSeriesID = try XCTUnwrap(sortedIDs.last)
+        let nextUp = seriesIDs.enumerated().map { index, seriesID in
+            #"{"Id":"next-\#(index)","Name":"Episode","Type":"Episode","SeriesId":"\#(seriesID)"}"#
+        }.joined(separator: ",")
+        stub.stub(pathSuffix: "/Users/u1/Items/Resume", json: #"{"Items":[],"TotalRecordCount":0}"#)
+        stub.stub(pathSuffix: "/Shows/NextUp", json: #"{"Items":[\#(nextUp)],"TotalRecordCount":51}"#)
+        stub.stubSequence(pathSuffix: "/Users/u1/Items", jsons: [
+            #"{"Items":[\#(firstBatch)],"TotalRecordCount":50}"#,
+            #"{"Items":[{"Id":"\#(missingDateSeriesID)","Name":"Series","Type":"Series"}],"TotalRecordCount":1}"#
+        ])
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+
+        let items = try await provider.continueWatching(limit: Int.max)
+
+        XCTAssertEqual(items.count, 51)
+        let missingDateItemID = "next-\(try XCTUnwrap(seriesIDs.firstIndex(of: missingDateSeriesID)))"
+        XCTAssertEqual(items.last?.id, missingDateItemID)
+        XCTAssertNil(items.last?.lastPlayedAt)
+        let recencyQueries = Array(zip(stub.sentPaths, stub.sentQueryItems))
+            .filter { $0.0.hasSuffix("/Users/u1/Items") }
+            .map { $0.1 }
+        XCTAssertEqual(recencyQueries.count, 2)
+        XCTAssertEqual(
+            recencyQueries.compactMap { $0.first { $0.name == "Limit" }?.value },
+            ["50", "1"]
+        )
+        XCTAssertTrue(recencyQueries.allSatisfy {
+            guard let ids = $0.first(where: { $0.name == "Ids" })?.value else { return false }
+            return ids.split(separator: ",").count <= 50
+        })
+        XCTAssertTrue(recencyQueries.allSatisfy {
+            !$0.contains { $0.name == "SortBy" }
+        })
+    }
+
+    func testOlderNextUpSeriesMovesBackWithoutBeingRemoved() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/Users/u1/Items/Resume", json: #"{"Items":[],"TotalRecordCount":0}"#)
+        stub.stub(pathSuffix: "/Shows/NextUp", json: """
+        {"Items":[
+          {"Id":"older-next","Name":"Older Episode","Type":"Episode","SeriesId":"older-series"},
+          {"Id":"newer-next","Name":"Newer Episode","Type":"Episode","SeriesId":"newer-series"}
+        ],"TotalRecordCount":2}
+        """)
+        stub.stub(pathSuffix: "/Users/u1/Items", json: """
+        {"Items":[
+          {"Id":"older-series","Name":"Older Series","Type":"Series",
+           "UserData":{"LastPlayedDate":"2020-01-01T00:00:00Z"}},
+          {"Id":"newer-series","Name":"Newer Series","Type":"Series",
+           "UserData":{"LastPlayedDate":"2026-01-01T00:00:00Z"}}
+        ],"TotalRecordCount":2}
+        """)
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+
+        let items = try await provider.continueWatching(limit: Int.max)
+
+        XCTAssertEqual(items.map(\.id), ["newer-next", "older-next"])
+        XCTAssertTrue(items.contains { $0.id == "older-next" })
+    }
+
+    func testSeriesRecencyPropagatesBothCancellationForms() async throws {
+        for form in RecencyCancellationHTTPClient.Form.allCases {
+            let provider = JellyfinProvider(
+                session: makeSession(),
+                http: RecencyCancellationHTTPClient(form: form)
+            )
+
+            do {
+                _ = try await provider.continueWatching(limit: 10)
+                XCTFail("Expected \(form) to propagate")
+            } catch let error as AppError {
+                XCTAssertEqual(form, .appError)
+                XCTAssertEqual(error, .cancelled)
+            } catch is CancellationError {
+                XCTAssertEqual(form, .cancellationError)
+            } catch {
+                XCTFail("Unexpected cancellation error: \(error)")
+            }
+        }
     }
 
     func testLatestIncludesProviderIDsForHomeDedup() async throws {
@@ -832,8 +1091,9 @@ final class JellyfinProviderMappingTests: XCTestCase {
         XCTAssertEqual(subtitleLocator.purpose, .subtitle)
         XCTAssertEqual(
             subtitleLocator.resource.path,
-            "Videos/i1/src1/Subtitles/2/0/Stream.vtt"
+            "Videos/i1/src1/Subtitles/2/0/Stream.srt"
         )
+        XCTAssertEqual(subtitleLocator.formatHint.container, "srt")
         XCTAssertTrue(subtitleLocator.resource.queryItems.isEmpty)
         XCTAssertFalse(String(describing: subtitleLocator).contains("TOKEN"))
         guard case .authenticatedHTTP(let locator) = request.playbackSource else {

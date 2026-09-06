@@ -9,16 +9,19 @@ import Foundation
 import SwiftUI
 import UIKit
 
+@MainActor
+private enum PlozziOSProcessComposition {
+    static let appModel = PlozziOSAppModel()
+}
+
 public struct PlozziOSRootView: View {
     @Environment(\.colorScheme) private var systemColorScheme
-    @Environment(\.scenePhase) private var scenePhase
     /// The reader's text size. Feeds `PlozzMetrics` so the shared type/geometry
     /// table rebuilds when it changes (see where the metrics are injected below).
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceTransparency)
     private var systemReduceTransparency
-    @State private var appModel = PlozziOSAppModel.shared
-    @State private var sceneID = UUID()
+    @State private var appModel = PlozziOSProcessComposition.appModel
     @State private var heroTrailerController = HeroTrailerController()
     @State private var sidebarGeometry = PlozziOSSidebarGeometryModel()
     @State private var showingAddServer = false
@@ -167,15 +170,8 @@ public struct PlozziOSRootView: View {
             )
             .preferredColorScheme(resolvedPalette.isLight ? .light : .dark)
         }
-        .onChange(of: scenePhase, initial: true) { _, newPhase in
-            appModel.setScene(sceneID, isActive: newPhase == .active)
-            if newPhase == .active {
-                appModel.accountsProviders.retryUnconfirmedCredentials()
-                appModel.syncCloudOnForeground()
-            }
-        }
-        .onDisappear {
-            appModel.removeScene(sceneID)
+        .background {
+            PlozziOSScenePhaseEffects(appModel: appModel)
         }
         .alert(
             syncSetupOfferTitle,
@@ -570,6 +566,23 @@ public struct PlozziOSRootView: View {
     }
 }
 
+/// Keeps scene-environment invalidation out of the full app root. Process
+/// lifecycle admission is driven independently by UIKit scene notifications.
+private struct PlozziOSScenePhaseEffects: View {
+    @Environment(\.scenePhase) private var scenePhase
+    let appModel: PlozziOSAppModel
+
+    var body: some View {
+        Color.clear
+            .onChange(of: scenePhase, initial: true) { _, newPhase in
+                if newPhase == .active {
+                    appModel.accountsProviders.retryUnconfirmedCredentials()
+                    appModel.syncCloudOnForeground()
+                }
+            }
+    }
+}
+
 private struct PendingPairing: Identifiable {
     let invite: String
     var id: String { invite }
@@ -796,6 +809,7 @@ private struct PlozziOSTabShell: View {
         }
 
         .tabViewStyle(.tabBarOnly)
+        .environment(sharedHomeViewModel)
         .onChange(of: appModel.settings.navigation.showsWatchlist) {
             _, showsWatchlist in
             selectedDestination = WatchlistNavigationPolicy.resolvedSelection(

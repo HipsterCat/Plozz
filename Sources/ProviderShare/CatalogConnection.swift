@@ -10,16 +10,23 @@ import CoreNetworking
 /// it keeps the raw SQLite mechanics out of `ShareCatalogStore`'s query/orchestration
 /// responsibilities without introducing a second connection or actor.
 final class CatalogConnection {
-    enum ImmediateTransactionResult {
+    enum ImmediateTransactionResult: Sendable, Equatable {
         case committed
         case couldNotBegin
         case cancelled
+        case commitFailed
+        case nestedTransaction
         case rolledBack
     }
 
     private let url: URL
-    private(set) var db: OpaquePointer?
-    private var didOpen = false
+    private var handle: OpaquePointer?
+    private var accessSuspended = false
+    var db: OpaquePointer? {
+        accessSuspended ? nil : handle
+    }
+    private var schemaReadyForLifetime = false
+    private(set) var schemaMigrationAttemptCount = 0
 
     /// SQLite wants a destructor sentinel for transient (copied) bound text; not
     /// exported into Swift, so reconstruct it.
@@ -30,7 +37,14 @@ final class CatalogConnection {
     }
 
     deinit {
-        if let db { sqlite3_close_v2(db) }
+        if let handle {
+            let result = sqlite3_close(handle)
+            if result != SQLITE_OK {
+                PlozzLog.boot(
+                    "share.catalog DEINIT CLOSE FAILED file=\(url.lastPathComponent) code=\(result)"
+                )
+            }
+        }
     }
 
     // MARK: - Open / schema
@@ -43,18 +57,17 @@ final class CatalogConnection {
     /// **only** on the single call where the schema was just committed ready, so the
     /// owning store can run its one-time post-open projection repairs exactly once.
     func ensureOpen(legacyMetadataMigration: (CatalogConnection) -> Bool) -> Bool {
-        guard !didOpen else { return false }
-        didOpen = true
-        var handle: OpaquePointer?
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
-        guard sqlite3_open_v2(url.path, &handle, flags, nil) == SQLITE_OK, let handle else {
-            PlozzLog.boot("share.catalog OPEN FAILED file=\(url.lastPathComponent)")
-            if let handle { sqlite3_close(handle) }
+        guard !accessSuspended, handle == nil else { return false }
+        guard open(flags: SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX) else {
             return false
         }
-        db = handle
         _ = exec("PRAGMA journal_mode=WAL;")
         _ = exec("PRAGMA synchronous=NORMAL;")
+        if schemaReadyForLifetime, schemaIsCurrent() {
+            return false
+        }
+        schemaReadyForLifetime = false
+        schemaMigrationAttemptCount += 1
         var migrationSucceeded = true
         let transactionResult = immediateTransaction {
             func apply(_ sql: String) {
@@ -392,14 +405,17 @@ final class CatalogConnection {
             INSERT OR REPLACE INTO meta(key, value)
             VALUES('enrichment_attempts_repaired_v1', '1');
             """)
-            }
-            return migrationSucceeded
+        }
+        return migrationSucceeded
         }
         if transactionResult == .committed {
+            schemaReadyForLifetime = true
             return true
         }
         PlozzLog.boot("share.catalog MIGRATION FAILED file=\(url.lastPathComponent)")
-        if transactionResult == .couldNotBegin || transactionResult == .cancelled {
+        if transactionResult == .couldNotBegin
+            || transactionResult == .cancelled
+            || transactionResult == .commitFailed {
             _ = closeForSuspension()
         }
         return false
@@ -407,9 +423,75 @@ final class CatalogConnection {
 
     // MARK: - Small SQLite helpers
 
+    /// A cache file may be evicted or replaced while its connection is closed.
+    /// Revalidate the database that was actually reopened before taking the
+    /// lifetime fast path; `user_version` alone is insufficient for a malformed
+    /// replacement that merely copied the version number.
+    private func schemaIsCurrent() -> Bool {
+        var userVersion: Int32?
+        query("PRAGMA user_version;") {
+            userVersion = sqlite3_column_int($0, 0)
+        }
+        guard userVersion == 4 else { return false }
+
+        let requiredTables: Set<String> = [
+            "assets",
+            "dir_state",
+            "meta",
+            "enrichment",
+            "metadata_values",
+            "metadata_enrichment_state",
+            "movie_alias",
+            "series_merge",
+            "local_metadata_files",
+            "local_metadata_file_values",
+            "local_artwork_files",
+            "local_artwork_associations",
+            "extras"
+        ]
+        var presentTables = Set<String>()
+        query("SELECT name FROM sqlite_master WHERE type='table';") {
+            if let name = Self.columnText($0, 0) {
+                presentTables.insert(name)
+            }
+        }
+        guard requiredTables.isSubset(of: presentTables) else { return false }
+        return hasColumn(table: "assets", column: "movie_group_key")
+            && hasColumn(table: "local_artwork_files", column: "catalog_artwork_id")
+    }
+
+    private func open(flags: Int32) -> Bool {
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+        } catch {
+            PlozzLog.boot("share.catalog DIRECTORY UNAVAILABLE file=\(url.lastPathComponent)")
+            return false
+        }
+        var handle: OpaquePointer?
+        let result = sqlite3_open_v2(url.path, &handle, flags, nil)
+        guard result == SQLITE_OK, let handle else {
+            PlozzLog.boot(
+                "share.catalog OPEN FAILED file=\(url.lastPathComponent) code=\(result)"
+            )
+            if let handle { sqlite3_close(handle) }
+            return false
+        }
+        self.handle = handle
+        return true
+    }
+
+    func setAccessSuspended(_ suspended: Bool) {
+        accessSuspended = suspended
+    }
+
+    var isClosed: Bool { handle == nil }
+
     var isInTransaction: Bool {
-        guard let db else { return false }
-        return sqlite3_get_autocommit(db) == 0
+        guard let handle else { return false }
+        return sqlite3_get_autocommit(handle) == 0
     }
 
     /// Runs one synchronous write transaction and guarantees that every exit other
@@ -417,14 +499,20 @@ final class CatalogConnection {
     /// owning `ShareCatalogStore`, so the body cannot interleave with another writer.
     @discardableResult
     func withImmediateTransaction(_ body: () -> Bool) -> Bool {
-        immediateTransaction(body) == .committed
+        let result = immediateTransaction(body)
+        if result != .committed {
+            PlozzLog.boot(
+                "share.catalog TRANSACTION FAILED file=\(url.lastPathComponent) result=\(String(describing: result))"
+            )
+        }
+        return result == .committed
     }
 
     @discardableResult
     func immediateTransaction(_ body: () -> Bool) -> ImmediateTransactionResult {
-        guard !Task.isCancelled, !isInTransaction, exec("BEGIN IMMEDIATE;") else {
-            return .couldNotBegin
-        }
+        guard !Task.isCancelled else { return .cancelled }
+        guard !isInTransaction else { return .nestedTransaction }
+        guard exec("BEGIN IMMEDIATE;") else { return .couldNotBegin }
         if let db {
             sqlite3_progress_handler(db, 1_000, { _ in
                 withUnsafeCurrentTask { task in
@@ -447,36 +535,37 @@ final class CatalogConnection {
         guard !Task.isCancelled else { return .cancelled }
         committed = exec("COMMIT;")
         if committed { return .committed }
-        return Task.isCancelled ? .cancelled : .rolledBack
+        return Task.isCancelled ? .cancelled : .commitFailed
     }
 
-    /// Relinquishes every SQLite lock before application suspension. A failed write
-    /// may leave SQLite inside its transaction after `COMMIT` returns an error, so
-    /// rollback is based on SQLite's autocommit state rather than caller bookkeeping.
+    /// Closes only a truly idle handle. Statements belong to their preparing caller:
+    /// this method never finalizes or resets them and never rolls back a transaction
+    /// it did not begin. A busy result is actionable lifecycle failure, not success.
     @discardableResult
     func closeForSuspension() -> Bool {
-        guard let db else {
-            didOpen = false
+        guard let handle else {
             return true
         }
-        if isInTransaction, !exec("ROLLBACK;") {
-            PlozzLog.boot("share.catalog SUSPEND ROLLBACK FAILED file=\(url.lastPathComponent)")
+        guard !isInTransaction else {
+            PlozzLog.boot(
+                "share.catalog SUSPEND CLOSE BLOCKED transaction file=\(url.lastPathComponent)"
+            )
+            return false
         }
-        var result = sqlite3_close(db)
-        if result == SQLITE_BUSY {
-            while let statement = sqlite3_next_stmt(db, nil) {
-                sqlite3_finalize(statement)
-            }
-            result = sqlite3_close(db)
+        guard sqlite3_next_stmt(handle, nil) == nil else {
+            PlozzLog.boot(
+                "share.catalog SUSPEND CLOSE BLOCKED statement file=\(url.lastPathComponent)"
+            )
+            return false
         }
+        let result = sqlite3_close(handle)
         guard result == SQLITE_OK else {
             PlozzLog.boot(
                 "share.catalog SUSPEND CLOSE FAILED file=\(url.lastPathComponent) code=\(result)"
             )
             return false
         }
-        self.db = nil
-        didOpen = false
+        self.handle = nil
         return true
     }
 

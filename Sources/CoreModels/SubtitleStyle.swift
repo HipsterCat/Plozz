@@ -159,6 +159,37 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
 
     // MARK: Size & placement
 
+    /// Stored values describe the drawing anchor; labels describe where extra
+    /// lines grow, so a bottom anchor is presented as "Above".
+    public enum VerticalAnchor: String, Codable, Sendable, Equatable, CaseIterable {
+        case bottom, center, top
+
+        public var displayName: LocalizedStringResource {
+            switch self {
+            case .bottom: "Above"
+            case .center: LocalizedStringResource(
+                "Center",
+                comment: "Extra Line Position option: additional subtitle lines expand around the same vertical midpoint, rather than only above or below."
+            )
+            case .top: "Below"
+            }
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            let value = try container.decode(String.self)
+            if value == "automatic" {
+                self = .bottom
+            } else if let anchor = Self(rawValue: value) {
+                self = anchor
+            } else {
+                throw DecodingError.dataCorruptedError(
+                    in: container, debugDescription: "Unknown subtitle vertical anchor: \(value)"
+                )
+            }
+        }
+    }
+
     /// The subtitle typeface. Defaults to bundled Atkinson Hyperlegible.
     public var fontFamily: SubtitleFontFamily
     /// The global typeface weight. The active family snaps this to the nearest
@@ -167,9 +198,22 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
     public var fontWeight: SubtitleFontWeight
     /// Multiplier on the base caption size (1.0 == default).
     public var fontScale: Double
-    /// Vertical seat of the subtitle block, `0` = bottom safe edge … `1` = top.
-    /// Default sits just above the bottom safe area.
+    /// Vertical position measured upward from the screen bottom. The chosen
+    /// anchor stays fixed as lines change.
+    /// `0` aligns the block's bottom with the screen bottom, `1` aligns its top.
+    /// Negative values deliberately move the block past the bottom edge.
     public var verticalPosition: Double
+    /// Which part of the block stays fixed when a cue gains or loses lines.
+    /// Screen-edge limits take precedence so 0% and 100% remain fully visible.
+    public var verticalAnchor: VerticalAnchor
+    public static let verticalPositionRange: ClosedRange<Double> = -0.05...1
+    public static let verticalPositionStep: Double = 0.005
+    /// Integer indices avoid accumulating floating-point error while stepping.
+    public static let verticalPositionOptions: [Double] = {
+        let first = Int((verticalPositionRange.lowerBound / verticalPositionStep).rounded())
+        let last = Int((verticalPositionRange.upperBound / verticalPositionStep).rounded())
+        return (first...last).map { Double($0) * verticalPositionStep }
+    }()
     /// Horizontal nudge, `-1` … `1` (0 = centred). Lets users dodge burned-in
     /// signage or letterbox furniture.
     public var horizontalOffset: Double
@@ -308,6 +352,7 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
         fontWeight: SubtitleFontWeight = .regular,
         fontScale: Double = 1.0,
         verticalPosition: Double = 0.06,
+        verticalAnchor: VerticalAnchor = .bottom,
         horizontalOffset: Double = 0,
         textColor: Color = .white,
         opacity: Double = 1.0,
@@ -322,6 +367,7 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
         self.fontWeight = fontWeight
         self.fontScale = fontScale
         self.verticalPosition = verticalPosition
+        self.verticalAnchor = verticalAnchor
         self.horizontalOffset = horizontalOffset
         self.textColor = textColor
         self.opacity = opacity
@@ -441,7 +487,7 @@ public extension SubtitleStyle {
 
 extension SubtitleStyle {
     private enum CodingKeys: String, CodingKey {
-        case fontFamily, fontWeight, fontScale, verticalPosition, horizontalOffset
+        case fontFamily, fontWeight, fontScale, verticalPosition, verticalAnchor, horizontalOffset
         case textColor, opacity, hdrLuminanceScale
         case background, edge, border, secondary, followsSystemStyle
     }
@@ -456,6 +502,7 @@ extension SubtitleStyle {
             fontWeight: try c.decodeIfPresent(SubtitleFontWeight.self, forKey: .fontWeight) ?? d.fontWeight,
             fontScale: try c.decodeIfPresent(Double.self, forKey: .fontScale) ?? d.fontScale,
             verticalPosition: try c.decodeIfPresent(Double.self, forKey: .verticalPosition) ?? d.verticalPosition,
+            verticalAnchor: try c.decodeIfPresent(VerticalAnchor.self, forKey: .verticalAnchor) ?? d.verticalAnchor,
             horizontalOffset: try c.decodeIfPresent(Double.self, forKey: .horizontalOffset) ?? d.horizontalOffset,
             textColor: try c.decodeIfPresent(Color.self, forKey: .textColor) ?? d.textColor,
             opacity: try c.decodeIfPresent(Double.self, forKey: .opacity) ?? d.opacity,

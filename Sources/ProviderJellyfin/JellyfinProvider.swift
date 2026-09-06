@@ -84,29 +84,26 @@ public struct JellyfinProvider: MediaProvider {
     /// restores parity so a series doesn't vanish from Continue Watching the
     /// moment you finish an episode.
     ///
-    /// NextUp is best-effort: it runs concurrently with Resume and a failure
-    /// (older server, transient error) silently degrades to resume-only rather
-    /// than breaking Continue Watching. In-progress items are ordered first
-    /// (you're actively watching them), then next-up suggestions; both preserve
-    /// the server's recency order. Results are deduped by id and capped to
-    /// `limit`.
+    /// Resume and NextUp run concurrently and fail independently: one successful
+    /// feed is still useful when the other endpoint is unavailable. Failures are
+    /// logged rather than silently swallowed. Results are deduped by id and
+    /// ordered by effective recency. `Int.max` drains both feeds through bounded
+    /// HTTP pages and deliberately applies no final cap.
     public func continueWatching(limit: Int) async throws -> [MediaItem] {
-        async let resumeTask = client.resumeItems(userID: session.userID, limit: limit)
-        async let nextUpTask = nextUpItemsBestEffort(limit: limit)
-        async let seriesDatesTask = seriesLastPlayedDatesBestEffort(limit: limit)
-        let resume = try await resumeTask
-        let nextUp = await nextUpTask
-        let seriesDates = await seriesDatesTask
-
-        var seen = Set<String>()
-        let merged = (resume + nextUp).filter { seen.insert($0.Id).inserted }
+        let outcome = try await continueWatchingDTOs(limit: limit, parentID: nil)
+        guard outcome.successfulEndpointCount > 0 else {
+            throw outcome.firstError ?? AppError.invalidResponse
+        }
+        let merged = outcome.items
+        let seriesDates = try await seriesLastPlayedDatesBestEffort(for: merged)
         // Stamp NextUp recency BEFORE capping: a just-finished show's next episode
         // must be able to survive the `limit` cut on its stamped recency rather than
         // being dropped merely because in-progress Resume items filled the limit
         // first (r6-jf-precap).
         let stamped = merged.map(map(item:)).map { stampingSeriesRecency($0, using: seriesDates) }
         logContinueWatchingFeed(merged, endpoint: "Items/Resume + Shows/NextUp")
-        return Array(orderedByEffectiveRecency(stamped).prefix(limit))
+        let ordered = orderedByEffectiveRecency(stamped)
+        return limit == Int.max ? ordered : Array(ordered.prefix(limit))
     }
 
     /// Records the resume feed exactly as Jellyfin returned it, before mapping.
@@ -168,20 +165,117 @@ public struct JellyfinProvider: MediaProvider {
         }.map(\.element)
     }
 
-    /// Wraps `/Shows/NextUp` so a failure never propagates into Continue
-    /// Watching, which is anchored by the in-progress Resume items.
-    private func nextUpItemsBestEffort(limit: Int) async -> [BaseItemDto] {
-        (try? await client.nextUpItems(userID: session.userID, limit: limit)) ?? []
+    private struct ContinueWatchingDTOOutcome {
+        let items: [BaseItemDto]
+        let successfulEndpointCount: Int
+        let firstError: AppError?
+    }
+
+    /// Fetches the two server-owned Continue Watching feeds independently.
+    /// Resume wins duplicate ids because it carries the playback position.
+    private func continueWatchingDTOs(
+        limit: Int,
+        parentID: String?
+    ) async throws -> ContinueWatchingDTOOutcome {
+        async let resumeTask = client.resumeItems(
+            userID: session.userID,
+            limit: limit,
+            parentID: parentID
+        )
+        async let nextUpTask = client.nextUpItems(
+            userID: session.userID,
+            limit: limit,
+            parentID: parentID
+        )
+
+        var resume: [BaseItemDto] = []
+        var nextUp: [BaseItemDto] = []
+        var successfulEndpointCount = 0
+        var firstError: AppError?
+        do {
+            resume = try await resumeTask
+            successfulEndpointCount += 1
+        } catch {
+            try Task.checkCancellation()
+            let appError = Self.appError(from: error)
+            if appError == .cancelled { throw appError }
+            firstError = appError
+            logContinueWatchingFetchFailure(
+                endpoint: "/Items/Resume",
+                parentID: parentID,
+                error: appError
+            )
+        }
+        do {
+            nextUp = try await nextUpTask
+            successfulEndpointCount += 1
+        } catch {
+            try Task.checkCancellation()
+            let appError = Self.appError(from: error)
+            if appError == .cancelled { throw appError }
+            firstError = firstError ?? appError
+            logContinueWatchingFetchFailure(
+                endpoint: "/Shows/NextUp",
+                parentID: parentID,
+                error: appError
+            )
+        }
+
+        var seen = Set<String>()
+        let merged = (resume + nextUp).filter { seen.insert($0.Id).inserted }
+        return ContinueWatchingDTOOutcome(
+            items: merged,
+            successfulEndpointCount: successfulEndpointCount,
+            firstError: firstError
+        )
+    }
+
+    private static func appError(from error: Error) -> AppError {
+        if let appError = error as? AppError { return appError }
+        if error is CancellationError { return .cancelled }
+        return .unknown(String(describing: error))
+    }
+
+    private func logContinueWatchingFetchFailure(
+        endpoint: String,
+        parentID: String?,
+        error: AppError
+    ) {
+        let scope = parentID == nil ? "unscoped" : "library-scoped"
+        PlozzLog.networking.error(
+            "Jellyfin Continue Watching \(endpoint) failed (\(scope)); preserving other feed results: \(String(describing: error))"
+        )
     }
 
     /// Best-effort map of `seriesID → series last-played date`, used to stamp
-    /// NextUp episodes with their series' true recency (see
-    /// ``JellyfinClient/recentlyWatchedSeries(userID:limit:)``). Run concurrently
-    /// with the Resume/NextUp fetches so it adds no latency to the common path; a
-    /// failure yields an empty map and Continue Watching falls back to unstamped
-    /// ordering.
-    private func seriesLastPlayedDatesBestEffort(limit: Int) async -> [String: Date] {
-        guard let series = try? await client.recentlyWatchedSeries(userID: session.userID, limit: limit) else {
+    /// NextUp episodes with their series' true recency. Only series referenced by
+    /// this feed are fetched, in bounded batches, so an exhaustive Continue
+    /// Watching load never becomes an exhaustive library scan.
+    private func seriesLastPlayedDatesBestEffort(
+        for items: [BaseItemDto]
+    ) async throws -> [String: Date] {
+        let seriesIDs = Set(items.compactMap { dto -> String? in
+            guard dto.UserData?.LastPlayedDate == nil,
+                  dto.Type == "Episode" else { return nil }
+            return dto.SeriesId
+        }).sorted()
+        guard !seriesIDs.isEmpty else { return [:] }
+
+        let series: [BaseItemDto]
+        do {
+            series = try await client.recentlyWatchedSeries(
+                userID: session.userID,
+                seriesIDs: seriesIDs
+            )
+        } catch let error as AppError where error == .cancelled {
+            throw error
+        } catch let error as CancellationError {
+            throw error
+        } catch {
+            try Task.checkCancellation()
+            PlozzLog.networking.error(
+                "Jellyfin Continue Watching series-recency enrichment failed; preserving feed order: \(String(describing: error))"
+            )
             return [:]
         }
         var result: [String: Date] = [:]
@@ -193,24 +287,12 @@ public struct JellyfinProvider: MediaProvider {
     }
 
     /// Stamps a Continue Watching item that carries no play timestamp of its own —
-    /// a NextUp suggestion, whose next-episode `LastPlayedDate` is nil — with its
-    /// series' last-played date, so a just-finished show sorts by real recency in a
-    /// merged Continue Watching row instead of inheriting a foreign timestamp or
-    /// sinking to the bottom. In-progress Resume items (already timestamped) and
-    /// non-series items are returned unchanged.
-    /// Stamps a Continue Watching item that carries no play timestamp of its own —
     /// a next-episode suggestion whose `lastPlayedAt` is nil — with its series'
     /// last-viewed date, so a just-finished show sorts by real recency in a merged
     /// Continue Watching row instead of sinking to the bottom.
-    ///
-    /// The stamp is also what lets ``ContinueWatchingPolicy`` retire a suggestion
-    /// for a series left alone for months. Jellyfin bounds its own `Shows/NextUp`
-    /// with a server setting that defaults to a full year and is the viewer's to
-    /// choose, so Plozz deliberately does **not** override it with a
-    /// `NextUpDateCutoff` on the request; the shared policy applies the same
-    /// client-side rule here that it applies to every other backend. Removing this
-    /// stamp would silently exempt Jellyfin and Emby from that rule, because a
-    /// suggestion with no recency is kept fail-open.
+    /// In-progress items (already timestamped) and non-episode items are returned
+    /// unchanged. The server remains authoritative about NextUp membership; this
+    /// timestamp only moves older suggestions farther back.
     private func stampingSeriesRecency(_ item: MediaItem, using seriesDates: [String: Date]) -> MediaItem {
         guard item.lastPlayedAt == nil,
               let seriesID = item.seriesID,
@@ -286,53 +368,68 @@ public struct JellyfinProvider: MediaProvider {
         guard let libraryIDs else { return try await continueWatching(limit: limit) }
         guard !libraryIDs.isEmpty else { return [] }
 
-        let userID = session.userID
-        let client = self.client
-        async let seriesDatesTask = seriesLastPlayedDatesBestEffort(limit: limit)
         // Cap concurrent per-library requests: a user with many libraries would
         // otherwise fire 2×libraries requests (resume + next-up) in one burst,
         // flooding the shared URLSession pool and the server. 4 in flight keeps
         // Home load fast without swamping either.
         let limiter = ConcurrencyLimiter(limit: 4)
-        let perLibrary: [[BaseItemDto]] = await withTaskGroup(of: (Int, [BaseItemDto]).self) { group in
+        let perLibrary: [ContinueWatchingDTOOutcome] = try await withThrowingTaskGroup(
+            of: (Int, [BaseItemDto], Int, AppError?).self
+        ) { group in
             for (index, libraryID) in libraryIDs.enumerated() {
                 group.addTask {
-                    await limiter.run {
-                        async let resumeTask = try? client.resumeItems(userID: userID, limit: limit, parentID: libraryID)
-                        let nextUp = (try? await client.nextUpItems(userID: userID, limit: limit, parentID: libraryID)) ?? []
-                        let resume = (await resumeTask) ?? []
-                        var seen = Set<String>()
-                        let merged = (resume + nextUp).filter { seen.insert($0.Id).inserted }
-                        // No inner per-library cap: capping here (before series-recency
-                        // stamping and the final effective-recency ordering) could drop a
-                        // just-finished show's next episode within a library whose Resume
-                        // list is long. The single recency-aware cap below handles it.
-                        return (index, merged)
+                    try await limiter.run {
+                        let outcome = try await continueWatchingDTOs(
+                            limit: limit,
+                            parentID: libraryID
+                        )
+                        return (
+                            index,
+                            outcome.items,
+                            outcome.successfulEndpointCount,
+                            outcome.firstError
+                        )
                     }
                 }
             }
-            var byIndex: [Int: [BaseItemDto]] = [:]
-            for await (index, items) in group { byIndex[index] = items }
+            var byIndex: [Int: ContinueWatchingDTOOutcome] = [:]
+            for try await (index, items, successfulEndpointCount, firstError) in group {
+                byIndex[index] = ContinueWatchingDTOOutcome(
+                    items: items,
+                    successfulEndpointCount: successfulEndpointCount,
+                    firstError: firstError
+                )
+            }
             return libraryIDs.indices.compactMap { byIndex[$0] }
+        }
+
+        let successfulEndpointCount = perLibrary.reduce(0) {
+            $0 + $1.successfulEndpointCount
+        }
+        guard successfulEndpointCount > 0 else {
+            throw perLibrary.compactMap(\.firstError).first ?? AppError.invalidResponse
         }
 
         // Series play dates are user-global (not library-scoped), so fetch once and
         // stamp every library's NextUp suggestions with their series' true recency.
-        let seriesDates = await seriesDatesTask
+        let seriesDates = try await seriesLastPlayedDatesBestEffort(
+            for: perLibrary.flatMap(\.items)
+        )
         var seen = Set<String>()
         var result: [MediaItem] = []
-        for (libraryID, dtos) in zip(libraryIDs, perLibrary) {
-            for dto in dtos where seen.insert(dto.Id).inserted {
+        for (libraryID, outcome) in zip(libraryIDs, perLibrary) {
+            for dto in outcome.items where seen.insert(dto.Id).inserted {
                 result.append(stampingSeriesRecency(map(item: dto).taggingLibrary(libraryID), using: seriesDates))
             }
         }
         logContinueWatchingFeed(
-            perLibrary.flatMap { $0 },
+            perLibrary.flatMap(\.items),
             endpoint: "Items/Resume + Shows/NextUp (scoped to \(libraryIDs.count) libraries)"
         )
         // Order by effective recency, then cap once — same rationale as the unscoped
         // path: a just-finished show's stamped next episode must survive the cut.
-        return Array(orderedByEffectiveRecency(result).prefix(limit))
+        let ordered = orderedByEffectiveRecency(result)
+        return limit == Int.max ? ordered : Array(ordered.prefix(limit))
     }
 
     /// Library-scoped Recently Added — see ``continueWatching(limit:inLibraries:)``
@@ -1385,7 +1482,7 @@ public struct JellyfinProvider: MediaProvider {
         try await client.downloadRemoteSubtitle(itemID: itemID, subtitleID: subtitleID)
     }
 
-    /// The item's current subtitle tracks (text sidecars get VTT delivery sources),
+    /// The item's current subtitle tracks (text sidecars get delivery sources),
     /// fetched via a plain item lookup — no `PlaybackInfo`/transcode. Used to
     /// observe a just-downloaded subtitle so it can be hot-loaded.
     public func subtitleTracks(forItemID itemID: String) async throws -> [MediaTrack] {
@@ -1938,10 +2035,10 @@ public struct JellyfinProvider: MediaProvider {
         )
     }
 
-    /// Maps a subtitle stream, attaching a WebVTT delivery source for text-based
+    /// Maps a subtitle stream, attaching a delivery source for text-based
     /// subtitles so the player can inject them into the native picker even on
-    /// direct play. Image-based subs (PGS/VOBSUB) get no URL — they need server
-    /// burn-in, which the native picker can't drive.
+    /// direct play. Image-based subs (PGS/VOBSUB) get no text delivery source;
+    /// their engine-decoded bitmap cues keep their authored placement.
     private func map(
         subtitleStream dto: MediaStreamDto,
         itemID: String,
@@ -1952,7 +2049,8 @@ public struct JellyfinProvider: MediaProvider {
             ? try subtitleDeliverySource(
                 itemID: itemID,
                 sourceID: sourceID,
-                streamIndex: dto.Index
+                streamIndex: dto.Index,
+                codec: dto.Codec
             )
             : nil
         return MediaTrack(
@@ -1964,7 +2062,8 @@ public struct JellyfinProvider: MediaProvider {
             isDefault: dto.IsDefault ?? false,
             isForced: dto.IsForced ?? false,
             deliverySource: deliverySource,
-            isImageBasedSubtitle: !isText
+            isImageBasedSubtitle: !isText,
+            isExternal: dto.IsExternal ?? false
         )
     }
 
@@ -1975,16 +2074,19 @@ public struct JellyfinProvider: MediaProvider {
         return ["subrip", "srt", "ass", "ssa", "webvtt", "vtt", "mov_text", "text", "ttml", "subviewer", "sami", "smi"].contains(codec)
     }
 
-    /// `GET /Videos/{itemId}/{mediaSourceId}/Subtitles/{index}/0/Stream.vtt` —
-    /// the server converts SRT/ASS/embedded-text subtitles to WebVTT on the fly.
+    /// Keep SubRip as SRT: Jellyfin's WebVTT conversion adds `line:90%` even to
+    /// plain dialogue, which falsely makes it source-positioned in our renderer.
+    /// Other text formats retain the existing WebVTT conversion.
     private func subtitleDeliverySource(
         itemID: String,
         sourceID: String,
-        streamIndex: Int
+        streamIndex: Int,
+        codec: String?
     ) throws -> SubtitleDeliverySource {
+        let format = ["srt", "subrip"].contains(codec?.lowercased() ?? "") ? "srt" : "vtt"
         var pathComponents = URLComponents()
         pathComponents.path =
-            "/Videos/\(itemID)/\(sourceID)/Subtitles/\(streamIndex)/0/Stream.vtt"
+            "/Videos/\(itemID)/\(sourceID)/Subtitles/\(streamIndex)/0/Stream.\(format)"
         let resource = try AuthenticatedHTTPResource(
             pathBase: .configuredBaseURL,
             path: String(
@@ -1999,7 +2101,7 @@ public struct JellyfinProvider: MediaProvider {
                 itemID: itemID,
                 mediaSourceID: sourceID,
                 deliveryMode: .directFile,
-                formatHint: MediaFormatHint(container: "vtt"),
+                formatHint: MediaFormatHint(container: format),
                 purpose: .subtitle,
                 resource: resource
             )

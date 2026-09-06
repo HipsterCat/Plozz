@@ -161,6 +161,36 @@ public enum SeriesResume {
     public static func restartSeason(in seasons: [MediaItem]) -> MediaItem? {
         seasons.first { ($0.seasonNumber ?? 1) > 0 } ?? seasons.first
     }
+
+    /// A cached season choice must not outrank a later Continue Watching answer.
+    /// Once the viewer starts browsing, their selection takes precedence.
+    public static func openingSeasonID(
+        seasons: [MediaItem],
+        episodes: [MediaItem],
+        selectedSeasonID: String?,
+        preserveSelection: Bool,
+        initialSeasonID: String?,
+        initialEpisode: MediaItem?,
+        resumeEpisode: MediaItem?
+    ) -> String? {
+        func known(_ id: String?) -> String? {
+            id.flatMap { id in seasons.contains { $0.id == id } ? id : nil }
+        }
+        func season(for episode: MediaItem?) -> String? {
+            known(episode?.seasonID)
+                ?? episode?.seasonNumber.flatMap { number in
+                    seasons.first { $0.seasonNumber == number }?.id
+                }
+        }
+        if preserveSelection, let selected = known(selectedSeasonID) { return selected }
+        if let explicit = known(initialSeasonID) ?? season(for: initialEpisode) { return explicit }
+        if let resume = season(for: resumeEpisode) { return resume }
+        if let selected = known(selectedSeasonID) { return selected }
+        if isFinished(seasons: seasons, episodes: episodes) {
+            return restartSeason(in: seasons)?.id
+        }
+        return nextUp(in: seasons)?.id
+    }
 }
 
 /// A season+episode ordinal pair, used to re-locate "the same episode" on a
@@ -178,6 +208,27 @@ public struct SeasonEpisodeRef: Equatable, Sendable {
 /// Resolves an episode-context entry against the active server's season/episode
 /// objects. Provider ids differ across servers, but S/E ordinals remain stable.
 public enum SeriesEpisodeEntry {
+    public static func openingSeed(
+        for series: MediaItem,
+        initialEpisode: MediaItem?,
+        initialSeasonID: String?,
+        resumeEpisode: MediaItem?
+    ) -> MediaItem? {
+        let requested = initialEpisode ?? (initialSeasonID == nil ? resumeEpisode : nil)
+        return playableSeed(requested, for: series)
+    }
+
+    /// Only a real episode on the currently selected source can seed Play before
+    /// the season loads. An ordinal match alone cannot authorize a playback id.
+    public static func playableSeed(_ episode: MediaItem?, for series: MediaItem) -> MediaItem? {
+        guard let episode,
+              episode.kind == .episode,
+              episode.locallyValidatedPlayableSource,
+              episode.seriesID == series.id,
+              episode.sourceAccountID == series.sourceAccountID else { return nil }
+        return episode
+    }
+
     public static func seasonID(
         initialEpisode: MediaItem?,
         initialSeasonID: String?,
@@ -217,7 +268,10 @@ public enum SeriesEpisodeEntry {
             // `episodes` is already the selected season's scoped child list.
             // Some providers omit seasonNumber on those rows, so E-number is the
             // correct fallback here and cannot accidentally cross seasons.
-            return episodes.first { $0.episodeNumber == episode }
+            return episodes.first {
+                $0.episodeNumber == episode
+                    && ($0.seasonNumber == nil || $0.seasonNumber == season)
+            }
         }
         if let episode = initialEpisode.episodeNumber {
             return episodes.first { $0.episodeNumber == episode }
