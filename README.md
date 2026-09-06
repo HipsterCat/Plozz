@@ -73,6 +73,9 @@ presents them as a single library rather than a set of tabs you switch between.
   files becomes a real library with artwork, descriptions, ratings, and cast.
   Browse folders as grids on both iOS and tvOS, with recognized movies and
   shows opening their usual details, seasons, and episodes.
+  Recognized titles stay in detail navigation during library scans. Choose
+  **More actions > Browse Files** on a title to inspect its original folders
+  and individual files; unknown or mixed folders remain browsable grids.
   Choose movie, TV, mixed, or personal-video content, with a separate anime
   option. Personal videos stay as files without movie or TV matching.
   Library scans run while the app is active: normal passes skip unchanged

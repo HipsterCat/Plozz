@@ -413,7 +413,7 @@ final class ShareCatalogBrowseProjectionTests: XCTestCase {
         XCTAssertEqual(projected[1], unindexed)
     }
 
-    func testIncompleteFolderInventoryDoesNotHidePotentialUnindexedNestedFiles() async throws {
+    func testKnownShowOpensDetailsBeforeInventoryCompletesWithFilesStillReachable() async throws {
         let store = ShareCatalogStore(accountKey: "incomplete-folder", directory: try catalogDirectory())
         let showRoot = "TV Shows/Animanimals"
         await store.upsert([
@@ -425,16 +425,18 @@ final class ShareCatalogBrowseProjectionTests: XCTestCase {
                 metadataRoot: showRoot
             )
         ], scanID: 1)
-        // No completed-directory-state marker: the known episode is insufficient
-        // proof that another playable child was not missed by an interrupted scan.
-
         let projected = await store.browseItems([folder(showRoot)])
 
-        XCTAssertEqual(projected.first?.id, "d:\(showRoot)")
-        XCTAssertEqual(projected.first?.kind, .folder)
+        XCTAssertEqual(projected.first?.id, ShareCatalogID.series("animanimals"))
+        XCTAssertEqual(projected.first?.kind, .series)
+        XCTAssertEqual(projected.first?.fileBrowserContainerID, "share:files:d:\(showRoot)")
+
+        let reopened = ShareCatalogStore(accountKey: "incomplete-folder", directory: createdCatalogDirectories[0])
+        let afterReopen = await reopened.browseItems([folder(showRoot)])
+        XCTAssertEqual(afterReopen, projected, "a partial scan must not invalidate retained identity")
     }
 
-    func testRecognizedMovieKeepsPosterAndFolderNavigationDuringRescan() async throws {
+    func testRecognizedMovieKeepsDetailsAndPosterDuringRescan() async throws {
         let store = ShareCatalogStore(accountKey: "rescan-poster", directory: try catalogDirectory())
         let root = "Movies/Arrival (2016)"
         let path = "\(root)/Arrival.2016.mkv"
@@ -453,14 +455,15 @@ final class ShareCatalogBrowseProjectionTests: XCTestCase {
         live.isFavorite = true
         let duringScanItems = await store.browseItems([live])
         let duringScan = try XCTUnwrap(duringScanItems.first)
-        XCTAssertEqual(duringScan.id, live.id)
-        XCTAssertEqual(duringScan.kind, .folder)
-        XCTAssertEqual(duringScan.title, live.title)
+        XCTAssertEqual(duringScan.id, completed.first?.id)
+        XCTAssertEqual(duringScan.kind, .movie)
+        XCTAssertEqual(duringScan.title, completed.first?.title)
+        XCTAssertEqual(duringScan.fileBrowserContainerID, "share:files:d:\(root)")
         XCTAssertEqual(duringScan.sourceAccountID, live.sourceAccountID)
         XCTAssertTrue(duringScan.isFavorite)
         XCTAssertEqual(duringScan.posterURL, metadata.posterURL)
         XCTAssertEqual(duringScan.productionYear, 2016)
-        XCTAssertTrue(duringScan.providerIDs.isEmpty, "a decorated folder must not acquire a movie identity")
+        XCTAssertEqual(duringScan.providerIDs, completed.first?.providerIDs)
     }
 
     func testRecognizedShowWithUnclassifiedContentKeepsPosterWithoutHidingFiles() async throws {
@@ -498,6 +501,8 @@ final class ShareCatalogBrowseProjectionTests: XCTestCase {
             episode("\(root)/E01.mkv", series: "Animanimals", season: 1,
                     number: 1, metadataRoot: "TV Shows/Animanimals")
         ], scanID: 1)
+        let savedInventory = await store.upsertPlayablePaths(["\(root)/unknown.mp4"], scanID: 1)
+        XCTAssertTrue(savedInventory)
         let url = try XCTUnwrap(URL(string: "https://example.com/season.jpg"))
         var season = MediaItem(
             id: ShareCatalogID.season("animanimals", 1), title: "Season 1", kind: .season,
@@ -699,7 +704,7 @@ final class ShareCatalogBrowseProjectionTests: XCTestCase {
         await store.invalidateCompletedDirectoryState()
         await store.touchDirectoryContents(relPaths: [showRoot], scanID: 2)
         let duringScan = await store.browseItems([folder(showRoot)])
-        XCTAssertEqual(duringScan.first?.kind, .folder)
+        XCTAssertEqual(duringScan, baseline)
 
         let inventoryFinalized = await store.finalizePlayableInventory(inScan: 2)
         XCTAssertTrue(inventoryFinalized)
@@ -711,6 +716,47 @@ final class ShareCatalogBrowseProjectionTests: XCTestCase {
         ])
         XCTAssertEqual(afterSkip.first?.kind, .series)
         XCTAssertTrue(recordedDirectories.contains(showRoot))
+    }
+
+    func testDetailFileBrowserRoutesResolveShowSeasonMovieAndFileParents() async throws {
+        let store = ShareCatalogStore(accountKey: "detail-files", directory: try catalogDirectory())
+        let showRoot = "TV 100%_O'Brien/Animanimals"
+        let episodePath = "\(showRoot)/Season 01/E01.mkv"
+        let movieRoot = "Movies/Arrival (2016)"
+        let moviePath = "\(movieRoot)/Arrival.2016.mkv"
+        await store.upsert([
+            episode(episodePath, series: "Animanimals", season: 1, number: 1, metadataRoot: showRoot),
+            movie(moviePath, title: "Arrival", year: 2016),
+            movie("Akira (1988).mkv", title: "Akira", year: 1988),
+        ], scanID: 1)
+        let routes = [
+            (ShareCatalogID.series("animanimals"), "share:files:d:\(showRoot)"),
+            (ShareCatalogID.season("animanimals", 1), "share:files:d:\(showRoot)/Season 01"),
+            (ShareCatalogID.file(episodePath), "share:files:d:\(showRoot)/Season 01"),
+            (ShareCatalogID.movie("arrival-2016"), "share:files:d:\(movieRoot)"),
+            (ShareCatalogID.file(moviePath), "share:files:d:\(movieRoot)"),
+            (ShareCatalogID.movie("akira-1988"), "share:files:share:root"),
+        ]
+        for (id, expected) in routes {
+            let item = await store.item(id: id)
+            XCTAssertEqual(item?.fileBrowserContainerID, expected, id)
+        }
+
+        await store.invalidateCompletedDirectoryState()
+        let duringScan = await store.item(id: ShareCatalogID.series("animanimals"))
+        XCTAssertEqual(duringScan?.fileBrowserContainerID, "share:files:d:\(showRoot)")
+    }
+
+    func testDetailFileBrowserIncludesAllPhysicalCopiesOfSeries() async throws {
+        let store = ShareCatalogStore(accountKey: "multiple-show-roots", directory: try catalogDirectory())
+        await store.upsert([
+            episode("TV/Current/Animanimals/E01.mkv", series: "Animanimals", season: 1,
+                    number: 1, metadataRoot: "TV/Current/Animanimals"),
+            episode("TV/Archive/Animanimals/E02.mkv", series: "Animanimals", season: 1,
+                    number: 2, metadataRoot: "TV/Archive/Animanimals"),
+        ], scanID: 1)
+        let series = await store.item(id: ShareCatalogID.series("animanimals"))
+        XCTAssertEqual(series?.fileBrowserContainerID, "share:files:d:TV")
     }
 
     func testIndexedEpisodeKeepsFileWatchIdentity() async throws {

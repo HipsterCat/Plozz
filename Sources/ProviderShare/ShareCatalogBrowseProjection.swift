@@ -64,7 +64,7 @@ struct ShareCatalogBrowseProjection {
         let exactFiles = loadExactFiles(filePaths)
         let folderEvidence = loadFolderEvidence(folderPaths)
         let movieNFOGroups = loadAssociatedMovieNFOGroups(folderPaths)
-        let completedFolders = loadProjectionSafeFolderPaths(folderPaths)
+        let unambiguousFolders = loadProjectionSafeFolderPaths(folderPaths)
 
         var folderTargets: [String: String] = [:]
         var possibleSeasons: [SeasonCandidate] = []
@@ -135,47 +135,26 @@ struct ShareCatalogBrowseProjection {
                 result.append(live)
                 continue
             }
-            if let folderPath = Self.folderPath(live), !completedFolders.contains(folderPath) {
+            if let folderPath = Self.folderPath(live), !unambiguousFolders.contains(folderPath) {
                 result.append(Self.decoratingFolder(live, with: catalogItem))
                 continue
             }
             guard emittedCatalogIDs.insert(catalogItem.id).inserted else { continue }
-            result.append(Self.preservingLiveState(catalogItem, from: live))
+            var projected = Self.preservingLiveState(catalogItem, from: live)
+            if Self.folderPath(live) != nil {
+                projected.fileBrowserContainerID = ShareCatalogID.fileBrowserID(for: live.id)
+            }
+            result.append(projected)
         }
         return result
     }
 
-    /// Folder promotion needs two matching clean-scan snapshots: directory state
-    /// and the scanner's complete playable-file inventory. Every playable path
-    /// below the candidate must resolve to an indexed asset or a proven extra;
-    /// excluded/unclassified files therefore keep the folder unpromoted.
+    /// Known mixed/unclassified content keeps folder navigation. Identity uses
+    /// the retained catalog, not scan stamps: starting or cancelling maintenance
+    /// must not turn an established title back into a folder. Newly added files
+    /// remain reachable through the title's explicit file-browser route.
     private func loadProjectionSafeFolderPaths(_ paths: [String]) -> Set<String> {
         guard !paths.isEmpty else { return [] }
-        var completedScanIDs: [String: Int64] = [:]
-        connection.query(
-            "SELECT key,value FROM meta WHERE key IN (?,?);",
-            bind: {
-                CatalogConnection.bindText(
-                    $0,
-                    1,
-                    ShareCatalogStore.completedDirectoryStateScanKey
-                )
-                CatalogConnection.bindText(
-                    $0,
-                    2,
-                    ShareCatalogStore.completedPlayableInventoryScanKey
-                )
-            }
-        ) { stmt in
-            guard let key = CatalogConnection.columnText(stmt, 0),
-                  let scanID = CatalogConnection.columnText(stmt, 1).flatMap(Int64.init)
-            else { return }
-            completedScanIDs[key] = scanID
-        }
-        guard let completedScanID = completedScanIDs[ShareCatalogStore.completedDirectoryStateScanKey],
-              completedScanIDs[ShareCatalogStore.completedPlayableInventoryScanKey] == completedScanID
-        else { return [] }
-
         var result = Set<String>()
         for chunk in paths.chunked(maxCount: Self.queryChunkSize) {
             let values = Array(repeating: "(?,?,?)", count: chunk.count).joined(separator: ",")
@@ -183,19 +162,17 @@ struct ShareCatalogBrowseProjection {
             WITH requested(path, lower_path, upper_path) AS (VALUES \(values))
             SELECT r.path
             FROM requested r
-            JOIN dir_state d ON d.rel_path=r.path AND d.last_scan=?
             WHERE NOT EXISTS (
               SELECT 1
               FROM playable_inventory p
-              WHERE p.last_scan=?
-                AND p.rel_path >= r.lower_path AND p.rel_path < r.upper_path
+              WHERE p.rel_path >= r.lower_path AND p.rel_path < r.upper_path
                 AND NOT EXISTS (
                   SELECT 1 FROM assets a
-                  WHERE a.rel_path=p.rel_path AND a.last_scan=?
+                  WHERE a.rel_path=p.rel_path
                 )
                 AND NOT EXISTS (
                   SELECT 1 FROM extras e
-                  WHERE e.rel_path=p.rel_path AND e.last_scan=? AND e.owner_id IS NOT NULL
+                  WHERE e.rel_path=p.rel_path AND e.owner_id IS NOT NULL
                     AND e.owner_kind IN ('movie','series','season','episode')
                 )
             );
@@ -207,10 +184,6 @@ struct ShareCatalogBrowseProjection {
                     CatalogConnection.bindText(stmt, index + 2, path + "0")
                     index += 3
                 }
-                sqlite3_bind_int64(stmt, index, completedScanID)
-                sqlite3_bind_int64(stmt, index + 1, completedScanID)
-                sqlite3_bind_int64(stmt, index + 2, completedScanID)
-                sqlite3_bind_int64(stmt, index + 3, completedScanID)
             }) { stmt in
                 if let path = CatalogConnection.columnText(stmt, 0) { result.insert(path) }
             }

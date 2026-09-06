@@ -837,7 +837,57 @@ struct CatalogReadQueries {
     }
 
     func item(id: String) -> MediaItem? {
-        browseItems(ids: [id])[id]
+        guard var item = browseItems(ids: [id])[id] else { return nil }
+        item.fileBrowserContainerID = fileBrowserContainerID(for: item.id)
+        return item
+    }
+
+    /// Resolve only when opening details, never once per card on the browse path.
+    /// Lexical endpoints give the common physical directory of all versions.
+    private func fileBrowserContainerID(for id: String) -> String? {
+        let parent = "substr(rel_path,1,length(rel_path)-length(basename)-1)"
+        let directory: String
+        let predicate: String
+        let key: String
+        var season: Int?
+        if let movieKey = ShareCatalogID.movieKey(forMovieID: id) {
+            directory = parent
+            predicate = "COALESCE(movie_group_key,movie_key)=? AND kind='movie'"
+            key = movieKey
+        } else if let seriesKey = ShareCatalogID.seriesKey(forSeriesID: id) {
+            directory = "COALESCE(metadata_root,\(parent))"
+            predicate = "series_key=? AND kind='episode'"
+            key = seriesKey
+        } else if let components = ShareCatalogID.seasonComponents(forSeasonID: id) {
+            directory = parent
+            predicate = "series_key=? AND kind='episode' AND COALESCE(season,1)=?"
+            key = components.seriesKey
+            season = components.season
+        } else if let path = ShareCatalogID.relPath(forFileID: id) {
+            directory = parent
+            predicate = "rel_path=?"
+            key = path
+        } else {
+            return nil
+        }
+        var folder: String?
+        query("""
+        SELECT MIN(\(directory)),MAX(\(directory))
+        FROM assets WHERE \(predicate);
+        """, bind: { stmt in
+            self.bindText(stmt, 1, key)
+            if let season { sqlite3_bind_int64(stmt, 2, Int64(season)) }
+        }) { stmt in
+            guard let first = self.columnText(stmt, 0),
+                  let last = self.columnText(stmt, 1) else { return }
+            folder = zip(first.split(separator: "/"), last.split(separator: "/"))
+                .prefix { $0.0 == $0.1 }
+                .map { String($0.0) }
+                .joined(separator: "/")
+        }
+        return folder.map {
+            ShareCatalogID.fileBrowserID(for: $0.isEmpty ? "share:root" : "d:\($0)")
+        }
     }
 
     /// Resolve and hydrate catalog ids in bounded batches.

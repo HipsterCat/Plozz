@@ -223,7 +223,7 @@ final class ShareProviderCapabilityTests: XCTestCase {
         )
         let capability: any MediaFileBrowsing = provider
 
-        XCTAssertEqual(capability.fileBrowserLibrary.id, ShareLibraryStore.rootLibraryID)
+        XCTAssertEqual(capability.fileBrowserLibrary.id, "share:files:share:root")
         XCTAssertEqual(capability.fileBrowserLibrary.title, "Browse Files — Anime Films")
         XCTAssertEqual(capability.fileBrowserLibrary.kind, .folder)
         XCTAssertEqual(capability.fileBrowserLibrary.synthesizedName, .browseFiles)
@@ -430,6 +430,62 @@ final class ShareProviderCapabilityTests: XCTestCase {
         ]])
         XCTAssertEqual(page.items.map(\.id), ["f:a.mkv"])
         XCTAssertEqual(page.totalCount, 3)
+    }
+
+    func testExplicitFileBrowserKeepsNestedFoldersAndEveryOriginalFile() async throws {
+        let reader = FakeCatalogReader()
+        reader.browseResult = [MediaItem(id: "series:wrong-route", title: "Show", kind: .series)]
+        let directory = "TV 100%_O'Brien/Animanimals"
+        let fileSystem = CapabilityFakeFileSystem(entries: [], directories: [
+            directory: [
+                try RemoteFileEntry(relativePath: "Season 01", kind: .directory),
+                try RemoteFileEntry(relativePath: "unknown.mp4", kind: .file),
+            ],
+            "\(directory)/Season 01": [
+                try RemoteFileEntry(relativePath: "E01.1080p.mkv", kind: .file),
+                try RemoteFileEntry(relativePath: "E01.2160p.mkv", kind: .file),
+            ],
+        ])
+        let provider = ShareProvider(
+            session: makeSession(),
+            sessionFactory: { role in
+                try CapabilityFakeSession(fileSystem: fileSystem, role: role)
+            },
+            catalogCoordinator: FakeCatalogCoordinator(reader: reader)
+        )
+        let rootID = ShareCatalogID.fileBrowserID(for: "d:\(directory)")
+        let root = try await provider.item(id: rootID)
+        XCTAssertEqual(root.id, rootID)
+        XCTAssertEqual(root.kind, .folder)
+        let page = try await provider.items(
+            in: rootID, kind: .folder, page: PageRequest(limit: 10)
+        )
+        XCTAssertEqual(page.items.map(\.id), [
+            "share:files:d:\(directory)/Season 01", "f:\(directory)/unknown.mp4",
+        ])
+        XCTAssertEqual(page.items.map(\.kind), [.folder, .video])
+        XCTAssertEqual(page.items.last?.title, "unknown.mp4")
+
+        let seasonID = try XCTUnwrap(page.items.first?.id)
+        let files = try await provider.children(of: seasonID)
+        XCTAssertEqual(Set(files.map(\.id)), [
+            "f:\(directory)/Season 01/E01.1080p.mkv",
+            "f:\(directory)/Season 01/E01.2160p.mkv",
+        ])
+        XCTAssertEqual(Set(files.map(\.title)), ["E01.1080p.mkv", "E01.2160p.mkv"])
+        XCTAssertTrue(files.allSatisfy { $0.kind == .video && !$0.allowsTitleBasedMetadataMatching })
+        XCTAssertTrue(reader.browseInputs.isEmpty, "explicit file browsing must not loop back to catalog details")
+        XCTAssertEqual(provider.supportedSortFields(in: rootID, kind: .folder), [.name, .dateAdded, .random])
+
+        let firstPage = try await provider.items(
+            in: seasonID, kind: .folder, page: PageRequest(limit: 1)
+        )
+        let secondPage = try await provider.items(
+            in: seasonID, kind: .folder, page: PageRequest(startIndex: 1, limit: 1)
+        )
+        XCTAssertEqual(firstPage.totalCount, 2)
+        XCTAssertEqual(secondPage.totalCount, 2)
+        XCTAssertNotEqual(firstPage.items.first?.id, secondPage.items.first?.id)
     }
 
     func testRawBrowseHonorsNameSortWhileKeepingFoldersFirst() async throws {
@@ -928,9 +984,11 @@ private final class CapabilityFakeSession: MediaTransportSession, @unchecked Sen
 
 private final class CapabilityFakeFileSystem: MediaTransportFileSystem, @unchecked Sendable {
     private let entries: [RemoteFileEntry]
+    private let directories: [String: [RemoteFileEntry]]
 
-    init(entries: [RemoteFileEntry]) {
+    init(entries: [RemoteFileEntry], directories: [String: [RemoteFileEntry]] = [:]) {
         self.entries = entries
+        self.directories = directories
     }
 
     func validate() async throws {}
@@ -949,7 +1007,7 @@ private final class CapabilityFakeFileSystem: MediaTransportFileSystem, @uncheck
     }
 
     func list(relativePath: String) async throws -> [RemoteFileEntry] {
-        relativePath.isEmpty ? entries : []
+        relativePath.isEmpty ? entries : directories[relativePath] ?? []
     }
 
     func stat(relativePath: String) async throws -> RemoteFileEntry {

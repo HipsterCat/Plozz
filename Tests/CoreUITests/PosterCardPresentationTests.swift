@@ -2,6 +2,27 @@
 import XCTest
 import CoreModels
 @testable import CoreUI
+final class MediaFileBrowserNavigationTests: XCTestCase {
+    func testFileBrowserTargetsOwningShareNotSelectedPlaybackServer() throws {
+        let item = MediaItem(
+            id: "series:show", title: "Show", kind: .series,
+            fileBrowserContainerID: "share:files:d:TV/Show",
+            sourceAccountID: "owning-share",
+            additionalSourceAccountIDs: ["other-server"],
+            selectedSourceAccountID: "other-server"
+        )
+        let target = try XCTUnwrap(item.navigationTarget(for: .browseFiles))
+        XCTAssertEqual(target.id, "share:files:d:TV/Show")
+        XCTAssertEqual(target.kind, .folder)
+        XCTAssertEqual(target.sourceAccountID, "owning-share")
+        XCTAssertFalse(target.allowsTitleBasedMetadataMatching)
+        XCTAssertTrue(target.sources.isEmpty)
+        XCTAssertNil(target.selectedSourceAccountID)
+        XCTAssertNil(target.fileBrowserContainerID)
+        XCTAssertNil(target.navigationTarget(for: .browseFiles))
+    }
+}
+
 #if canImport(UIKit)
 import SwiftUI
 import UIKit

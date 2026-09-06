@@ -40,10 +40,12 @@ public struct ShareProvider: MediaProvider, MediaFileBrowsing, MediaSortFieldPro
     }
 
     public var fileBrowserLibrary: MediaLibrary {
-        ShareLibraryStore.rootLibrary(
+        var library = ShareLibraryStore.rootLibrary(
             serverName: session.server.name,
             configuration: libraryConfiguration
         )
+        library.id = ShareCatalogID.fileBrowserID(for: library.id)
+        return library
     }
 
     public func supportedSortFields(
@@ -56,7 +58,8 @@ public struct ShareProvider: MediaProvider, MediaFileBrowsing, MediaSortFieldPro
         if ShareCatalogID.isSeries(containerID) || ShareCatalogID.isSeason(containerID) {
             return [.name, .releaseDate, .communityRating, .runtime, .random]
         }
-        if libraryConfiguration?.contentType == .personalVideos {
+        if libraryConfiguration?.contentType == .personalVideos
+            || ShareCatalogID.containerID(forFileBrowserID: containerID) != nil {
             // Raw personal files have filesystem dates, but intentionally carry
             // no fabricated runtime, release, or ratings metadata.
             return [.name, .dateAdded, .random]
@@ -303,6 +306,12 @@ public struct ShareProvider: MediaProvider, MediaFileBrowsing, MediaSortFieldPro
     }
 
     public func item(id: String) async throws -> MediaItem {
+        if let containerID = ShareCatalogID.containerID(forFileBrowserID: id) {
+            guard let folder = await store.item(id: containerID) else {
+                throw AppError.unknown("Folder not found on share: \(containerID)")
+            }
+            return ShareCatalogID.fileBrowserEntry(folder)
+        }
         if libraryConfiguration?.contentType == .personalVideos {
             guard let item = await store.item(id: id) else {
                 throw AppError.unknown("Item not found on share: \(id)")
@@ -377,7 +386,11 @@ public struct ShareProvider: MediaProvider, MediaFileBrowsing, MediaSortFieldPro
         if let (key, season) = ShareCatalogID.seasonComponents(forSeasonID: itemID) {
             return await watchState.stamp(await catalog.episodes(seriesKey: key, season: season))
         }
-        let entries = try await store.entries(forContainerID: itemID)
+        let rawContainerID = ShareCatalogID.containerID(forFileBrowserID: itemID)
+        let entries = try await store.entries(forContainerID: rawContainerID ?? itemID)
+        if rawContainerID != nil {
+            return await watchState.stamp(entries.map(ShareCatalogID.fileBrowserEntry))
+        }
         let projected = libraryConfiguration?.contentType == .personalVideos
             ? entries
             : await catalog.browseItems(entries)
@@ -441,11 +454,14 @@ public struct ShareProvider: MediaProvider, MediaFileBrowsing, MediaSortFieldPro
             )
         }
         // Browsing the raw file tree lists exactly that directory.
+        let rawContainerID = ShareCatalogID.containerID(forFileBrowserID: containerID)
         let entries = try await store.entries(
-            forContainerID: containerID,
+            forContainerID: rawContainerID ?? containerID,
             sort: page.sort
         )
-        let all = libraryConfiguration?.contentType == .personalVideos
+        let all = rawContainerID != nil
+            ? entries.map(ShareCatalogID.fileBrowserEntry)
+            : libraryConfiguration?.contentType == .personalVideos
             ? entries
             : await catalog.browseItems(entries)
         // Filesystem creation/modified time is available only while the store maps

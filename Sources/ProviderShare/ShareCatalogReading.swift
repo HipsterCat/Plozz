@@ -94,8 +94,8 @@ public protocol ShareCatalogReading: Sendable {
     /// Raw entries remain the source of truth for hierarchy and unindexed files.
     /// The catalog may resolve files or add a logical movie/series/season beside
     /// a physical folder only when persisted path/membership evidence proves the
-    /// identity. Keeping the folder preserves access to content added since the
-    /// last completed inventory.
+    /// identity. Promoted folders carry a separate raw file-browser route so
+    /// content added since the last inventory remains reachable from details.
     func browseItems(_ items: [MediaItem]) async -> [MediaItem]
 }
 

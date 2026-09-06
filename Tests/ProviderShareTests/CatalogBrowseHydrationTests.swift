@@ -211,7 +211,7 @@ final class CatalogBrowseHydrationTests: XCTestCase {
 
         XCTAssertEqual(batch.count, 8)
         for id in Set(ids) {
-            XCTAssertEqual(batch[id], queries.item(id: id), "parity failed for \(id)")
+            XCTAssertEqual(batch[id], queries.browseItems(ids: [id])[id], "parity failed for \(id)")
         }
         XCTAssertEqual(batch[logicalMovieID]?.versions.count, 2)
         XCTAssertEqual(batch[logicalMovieID]?.versions.filter(\.isDefault).count, 1)
