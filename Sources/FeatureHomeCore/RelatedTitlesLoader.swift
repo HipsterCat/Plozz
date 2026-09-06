@@ -92,6 +92,13 @@ public final class RelatedTitlesLoader {
     /// Safe to call on every open: a fresh record skips the provider chain
     /// entirely, and re-entering the same page is a no-op.
     public func load(for item: MediaItem) async {
+        guard item.allowsTitleBasedMetadataMatching else {
+            loadedSeedKey = nil
+            entries = []
+            isLoading = false
+            hasResolved = true
+            return
+        }
         let query = MetadataQuery(item).seriesScoped
         let key = query.enrichmentCacheKey
         guard loadedSeedKey != key else { return }

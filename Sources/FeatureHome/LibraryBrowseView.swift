@@ -74,7 +74,15 @@ public struct LibraryBrowseView: View {
         return ContentStateView(
             state: viewModel.state,
             emptyMessage: "This library is empty.",
-            onRetry: { Task { await viewModel.loadFirstPage() } }
+            onRetry: { Task { await viewModel.loadFirstPage() } },
+            loadingContent: {
+                if viewModel.isMediaShare {
+                    ShareLibraryLoadingView()
+                } else {
+                    LoadingMessagesView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
         ) { total in
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
@@ -155,6 +163,12 @@ public struct LibraryBrowseView: View {
         // Browse is a full-screen sub-page: hide the top tab bar so it reads as a
         // dedicated destination with no navigation chrome pinned at the top.
         .toolbar(.hidden, for: .tabBar)
+        .safeAreaInset(edge: .bottom) {
+            if viewModel.state.value == nil, let library = viewModel.fileBrowserLibrary {
+                LibraryFileBrowseButton(library: library, onSelect: onSelect)
+                    .padding()
+            }
+        }
         // Shared with the iOS grid so the two platforms cannot drift again: iOS
         // lacked this guard and reloaded the library every time the user came back
         // from a detail page.
@@ -162,8 +176,11 @@ public struct LibraryBrowseView: View {
         .onAppear { MainThreadStallProbe.context = "library" }
         .background {
             if viewModel.isMediaShare {
-                ShareCatalogRefreshObserver(shareID: viewModel.sourceServerID) {
-                    Task { await viewModel.refreshAfterCatalogChange() }
+                ShareCatalogRefreshObserver(
+                    shareID: viewModel.sourceServerID,
+                    status: shareScanStatus
+                ) {
+                    await viewModel.refreshAfterCatalogChange()
                 }
             }
         }
@@ -215,6 +232,9 @@ public struct LibraryBrowseView: View {
             title
                 .font(.largeTitle.bold())
             Spacer(minLength: PlozzTheme.Spacing.large)
+            if let library = viewModel.fileBrowserLibrary {
+                LibraryFileBrowseButton(library: library, onSelect: onSelect)
+            }
             sortControl
         }
 
@@ -261,7 +281,7 @@ public struct LibraryBrowseView: View {
     private var sortControl: some View {
         Menu {
             Picker("Sort By", selection: sortFieldBinding) {
-                ForEach(SortField.allCases, id: \.self) { field in
+                ForEach(viewModel.availableSortFields, id: \.self) { field in
                     Text(field.displayName).tag(field)
                 }
             }
@@ -319,25 +339,32 @@ public struct LibraryBrowseView: View {
     }
 }
 
-/// Render-isolated scan-completion observer. Scan/enrichment progress mutates the
-/// whole status dictionary frequently; containing that observation here prevents
-/// progress ticks from invalidating the poster grid.
-private struct ShareCatalogRefreshObserver: View {
-    let shareID: String
-    let onRefresh: () -> Void
-
-    @Environment(ShareScanStatusModel.self) private var status: ShareScanStatusModel?
-
-    private var lastScanAt: Date? { status?.byShare[shareID]?.lastScanAt }
+private struct LibraryFileBrowseButton: View {
+    let library: MediaLibrary
+    let onSelect: (MediaItem) -> Void
 
     var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .onChange(of: lastScanAt) { oldValue, newValue in
-                guard newValue != nil, newValue != oldValue else { return }
-                onRefresh()
+        Button("Browse Files", systemImage: "folder") {
+            var root = MediaItem(id: library.id, title: library.title, kind: .folder)
+            if let accountID = library.sourceAccountID {
+                root = root.taggingSource(accountID)
             }
-            .accessibilityHidden(true)
+            onSelect(root)
+        }
+        .plozzActionButton()
+    }
+}
+
+private struct ShareLibraryLoadingView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: PlozzTheme.Spacing.large) {
+            ProgressView("Loading library…")
+            Button("Back") { dismiss() }
+                .plozzActionButton()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -357,14 +384,22 @@ private struct LibraryGridCell: View {
     var body: some View {
         Group {
             if let item = slot?.item {
-                // Shared poster card — identical to Home's "Recently Added" row.
-                PosterCardView(
-                    item: item,
-                    style: .poster,
-                    spoilerSettings: spoilerSettings,
-                    enablesAsyncArtworkFallback: false
-                ) {
-                    onSelect(item)
+                if item.kind == .folder {
+                    Button {
+                        onSelect(item)
+                    } label: {
+                        MediaFolderCardLabel(title: item.title, usesFocusSurface: true)
+                    }
+                    .buttonStyle(SettingsCardButtonStyle())
+                } else {
+                    PosterCardView(
+                        item: item,
+                        style: .poster,
+                        spoilerSettings: spoilerSettings,
+                        enablesAsyncArtworkFallback: false
+                    ) {
+                        onSelect(item)
+                    }
                 }
             } else {
                 PosterPlaceholderView()

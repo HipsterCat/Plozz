@@ -106,6 +106,7 @@ public struct AniListRatingsProvider: ExternalRatingsProviding {
                 return ("idMal", id)
             }
         }
+        guard item.allowsTitleBasedMetadataMatching else { return nil }
         let trimmed = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : ("search", trimmed)
     }

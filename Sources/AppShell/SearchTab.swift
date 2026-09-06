@@ -148,38 +148,48 @@ struct SearchTab: View {
                 onSelect: { open($0) }
             )
             .navigationDestination(for: MediaItem.self) { item in
-                // A discovery (Seerr) result that isn't in the library (id
-                // `seer:<tmdbId>`, requestable/in-flight availability) opens the
-                // request-focused discovery detail page rather than a library
-                // fetch. Search's "Not in Your Library" section only ever surfaces
-                // such titles (owned ones are filtered out).
-                let isDiscovery = detailEnvironment.isDiscovery(item)
-                ItemDetailView(
-                    viewModel: detailEnvironment.makeViewModel(for: item, libraryOrigin: nil),
-                    spoilerSettings: spoilerSettings,
-                    onPlay: { requestPlay($0) },
-                    onSelectChild: { open($0) },
-                    onNavigate: { navigateToItem($0) },
-                    onSelectPerson: { person, accountID in
-                        path.append(PersonRoute(person: person, sourceAccountID: accountID))
-                    },
-                    stackDepth: detailStackDepth,
-                    heroTrailerResolver: makeHeroTrailerResolver(),
-                    initialSeasonID: item.seasonID,
-                    isDiscoveryItem: isDiscovery,
-                    seerConnected: seer.isConfigured,
-                    onRequest: { item in
-                        let outcome = await seer.request(item, actingUserID: activeSeerrUserID)
-                        return seerRequestResult(outcome, actingName: activeSeerrUserName)
-                    },
-                    requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
-                    onRequestSeasons: { item, seasons in
-                        let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
-                        return seerRequestResult(outcome, actingName: activeSeerrUserName)
-                    },
-                    requestActingName: activeSeerrUserName,
-                    confirmAdminRequest: confirmAdminRequest
-                )
+                let provider = resolveProvider(item.sourceAccountID, in: accounts)
+                if let library = MediaFolderNavigation.library(
+                    for: item,
+                    providerKind: provider.kind,
+                    sourceAccountID: item.sourceAccountID ?? provider.session.server.id
+                ) {
+                    MediaFolderBrowseView(
+                        library: library,
+                        provider: provider,
+                        spoilerSettings: spoilerSettings,
+                        onSelect: { open($0) }
+                    )
+                } else {
+                    // Discovery titles keep their request-focused detail page.
+                    let isDiscovery = detailEnvironment.isDiscovery(item)
+                    ItemDetailView(
+                        viewModel: detailEnvironment.makeViewModel(for: item, libraryOrigin: nil),
+                        spoilerSettings: spoilerSettings,
+                        onPlay: { requestPlay($0) },
+                        onSelectChild: { open($0) },
+                        onNavigate: { navigateToItem($0) },
+                        onSelectPerson: { person, accountID in
+                            path.append(PersonRoute(person: person, sourceAccountID: accountID))
+                        },
+                        stackDepth: detailStackDepth,
+                        heroTrailerResolver: makeHeroTrailerResolver(),
+                        initialSeasonID: item.seasonID,
+                        isDiscoveryItem: isDiscovery,
+                        seerConnected: seer.isConfigured,
+                        onRequest: { item in
+                            let outcome = await seer.request(item, actingUserID: activeSeerrUserID)
+                            return seerRequestResult(outcome, actingName: activeSeerrUserName)
+                        },
+                        requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
+                        onRequestSeasons: { item, seasons in
+                            let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
+                            return seerRequestResult(outcome, actingName: activeSeerrUserName)
+                        },
+                        requestActingName: activeSeerrUserName,
+                        confirmAdminRequest: confirmAdminRequest
+                    )
+                }
             }
             .onChange(of: pendingTitleRoute) { _, item in
                 guard isActiveTab, let item else { return }

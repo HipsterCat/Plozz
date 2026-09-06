@@ -4,6 +4,88 @@ import FeatureAuthCore
 import XCTest
 
 final class MediaShareAccountConfigurationServiceTests: XCTestCase {
+    func testReaddingShareUpdatesConfigurationWithoutChangingIdentityOrAddedDate() throws {
+        let store = try makeStore()
+        let service = MediaShareAccountConfigurationService(accountStore: store)
+        let first = try service.saveSMB(
+            host: "nas.local",
+            port: nil,
+            share: "Media",
+            username: "",
+            password: "",
+            displayName: "Media",
+            libraryConfiguration: MediaShareLibraryConfiguration(
+                name: "Media",
+                contentType: .automatic
+            )
+        )
+        let updated = try service.saveSMB(
+            host: "nas.local",
+            port: nil,
+            share: "Media",
+            username: "",
+            password: "",
+            displayName: "Family Movies",
+            libraryConfiguration: MediaShareLibraryConfiguration(
+                name: "Family Movies",
+                contentType: .movies,
+                isAnime: true
+            )
+        )
+
+        XCTAssertEqual(updated.account.id, first.account.id)
+        let persisted = try XCTUnwrap(store.loadAccounts().first)
+        XCTAssertEqual(persisted.addedAt, first.account.addedAt)
+        XCTAssertEqual(
+            persisted.credentialRevision,
+            first.account.credentialRevision,
+            "unchanged credentials must not rotate solely for library configuration"
+        )
+        XCTAssertEqual(
+            persisted.server.mediaShareLibraryConfiguration,
+            MediaShareLibraryConfiguration(
+                name: "Family Movies",
+                contentType: .movies,
+                isAnime: true
+            )
+        )
+    }
+
+    func testSyncedLibraryConfigurationPreservesLocalAuthorizationAndSelection() throws {
+        let store = try makeStore()
+        let service = MediaShareAccountConfigurationService(accountStore: store)
+        let prepared = try service.saveSMB(
+            host: "nas.local", port: nil, share: "Media",
+            username: "viewer", password: "local-password", displayName: "Media"
+        )
+        let original = try XCTUnwrap(store.loadAccounts().first)
+        let credential = try store.mediaShareCredential(for: original.id)
+        store.setActiveAccountIDs([])
+        var descriptor = SyncedAccountDescriptor(account: original)
+        descriptor.serverName = "Anime"
+        descriptor.mediaShareLibraryConfiguration = MediaShareLibraryConfiguration(
+            name: "Anime", contentType: .tvShows, isAnime: true
+        )
+        descriptor.candidateBaseURLs = [try XCTUnwrap(URL(string: "smb://peer-only/Other"))]
+
+        XCTAssertTrue(try store.updateMediaShareLibrary(from: descriptor))
+
+        var expected = original
+        expected.server.name = descriptor.serverName
+        expected.server.mediaShareLibraryConfiguration = descriptor.mediaShareLibraryConfiguration
+        let updated = try XCTUnwrap(store.loadAccounts().first)
+        XCTAssertEqual(updated, expected)
+        XCTAssertEqual(updated.id, prepared.account.id)
+        XCTAssertEqual(try store.mediaShareCredential(for: original.id), credential)
+        XCTAssertEqual(store.activeAccountIDs(), [])
+        XCTAssertFalse(try store.updateMediaShareLibrary(from: descriptor))
+        XCTAssertTrue(SyncedAccountDescriptor(account: updated).semanticallyEqualForSync(to: descriptor))
+
+        descriptor.id = "not-authorized-here"
+        XCTAssertFalse(try store.updateMediaShareLibrary(from: descriptor))
+        XCTAssertEqual(store.loadAccounts(), [expected])
+    }
+
     func testSaveFTPAndImplicitFTPSPersistExpectedSecurityMaterial() throws {
         let store = try makeStore()
         let service = MediaShareAccountConfigurationService(accountStore: store)

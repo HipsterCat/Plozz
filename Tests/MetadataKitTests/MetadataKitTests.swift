@@ -11,7 +11,8 @@ final class MetadataKitTests: XCTestCase {
         episode: Int? = nil,
         year: Int? = nil,
         genres: [String] = [],
-        providerIDs: [String: String] = [:]
+        providerIDs: [String: String] = [:],
+        allowsTitleBasedMetadataMatching: Bool = true
     ) -> MediaItem {
         MediaItem(
             id: "1",
@@ -22,7 +23,8 @@ final class MetadataKitTests: XCTestCase {
             episodeNumber: episode,
             productionYear: year,
             genres: genres,
-            providerIDs: providerIDs
+            providerIDs: providerIDs,
+            allowsTitleBasedMetadataMatching: allowsTitleBasedMetadataMatching
         )
     }
 
@@ -185,6 +187,27 @@ final class MetadataKitTests: XCTestCase {
         let q = MetadataQuery(item(kind: .movie, title: "Film", year: 1999, providerIDs: ["Tmdb": "603"]))
         XCTAssertFalse(q.isTV)
         XCTAssertEqual(q.year, 1999)
+    }
+
+    func testQuerySuppressesFuzzyTitleButPreservesExactIDs() {
+        let query = MetadataQuery(
+            item(
+                kind: .video,
+                title: "Birthday",
+                providerIDs: ["Tmdb": "603"],
+                allowsTitleBasedMetadataMatching: false
+            )
+        )
+
+        XCTAssertEqual(query.title, "")
+        XCTAssertEqual(query.providerIDs.providerID(.tmdb), "603")
+    }
+
+    func testFolderQueryNeverUsesItsTitleAsMetadataIdentity() {
+        XCTAssertEqual(
+            MetadataQuery(item(kind: .folder, title: "Avatar")).title,
+            ""
+        )
     }
 
     // MARK: - Cache keys

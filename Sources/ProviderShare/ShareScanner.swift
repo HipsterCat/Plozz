@@ -122,7 +122,8 @@ actor ShareScanner {
     private let concurrency: Int
     private let pacer: ShareScanPacer
     private let shareID: String
-    private let name: String
+    private var name: String
+    nonisolated let libraryConfiguration: MediaShareLibraryConfiguration?
     private var reporter: ShareScanReporter
     private var isRunning = false
     private var isInvalidated = false
@@ -136,6 +137,7 @@ actor ShareScanner {
 
     init(store: ShareCatalogStore, shareID: String = "", name: String = "",
          reporter: ShareScanReporter = .noop, concurrency: Int = 4,
+         libraryConfiguration: MediaShareLibraryConfiguration? = nil,
          makeLister: @escaping @Sendable () -> ScanLister) {
         self.init(
             store: store,
@@ -144,6 +146,7 @@ actor ShareScanner {
             reporter: reporter,
             concurrency: concurrency,
             pacer: ShareScanPacer(),
+            libraryConfiguration: libraryConfiguration,
             makeLister: makeLister
         )
     }
@@ -153,6 +156,7 @@ actor ShareScanner {
     init(store: ShareCatalogStore, shareID: String = "", name: String = "",
          reporter: ShareScanReporter = .noop, concurrency: Int = 4,
          pacer: ShareScanPacer,
+         libraryConfiguration: MediaShareLibraryConfiguration? = nil,
          makeLister: @escaping @Sendable () -> ScanLister) {
         self.store = store
         self.shareID = shareID
@@ -160,6 +164,7 @@ actor ShareScanner {
         self.reporter = reporter
         self.concurrency = max(1, concurrency)
         self.pacer = pacer
+        self.libraryConfiguration = libraryConfiguration
         self.makeLister = makeLister
     }
 
@@ -171,6 +176,10 @@ actor ShareScanner {
     func setReporter(_ reporter: ShareScanReporter) {
         self.reporter = reporter
         if isRunning { reporter.scanStarted(shareID, name) }
+    }
+
+    func setName(_ name: String) {
+        self.name = name
     }
 
     func invalidate() {
@@ -213,8 +222,10 @@ actor ShareScanner {
         // external re-enrichment (no `enrich_version`/`ShareEnricher` touch).
         let localInventoryCurrent = String(ShareMediaParser.localInventoryVersion)
         let localInventoryStored = await store.meta("local_inventory_version")
+        let configurationStored = await store.meta("library_configuration")
         let requiresCompleteRewalk = parserStored != parserCurrent
             || localInventoryStored != localInventoryCurrent
+            || configurationStored != classificationFingerprint
         if requiresCompleteRewalk {
             // A version bump changes what an unchanged directory listing means.
             // Invalidate the completed-mtime stamp so leaf directories cannot take
@@ -223,6 +234,7 @@ actor ShareScanner {
         }
         if parserStored == parserCurrent,
            localInventoryStored == localInventoryCurrent,
+           configurationStored == classificationFingerprint,
            let last = await store.meta("last_full_scan_at"),
            let ts = TimeInterval(last),
            Date().timeIntervalSince1970 - ts < minInterval {
@@ -295,13 +307,25 @@ actor ShareScanner {
         await store.activateScanGeneration(scanGeneration)
         let storedParserVersion = await store.meta("parser_version")
         let storedInventoryVersion = await store.meta("local_inventory_version")
+        let storedConfiguration = await store.meta("library_configuration")
+        let configurationChanged = storedConfiguration != classificationFingerprint
+        let externalContextChanged = configurationChanged
+            && (storedConfiguration != nil || libraryConfiguration != nil)
         let rulesChanged = storedParserVersion != String(ShareMediaParser.classifierVersion)
             || storedInventoryVersion != String(ShareMediaParser.localInventoryVersion)
+            || configurationChanged
+        // Snapshot the previous clean pass's incremental state before invalidating
+        // its promotion proof. The in-memory values remain safe for this walk,
+        // while readers immediately stop replacing folders until this pass also
+        // completes cleanly.
+        let storedDirectoryMTimes = rulesChanged ? [:] : await store.directoryModifiedSeconds()
+        let recordedDirectoryPaths = await store.recordedDirectoryPaths()
+        let directoriesWithRecordedFiles = await store.directoriesWithRecordedFiles()
+        await store.invalidateCompletedDirectoryState()
         if rulesChanged {
             // Manual scans must receive the same one-time full rewalk as the stale
             // scheduler. Old resume/frontier and completed-leaf stamps describe the
             // previous classifier and cannot safely skip directories under new rules.
-            await store.invalidateCompletedDirectoryState()
             await Self.clearResumeState(store: store, scanGeneration: scanGeneration)
         }
         let started = Date()
@@ -310,6 +334,51 @@ actor ShareScanner {
         guard !Task.isCancelled, !isInvalidated else {
             await finishScan(listers: [])
             return isInvalidated ? .invalidated : .cancelled(scanGeneration: scanGeneration)
+        }
+
+        if libraryConfiguration?.contentType == .personalVideos {
+            // Personal Videos use the live file tree directly. Do not walk the
+            // share or build movie/show assets, and retain any prior path aliases
+            // long enough to carry existing watch progress onto raw file ids.
+            // All provider read/enrichment paths are independently gated off for
+            // this configuration, so retained rows are never presented as media.
+            await Self.clearResumeState(store: store, scanGeneration: scanGeneration)
+            let now = String(Date().timeIntervalSince1970)
+            await store.setMeta("last_full_scan_at", now, scanGeneration: scanGeneration)
+            if deep {
+                await store.setMeta("last_deep_scan_at", now, scanGeneration: scanGeneration)
+            }
+            await store.setMeta(
+                "parser_version",
+                String(ShareMediaParser.classifierVersion),
+                scanGeneration: scanGeneration
+            )
+            await store.setMeta(
+                "local_inventory_version",
+                String(ShareMediaParser.localInventoryVersion),
+                scanGeneration: scanGeneration
+            )
+            let configurationApplied: Bool
+            if externalContextChanged {
+                configurationApplied = await store.resetExternalEnrichment(
+                    scanGeneration: scanGeneration
+                )
+            } else {
+                configurationApplied = true
+            }
+            if configurationApplied {
+                await store.setMeta(
+                    "library_configuration",
+                    classificationFingerprint,
+                    scanGeneration: scanGeneration
+                )
+                await store.setLibraryAnimeContext(false, scanGeneration: scanGeneration)
+            }
+            PlozzLog.boot(
+                "share.scan personal-videos live-tree-only elapsed=\(Int(Date().timeIntervalSince(started) * 1_000))ms"
+            )
+            await finishScan(listers: [])
+            return configurationApplied ? .completedClean : .completedPartial
         }
 
         // Pre-build the pool of independent listers (each its own SMB connection).
@@ -354,9 +423,6 @@ actor ShareScanner {
             await finishScan(listers: pool)
             return .invalidated
         }
-        // Incremental scan state: a directory whose mtime is unchanged since the
-        // last scan doesn't need listing. Loaded once for the whole walk.
-        let storedDirectoryMTimes = await store.directoryModifiedSeconds()
         // Directories known to CONTAIN a subdirectory, derived from the recorded
         // paths rather than queried per-child.
         //
@@ -372,7 +438,7 @@ actor ShareScanner {
         // deriving shape from those keys made its parent look childless and
         // therefore skippable — orphaning the child and pruning its media.
         let directoriesWithSubdirectories =
-            Self.parentPaths(of: await store.recordedDirectoryPaths())
+            Self.parentPaths(of: recordedDirectoryPaths)
         // Directories we have actually indexed files for. Being recorded in
         // `dir_state` only says a listing once succeeded, NOT that the subtree was
         // walked — a scan interrupted between recording a folder and reaching its
@@ -381,7 +447,6 @@ actor ShareScanner {
         // re-skips it on every later pass and its media stays invisible forever.
         // Requiring positive evidence makes the skip an assertion about content we
         // have, rather than an assumption from content we don't.
-        let directoriesWithRecordedFiles = await store.directoriesWithRecordedFiles()
         // Sidecar/artwork folders are re-listed on a DEEP pass only.
         //
         // They can't be skipped on mtime alone (an NFO edited in place doesn't
@@ -446,7 +511,14 @@ actor ShareScanner {
                     guard index < frontier.count, let lister = free.popLast() else { return }
                     let entry = frontier[index]
                     index += 1
-                    group.addTask { await Self.processDirectory(entry, using: lister) }
+                    let configuration = libraryConfiguration
+                    group.addTask {
+                        await Self.processDirectory(
+                            entry,
+                            using: lister,
+                            libraryConfiguration: configuration
+                        )
+                    }
                 }
                 // Fill the pool.
                 for _ in 0..<concurrency { spawnNext() }
@@ -536,6 +608,19 @@ actor ShareScanner {
                             scanID: scanID,
                             scanGeneration: scanGeneration
                         )
+                    }
+                    if !result.playablePaths.isEmpty {
+                        let persisted = await store.upsertPlayablePaths(
+                            result.playablePaths,
+                            scanID: scanID,
+                            scanGeneration: scanGeneration
+                        )
+                        if !persisted {
+                            // Without complete playable inventory, folder promotion
+                            // could hide an intentionally unclassified file. Treat
+                            // this pass as partial and retain the previous catalog.
+                            anyListingFailed = true
+                        }
                     }
                     if !result.sidecars.isEmpty {
                         await store.upsertSidecars(
@@ -664,17 +749,10 @@ actor ShareScanner {
             await store.pruneDirectoryStateNotSeen(
                 inScan: scanID, scanGeneration: scanGeneration
             )
-            // Only NOW is this scan's directory state safe to skip against: the
-            // pass completed, so every recorded directory had its full subtree
-            // walked. A partial pass's rows are never trusted.
-            await store.markDirectoryStateComplete(
-                scanID: scanID, scanGeneration: scanGeneration
-            )
             // Nothing arrived and nothing vanished: the reconciliation below can
-            // only reproduce what is already stored, so skip it. Directory state
-            // is still marked complete above, which is what keeps the next pass
-            // able to skip — the saving is the reconciliation, never the
-            // bookkeeping that makes incremental scanning work.
+            // only reproduce what is already stored, so skip it. Completion
+            // markers are still committed below; the saving is the reconciliation,
+            // never the bookkeeping that makes incremental scanning work.
             if rulesChanged {
                 unchangedPass = false
             } else {
@@ -699,6 +777,23 @@ actor ShareScanner {
                 // current; orphan cleanup is deferred to the next clean pass.
                 await store.materializeFilenameProviderIDs(scanGeneration: scanGeneration)
                 await store.resolveExtraOwners(scanGeneration: scanGeneration)
+                anyListingFailed = true
+            } else {
+                // Commit playable coverage only after asset/extra reconciliation
+                // and owner resolution. Folder projection requires this marker and
+                // directory completion to name the same clean scan.
+                let inventoryFinalized = await store.finalizePlayableInventory(
+                    inScan: scanID,
+                    scanGeneration: scanGeneration
+                )
+                if inventoryFinalized {
+                    await store.markDirectoryStateComplete(
+                        scanID: scanID,
+                        scanGeneration: scanGeneration
+                    )
+                } else {
+                    anyListingFailed = true
+                }
             }
         } else {
             // Partial walk: never prune/reconcile. Still refresh pure path-derived
@@ -740,6 +835,25 @@ actor ShareScanner {
             String(ShareMediaParser.localInventoryVersion),
             scanGeneration: scanGeneration
         )
+        let configurationApplied: Bool
+        if externalContextChanged {
+            configurationApplied = await store.resetExternalEnrichment(
+                scanGeneration: scanGeneration
+            )
+        } else {
+            configurationApplied = true
+        }
+        if configurationApplied {
+            await store.setMeta(
+                "library_configuration",
+                classificationFingerprint,
+                scanGeneration: scanGeneration
+            )
+            await store.setLibraryAnimeContext(
+                libraryConfiguration?.isAnime == true,
+                scanGeneration: scanGeneration
+            )
+        }
         // One-time reread after an NFO PARSER-RULE upgrade (root-gated episode fields,
         // strict date rejection): mark already-processed sidecars whose stored
         // parser_version predates the current parser as pending so the local enricher
@@ -804,6 +918,9 @@ actor ShareScanner {
         let lister: ScanLister
         let dir: String
         let subdirectories: [ScannedSubdirectory]
+        /// Every supported playable file observed in this successful listing,
+        /// including samples, extras, and files intentionally left unclassified.
+        let playablePaths: [String]
         let assets: [CatalogAsset]
         let extras: [CatalogExtraCandidate]
         let sidecars: [LocalSidecarCandidate]
@@ -821,7 +938,8 @@ actor ShareScanner {
     /// is flagged `ok: false` so the caller can skip the global prune.
     static func processDirectory(
         _ frontier: FrontierEntry,
-        using lister: ScanLister
+        using lister: ScanLister,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) async -> DirResult {
         let dir = frontier.relPath
         let entries: [RemoteFileEntry]
@@ -831,7 +949,8 @@ actor ShareScanner {
             entries = try await lister.list(dir)
         } catch {
             return DirResult(
-                lister: lister, dir: dir, subdirectories: [], assets: [], extras: [],
+                lister: lister, dir: dir, subdirectories: [], playablePaths: [],
+                assets: [], extras: [],
                 sidecars: [], artwork: [], ok: false,
                 failureCategory: ShareScanListFailureCategory(error)
             )
@@ -846,6 +965,7 @@ actor ShareScanner {
         }
 
         var subdirs: [ScannedSubdirectory] = []
+        var playablePaths: [String] = []
         var assets: [CatalogAsset] = []
         var extras: [CatalogExtraCandidate] = []
         var movieStemsLower: Set<String> = []
@@ -860,6 +980,9 @@ actor ShareScanner {
 
         for entry in entries {
             let childPath = dir.isEmpty ? entry.name : "\(dir)/\(entry.name)"
+            if entry.kind != .directory, ShareMediaParser.isVideoFile(entry.name) {
+                playablePaths.append(childPath)
+            }
             if entry.kind != .directory,
                ShareMediaParser.isVideoFile(entry.name),
                isSampleFile(entry.name),
@@ -870,7 +993,13 @@ actor ShareScanner {
                let suffix = ShareExtraDiscoveryPolicy.terminalSuffix(inFileName: entry.name) {
                 suffixVideos.append((entry, childPath, suffix))
             } else if entry.kind != .directory, ShareMediaParser.isVideoFile(entry.name) {
-                let parsed = asset(relPath: childPath, entry: entry)
+                guard let parsed = asset(
+                    relPath: childPath,
+                    entry: entry,
+                    libraryConfiguration: libraryConfiguration
+                ) else {
+                    continue
+                }
                 let stem = ShareExtraDiscoveryPolicy.stemIdentity(
                     ShareMediaParser.videoStem(entry.name)
                 )
@@ -964,7 +1093,8 @@ actor ShareScanner {
 
         let artwork = ShareArtworkInventoryPolicy.candidates(entries: entries, parentDir: dir)
         return DirResult(
-            lister: lister, dir: dir, subdirectories: subdirs, assets: assets,
+            lister: lister, dir: dir, subdirectories: subdirs,
+            playablePaths: playablePaths, assets: assets,
             extras: extras, sidecars: sidecars, artwork: artwork, ok: true
         )
     }
@@ -1023,6 +1153,7 @@ actor ShareScanner {
         }
         return DirResult(
             lister: lister, dir: dir, subdirectories: subdirectories,
+            playablePaths: extras.map(\.relPath),
             assets: [], extras: extras, sidecars: [], artwork: [], ok: true
         )
     }
@@ -1139,9 +1270,27 @@ actor ShareScanner {
     // MARK: - Parse one file into a catalog asset
 
     static func asset(relPath: String, entry: RemoteFileEntry) -> CatalogAsset {
+        asset(
+            relPath: relPath,
+            entry: entry,
+            libraryConfiguration: nil
+        )!
+    }
+
+    static func asset(
+        relPath: String,
+        entry: RemoteFileEntry,
+        libraryConfiguration: MediaShareLibraryConfiguration?
+    ) -> CatalogAsset? {
         let name = entry.name
         let explicitIDs = ShareMediaParser.embeddedProviderIDs(relPath: relPath)
-        switch ShareMediaParser.classify(relPath: relPath) {
+        guard let classification = ShareMediaParser.classify(
+            relPath: relPath,
+            configuration: libraryConfiguration
+        ) else {
+            return nil
+        }
+        switch classification {
         case .movie(let movie):
             let title = movie.title.isEmpty ? displayTitle(forFileName: name) : movie.title
             let g = ShareMediaParser.movieGrouping(relPath: relPath, parsedTitle: title, parsedYear: movie.year)
@@ -1160,7 +1309,10 @@ actor ShareScanner {
                 explicitProviderIDs: explicitIDs, metadataRoot: nil
             )
         case .episode(let ep):
-            let library: CatalogLibrary = isAnimePath(relPath) ? .anime : .tv
+            let anime = libraryConfiguration?.contentType == .tvShows
+                ? libraryConfiguration?.isAnime == true
+                : libraryConfiguration?.isAnime == true || isAnimePath(relPath)
+            let library: CatalogLibrary = anime ? .anime : .tv
             let fallback = "S\(ep.season)·E\(String(format: "%02d", ep.episode))"
             return CatalogAsset(
                 relPath: relPath, basename: name, size: entry.size ?? 0,
@@ -1170,7 +1322,11 @@ actor ShareScanner {
                 seriesKey: ShareCatalogID.seriesKey(fromTitle: ep.series, providerTag: ep.providerTag),
                 season: ep.season, episode: ep.episode,
                 movieKey: nil, movieTitleKey: nil,
-                explicitProviderIDs: explicitIDs, metadataRoot: seriesMetadataRoot(relPath: relPath)
+                explicitProviderIDs: explicitIDs,
+                metadataRoot: seriesMetadataRoot(
+                    relPath: relPath,
+                    libraryConfiguration: libraryConfiguration
+                )
             )
         }
     }
@@ -1180,13 +1336,25 @@ actor ShareScanner {
     /// names the series) — where a `tvshow.nfo` sidecar would live. `nil` when the
     /// folder tree doesn't prove a show folder (mirrors `authoritativeShowFolder`,
     /// so this stays consistent with which folder GROUPING already trusts).
-    static func seriesMetadataRoot(relPath: String) -> String? {
+    static func seriesMetadataRoot(
+        relPath: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
+    ) -> String? {
         let comps = relPath.split(separator: "/").map(String.init)
         guard comps.count > 1 else { return nil }
         let ancestors = Array(comps.dropLast())
-        guard let showFolder = ShareMediaParser.authoritativeShowFolder(fromAncestors: ancestors),
-              let idx = ancestors.lastIndex(of: showFolder) else { return nil }
-        return ancestors[0...idx].joined(separator: "/")
+        if let showFolder = ShareMediaParser.authoritativeShowFolder(fromAncestors: ancestors),
+           let idx = ancestors.lastIndex(of: showFolder) {
+            return ancestors[0...idx].joined(separator: "/")
+        }
+        guard libraryConfiguration?.contentType == .tvShows
+                || (libraryConfiguration?.contentType == .automatic
+                    && libraryConfiguration?.isAnime == true),
+              let first = ancestors.first,
+              !ShareMediaParser.isSeasonFolder(first) else {
+            return nil
+        }
+        return first
     }
 
     // MARK: - Heuristics
@@ -1204,6 +1372,14 @@ actor ShareScanner {
     static func isSampleFile(_ name: String) -> Bool {
         let stem = (name as NSString).deletingPathExtension.lowercased()
         return stem == "sample" || stem.hasSuffix("-sample") || stem.hasSuffix(".sample") || stem.hasSuffix(" sample")
+    }
+
+    private var classificationFingerprint: String {
+        guard let libraryConfiguration else { return "legacy" }
+        return [
+            libraryConfiguration.contentType.rawValue,
+            libraryConfiguration.isAnime ? "anime" : "standard",
+        ].joined(separator: ":")
     }
 
     private static func displayTitle(forFileName name: String) -> String {

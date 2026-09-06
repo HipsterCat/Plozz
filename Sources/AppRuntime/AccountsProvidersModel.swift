@@ -252,6 +252,22 @@ public final class AccountsProvidersModel {
         onActiveAccountsChanged(resolved, accounts)
     }
 
+    public func applySyncedMediaShareLibraries(_ descriptors: [SyncedAccountDescriptor]) {
+        let localShareIDs = Set(accounts.filter { $0.server.provider == .mediaShare }.map(\.id))
+        var updated = false
+        for descriptor in descriptors
+        where descriptor.provider == .mediaShare && localShareIDs.contains(descriptor.id) {
+            do {
+                if try accountStore.updateMediaShareLibrary(from: descriptor) {
+                    updated = true
+                }
+            } catch {
+                PlozzLog.sync.error("Could not apply synced share library \(descriptor.id): \(error)")
+            }
+        }
+        if updated { reloadAccounts() }
+    }
+
     /// Retries credentials whose launch-time Keychain read failed, without
     /// rebuilding accounts or providers during an interactive navigation path.
     @discardableResult

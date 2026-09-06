@@ -156,11 +156,20 @@ public struct MetadataQuery: Sendable, Hashable {
     public init(_ item: MediaItem) {
         let type = ContentClassifier.classify(item)
         let showTitle: String
-        switch item.kind {
-        case .season, .episode:
-            showTitle = item.parentTitle ?? item.title
-        default:
-            showTitle = item.title
+        if item.allowsTitleBasedMetadataMatching,
+           item.kind != .folder,
+           item.kind != .collection,
+           item.kind != .unknown {
+            switch item.kind {
+            case .season, .episode:
+                showTitle = item.parentTitle ?? item.title
+            default:
+                showTitle = item.title
+            }
+        } else {
+            // Keep explicit ids available for exact lookups, but make every
+            // provider's existing empty-title guard reject fuzzy matching.
+            showTitle = ""
         }
         // TV uses the series' air range, not an episode air date, so only movies
         // pass a year into title searches.

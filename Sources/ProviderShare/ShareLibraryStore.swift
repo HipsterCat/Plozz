@@ -27,10 +27,16 @@ actor ShareLibraryStore {
 
     private let browser: ShareTransportBrowser
     private let serverName: String
+    private let configuration: MediaShareLibraryConfiguration?
 
-    init(browser: ShareTransportBrowser, serverName: String) {
+    init(
+        browser: ShareTransportBrowser,
+        serverName: String,
+        configuration: MediaShareLibraryConfiguration? = nil
+    ) {
         self.browser = browser
         self.serverName = serverName
+        self.configuration = configuration
     }
 
     // MARK: - Libraries
@@ -62,7 +68,25 @@ actor ShareLibraryStore {
     /// `.folder` so the browse UI treats every entry as navigable/​playable by its
     /// own kind rather than forcing a movie/series split.
     func libraries() -> [MediaLibrary] {
-        [MediaLibrary(id: Self.rootLibraryID, title: serverName, kind: .folder)]
+        [Self.rootLibrary(serverName: serverName, configuration: configuration)]
+    }
+
+    static func rootLibrary(
+        serverName: String,
+        configuration: MediaShareLibraryConfiguration?
+    ) -> MediaLibrary {
+        let name = configuration?.name ?? serverName
+        let title = configuration?.contentType == .personalVideos
+            ? name
+            : "Browse Files — \(name)"
+        return MediaLibrary(
+            id: Self.rootLibraryID,
+            title: title,
+            kind: .folder,
+            synthesizedName: configuration?.contentType == .personalVideos
+                ? nil
+                : .browseFiles
+        )
     }
 
     // MARK: - Directory listing (lazy, one folder per call)
@@ -72,23 +96,74 @@ actor ShareLibraryStore {
     /// `.video` items, everything else (photos, docs, `.DS_Store`, …) is hidden.
     /// Folders sort first, then files, both case-insensitively by name.
     func entries(forContainerID id: String) async throws -> [MediaItem] {
+        try await loadEntries(forContainerID: id, sort: nil)
+    }
+
+    /// Paged file browsing needs filesystem-backed "Date Added" ordering before
+    /// entries are projected into catalog items (MediaItem intentionally carries
+    /// no provider date-added value). Other fields are ordered after projection
+    /// by ShareProvider, when enriched runtime/rating metadata is available.
+    func entries(
+        forContainerID id: String,
+        sort: CoreModels.SortDescriptor
+    ) async throws -> [MediaItem] {
+        try await loadEntries(forContainerID: id, sort: sort)
+    }
+
+    private func loadEntries(
+        forContainerID id: String,
+        sort: CoreModels.SortDescriptor?
+    ) async throws -> [MediaItem] {
         let relPath = Self.relativePath(forContainerID: id)
         guard let relPath else { return [] }
         let entries = try await browser.listDirectory(relPath)
 
-        var folders: [MediaItem] = []
-        var videos: [MediaItem] = []
+        var folders: [(item: MediaItem, addedAt: Date?)] = []
+        var videos: [(item: MediaItem, addedAt: Date?)] = []
         for entry in entries {
             let childPath = relPath.isEmpty ? entry.name : "\(relPath)/\(entry.name)"
+            let row: (item: MediaItem, addedAt: Date?)
             if entry.kind == .directory {
-                folders.append(folderItem(relPath: childPath, name: entry.name))
+                row = (
+                    folderItem(relPath: childPath, name: entry.name),
+                    entry.createdAt ?? entry.modifiedAt
+                )
+                folders.append(row)
             } else if ShareMediaParser.isVideoFile(entry.name) {
-                videos.append(videoItem(relPath: childPath, name: entry.name))
+                row = (
+                    videoItem(relPath: childPath, name: entry.name),
+                    entry.createdAt ?? entry.modifiedAt
+                )
+                videos.append(row)
             }
         }
-        folders.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-        videos.sort(by: Self.videoOrder)
-        return folders + videos
+        if sort?.field == .dateAdded, let sort {
+            folders.sort { Self.dateOrder($0, $1, direction: sort.direction) }
+            videos.sort { Self.dateOrder($0, $1, direction: sort.direction) }
+        } else {
+            folders.sort {
+                $0.item.title.localizedStandardCompare($1.item.title) == .orderedAscending
+            }
+            videos.sort { Self.videoOrder($0.item, $1.item) }
+        }
+        return (folders + videos).map(\.item)
+    }
+
+    private static func dateOrder(
+        _ lhs: (item: MediaItem, addedAt: Date?),
+        _ rhs: (item: MediaItem, addedAt: Date?),
+        direction: SortDirection
+    ) -> Bool {
+        switch (lhs.addedAt, rhs.addedAt) {
+        case let (left?, right?) where left != right:
+            return direction == .ascending ? left < right : left > right
+        case (nil, .some):
+            return false
+        case (.some, nil):
+            return true
+        default:
+            return lhs.item.title.localizedStandardCompare(rhs.item.title) == .orderedAscending
+        }
     }
 
     /// Total ordering for a folder's playable files. Episodes (those the parser
@@ -115,7 +190,7 @@ actor ShareLibraryStore {
     /// title is just the last path component (or the share name for the root).
     func item(id: String) -> MediaItem? {
         if id == Self.rootLibraryID {
-            return folderItem(relPath: "", name: serverName)
+            return folderItem(relPath: "", name: configuration?.name ?? serverName)
         }
         if id.hasPrefix("d:") {
             let relPath = String(id.dropFirst(2))
@@ -146,7 +221,12 @@ actor ShareLibraryStore {
 
     private func folderItem(relPath: String, name: String) -> MediaItem {
         let id = relPath.isEmpty ? Self.rootLibraryID : "d:\(relPath)"
-        return MediaItem(id: id, title: name, kind: .folder)
+        return MediaItem(
+            id: id,
+            title: name,
+            kind: .folder,
+            allowsTitleBasedMetadataMatching: false
+        )
     }
 
     private func videoItem(relPath: String, name: String) -> MediaItem {
@@ -157,7 +237,18 @@ actor ShareLibraryStore {
         // its folder) into a clean title + year + season/episode; a wrong guess
         // just falls back to the clean title on a neutral card.
         let id = "f:\(relPath)"
-        switch ShareMediaParser.classify(relPath: relPath) {
+        guard let classification = ShareMediaParser.classify(
+            relPath: relPath,
+            configuration: configuration
+        ) else {
+            return MediaItem(
+                id: id,
+                title: Self.displayTitle(forFileName: name),
+                kind: .video,
+                allowsTitleBasedMetadataMatching: false
+            )
+        }
+        switch classification {
         case .movie(let movie):
             return MediaItem(
                 id: id,

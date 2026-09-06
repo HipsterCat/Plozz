@@ -83,6 +83,7 @@ actor ShareCatalogStore {
     /// This avoids rematerializing every item after a process relaunch while never
     /// storing credentials or artwork paths in catalog metadata.
     private static let artworkReferenceContextMetaKey = "artwork_reference_context_v2"
+    static let libraryAnimeContextMetaKey = "library_anime_context"
     private var artworkAssociationMaterializationStats = ArtworkAssociationMaterializationStats(
         passes: 0,
         assetRowsLoaded: 0,
@@ -259,6 +260,11 @@ actor ShareCatalogStore {
             if index < assets.count { await Task.yield() }
         }
         reassociateArtwork(afterUpserting: assets)
+        _ = upsertPlayablePaths(
+            assets.map(\.relPath),
+            scanID: scanID,
+            scanGeneration: scanGeneration
+        )
         if slowestChunkMs >= 20 {
             PlozzLog.boot(
                 "share.catalog slow upsert files=\(assets.count) total=\(Int(Date().timeIntervalSince(started) * 1_000))ms maxChunk=\(slowestChunkMs)ms"
@@ -279,6 +285,11 @@ actor ShareCatalogStore {
         if !extraRepo.upsert(extras, scanID: scanID) {
             PlozzLog.boot("share.catalog extras upsert failed count=\(extras.count)")
         }
+        _ = upsertPlayablePaths(
+            extras.map(\.relPath),
+            scanID: scanID,
+            scanGeneration: scanGeneration
+        )
     }
 
     /// A partial pass never prunes, but may safely expose newly found extras whose
@@ -455,6 +466,62 @@ actor ShareCatalogStore {
         bindText(stmt, 1, key)
         guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
         return columnText(stmt, 0)
+    }
+
+    /// Persisted classification context for this configured share root.
+    ///
+    /// One catalog belongs to one account/root configuration, so this is the
+    /// store-side equivalent of a per-asset bit without duplicating the same value
+    /// on every row. Movie/TV classification remains in `assets.library`; anime is
+    /// an independent resolver hint and therefore works for `.movies` rows too.
+    func setLibraryAnimeContext(
+        _ isAnime: Bool,
+        scanGeneration: UUID? = nil
+    ) {
+        setMeta(
+            Self.libraryAnimeContextMetaKey,
+            isAnime ? "1" : "0",
+            scanGeneration: scanGeneration
+        )
+    }
+
+    func libraryAnimeContext() -> Bool {
+        meta(Self.libraryAnimeContextMetaKey) == "1"
+    }
+
+    /// Invalidates every externally resolved catalog projection after a library
+    /// configuration change, while preserving independently versioned local NFO,
+    /// filename, and artwork metadata.
+    ///
+    /// Deleting the flat `enrichment` rows makes all logical items immediately
+    /// pending at the current resolver version. Non-local normalized candidates
+    /// are removed with them so stale provider values cannot survive the next
+    /// replacement write. Local scheduling state remains intact.
+    @discardableResult
+    func resetExternalEnrichment(scanGeneration: UUID? = nil) -> Bool {
+        ensureOpen()
+        guard admits(scanGeneration), db != nil, exec("BEGIN IMMEDIATE;") else {
+            return false
+        }
+        let succeeded =
+            exec("DELETE FROM enrichment;")
+            && exec("""
+                DELETE FROM metadata_values
+                WHERE source NOT IN ('localNFO','filename','localArtwork');
+                """)
+            && exec("""
+                DELETE FROM metadata_enrichment_state
+                WHERE local_version IS NULL;
+                """)
+            && exec("""
+                UPDATE metadata_enrichment_state
+                SET external_version=NULL, external_attempts=0;
+                """)
+        guard succeeded, exec("COMMIT;") else {
+            _ = exec("ROLLBACK;")
+            return false
+        }
+        return true
     }
 
     private func admits(_ scanGeneration: UUID?) -> Bool {
@@ -2375,12 +2442,35 @@ actor ShareCatalogStore {
 
     /// Movie items for the Movies grid (paged, grouped, enrichment overlaid).
     func movies(offset: Int, limit: Int) -> [MediaItem] {
-        ensureOpen(); return readQueries.movies(offset: offset, limit: limit)
+        ensureOpen()
+        return readQueries.movies(offset: offset, limit: limit)
+    }
+
+    /// Movie items using the same sort descriptor advertised by `ShareProvider`.
+    func movies(
+        offset: Int,
+        limit: Int,
+        sort: CoreModels.SortDescriptor
+    ) async -> [MediaItem] {
+        ensureOpen()
+        return readQueries.movies(offset: offset, limit: limit, sort: sort)
     }
 
     /// Distinct series items for a TV/Anime library, alphabetical (paged).
     func series(in library: CatalogLibrary, offset: Int, limit: Int) -> [MediaItem] {
-        ensureOpen(); return readQueries.series(in: library, offset: offset, limit: limit)
+        ensureOpen()
+        return readQueries.series(in: library, offset: offset, limit: limit)
+    }
+
+    /// Distinct series using the same sort descriptor advertised by `ShareProvider`.
+    func series(
+        in library: CatalogLibrary,
+        offset: Int,
+        limit: Int,
+        sort: CoreModels.SortDescriptor
+    ) async -> [MediaItem] {
+        ensureOpen()
+        return readQueries.series(in: library, offset: offset, limit: limit, sort: sort)
     }
 
     /// Exact number of distinct logical movies (for the grid's `totalCount`).
@@ -2449,6 +2539,17 @@ actor ShareCatalogStore {
     /// Whether a legacy/raw `f:` id still has a live catalog row.
     func containsFileAsset(id: String) -> Bool {
         ensureOpen(); return readQueries.containsFileAsset(id: id)
+    }
+
+    /// Catalog-backed projection of a live raw-directory listing. The helper
+    /// batches path evidence reads and remains conservative about replacing
+    /// physical folders with logical catalog containers.
+    func browseItems(_ items: [MediaItem]) async -> [MediaItem] {
+        ensureOpen()
+        return ShareCatalogBrowseProjection(connection: connection).project(
+            items,
+            resolve: { readQueries.item(id: $0) }
+        )
     }
 
     func extras(ownerID: String) async -> [MediaExtra] {
@@ -2668,9 +2769,11 @@ extension ShareCatalogStore {
     }
 
     static let completedDirectoryStateScanKey = "dir_state_complete_scan"
+    static let completedPlayableInventoryScanKey = "playable_inventory_complete_scan"
 
     func invalidateCompletedDirectoryState() {
         setMeta(Self.completedDirectoryStateScanKey, "")
+        setMeta(Self.completedPlayableInventoryScanKey, "")
     }
 
     /// Mark this scan's directory state as trustworthy. Called only after a clean,
@@ -2678,6 +2781,113 @@ extension ShareCatalogStore {
     /// have had its whole subtree walked.
     func markDirectoryStateComplete(scanID: Int64, scanGeneration: UUID? = nil) {
         setMeta(Self.completedDirectoryStateScanKey, String(scanID), scanGeneration: scanGeneration)
+    }
+
+    /// Records every playable file observed by the scanner, including files that
+    /// configuration or conservative parsing intentionally excludes from `assets`.
+    ///
+    /// `assets` and `extras` call this automatically for their own paths. Scanner
+    /// callers must additionally pass unmatched/sample paths from each successful
+    /// directory listing so folder projection can detect hidden content.
+    @discardableResult
+    func upsertPlayablePaths(
+        _ relPaths: [String],
+        scanID: Int64,
+        scanGeneration: UUID? = nil
+    ) -> Bool {
+        ensureOpen()
+        guard admits(scanGeneration), db != nil else { return false }
+        guard !relPaths.isEmpty else { return true }
+        guard exec("BEGIN IMMEDIATE;") else { return false }
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, """
+        INSERT INTO playable_inventory(rel_path, parent_dir, last_scan)
+        VALUES(?,?,?)
+        ON CONFLICT(rel_path) DO UPDATE SET
+          parent_dir=excluded.parent_dir,
+          last_scan=excluded.last_scan;
+        """, -1, &stmt, nil) == SQLITE_OK, let stmt else {
+            _ = exec("ROLLBACK;")
+            return false
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var succeeded = true
+        for relPath in Set(relPaths) {
+            guard admits(scanGeneration) else {
+                succeeded = false
+                break
+            }
+            sqlite3_reset(stmt)
+            sqlite3_clear_bindings(stmt)
+            bindText(stmt, 1, relPath)
+            let parentDir = relPath.lastIndex(of: "/").map {
+                String(relPath[..<$0])
+            } ?? ""
+            bindText(stmt, 2, parentDir)
+            sqlite3_bind_int64(stmt, 3, scanID)
+            if sqlite3_step(stmt) != SQLITE_DONE {
+                succeeded = false
+                break
+            }
+        }
+        guard succeeded, exec("COMMIT;") else {
+            _ = exec("ROLLBACK;")
+            return false
+        }
+        return true
+    }
+
+    /// Commits one clean playable-inventory snapshot. Scanner must call this only
+    /// after every successful directory result has emitted all playable paths.
+    /// A failed/partial scan leaves the previous marker untouched, while changed
+    /// directory stamps stop those folders from projecting against stale proof.
+    @discardableResult
+    func finalizePlayableInventory(
+        inScan scanID: Int64,
+        scanGeneration: UUID? = nil
+    ) -> Bool {
+        ensureOpen()
+        guard admits(scanGeneration), db != nil, exec("BEGIN IMMEDIATE;") else {
+            return false
+        }
+        var prune: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "DELETE FROM playable_inventory WHERE last_scan <> ?;",
+            -1,
+            &prune,
+            nil
+        ) == SQLITE_OK, let prune else {
+            _ = exec("ROLLBACK;")
+            return false
+        }
+        sqlite3_bind_int64(prune, 1, scanID)
+        let pruned = sqlite3_step(prune) == SQLITE_DONE
+        sqlite3_finalize(prune)
+
+        var marker: OpaquePointer?
+        guard pruned,
+              sqlite3_prepare_v2(db, """
+              INSERT INTO meta(key,value) VALUES(?,?)
+              ON CONFLICT(key) DO UPDATE SET value=excluded.value;
+              """, -1, &marker, nil) == SQLITE_OK,
+              let marker
+        else {
+            _ = exec("ROLLBACK;")
+            return false
+        }
+        bindText(marker, 1, Self.completedPlayableInventoryScanKey)
+        bindText(marker, 2, String(scanID))
+        let marked = sqlite3_step(marker) == SQLITE_DONE
+        sqlite3_finalize(marker)
+
+        guard marked, exec("COMMIT;") else {
+            _ = exec("ROLLBACK;")
+            return false
+        }
+        return true
     }
 
     /// The subdirectories of `relPath` recorded by an earlier scan.
@@ -2802,6 +3012,10 @@ extension ShareCatalogStore {
             )
         }
         stampScan(
+            "UPDATE playable_inventory SET last_scan=? WHERE parent_dir IN (SELECT rel_path FROM skipped_dirs);",
+            scanID: scanID
+        )
+        stampScan(
             "UPDATE dir_state SET last_scan=? WHERE rel_path IN (SELECT rel_path FROM skipped_dirs);",
             scanID: scanID
         )
@@ -2851,7 +3065,7 @@ extension ShareCatalogStore {
         guard admits(scanGeneration), db != nil else { return }
         // Every table pruned by `last_scan`, kept together so a future scan-scoped
         // table can't be forgotten here (which would delete its rows).
-        for table in ["assets", "extras", "local_metadata_files", "local_artwork_files"] {
+        for table in ["assets", "extras", "local_metadata_files", "local_artwork_files", "playable_inventory"] {
             touchDirectChildren(table: table, relPath: relPath, scanID: scanID)
         }
         var stmt: OpaquePointer?

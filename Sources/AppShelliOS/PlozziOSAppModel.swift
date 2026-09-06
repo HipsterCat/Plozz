@@ -196,7 +196,8 @@ final class PlozziOSAppModel {
                 expected += 1
                 let server = MediaServer(id: desc.serverID, name: desc.serverName, baseURL: baseURL,
                                          provider: .mediaShare,
-                                         connectionURLs: desc.candidateBaseURLs.isEmpty ? nil : desc.candidateBaseURLs)
+                                         connectionURLs: desc.candidateBaseURLs.isEmpty ? nil : desc.candidateBaseURLs,
+                                         mediaShareLibraryConfiguration: desc.mediaShareLibraryConfiguration)
                 let account = Account(id: desc.id, server: server, userID: desc.userID, userName: desc.userName,
                                       avatarURL: desc.avatarURL, deviceID: accountStore.deviceID())
                 do {
@@ -2350,7 +2351,8 @@ final class PlozziOSAppModel {
         port: Int?,
         exportPath: String,
         subpath: String = "",
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveNFS(
@@ -2358,7 +2360,8 @@ final class PlozziOSAppModel {
                 port: port,
                 exportPath: exportPath,
                 subpath: subpath,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2379,7 +2382,8 @@ final class PlozziOSAppModel {
         username: String,
         password: String,
         displayName: String,
-        subpath: String = ""
+        subpath: String = "",
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveSMB(
@@ -2389,7 +2393,8 @@ final class PlozziOSAppModel {
                 username: username,
                 password: password,
                 displayName: displayName,
-                subpath: subpath
+                subpath: subpath,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2407,14 +2412,16 @@ final class PlozziOSAppModel {
         baseURL: URL,
         auth: MediaShareWebDAVAuth,
         trustPin: SHA256Fingerprint?,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveWebDAV(
                 baseURL: baseURL,
                 auth: auth,
                 trustPin: trustPin,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2435,7 +2442,8 @@ final class PlozziOSAppModel {
         username: String,
         password: String,
         hostKeyPin: SHA256Fingerprint,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveSFTP(
@@ -2445,7 +2453,8 @@ final class PlozziOSAppModel {
                 username: username,
                 password: password,
                 hostKeyPin: hostKeyPin,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2462,13 +2471,15 @@ final class PlozziOSAppModel {
     func addFTPShare(
         baseURL: URL,
         auth: MediaShareFTPAuth,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveFTP(
                 baseURL: baseURL,
                 auth: auth,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()

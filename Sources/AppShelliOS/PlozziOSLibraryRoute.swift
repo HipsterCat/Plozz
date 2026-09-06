@@ -26,6 +26,7 @@ struct PlozziOSLibraryRoute: Hashable, Identifiable {
     var containerID: String
     var containerKind: MediaItemKind
     var accountID: String?
+    var synthesizedName: MediaLibrary.SynthesizedName?
 
     /// Stable across the value's lifetime so it can also drive a
     /// `navigationDestination(item:)` push (the screenshot router's path). The
@@ -37,6 +38,7 @@ struct PlozziOSLibraryRoute: Hashable, Identifiable {
         self.containerID = library.id
         self.containerKind = library.kind
         self.accountID = accountID
+        self.synthesizedName = library.synthesizedName
     }
 }
 
@@ -47,13 +49,25 @@ struct PlozziOSLibraryRoute: Hashable, Identifiable {
 /// `navigationDestination(item:)`) build the identical page rather than two
 /// copies that could drift.
 struct PlozziOSLibraryDestinationView: View {
+    @Environment(\.locale) private var locale
     let appModel: PlozziOSAppModel
     let route: PlozziOSLibraryRoute
 
+    private var provider: (any MediaProvider)? {
+        if let accountID = route.accountID {
+            return appModel.accountsProviders.provider(forAccountID: accountID)
+        }
+        return appModel.accountsProviders.primaryProvider
+    }
+
+    private var title: String {
+        guard var resource = route.synthesizedName?.title else { return route.title }
+        resource.locale = locale
+        return String(localized: resource)
+    }
+
     var body: some View {
-        if let provider = route.accountID.flatMap({
-            appModel.accountsProviders.provider(forAccountID: $0)
-        }) ?? appModel.accountsProviders.primaryProvider {
+        if let provider {
             PlozziOSLibraryGridView(
                 viewModel: LibraryBrowseViewModel(
                     provider: provider,
@@ -61,7 +75,7 @@ struct PlozziOSLibraryDestinationView: View {
                     containerKind: route.containerKind,
                     sourceAccountID: route.accountID
                 ),
-                title: route.title,
+                title: title,
                 provider: provider,
                 settings: appModel.settings,
                 scanStatus: appModel.shareScanStatus

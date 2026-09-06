@@ -305,19 +305,63 @@ struct CatalogReadQueries {
     /// representative file id (`f:<MIN(rel_path)>`), which already carries art —
     /// so grouping never blanks a card.
     func movies(offset: Int, limit: Int) -> [MediaItem] {
+        movies(offset: offset, limit: limit, sort: .default)
+    }
+
+    func movies(
+        offset: Int,
+        limit: Int,
+        sort: CoreModels.SortDescriptor
+    ) -> [MediaItem] {
         guard db != nil else { return [] }
         var rows: [(item: MediaItem, enrichmentID: String, record: EnrichmentRecord?)] = []
+        let order = catalogOrderClause(sort: sort)
         query("""
         SELECT g.logical_id, g.title, g.year, g.rep_id,
                e.provider_ids_json, e.overview, e.genres_json, e.runtime,
-               e.poster_url, e.backdrop_url, e.logo_url, e.title, \(joinedCastColumn)
+               e.poster_url, e.backdrop_url, e.logo_url, e.title, \(joinedCastColumn),
+               COALESCE(
+                 CASE WHEN json_valid(sv.value_json) THEN json_extract(sv.value_json, '$') END,
+                 g.gsort
+               ) AS catalog_sort_name,
+               g.date_added AS catalog_date_added,
+               CASE
+                 WHEN json_valid(pd.value_json)
+                   THEN json_extract(pd.value_json, '$')
+                 WHEN json_valid(py.value_json)
+                   THEN printf('%04d', CAST(json_extract(py.value_json, '$') AS INTEGER))
+                 WHEN g.year IS NOT NULL
+                   THEN printf('%04d', g.year)
+               END AS catalog_release_date,
+               (
+                 SELECT
+                   CAST(json_extract(j.value, '$.value') AS REAL)
+                   / NULLIF(CAST(COALESCE(json_extract(j.value, '$.max'), 10) AS REAL), 0)
+                 FROM json_each(
+                   CASE WHEN json_valid(cr.value_json) THEN cr.value_json ELSE '[]' END
+                 ) j
+                 WHERE j.type='object'
+                   AND json_type(j.value, '$.value') IN ('integer', 'real')
+                   AND CAST(json_extract(j.value, '$.value') AS REAL) >= 0
+                 ORDER BY COALESCE(json_extract(j.value, '$.isDefault'), 0) DESC, j.key
+                 LIMIT 1
+               ) AS catalog_community_rating,
+               COALESCE(
+                 CASE WHEN json_valid(rt.value_json)
+                   THEN CAST(json_extract(rt.value_json, '$') AS REAL) END,
+                 e.runtime
+               ) AS catalog_runtime,
+               \(stableRandomOrderExpression("g.logical_id")) AS catalog_random,
+               g.title AS catalog_display_title,
+               g.logical_id AS catalog_stable_id
         FROM (
           SELECT
             CASE WHEN MIN(COALESCE(movie_group_key, movie_key)) IS NOT NULL
                  THEN 'movie:' || MIN(COALESCE(movie_group_key, movie_key))
                  ELSE 'f:' || MIN(rel_path) END AS logical_id,
             'f:' || MIN(rel_path) AS rep_id,
-            MIN(title) AS title, MAX(year) AS year, MIN(sort_title) AS gsort
+            MIN(title) AS title, MAX(year) AS year, MIN(sort_title) AS gsort,
+            MIN(first_seen_at) AS date_added
           FROM assets WHERE library='movies' AND kind='movie'
           GROUP BY COALESCE(movie_group_key, movie_key, rel_path)
         ) g
@@ -328,7 +372,15 @@ struct CatalogReadQueries {
         -- is never mutated (it stays the scanner's own fallback).
         LEFT JOIN metadata_values sv
           ON sv.item_id = g.rep_id AND sv.field = 'sortTitle' AND sv.source = 'localNFO'
-        ORDER BY COALESCE(CASE WHEN json_valid(sv.value_json) THEN json_extract(sv.value_json, '$') END, g.gsort), g.title, g.logical_id
+        LEFT JOIN metadata_values pd
+          ON pd.item_id = g.rep_id AND pd.field = 'premiereDate' AND pd.source = 'localNFO'
+        LEFT JOIN metadata_values py
+          ON py.item_id = g.rep_id AND py.field = 'productionYear' AND py.source = 'localNFO'
+        LEFT JOIN metadata_values cr
+          ON cr.item_id = g.rep_id AND cr.field = 'ratings' AND cr.source = 'localNFO'
+        LEFT JOIN metadata_values rt
+          ON rt.item_id = g.rep_id AND rt.field = 'runtime' AND rt.source = 'localNFO'
+        ORDER BY \(order)
         LIMIT ? OFFSET ?;
         """, bind: { sqlite3_bind_int64($0, 1, Int64(limit)); sqlite3_bind_int64($0, 2, Int64(offset)) }) { stmt in
             let item = MediaItem(
@@ -364,22 +416,76 @@ struct CatalogReadQueries {
 
     /// Distinct series items for a TV/Anime library, alphabetical.
     func series(in library: CatalogLibrary, offset: Int, limit: Int) -> [MediaItem] {
+        series(in: library, offset: offset, limit: limit, sort: .default)
+    }
+
+    func series(
+        in library: CatalogLibrary,
+        offset: Int,
+        limit: Int,
+        sort: CoreModels.SortDescriptor
+    ) -> [MediaItem] {
         guard db != nil, library != .movies else { return [] }
         var rows: [(item: MediaItem, enrichmentID: String, record: EnrichmentRecord?)] = []
-        // LEFT JOIN enrichment (keyed "series:<series_key>") into the grouped query so
-        // a page is one query, not 1 + N per-row enrichment lookups. The GROUP BY is
-        // over series_key, which the JOIN is 1:1 with.
+        let order = catalogOrderClause(sort: sort)
         query("""
-        SELECT a.series_key, MIN(a.series_title), MAX(a.year), MIN(a.sort_title) AS s,
+        WITH grouped AS (
+          SELECT series_key, MIN(series_title) AS title, MAX(year) AS year,
+                 MIN(sort_title) AS sort_name, MIN(first_seen_at) AS date_added
+          FROM assets
+          WHERE library=? AND kind='episode' AND series_key IS NOT NULL
+          GROUP BY series_key
+        )
+        SELECT g.series_key, g.title, g.year, g.sort_name,
                e.provider_ids_json, e.overview, e.genres_json, e.runtime,
-               e.poster_url, e.backdrop_url, e.logo_url, e.title, \(joinedCastColumn)
-        FROM assets a
-        LEFT JOIN enrichment e ON e.item_id = 'series:' || a.series_key
+               e.poster_url, e.backdrop_url, e.logo_url, e.title, \(joinedCastColumn),
+               COALESCE(
+                 CASE WHEN json_valid(sv.value_json) THEN json_extract(sv.value_json, '$') END,
+                 g.sort_name
+               ) AS catalog_sort_name,
+               g.date_added AS catalog_date_added,
+               CASE
+                 WHEN json_valid(pd.value_json)
+                   THEN json_extract(pd.value_json, '$')
+                 WHEN json_valid(py.value_json)
+                   THEN printf('%04d', CAST(json_extract(py.value_json, '$') AS INTEGER))
+                 WHEN g.year IS NOT NULL
+                   THEN printf('%04d', g.year)
+               END AS catalog_release_date,
+               (
+                 SELECT
+                   CAST(json_extract(j.value, '$.value') AS REAL)
+                   / NULLIF(CAST(COALESCE(json_extract(j.value, '$.max'), 10) AS REAL), 0)
+                 FROM json_each(
+                   CASE WHEN json_valid(cr.value_json) THEN cr.value_json ELSE '[]' END
+                 ) j
+                 WHERE j.type='object'
+                   AND json_type(j.value, '$.value') IN ('integer', 'real')
+                   AND CAST(json_extract(j.value, '$.value') AS REAL) >= 0
+                 ORDER BY COALESCE(json_extract(j.value, '$.isDefault'), 0) DESC, j.key
+                 LIMIT 1
+               ) AS catalog_community_rating,
+               COALESCE(
+                 CASE WHEN json_valid(rt.value_json)
+                   THEN CAST(json_extract(rt.value_json, '$') AS REAL) END,
+                 e.runtime
+               ) AS catalog_runtime,
+               \(stableRandomOrderExpression("g.series_key")) AS catalog_random,
+               g.title AS catalog_display_title,
+               'series:' || g.series_key AS catalog_stable_id
+        FROM grouped g
+        LEFT JOIN enrichment e ON e.item_id = 'series:' || g.series_key
         LEFT JOIN metadata_values sv
-          ON sv.item_id = 'series:' || a.series_key AND sv.field = 'sortTitle' AND sv.source = 'localNFO'
-        WHERE a.library=? AND a.kind='episode' AND a.series_key IS NOT NULL
-        GROUP BY a.series_key
-        ORDER BY COALESCE(CASE WHEN json_valid(MIN(sv.value_json)) THEN json_extract(MIN(sv.value_json), '$') END, s), a.series_key
+          ON sv.item_id = 'series:' || g.series_key AND sv.field = 'sortTitle' AND sv.source = 'localNFO'
+        LEFT JOIN metadata_values pd
+          ON pd.item_id = 'series:' || g.series_key AND pd.field = 'premiereDate' AND pd.source = 'localNFO'
+        LEFT JOIN metadata_values py
+          ON py.item_id = 'series:' || g.series_key AND py.field = 'productionYear' AND py.source = 'localNFO'
+        LEFT JOIN metadata_values cr
+          ON cr.item_id = 'series:' || g.series_key AND cr.field = 'ratings' AND cr.source = 'localNFO'
+        LEFT JOIN metadata_values rt
+          ON rt.item_id = 'series:' || g.series_key AND rt.field = 'runtime' AND rt.source = 'localNFO'
+        ORDER BY \(order)
         LIMIT ? OFFSET ?;
         """, bind: {
             self.bindText($0, 1, library.rawValue)
@@ -400,6 +506,42 @@ struct CatalogReadQueries {
         return withLocalOverlay(rows.map { row in
             hydrated[row.enrichmentID].map { ShareCatalogReadProjection.applyEnrichment(row.item, $0) } ?? row.item
         })
+    }
+
+    /// SQL order shared by movie and series grid queries. Unknown values always
+    /// sink, independent of direction, and every order ends with deterministic
+    /// name/id tie-breakers so LIMIT/OFFSET cannot duplicate or skip rows.
+    private func catalogOrderClause(sort: CoreModels.SortDescriptor) -> String {
+        let direction = sort.direction == .ascending ? "ASC" : "DESC"
+        switch sort.field {
+        case .name:
+            return "catalog_sort_name IS NULL, catalog_sort_name \(direction), catalog_display_title \(direction), catalog_stable_id ASC"
+        case .dateAdded:
+            return "catalog_date_added IS NULL, catalog_date_added \(direction), catalog_sort_name ASC, catalog_stable_id ASC"
+        case .releaseDate:
+            return "catalog_release_date IS NULL, catalog_release_date \(direction), catalog_sort_name ASC, catalog_stable_id ASC"
+        case .communityRating:
+            return "catalog_community_rating IS NULL, catalog_community_rating \(direction), catalog_sort_name ASC, catalog_stable_id ASC"
+        case .runtime:
+            return "catalog_runtime IS NULL, catalog_runtime \(direction), catalog_sort_name ASC, catalog_stable_id ASC"
+        case .random:
+            return "catalog_random \(direction), catalog_stable_id ASC"
+        }
+    }
+
+    /// Deterministic local shuffle key. SQLite's `random()` would reorder between
+    /// page requests and make LIMIT/OFFSET skip or duplicate cards.
+    private func stableRandomOrderExpression(_ id: String) -> String {
+        """
+        printf(
+          '%016x',
+          abs(
+            length(\(id)) * 1103515245
+            + COALESCE(unicode(substr(\(id), -1, 1)), 0) * 12345
+            + COALESCE(unicode(substr(\(id), (length(\(id)) + 1) / 2, 1)), 0) * 2654435761
+          )
+        )
+        """
     }
 
     /// Exact number of movies in the Movies library, for the grid's `totalCount`

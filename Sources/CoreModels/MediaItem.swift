@@ -252,6 +252,12 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// External database identifiers (e.g. `["Imdb": "tt0111161", "Tmdb": "278"]`),
     /// used by enrichment services to look up additional ratings/metadata.
     public var providerIDs: [String: String]
+    /// Whether metadata services may identify this item by a fuzzy title search.
+    ///
+    /// Exact provider-id lookups remain allowed. Direct-share folders and
+    /// Personal Videos disable title matching so a folder or home video cannot
+    /// silently acquire a similarly named film/show's artwork and metadata.
+    public var allowsTitleBasedMetadataMatching: Bool
     /// Field-level origin and optional attribution URL for metadata values.
     public var metadataProvenance: MetadataProvenance
     /// Presentation-aware artwork references. Direct-share local artwork lives here
@@ -447,6 +453,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         logoURL: URL? = nil,
         ratings: [ExternalRating] = [],
         providerIDs: [String: String] = [:],
+        allowsTitleBasedMetadataMatching: Bool = true,
         metadataProvenance: MetadataProvenance = MetadataProvenance(),
         artworkSelections: [ArtworkSelection] = [],
         availability: MediaAvailabilityStatus? = nil,
@@ -504,6 +511,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.logoURL = logoURL
         self.ratings = ratings
         self.providerIDs = providerIDs
+        self.allowsTitleBasedMetadataMatching = allowsTitleBasedMetadataMatching
         self.metadataProvenance = metadataProvenance
         self.artworkSelections = artworkSelections
         self.availability = availability
@@ -545,6 +553,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         case seriesID, seasonID, runtime, resumePosition, playedPercentage, isPlayed, hasBeenPlayed
         case posterURL, seriesPosterURL, backdropURL, heroBackdropURL
         case fallbackArtworkURL, logoURL, ratings, providerIDs, metadataProvenance
+        case allowsTitleBasedMetadataMatching
         case artworkSelections, mediaInfo
         case availability, locallyValidatedPlayableSource
         case downloadProgress
@@ -594,6 +603,10 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         logoURL = try container.decodeIfPresent(URL.self, forKey: .logoURL)
         ratings = try container.decodeIfPresent([ExternalRating].self, forKey: .ratings) ?? []
         providerIDs = try container.decodeIfPresent([String: String].self, forKey: .providerIDs) ?? [:]
+        allowsTitleBasedMetadataMatching = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .allowsTitleBasedMetadataMatching
+        ) ?? true
         // Home snapshots written before anime title-search validation may carry
         // the same poisoned ids as the durable alias ledger. Repair both stores:
         // cleaning only the ledger still leaves an offline/first-frame card able
@@ -1162,13 +1175,14 @@ public struct MediaLibrary: Codable, Hashable, Identifiable, Sendable {
     /// something to persist. The enum stores which library it is; the wording
     /// stays in the catalog and is resolved at render time.
     public enum SynthesizedName: String, Codable, Hashable, Sendable {
-        case movies, tvShows, anime, generic
+        case movies, tvShows, anime, browseFiles, generic
 
         public var title: LocalizedStringResource {
             switch self {
             case .movies:  return "Movies"
             case .tvShows: return "TV Shows"
             case .anime:   return "Anime"
+            case .browseFiles: return "Browse Files"
             case .generic: return "Library"
             }
         }

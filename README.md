@@ -71,6 +71,10 @@ presents them as a single library rather than a set of tabs you switch between.
   second-tier afterthought bolted on later.
 - **Network shares too** — SMB, NFS, WebDAV, SFTP, and FTP. A bare folder of
   files becomes a real library with artwork, descriptions, ratings, and cast.
+  Browse folders as grids on both iOS and tvOS, with recognized movies and
+  shows opening their usual details, seasons, and episodes.
+  Choose movie, TV, mixed, or personal-video content, with a separate anime
+  option. Personal videos stay as files without movie or TV matching.
   (Shares are supported, but still the newest and roughest part.)
 - **One merged library** — connect several servers and see one set of rows
   instead of picking a server first.

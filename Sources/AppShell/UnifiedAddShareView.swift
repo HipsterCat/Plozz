@@ -28,7 +28,7 @@ struct UnifiedAddShareView: View {
         case proto, address, port, portChip(Int)
         case authToggle, username, password, token, connect
         case approve, reject
-        case location(String), manualShare, displayName, useFolder
+        case location(String), manualShare, displayName, contentType, anime, useFolder
         case comingSoonBack
     }
 
@@ -222,15 +222,6 @@ struct UnifiedAddShareView: View {
 
             credentialPanel
 
-            Panel(title: nil) {
-                LabeledFormRow("Nickname") {
-                    TextField("e.g. Living Room NAS", text: $viewModel.displayName)
-                        .autocorrectionDisabled()
-                        .focused($focus, equals: .displayName)
-                }
-            }
-            .focusSection()
-
             if let error = viewModel.connectError {
                 InlineErrorMessage(Text(error), systemImage: "exclamationmark.triangle")
             }
@@ -362,6 +353,7 @@ struct UnifiedAddShareView: View {
     private var locationStep: some View {
         Group {
             headerRow(title: Text(locationTitle), back: { viewModel.backToConnect() }) { EmptyView() }
+            libraryConfigurationPanel
             switch viewModel.locationLoad {
             case .idle, .loading:
                 Panel(title: Text("Locations")) { placeholder("Loading…") }
@@ -390,6 +382,73 @@ struct UnifiedAddShareView: View {
             case .loaded:
                 loadedLocations
             }
+        }
+    }
+
+    private var libraryConfigurationPanel: some View {
+        Panel(title: Text("Library")) {
+            VStack(alignment: .leading, spacing: 18) {
+                LabeledFormRow("Name") {
+                    TextField("e.g. Family Movies", text: $viewModel.displayName)
+                        .autocorrectionDisabled()
+                        .focused($focus, equals: .displayName)
+                }
+                LabeledFormRow("Content") {
+                    Menu {
+                        ForEach(MediaShareLibraryConfiguration.ContentType.allCases, id: \.self) { type in
+                            Button {
+                                viewModel.libraryContentType = type
+                                if type == .personalVideos {
+                                    viewModel.libraryIsAnime = false
+                                }
+                            } label: {
+                                if type == viewModel.libraryContentType {
+                                    Label { Text(libraryContentLabel(type)) } icon: {
+                                        Image(systemName: "checkmark")
+                                    }
+                                } else {
+                                    Text(libraryContentLabel(type))
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text(libraryContentLabel(viewModel.libraryContentType))
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.footnote)
+                                .plozzForeground(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .focused($focus, equals: .contentType)
+                }
+                if viewModel.libraryContentType != .personalVideos {
+                    Toggle(
+                        "Anime",
+                        isOn: Binding(
+                            get: { viewModel.libraryIsAnime },
+                            set: { viewModel.setLibraryIsAnime($0) }
+                        )
+                    )
+                    .focused($focus, equals: .anime)
+                }
+                Text("Content type controls scanning and matching. Personal Videos stay playable without movie or show matching. Re-adding the same location updates these settings without changing its library identity.")
+                    .font(.footnote)
+                    .plozzForeground(.secondary)
+            }
+        }
+        .focusSection()
+    }
+
+    private func libraryContentLabel(
+        _ type: MediaShareLibraryConfiguration.ContentType
+    ) -> LocalizedStringResource {
+        switch type {
+        case .automatic: "Mixed (Automatic)"
+        case .movies: "Movies"
+        case .tvShows: "TV Shows"
+        case .personalVideos: "Personal Videos"
         }
     }
 

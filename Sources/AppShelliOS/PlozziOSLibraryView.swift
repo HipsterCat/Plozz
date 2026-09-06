@@ -178,6 +178,7 @@ private struct PlozziOSLibraryCard: View {
 }
 
 struct PlozziOSLibraryGridView: View {
+    @Environment(PlozziOSAppModel.self) private var appModel
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.plozzMetrics) private var metrics
     /// Per-profile card presentation. Decides how far a grid card insets its
@@ -259,11 +260,39 @@ struct PlozziOSLibraryGridView: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if let library = viewModel.fileBrowserLibrary {
+                ToolbarItem(placement: .primaryAction) {
+                    NavigationLink(
+                        value: PlozziOSLibraryRoute(
+                            library: library,
+                            accountID: library.sourceAccountID ?? provider.session.server.id
+                        )
+                    ) {
+                        Label("Browse Files", systemImage: "folder")
+                    }
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 sortControl
             }
         }
         .task { await viewModel.loadFirstPageIfNeeded() }
+        .plozziOSLibraryDestination(appModel: appModel)
+        .background {
+            if viewModel.isMediaShare {
+                ShareCatalogRefreshObserver(
+                    shareID: viewModel.sourceServerID,
+                    status: scanStatus
+                ) {
+                    await viewModel.refreshAfterCatalogChange()
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .mediaItemDidMutate)) { note in
+            if let mutation = MediaItemMutation.from(note) {
+                viewModel.applyWatchedState(mutation)
+            }
+        }
     }
 
     /// Live scan/enrich progress for the media share backing THIS library, above
@@ -299,7 +328,7 @@ struct PlozziOSLibraryGridView: View {
     private var sortControl: some View {
         Menu {
             Picker("Sort By", selection: sortFieldBinding) {
-                ForEach(SortField.allCases, id: \.self) { field in
+                ForEach(viewModel.availableSortFields, id: \.self) { field in
                     Text(field.displayName).tag(field)
                 }
             }
@@ -360,17 +389,32 @@ private struct PlozziOSLibraryItemCell: View {
     var body: some View {
         Group {
             if let item = slot?.item {
-                NavigationLink {
-                    PlozziOSItemDetailView(
-                        appModel: appModel,
-                        provider: provider,
-                        item: item,
-                        originSourceAccountID: item.sourceAccountID
-                    )
-                } label: {
-                    card
+                if let library = MediaFolderNavigation.library(
+                    for: item,
+                    providerKind: provider.kind
+                ) {
+                    NavigationLink(
+                        value: PlozziOSLibraryRoute(
+                            library: library,
+                            accountID: library.sourceAccountID ?? provider.session.server.id
+                        )
+                    ) {
+                        card
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    NavigationLink {
+                        PlozziOSItemDetailView(
+                            appModel: appModel,
+                            provider: provider,
+                            item: item,
+                            originSourceAccountID: item.sourceAccountID
+                        )
+                    } label: {
+                        card
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             } else {
                 card
             }
@@ -380,9 +424,13 @@ private struct PlozziOSLibraryItemCell: View {
     }
 
     private var card: some View {
-        PlozziOSPosterCard(
-            item: slot?.item
-        )
+        Group {
+            if let item = slot?.item, item.kind == .folder {
+                MediaFolderCardLabel(title: item.title)
+            } else {
+                PlozziOSPosterCard(item: slot?.item)
+            }
+        }
     }
 }
 #endif

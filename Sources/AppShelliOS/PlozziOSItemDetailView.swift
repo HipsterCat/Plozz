@@ -62,7 +62,24 @@ struct PlozziOSItemDetailView: View {
 
     @ViewBuilder
     private var detailBody: some View {
-        if shouldResolveSeries {
+        if let library = MediaFolderNavigation.library(
+            for: item,
+            providerKind: provider.kind,
+            sourceAccountID: originSourceAccountID ?? item.sourceAccountID ?? provider.session.server.id
+        ) {
+            PlozziOSLibraryGridView(
+                viewModel: LibraryBrowseViewModel(
+                    provider: provider,
+                    containerID: library.id,
+                    containerKind: library.kind,
+                    sourceAccountID: library.sourceAccountID
+                ),
+                title: library.title,
+                provider: provider,
+                settings: appModel.settings,
+                scanStatus: appModel.shareScanStatus
+            )
+        } else if shouldResolveSeries {
             if let resolvedSeries {
                 canonicalDetail(for: resolvedSeries)
             } else if let resolutionError {

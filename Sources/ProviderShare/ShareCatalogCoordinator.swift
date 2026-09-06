@@ -11,6 +11,7 @@ public protocol ShareCatalogCoordinating: Sendable {
         accountKey: String,
         displayName: String,
         credentialRevision: CredentialRevision,
+        libraryConfiguration: MediaShareLibraryConfiguration?,
         sessionFactory: @escaping ShareTransportSessionFactory
     ) async -> any ShareCatalogReading
     func rescan(accountKey: String) async
@@ -247,12 +248,14 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         accountKey: String,
         displayName: String,
         credentialRevision: CredentialRevision,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil,
         sessionFactory: @escaping ShareTransportSessionFactory
     ) async -> any ShareCatalogReading {
         await store(
             accountKey: accountKey,
             displayName: displayName,
             credentialRevision: credentialRevision,
+            libraryConfiguration: libraryConfiguration,
             sessionFactory: sessionFactory
         )
     }
@@ -265,6 +268,7 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         accountKey: String,
         displayName: String,
         credentialRevision: CredentialRevision,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil,
         sessionFactory: @escaping ShareTransportSessionFactory
     ) async -> ShareCatalogStore {
         while true {
@@ -289,6 +293,32 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
                 accountID: accountKey,
                 credentialRevision: credentialRevision
             )
+            await runtime.scanner?.setName(displayName)
+
+            if let scanner = runtime.scanner,
+               (
+                   scanner.libraryConfiguration?.contentType
+                       != libraryConfiguration?.contentType
+                       || scanner.libraryConfiguration?.isAnime
+                       != libraryConfiguration?.isAnime
+               ) {
+                if libraryConfiguration?.contentType == .personalVideos {
+                    let staleLocalEnricher = runtime.localEnricher
+                    let staleArtworkProbeWorker = runtime.artworkProbeWorker
+                    runtime.localEnricher = nil
+                    runtime.artworkProbeWorker = nil
+                    runtime.enricher = nil
+                    await metadataScheduler.remove(accountKey: accountKey)
+                    await staleLocalEnricher?.close()
+                    await staleArtworkProbeWorker?.close()
+                }
+                await invalidateScanner(
+                    accountKey: accountKey,
+                    runtime: runtime,
+                    releaseRuntimeState: false
+                )
+                continue
+            }
 
             if let activeRevision = runtime.scannerRevision,
                activeRevision != credentialRevision {
@@ -331,12 +361,15 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
                 }
                 runtime.scanner = ShareScanner(
                     store: store, shareID: accountKey, name: displayName,
-                    reporter: reporter, pacer: runtime.pacer, makeLister: makeLister
+                    reporter: reporter, pacer: runtime.pacer,
+                    libraryConfiguration: libraryConfiguration,
+                    makeLister: makeLister
                 )
                 runtime.scannerID = UUID()
                 runtime.scannerRevision = credentialRevision
             }
-            if runtime.enricher == nil {
+            if runtime.enricher == nil,
+               libraryConfiguration?.contentType != .personalVideos {
                 // Pipeline construction is injected for deterministic lifecycle tests.
                 // The production factory preserves the existing TVDB-when-configured,
                 // keyless-otherwise selection and builds both workers.

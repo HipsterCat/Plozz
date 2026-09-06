@@ -14,7 +14,8 @@ final class TMDbRatingsProviderTests: XCTestCase {
         title: String = "The Bad Guys 2",
         parentTitle: String? = nil,
         year: Int? = nil,
-        providerIDs: [String: String] = [:]
+        providerIDs: [String: String] = [:],
+        allowsTitleBasedMetadataMatching: Bool = true
     ) -> MediaItem {
         MediaItem(
             id: "1",
@@ -22,7 +23,8 @@ final class TMDbRatingsProviderTests: XCTestCase {
             kind: kind,
             parentTitle: parentTitle,
             productionYear: year,
-            providerIDs: providerIDs
+            providerIDs: providerIDs,
+            allowsTitleBasedMetadataMatching: allowsTitleBasedMetadataMatching
         )
     }
 
@@ -117,6 +119,27 @@ final class TMDbRatingsProviderTests: XCTestCase {
 
     func testBlankTitleWithNoIDProducesNoLookup() {
         XCTAssertNil(TMDbRatingsProvider.lookup(for: item(kind: .movie, title: "   ")))
+    }
+
+    func testDisabledTitleMatchingStillAllowsExactIDOnly() {
+        XCTAssertNil(
+            TMDbRatingsProvider.lookup(
+                for: item(
+                    kind: .movie,
+                    allowsTitleBasedMetadataMatching: false
+                )
+            )
+        )
+        guard case let .id(id, _) = TMDbRatingsProvider.lookup(
+            for: item(
+                kind: .movie,
+                providerIDs: ["Tmdb": "27205"],
+                allowsTitleBasedMetadataMatching: false
+            )
+        ) else {
+            return XCTFail("an exact id should remain usable")
+        }
+        XCTAssertEqual(id, "27205")
     }
 
     func testYearParameterDiffersByKind() {
