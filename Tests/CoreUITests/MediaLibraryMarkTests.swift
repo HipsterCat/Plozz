@@ -3,6 +3,11 @@ import XCTest
 @testable import CoreUI
 
 #if canImport(SwiftUI)
+import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
+
 /// Covers which mark a card wears, because the decision is easy to get subtly
 /// wrong in the direction that matters most: the informational mark must survive
 /// Seerr being absent, which is the majority case and the reason it exists.
@@ -64,7 +69,7 @@ final class MediaLibraryMarkTests: XCTestCase {
                 subject.kind = kind
                 let mark = MediaLibraryMark.mark(for: subject, seerConnected: true)
                 XCTAssertEqual(mark, .requested)
-                XCTAssertEqual(mark?.systemImage, "clock.fill")
+                XCTAssertEqual(mark?.systemImage, "clock.circle.fill")
                 XCTAssertEqual(
                     MediaPlaybackIndicatorState(subject).libraryMark(seerConnected: true),
                     .requested
@@ -87,6 +92,45 @@ final class MediaLibraryMarkTests: XCTestCase {
         label.locale = Locale(identifier: "en")
         XCTAssertEqual(String(localized: label), "Not in your library — already requested")
     }
+
+    #if canImport(UIKit)
+    @MainActor
+    func testRequestedClockKeepsThePlusBadgeEnclosure() throws {
+        for size in [CGFloat(25), 42] {
+            let plusRenderer = ImageRenderer(content: MediaLibraryMarkView(mark: .requestable, size: size))
+            let clockRenderer = ImageRenderer(content: MediaLibraryMarkView(mark: .requested, size: size))
+            plusRenderer.scale = 2
+            clockRenderer.scale = 2
+            let plus = try XCTUnwrap(plusRenderer.cgImage)
+            let clock = try XCTUnwrap(clockRenderer.cgImage)
+            XCTAssertEqual(clock.width, plus.width)
+            XCTAssertEqual(clock.height, plus.height)
+            XCTAssertEqual(clock.bitsPerPixel, plus.bitsPerPixel)
+            let plusPixels = try XCTUnwrap(plus.dataProvider?.data) as Data
+            let clockPixels = try XCTUnwrap(clock.dataProvider?.data) as Data
+            let bytesPerPixel = plus.bitsPerPixel / 8
+            let border = Int(Double(plus.width) * 0.15)
+            var plusEnclosure = Data()
+            var clockEnclosure = Data()
+            for y in 0..<min(plus.height, clock.height) {
+                for x in 0..<min(plus.width, clock.width)
+                    where x < border || y < border || x >= plus.width - border || y >= plus.height - border {
+                    let plusOffset = y * plus.bytesPerRow + x * bytesPerPixel
+                    let clockOffset = y * clock.bytesPerRow + x * bytesPerPixel
+                    plusEnclosure.append(contentsOf: plusPixels[plusOffset..<(plusOffset + bytesPerPixel)])
+                    clockEnclosure.append(contentsOf: clockPixels[clockOffset..<(clockOffset + bytesPerPixel)])
+                }
+            }
+            XCTAssertEqual(clockEnclosure, plusEnclosure, "The circle's shape, color and opacity must match.")
+            for (name, image) in [("requestable", plus), ("requested", clock)] {
+                let attachment = XCTAttachment(image: UIImage(cgImage: image))
+                attachment.name = "\(name)-\(Int(size))pt"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+    #endif
 
     func testMarkAgreesWithTheItemPredicateItIsDerivedFrom() {
         // The mark must never disagree with `isNotInLibraryDiscovery`, which is

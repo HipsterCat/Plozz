@@ -39,12 +39,12 @@ public enum MediaLibraryMark: Equatable, Sendable {
     ///
     /// The filled plus keeps continuity with the Request button's `plus.circle`
     /// while gaining a disc, because the outline's ring is the first thing to go
-    /// at 25pt.
+    /// at 25pt. The requested clock uses the same filled-circle enclosure.
     var systemImage: String {  // l10n:content — SF Symbol name, not copy
         switch self {
         case .notInLibrary: return "binoculars.fill"
         case .requestable: return "plus.circle.fill"
-        case .requested: return "clock.fill"
+        case .requested: return "clock.circle.fill"
         }
     }
 
@@ -120,7 +120,7 @@ public enum MediaLibraryMark: Equatable, Sendable {
 ///
 /// Rendered `.palette` rather than `.hierarchical`, with both layers named. The
 /// symbols are white shapes on a white secondary layer (the plus's disc, the
-/// binoculars' body, or the clock's face), and hierarchical separates them only
+/// binoculars' body, or the clock's outer disc), and hierarchical separates them only
 /// by an alpha gap it picks itself — about half. Artwork bleeds through, and the
 /// mark changes tone from poster to poster.
 /// Naming that second layer as a **fixed grey** fixes both: the tone stays put
