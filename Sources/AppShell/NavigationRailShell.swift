@@ -33,8 +33,6 @@ struct NavigationRailShell<Content: View>: View {
     /// the initial pick, which would open the navigation every time the app launches
     /// or the viewer switches destination.
     @Namespace private var focusScopeID
-    @Namespace private var contentFocusScopeID
-    @Environment(\.resetFocus) private var resetFocus
     @StateObject private var pinnedSidebarInteraction = PlozzPinnedSidebarInteraction()
     /// Whether focus is inside the rail, reported up from it.
     @State private var railExpanded = false
@@ -44,7 +42,6 @@ struct NavigationRailShell<Content: View>: View {
     /// returns to the page.
     @State private var railReturnToken = 0
     @State private var isOpeningNavigation = false
-    @State private var searchContentFocusRequest = 0
     @State private var hasEnteredSearchContent = false
 
     var body: some View {
@@ -58,8 +55,6 @@ struct NavigationRailShell<Content: View>: View {
         )
         return ZStack(alignment: .leading) {
             content
-                // A reset into this scope excludes the page's navigation capsule.
-                .focusScope(contentFocusScopeID)
                 .background {
                     SearchPageFocusObserver(
                         isEnabled: presentation.shouldEnterSearchContent && !hasEnteredSearchContent,
@@ -163,15 +158,9 @@ struct NavigationRailShell<Content: View>: View {
                 isOpeningNavigation = false
                 hasEnteredSearchContent = false
             }
-            if destination == .search {
-                searchContentFocusRequest &+= 1
-            }
         }
-        .onChange(of: railExpanded) { _, expanded in
+        .onChange(of: railExpanded) { _, _ in
             isOpeningNavigation = false
-            if !expanded, selection == .search {
-                searchContentFocusRequest &+= 1
-            }
         }
         .onChange(of: hidden) { _, hidden in
             if hidden {
@@ -181,19 +170,6 @@ struct NavigationRailShell<Content: View>: View {
         }
         .onChange(of: pinnedSidebarInteraction.openRequest) { _, _ in
             requestNavigationFocus()
-        }
-        .task(id: searchContentFocusRequest) {
-            guard searchContentFocusRequest > 0 else { return }
-            // Let the destination and the rail's focus release land first.
-            await Task.yield()
-            let current = NavigationRailPresentation(
-                destination: selection,
-                chromeHidden: chrome.isChromeHidden,
-                isExpanded: railExpanded,
-                isOpening: isOpeningNavigation
-            )
-            guard !Task.isCancelled, current.shouldEnterSearchContent else { return }
-            resetFocus(in: contentFocusScopeID)
         }
     }
 

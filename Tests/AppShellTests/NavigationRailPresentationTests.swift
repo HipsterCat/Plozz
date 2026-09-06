@@ -48,27 +48,6 @@ final class NavigationRailPresentationTests: XCTestCase {
         XCTAssertTrue(make(.search, expanded: true).isEdgeNavigationEnabled)
     }
 
-    func testNavigationEntryWaitsForAnEnabledLaidOutTarget() {
-        let size = CGSize(width: NavigationRailMetrics.expandedWidth, height: 900)
-        XCTAssertFalse(NavigationRailFocusReadiness(
-            request: 1, size: size, isEnabled: false
-        ).canAdoptFocus)
-        XCTAssertFalse(NavigationRailFocusReadiness(
-            request: 1, size: .zero, isEnabled: true
-        ).canAdoptFocus)
-        XCTAssertTrue(NavigationRailFocusReadiness(
-            request: 1, size: size, isEnabled: true
-        ).canAdoptFocus)
-    }
-
-    func testClearedEntryRequestDoesNotReclaimFocusAfterLeavingNavigation() {
-        XCTAssertFalse(NavigationRailFocusReadiness(
-            request: nil,
-            size: CGSize(width: NavigationRailMetrics.expandedWidth, height: 900),
-            isEnabled: true
-        ).canAdoptFocus)
-    }
-
     func testOtherRootDestinationsKeepPinnedNavigation() {
         for destination: NavigationRailDestination in [.home, .watchlist, .settings, .music, .allLibraries] {
             let presentation = make(destination)

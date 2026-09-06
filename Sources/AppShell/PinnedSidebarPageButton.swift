@@ -26,6 +26,7 @@ struct PinnedSidebarPageButton: View {
                 .labelStyle(.titleAndIcon)
                 .font(NavigationRailMetrics.labelFont)
             }
+            .disabled(isNavigationExpanded || !isFocusEnabled)
             .controlSize(.small)
             .buttonBorderShape(.capsule)
             .plozzGlassPillButton()
@@ -35,7 +36,6 @@ struct PinnedSidebarPageButton: View {
         // Preserve header geometry, and therefore the native search field, while
         // the expanded menu overlays the page.
         .opacity(isNavigationExpanded ? 0 : 1)
-        .disabled(isNavigationExpanded || !isFocusEnabled)
         .accessibilityHidden(isNavigationExpanded)
     }
 

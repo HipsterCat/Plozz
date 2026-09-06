@@ -8,14 +8,15 @@ final class SearchPageFocusObserverTests: XCTestCase {
     func testHeaderFocusDoesNotCountAsSearchPageEntry() {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080))
         let observer = makeObserver(in: window)
+        let root = makeContentRoot(in: window)
         let header = UIButton(frame: CGRect(x: 80, y: 72, width: 175, height: 58))
         let keyboard = UIButton(frame: CGRect(x: 300, y: 250, width: 60, height: 60))
         let result = UIButton(frame: CGRect(x: 300, y: 500, width: 220, height: 330))
-        [header, keyboard, result].forEach { window.addSubview($0) }
-        XCTAssertFalse(observer.containsFocus(header))
-        XCTAssertTrue(observer.containsFocus(keyboard))
-        XCTAssertTrue(observer.containsFocus(result))
-        XCTAssertFalse(observer.containsFocus(nil))
+        [header, keyboard, result].forEach { root.addSubview($0) }
+        XCTAssertFalse(observer.containsFocus(header, in: root))
+        XCTAssertTrue(observer.containsFocus(keyboard, in: root))
+        XCTAssertTrue(observer.containsFocus(result, in: root))
+        XCTAssertFalse(observer.containsFocus(nil, in: root))
     }
 
     func testVirtualKeyboardAndHeaderItemsUseTheirOwnFrames() {
@@ -31,58 +32,83 @@ final class SearchPageFocusObserverTests: XCTestCase {
             parent: container,
             frame: CGRect(x: 300, y: 250, width: 60, height: 60)
         )
-        XCTAssertFalse(observer.containsFocus(header))
-        XCTAssertTrue(observer.containsFocus(keyboard))
+        XCTAssertFalse(observer.containsFocus(header, in: container))
+        XCTAssertTrue(observer.containsFocus(keyboard, in: container))
     }
 
     func testOtherWindowsCannotReleaseTheEntryGate() {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080))
         let other = UIWindow(frame: window.frame)
         let observer = makeObserver(in: window)
+        let root = makeContentRoot(in: window)
         let button = UIButton(frame: CGRect(x: 300, y: 250, width: 60, height: 60))
         other.addSubview(button)
-        XCTAssertFalse(observer.containsFocus(button))
+        XCTAssertFalse(observer.containsFocus(button, in: root))
     }
 
     func testDisabledFocusTargetCannotReleaseTheEntryGate() {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080))
         let observer = makeObserver(in: window)
+        let root = makeContentRoot(in: window)
         let previous = UIButton(frame: CGRect(x: 100, y: 200, width: 200, height: 60))
-        window.addSubview(previous)
+        root.addSubview(previous)
         previous.isEnabled = false
-        XCTAssertFalse(observer.containsFocus(previous))
+        XCTAssertFalse(observer.containsFocus(previous, in: root))
     }
 
     func testReportsActualContentFocusOnlyOncePerEntry() {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080))
         let observer = makeObserver(in: window)
+        let root = makeContentRoot(in: window)
         let header = UIButton(frame: CGRect(x: 80, y: 72, width: 175, height: 58))
         let keyboard = UIButton(frame: CGRect(x: 300, y: 250, width: 60, height: 60))
-        window.addSubview(header)
-        window.addSubview(keyboard)
+        root.addSubview(header)
+        root.addSubview(keyboard)
         var reports = 0
         observer.onFocusEntered = { reports += 1 }
         observer.isEnabled = true
-        observer.reportFocus(header)
+        observer.reportFocus(header, in: root)
         XCTAssertEqual(reports, 0)
-        observer.reportFocus(keyboard)
-        observer.reportFocus(keyboard)
+        observer.reportFocus(keyboard, in: root)
+        observer.reportFocus(keyboard, in: root)
         XCTAssertEqual(reports, 1)
         observer.isEnabled = true
-        observer.reportFocus(keyboard)
+        observer.reportFocus(keyboard, in: root)
         XCTAssertEqual(reports, 2)
         observer.stop()
-        observer.reportFocus(keyboard)
+        observer.reportFocus(keyboard, in: root)
         XCTAssertEqual(reports, 2)
     }
 
     func testDetachedObserverCannotReportContentFocus() {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080))
         let observer = makeObserver(in: window)
+        let root = makeContentRoot(in: window)
         let keyboard = UIButton(frame: CGRect(x: 300, y: 250, width: 60, height: 60))
-        window.addSubview(keyboard)
+        root.addSubview(keyboard)
         observer.removeFromSuperview()
-        XCTAssertFalse(observer.containsFocus(keyboard))
+        XCTAssertFalse(observer.containsFocus(keyboard, in: root))
+    }
+
+    func testOldContentInsideSameRectangleCannotUnlockSearchCapsule() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080))
+        let observer = makeObserver(in: window)
+        let searchRoot = UIView(frame: observer.frame)
+        window.addSubview(searchRoot)
+        let oldContent = UIButton(frame: CGRect(x: 300, y: 250, width: 200, height: 60))
+        window.addSubview(oldContent)
+        let keyboard = UIButton(frame: CGRect(x: 300, y: 110, width: 60, height: 60))
+        searchRoot.addSubview(keyboard)
+        XCTAssertFalse(observer.containsFocus(oldContent, in: searchRoot))
+        XCTAssertTrue(observer.containsFocus(keyboard, in: searchRoot))
+        let oldVirtualItem = VirtualFocusItem(parent: window, frame: oldContent.frame)
+        XCTAssertFalse(observer.containsFocus(oldVirtualItem, in: searchRoot))
+    }
+
+    private func makeContentRoot(in window: UIWindow) -> UIView {
+        let root = UIView(frame: window.bounds)
+        window.addSubview(root)
+        return root
     }
 
     private func makeObserver(in window: UIWindow) -> SearchPageFocusObserver.ObserverView {
