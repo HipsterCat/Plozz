@@ -210,7 +210,7 @@ final class ShareProviderCapabilityTests: XCTestCase {
         XCTAssertEqual(coordinator.catalogReaderRequests, ["share:nas.local/Media"])
     }
 
-    func testFileBrowsingCapabilityExposesStableRawRootWithoutProviderKnowledge() {
+    func testFileBrowsingCapabilityExposesMediaAwareRootWithoutProviderKnowledge() {
         let provider = ShareProvider(
             session: makeSession(
                 configuration: MediaShareLibraryConfiguration(
@@ -223,10 +223,86 @@ final class ShareProviderCapabilityTests: XCTestCase {
         )
         let capability: any MediaFileBrowsing = provider
 
-        XCTAssertEqual(capability.fileBrowserLibrary.id, "share:files:share:root")
+        XCTAssertEqual(capability.fileBrowserLibrary.id, ShareLibraryStore.rootLibraryID)
         XCTAssertEqual(capability.fileBrowserLibrary.title, "Browse Files — Anime Films")
         XCTAssertEqual(capability.fileBrowserLibrary.kind, .folder)
         XCTAssertEqual(capability.fileBrowserLibrary.synthesizedName, .browseFiles)
+    }
+
+    func testMainBrowseFilesThroughMoviesOpensCatalogTitlesButDetailFilesStayRaw() async throws {
+        let fixture = ShareCatalogSQLiteFixture()
+        defer { fixture.cleanup() }
+        let store = fixture.makeStore()
+        let titles = [("Arrival", 2016), ("Alien", 1979)]
+        var directories: [String: [RemoteFileEntry]] = ["Movies": []]
+        var assets: [CatalogAsset] = []
+        for (title, year) in titles {
+            let root = "Movies/\(title) (\(year))"
+            directories["Movies", default: []].append(
+                try RemoteFileEntry(relativePath: root, kind: .directory)
+            )
+            for quality in ["1080p", "2160p"] {
+                let name = "\(title).\(year).\(quality).mkv"
+                directories[root, default: []].append(
+                    try RemoteFileEntry(relativePath: "\(root)/\(name)", kind: .file)
+                )
+                assets.append(CatalogAsset(
+                    relPath: "\(root)/\(name)", basename: name,
+                    size: 1_000, modifiedAt: Date(), kind: .movie, library: .movies,
+                    title: title, year: year, seriesTitle: nil, seriesKey: nil,
+                    season: nil, episode: nil,
+                    movieKey: ShareCatalogID.movieKey(fromTitle: title, year: year),
+                    movieTitleKey: ShareCatalogID.movieKey(fromTitle: title, year: nil)
+                ))
+            }
+        }
+        await store.upsert(assets, scanID: 1)
+        var metadata = EnrichmentRecord()
+        metadata.posterURL = URL(string: "https://example.com/arrival.jpg")
+        let saved = await store.saveEnrichment(
+            itemID: "f:Movies/Arrival (2016)/Arrival.2016.1080p.mkv",
+            metadata, version: 18
+        )
+        XCTAssertTrue(saved)
+        await store.invalidateCompletedDirectoryState()
+
+        let fileSystem = CapabilityFakeFileSystem(
+            entries: [try RemoteFileEntry(relativePath: "Movies", kind: .directory)],
+            directories: directories
+        )
+        let provider = ShareProvider(
+            session: makeSession(),
+            sessionFactory: { role in
+                try CapabilityFakeSession(fileSystem: fileSystem, role: role)
+            },
+            catalogCoordinator: FakeCatalogCoordinator(reader: FakeCatalogReader()),
+            catalogStore: store
+        )
+        let browser: any MediaFileBrowsing = provider
+        let rootPage = try await provider.items(
+            in: browser.fileBrowserLibrary.id, kind: .folder, page: PageRequest(limit: 20)
+        )
+        let moviesFolder = try XCTUnwrap(rootPage.items.first)
+        XCTAssertEqual(moviesFolder.id, "d:Movies")
+        XCTAssertEqual(moviesFolder.kind, .folder)
+
+        let moviesPage = try await provider.items(
+            in: moviesFolder.id, kind: .folder, page: PageRequest(limit: 20)
+        )
+        XCTAssertEqual(Set(moviesPage.items.map(\.id)), ["movie:arrival-2016", "movie:alien-1979"])
+        XCTAssertTrue(moviesPage.items.allSatisfy { $0.kind == .movie && $0.versions.count == 2 })
+        let arrival = try XCTUnwrap(moviesPage.items.first { $0.id == "movie:arrival-2016" })
+        XCTAssertEqual(arrival.posterURL, metadata.posterURL)
+        let detail = try await provider.item(id: arrival.id)
+        XCTAssertEqual(detail.kind, .movie)
+        let rawID = try XCTUnwrap(detail.fileBrowserContainerID)
+        XCTAssertEqual(rawID, "share:files:d:Movies/Arrival (2016)")
+
+        let filesPage = try await provider.items(
+            in: rawID, kind: .folder, page: PageRequest(limit: 20)
+        )
+        XCTAssertEqual(Set(filesPage.items.map(\.title)), ["Arrival.2016.1080p.mkv", "Arrival.2016.2160p.mkv"])
+        XCTAssertTrue(filesPage.items.allSatisfy { $0.kind == .video && $0.id.hasPrefix("f:") })
     }
 
     func testShareAdvertisesOnlySortsItsContainerCanHonor() {

@@ -39,13 +39,13 @@ public struct ShareProvider: MediaProvider, MediaFileBrowsing, MediaSortFieldPro
         session.server.mediaShareLibraryConfiguration
     }
 
+    /// The main share browser stays media-aware. Only title-scoped file-browser
+    /// routes bypass catalog projection.
     public var fileBrowserLibrary: MediaLibrary {
-        var library = ShareLibraryStore.rootLibrary(
+        ShareLibraryStore.rootLibrary(
             serverName: session.server.name,
             configuration: libraryConfiguration
         )
-        library.id = ShareCatalogID.fileBrowserID(for: library.id)
-        return library
     }
 
     public func supportedSortFields(
