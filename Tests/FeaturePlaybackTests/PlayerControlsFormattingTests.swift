@@ -6,6 +6,36 @@ import CoreModels
 /// `PlayerControls`. These pin the human-readable readouts (precise positions,
 /// signed offsets, preset color names, edge summary) that the style rows show.
 final class PlayerControlsFormattingTests: XCTestCase {
+    func testAvenirSelectionPersistsPerProfileWithoutChangingDefaults() throws {
+        let suite = "SubtitleAvenirTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = SubtitleStyleStore(defaults: defaults, namespace: "avenir-profile")
+        let primary = SubtitleStyleStore(defaults: defaults)
+        var preferences = SubtitleStylePreferences.default
+        preferences.base.fontFamily = .avenir
+        preferences.base.fontWeight = .semibold
+        preferences.base.verticalPosition = 0.005
+        store.save(preferences)
+        XCTAssertEqual(store.load(), preferences)
+        XCTAssertEqual(primary.load(), .default)
+        XCTAssertEqual(SubtitleStyle.default.fontFamily, .atkinson)
+        XCTAssertEqual(SubtitleFontFamily.avenir.displayName, "Avenir")
+        XCTAssertTrue(SubtitleFontFamily.allCases.contains(.avenir))
+    }
+
+    func testExistingFontCandidateFallbacksAreUnchanged() {
+        XCTAssertEqual(SubtitleFontFamily.atkinson.postScriptNameCandidates(
+            weight: .semibold, isItalic: true
+        ), ["AtkinsonHyperlegible-BoldItalic", "AtkinsonHyperlegible-Italic",
+            "AtkinsonHyperlegible-Bold", "AtkinsonHyperlegible-Regular"])
+        XCTAssertEqual(SubtitleFontFamily.roboto.postScriptNameCandidates(
+            weight: .medium, isItalic: true
+        ), ["Roboto-Italic", "Roboto-Medium", "Roboto-Regular"])
+        XCTAssertTrue(SubtitleFontFamily.system.postScriptNameCandidates().isEmpty)
+        XCTAssertTrue(SubtitleFontFamily.sfRounded.postScriptNameCandidates().isEmpty)
+    }
+
     func testPositionGridIncludesEveryHalfPercentAndDefault() {
         let options = SubtitleStyle.verticalPositionOptions
         XCTAssertEqual(options.count, 211)
