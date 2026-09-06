@@ -13,9 +13,11 @@ struct PinnedSidebarPageButton: View {
     @FocusState private var hasFocus: Bool
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 6) {
             Image(systemName: "chevron.backward")
-                .font(.system(size: 22, weight: .semibold))
+                .font(.system(size: 28, weight: .light))
+                .scaleEffect(x: 0.8, y: 1)
+                .frame(width: 12)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
 
