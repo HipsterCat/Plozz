@@ -8,7 +8,6 @@ public struct SeasonRequestMenuContent: View {
     private let availability: MediaRequestAvailability
     private let isSubmitting: Bool
     private let refreshFailed: Bool
-    private let showsDividers: Bool
     private let onRefresh: (() -> Void)?
     private let onRequest: ([Int]) -> Void
 
@@ -17,14 +16,12 @@ public struct SeasonRequestMenuContent: View {
         requestAllTitle _: String = "Request All Seasons",
         isSubmitting: Bool = false,
         refreshFailed: Bool = false,
-        showsDividers: Bool = true,
         onRefresh: (() -> Void)? = nil,
         onRequest: @escaping ([Int]) -> Void
     ) {
         self.availability = availability
         self.isSubmitting = isSubmitting
         self.refreshFailed = refreshFailed
-        self.showsDividers = showsDividers
         self.onRefresh = onRefresh
         self.onRequest = onRequest
     }
@@ -43,7 +40,7 @@ public struct SeasonRequestMenuContent: View {
                 onRequest(requestableSeasons.map(\.number))
             }
             .disabled(isSubmitting)
-            if showsDividers { Divider() }
+            Divider()
         }
         ForEach(seasons) { season in
             if season.isRequestable {
@@ -69,7 +66,7 @@ public struct SeasonRequestMenuContent: View {
             Text("Couldn’t refresh. Showing last known season statuses.")
         }
         if let onRefresh {
-            if showsDividers { Divider() }
+            Divider()
             Button("Refresh Status", systemImage: "arrow.clockwise", action: onRefresh)
         }
     }

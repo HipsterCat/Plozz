@@ -6,7 +6,7 @@ import UIKit
 import XCTest
 
 @MainActor
-final class SeasonRequestSectionTests: XCTestCase {
+final class SeasonRequestControlsTests: XCTestCase {
     func testSectionRendersLoadingFailureEmptyAndMixedSeasonStates() throws {
         let mixed = MediaRequestAvailability(
             status: .partiallyAvailable,
@@ -29,7 +29,7 @@ final class SeasonRequestSectionTests: XCTestCase {
         for (name, availability, submitting, failed) in cases {
             for width in [CGFloat(320), 640] {
                 let content = VStack(alignment: .leading, spacing: 12) {
-                    SeasonRequestSection(
+                    SeasonRequestControls(
                         availability: availability,
                         isSubmitting: submitting,
                         refreshFailed: failed,
