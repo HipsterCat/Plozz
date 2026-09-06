@@ -17,7 +17,7 @@
           "category": "Fixed",
           "items": [
             "Missing titles in Continue Watching",
-            "Play and Resume buttons on show pages",
+            "Play and Resume buttons on show pages are HOPEFULLY behaving themselves now!",
             "Library titles incorrectly shown as unavailable",
             "Subtitle positioning and downloaded subtitles on replay",
             {
