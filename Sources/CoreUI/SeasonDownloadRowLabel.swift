@@ -2,6 +2,8 @@ import CoreModels
 import SwiftUI
 
 public struct SeasonDownloadRowLabel: View {
+    @ScaledMetric(relativeTo: .caption) private var statusIconWidth: CGFloat = 14
+
     private let title: LocalizedStringResource
     private let status: LocalizedStringResource
     private let statusSystemImage: String
@@ -22,15 +24,17 @@ public struct SeasonDownloadRowLabel: View {
                 .foregroundStyle(Color.primary)
                 .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
-            Label {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: statusSystemImage)
+                    .frame(width: statusIconWidth)
+                    .accessibilityHidden(true)
                 Text(status)
                     .lineLimit(nil)
                     .fixedSize(horizontal: false, vertical: true)
-            } icon: {
-                Image(systemName: statusSystemImage)
             }
             .font(.caption)
             .foregroundStyle(Color.secondary)
+            .accessibilityElement(children: .combine)
         }
     }
 }

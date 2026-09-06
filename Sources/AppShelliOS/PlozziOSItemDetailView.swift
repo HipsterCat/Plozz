@@ -168,6 +168,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
     @State private var seasonRequestScope: String?
     @State private var seasonRequestRefreshID = UUID()
     @State private var seasonRequestRefreshFailed = false
+    @State private var isRefreshingSeasonRequests = false
     @State private var seasonRequestRetryToken = 0
     @State private var requestStatusOverride: MediaAvailabilityStatus?
     @State private var sourceOverride: String?
@@ -325,7 +326,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
                     } label: {
                         Image(systemName: "arrow.down.circle")
                     }
-                    .accessibilityLabel("Download Show")
+                    .accessibilityLabel("Manage Seasons")
                 }
             }
         }
@@ -339,6 +340,8 @@ private struct PlozziOSCanonicalItemDetailView: View {
                     presentation: seriesDownloadPresentation(for: detail),
                     seasonRequestAvailability: currentSeasonRequestAvailability(for: detail),
                     isRequestingSeasons: isRequesting,
+                    isRefreshingSeasons: seasonRequestScope == seasonRequestScopeKey(for: detail)
+                        && isRefreshingSeasonRequests,
                     seasonRequestRefreshFailed: currentSeasonRequestRefreshFailed(for: detail),
                     requestActingName: appModel.activeSeerrRequestActingName,
                     onRefreshSeasonRequests: { seasonRequestRetryToken &+= 1 },
@@ -1031,6 +1034,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
             seasonRequestScope = scope
             seasonRequestState.reset()
             seasonRequestRefreshFailed = false
+            isRefreshingSeasonRequests = false
             requestConfirmationItem = nil
             requestConfirmationSeasons = nil
             requestConfirmationContext = nil
@@ -1068,7 +1072,14 @@ private struct PlozziOSCanonicalItemDetailView: View {
               seerService.isConfigured else {
             seasonRequestState.reset()
             seasonRequestRefreshFailed = false
+            isRefreshingSeasonRequests = false
             return false
+        }
+        isRefreshingSeasonRequests = true
+        defer {
+            if seasonRequestRefreshID == refreshID {
+                isRefreshingSeasonRequests = false
+            }
         }
         let refreshed = await seerService.requestAvailability(for: item)
         guard !Task.isCancelled,
@@ -1766,6 +1777,7 @@ private struct PlozziOSSeriesDownloadPicker: View {
     let presentation: SeriesDownloadPresentation
     let seasonRequestAvailability: MediaRequestAvailability?
     let isRequestingSeasons: Bool
+    let isRefreshingSeasons: Bool
     let seasonRequestRefreshFailed: Bool
     let requestActingName: String?
     let onRefreshSeasonRequests: () -> Void
@@ -1799,46 +1811,43 @@ private struct PlozziOSSeriesDownloadPicker: View {
 
     var body: some View {
         let seasonList = self.seasonList
+        let downloadState = presentation.hasLibraryDownloads ? showDownloadState : nil
+        let downloadAction = showDownloadAction
         NavigationStack {
             List {
-                if presentation.hasLibraryDownloads {
-                    Section {
-                        Button(action: beginShowDownload) {
-                            HStack(spacing: 12) {
-                                Text("Download Available")
-                                    .lineLimit(nil)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                if completedEpisodeCount > 0,
-                                   showDownloadState == nil {
-                                    Text(
-                                        "Downloaded: \(completedEpisodeCount.formatted())"
-                                    )
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                }
-                                Spacer()
+                SeriesDownloadActions(
+                    hasDownloads: presentation.hasLibraryDownloads,
+                    canRequestSeasons: presentation.canRequestSeasons,
+                    availability: seasonList.requestAvailability,
+                    isSubmitting: isRequestingSeasons,
+                    isRefreshing: isRefreshingSeasons,
+                    refreshFailed: seasonRequestRefreshFailed,
+                    actingName: requestActingName,
+                    onRefresh: onRefreshSeasonRequests,
+                    onRequest: onRequestSeasons
+                ) {
+                    Button(action: beginShowDownload) {
+                        SeriesDownloadActionLabel(
+                            title: downloadAction.title,
+                            subtitle: "Save to this device",
+                            systemImage: downloadAction.systemImage,
+                            detail: completedEpisodeCount > 0 && downloadState == nil
+                                ? "Downloaded: \(completedEpisodeCount.formatted())"
+                                : nil
+                        ) {
+                            if downloadState != nil || isBusy {
                                 PlozziOSDownloadControl(
-                                    state: showDownloadState,
+                                    state: downloadState,
                                     isPreparing: isBusy
                                 )
                             }
-                            .foregroundStyle(.primary)
                         }
-                        .buttonStyle(.plain)
-                        .disabled(isBusy)
                     }
+                    .buttonStyle(.plain)
+                    .disabled(!downloadAction.isEnabled)
                 }
 
-                if presentation.canRequestSeasons {
-                    SeasonRequestControls(
-                        availability: seasonList.requestAvailability,
-                        isSubmitting: isRequestingSeasons,
-                        refreshFailed: seasonRequestRefreshFailed,
-                        actingName: requestActingName,
-                        onRefresh: onRefreshSeasonRequests,
-                        onRequest: onRequestSeasons
-                    )
-                } else if !presentation.hasLibraryDownloads {
+                if !presentation.isVisible {
                     ContentUnavailableView(
                         "No Downloads Available",
                         systemImage: "arrow.down.circle",
@@ -1847,10 +1856,13 @@ private struct PlozziOSSeriesDownloadPicker: View {
                 }
 
                 if !seasonList.rows.isEmpty {
-                    Section("Seasons") {
+                    Section {
                         ForEach(seasonList.rows) { row in
                             seasonRow(row)
                         }
+                    } header: {
+                        Text(verbatim: series.title)
+                            .textCase(nil)
                     }
                 }
 
@@ -1866,7 +1878,10 @@ private struct PlozziOSSeriesDownloadPicker: View {
                     }
                 }
             }
-            .navigationTitle(Text("Download ") + Text(verbatim: series.title))
+            .listStyle(.insetGrouped)
+            .contentMargins(.top, 12, for: .scrollContent)
+            .listSectionSpacing(16)
+            .navigationTitle("Seasons")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1874,6 +1889,15 @@ private struct PlozziOSSeriesDownloadPicker: View {
                         dismiss()
                     }
                     .disabled(isBusy)
+                }
+                if presentation.canRequestSeasons {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        SeasonRequestRefreshButton(
+                            isRefreshing: isRefreshingSeasons,
+                            isSubmitting: isRequestingSeasons,
+                            onRefresh: onRefreshSeasonRequests
+                        )
+                    }
                 }
             }
         }
@@ -1944,6 +1968,13 @@ private struct PlozziOSSeriesDownloadPicker: View {
             return Text(prompt.title)
         }
         return Text("Download?")
+    }
+
+    private var showDownloadAction: SeriesDownloadAction {
+        if isBusy { return .preparing }
+        if activeShowBatchID != nil { return .pause }
+        if pausedShowBatchID != nil { return .resume }
+        return .download
     }
 
     @ViewBuilder
@@ -2164,6 +2195,8 @@ private struct PlozziOSSeriesDownloadPicker: View {
     private var completedEpisodeCount: Int {
         appModel.downloads.records.filter {
             $0.snapshot.seriesID == series.id
+                && (series.sourceAccountID == nil
+                    || $0.snapshot.sourceAccountID == series.sourceAccountID)
                 && $0.status == .completed
         }.count
     }

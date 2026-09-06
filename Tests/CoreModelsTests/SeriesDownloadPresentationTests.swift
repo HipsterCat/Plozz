@@ -80,4 +80,20 @@ final class SeriesDownloadPresentationTests: XCTestCase {
         XCTAssertTrue(presentation.hasLibraryDownloads)
         XCTAssertTrue(presentation.isVisible)
     }
+
+    func testBulkDownloadLabelsDescribeTheirActualActions() {
+        let cases: [(SeriesDownloadAction, String, String, Bool)] = [
+            (.download, "Download Available", "arrow.down.circle", true),
+            (.preparing, "Preparing Downloads…", "clock", false),
+            (.pause, "Pause Downloads", "pause.circle", true),
+            (.resume, "Resume Downloads", "play.circle", true)
+        ]
+        for (action, title, icon, enabled) in cases {
+            var resource = action.title
+            resource.locale = Locale(identifier: "en")
+            XCTAssertEqual(String(localized: resource), title)
+            XCTAssertEqual(action.systemImage, icon)
+            XCTAssertEqual(action.isEnabled, enabled)
+        }
+    }
 }
