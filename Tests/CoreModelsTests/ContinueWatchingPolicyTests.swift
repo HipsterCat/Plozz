@@ -1,14 +1,8 @@
 import XCTest
 @testable import CoreModels
 
-/// Fixes the rules for what belongs on the Continue Watching row.
-///
-/// The row is built from feeds that disagree — each backend has its own idea of
-/// "resume", and some of them volunteer next-episode suggestions for series the
-/// viewer walked away from months ago. These tests pin the one rule that decides,
-/// and in particular the asymmetry at its heart: a title that was *started* is a
-/// promise to come back and is never retired on age, while a suggestion carries
-/// no such promise.
+/// Home keeps all provider titles by default. Restrictions remain opt-in for
+/// callers that explicitly request them.
 final class ContinueWatchingPolicyTests: XCTestCase {
 
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -38,7 +32,7 @@ final class ContinueWatchingPolicyTests: XCTestCase {
         XCTAssertTrue(policy.keeps(item(id: "a", resume: 1_200), now: now))
     }
 
-    // MARK: Suggestions are bounded by the age of the series
+    // MARK: Explicit age restrictions
 
     func testARecentSuggestionIsKept() {
         XCTAssertTrue(policy.keeps(item(id: "a", lastPlayedDaysAgo: 10), now: now))
@@ -101,10 +95,16 @@ final class ContinueWatchingPolicyTests: XCTestCase {
 
     // MARK: Limits
 
-    /// The row limit was a hardcoded 20 applied twice, which silently discarded
-    /// most of a real library's in-progress titles.
-    func testDefaultRowLimitHoldsARealLibrary() {
-        XCTAssertGreaterThanOrEqual(ContinueWatchingPolicy.default.rowLimit, 47)
+    func testDefaultHasNoRowLimitOrAgeCutoff() {
+        XCTAssertEqual(ContinueWatchingPolicy.default.rowLimit, .max)
+        XCTAssertNil(ContinueWatchingPolicy.default.nextUpCutoff)
+        let items = [
+            item(id: "old-next-up", lastPlayedDaysAgo: 10_000),
+            item(id: "zero-offset", resume: 0, lastPlayedDaysAgo: 10_000),
+            item(id: "old-resume", resume: 900, lastPlayedDaysAgo: 10_000),
+            item(id: "unknown")
+        ]
+        XCTAssertEqual(ContinueWatchingPolicy.default.curated(items, now: now), items)
     }
 
     func testRowLimitCannotBeZeroOrNegative() {

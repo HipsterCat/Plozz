@@ -2,14 +2,8 @@ import XCTest
 import CoreModels
 @testable import FeatureHome
 
-/// Proves the Continue Watching policy is applied where every backend passes
-/// through, rather than per-provider.
-///
-/// The staleness problem is not Plex's alone. Plex's `/library/onDeck` offers
-/// next-up episodes its own hub has retired; Jellyfin's `Shows/NextUp` is bounded
-/// by a server setting that defaults to a year; Emby rides the Jellyfin path.
-/// Applying the rule in the aggregator means one behaviour for all of them, and a
-/// new backend inherits it for free.
+/// Every backend shares the unlimited Home default. Explicit policy overrides
+/// remain consistent across merged and unmerged layouts.
 @MainActor
 final class HomeAggregatorCurationTests: XCTestCase {
 
@@ -56,19 +50,32 @@ final class HomeAggregatorCurationTests: XCTestCase {
         )
     }
 
-    /// The row limit was a hardcoded 20 that quietly discarded the rest of a real
-    /// library, with no way to reach what fell off.
-    func testTheRowCarriesMoreThanTheOldTwentyItemCap() async {
-        let many = (1...50).map { inProgress("m\($0)", daysAgo: Double($0) / 24) }
+    func testDefaultKeepsEveryTitleBeyondSixtyAndOrdersOldSuggestionsLast() async {
+        let many = (1...150).map { inProgress("m\($0)", daysAgo: Double($0) / 24) }
         let stub = ResumeStub(continueWatching: many)
+        let old = ResumeStub(continueWatching: [
+            suggestion("old-next-up", daysAgo: 400),
+            suggestion("recent-next-up", daysAgo: 1)
+        ])
 
         let content = await HomeAggregator().content(
-            from: [resolved("acct", provider: stub)],
-            policy: ContinueWatchingPolicy(rowLimit: 60),
+            from: [resolved("acct", provider: stub), resolved("other", provider: old)],
             visibility: merged
         )
 
-        XCTAssertEqual(content.continueWatching.count, 50)
+        XCTAssertEqual(content.continueWatching.count, 152)
+        XCTAssertEqual(content.continueWatching.last?.id, "old-next-up")
+        XCTAssertEqual(Set(content.continueWatching.map(\.id)),
+                       Set(many.map(\.id) + ["old-next-up", "recent-next-up"]))
+    }
+
+    func testDefaultUnmergedRowKeepsAllOldSuggestions() async {
+        let many = (1...125).map { suggestion("e\($0)", daysAgo: Double($0) + 100) }
+        let content = await HomeAggregator().unmergedContent(
+            from: [resolved("acct", provider: ResumeStub(continueWatching: many))],
+            visibility: HomeLibraryVisibility(mergeLibrariesOnHome: false)
+        )
+        XCTAssertEqual(content.continueWatching.map(\.id), many.map(\.id))
     }
 
     func testTheRowLimitIsStillHonoured() async {
