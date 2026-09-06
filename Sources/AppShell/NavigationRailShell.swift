@@ -44,7 +44,6 @@ struct NavigationRailShell<Content: View>: View {
     @State private var railReturnToken = 0
     @State private var isOpeningNavigation = false
     @State private var hasEnteredSearchContent = false
-    @State private var isPageButtonFocused = false
 
     var body: some View {
         let hidden = chrome.isChromeHidden
@@ -120,6 +119,15 @@ struct NavigationRailShell<Content: View>: View {
                     .frame(width: 0, height: 0)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
+
+                    SearchBoundaryNavigationObserver(
+                        isEnabled: presentation.shouldEnterSearchContent
+                            && !pinnedSidebarInteraction.searchResultsHaveFocus,
+                        onOpenNavigation: requestNavigationFocus
+                    )
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                 }
 
                 if !hidden {
@@ -149,22 +157,17 @@ struct NavigationRailShell<Content: View>: View {
                     .transition(.move(edge: .leading).combined(with: .opacity))
                 }
             }
-            .onPreferenceChange(NavigationGlassButtonFocus.self) { focused in
-                isPageButtonFocused = focused
-            }
             .backgroundPreferenceValue(NavigationGlassAnchors.self) { anchors in
                 GeometryReader { geometry in
-                    if presentation.showsPageButton,
-                       let button = anchors[.button],
-                       let menu = anchors[.menu],
-                       NavigationGlassMorphGeometry(
-                           button: geometry[button], menu: geometry[menu]
-                       ).isUsable {
+                    if let menu = anchors[.menu],
+                       !geometry[menu].isEmpty,
+                       !geometry[menu].isNull,
+                       !geometry[menu].isInfinite {
                         NavigationGlassMorph(
-                            buttonFrame: geometry[button],
+                            buttonFrame: anchors[.button].map { geometry[$0] },
                             menuFrame: geometry[menu],
                             isExpanded: railExpanded || isOpeningNavigation,
-                            isButtonFocused: isPageButtonFocused
+                            showsPageButton: presentation.showsPageButton
                         )
                     }
                 }

@@ -28,7 +28,7 @@ struct PinnedSidebarPageButton: View {
                 .font(NavigationRailMetrics.labelFont)
             }
             .disabled(isNavigationExpanded || !isFocusEnabled)
-            .buttonStyle(NavigationGlassPageButtonStyle())
+            .buttonStyle(NavigationGlassPageButtonStyle(showsFocusBackground: !isNavigationExpanded))
             .focusEffectDisabled()
             .anchorPreference(key: NavigationGlassAnchors.self, value: .bounds) { [.button: $0] }
             .accessibilityHint(Text(Self.openNavigationHint))
@@ -51,6 +51,7 @@ struct PinnedSidebarPageButton: View {
 /// The shell owns the shared glass surface; this control keeps normal focus
 /// feedback and reserves the capsule's dimensions without drawing a second one.
 private struct NavigationGlassPageButtonStyle: ButtonStyle {
+    let showsFocusBackground: Bool
     @Environment(\.isFocused) private var isFocused
 
     func makeBody(configuration: Configuration) -> some View {
@@ -58,8 +59,14 @@ private struct NavigationGlassPageButtonStyle: ButtonStyle {
             .padding(.horizontal, 22)
             .padding(.vertical, 12)
             .foregroundStyle(isFocused ? AnyShapeStyle(Color.black) : AnyShapeStyle(.primary))
+            .background {
+                // Focus chrome belongs to the control, never the morphing panel.
+                Capsule()
+                    .fill(.white)
+                    .opacity(isFocused && showsFocusBackground ? 1 : 0)
+                    .transaction { $0.animation = nil }
+            }
             .contentShape(Capsule())
-            .preference(key: NavigationGlassButtonFocus.self, value: isFocused)
     }
 }
 #endif

@@ -18,74 +18,73 @@ struct NavigationGlassAnchors: PreferenceKey {
     }
 }
 
-struct NavigationGlassButtonFocus: PreferenceKey {
-    static let defaultValue = false
+/// A persistent glass surface, separate from focus targets and focus highlights.
+struct NavigationGlassMorph: View {
+    let buttonFrame: CGRect?
+    let menuFrame: CGRect
+    let isExpanded: Bool
+    let showsPageButton: Bool
 
-    static func reduce(value: inout Bool, nextValue: () -> Bool) {
-        value = value || nextValue()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let surface = NavigationGlassSurface.resolve(
+            isExpanded: isExpanded,
+            showsPageButton: showsPageButton,
+            hasButtonFrame: buttonFrame != nil
+        )
+        let geometry = NavigationGlassMorphGeometry(button: buttonFrame ?? menuFrame, menu: menuFrame)
+        let frame = surface == .button ? geometry.button : geometry.menu
+        let radius = surface == .button ? geometry.buttonRadius : geometry.menuRadius
+        return NavigationGlassSurfaceView(frame: frame, cornerRadius: radius)
+            .opacity(surface == .none ? 0 : 1)
+            .animation(reduceMotion ? nil : NavigationGlassMorphGeometry.animation, value: surface)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
-/// One shared surface grows from the measured button into the measured menu.
-/// Only the backdrop morphs; the actual focus targets retain their final layout.
-struct NavigationGlassMorph: View {
-    let buttonFrame: CGRect
-    let menuFrame: CGRect
-    let isExpanded: Bool
-    let isButtonFocused: Bool
+/// Supply interpolated geometry to the material itself. tvOS does not reliably
+/// animate glassEffectID replacement through a preference-resolved background.
+struct NavigationGlassSurfaceView: View, Animatable {
+    var frame: CGRect
+    var cornerRadius: CGFloat
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.plozzReduceTransparency) private var reduceTransparency
-    @Namespace private var glassNamespace
-
-    private var geometry: NavigationGlassMorphGeometry {
-        NavigationGlassMorphGeometry(button: buttonFrame, menu: menuFrame)
+    var animatableData: AnimatablePair<CGRect.AnimatableData, CGFloat> {
+        get { AnimatablePair(frame.animatableData, cornerRadius) }
+        set {
+            frame.animatableData = newValue.first
+            frame.size.width = max(1, frame.width)
+            frame.size.height = max(1, frame.height)
+            cornerRadius = min(max(0, newValue.second), min(frame.width, frame.height) / 2)
+        }
     }
 
     var body: some View {
-        Group {
-            if #available(tvOS 26.0, *), !reduceTransparency, !reduceMotion {
-                GlassEffectContainer {
-                    if isExpanded {
-                        nativeSurface(frame: menuFrame, radius: geometry.menuRadius, focused: false)
-                    } else {
-                        nativeSurface(frame: buttonFrame, radius: geometry.buttonRadius, focused: isButtonFocused)
-                    }
-                }
-            } else {
-                let frame = isExpanded ? menuFrame : buttonFrame
-                Color.clear
-                    .frame(width: frame.width, height: frame.height)
-                    .plozzGlassPanel(
-                        cornerRadius: isExpanded ? geometry.menuRadius : geometry.buttonRadius,
-                        scrimOpacity: 0.08
-                    )
-                    .overlay {
-                        RoundedRectangle(cornerRadius: geometry.buttonRadius)
-                            .fill(.white)
-                            .opacity(!isExpanded && isButtonFocused ? 1 : 0)
-                    }
-                    .position(x: frame.midX, y: frame.midY)
-            }
-        }
-        .animation(reduceMotion ? nil : NavigationGlassMorphGeometry.animation, value: isExpanded)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
-    @available(tvOS 26.0, *)
-    private func nativeSurface(frame: CGRect, radius: CGFloat, focused: Bool) -> some View {
         Color.clear
             .frame(width: frame.width, height: frame.height)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .glassEffectID("navigation-surface", in: glassNamespace)
-            .glassEffectTransition(.matchedGeometry)
-            .overlay {
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(.white)
-                    .opacity(focused ? 1 : 0)
-            }
+            .plozzGlassPanel(cornerRadius: cornerRadius, scrimOpacity: 0.08)
             .position(x: frame.midX, y: frame.midY)
+            // Geometry is already interpolated; do not start a second material
+            // animation each time this body supplies the next frame.
+            .transaction { $0.animation = nil }
+    }
+}
+
+enum NavigationGlassSurface: Equatable {
+    case none
+    case button
+    case menu
+
+    static func resolve(
+        isExpanded: Bool,
+        showsPageButton: Bool,
+        hasButtonFrame: Bool
+    ) -> Self {
+        if isExpanded { return .menu }
+        guard showsPageButton else { return .none }
+        // Retain the outgoing panel until the new Search capsule is measured.
+        return hasButtonFrame ? .button : .menu
     }
 }
 
