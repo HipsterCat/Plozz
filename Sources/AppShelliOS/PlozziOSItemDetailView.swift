@@ -1958,26 +1958,13 @@ private struct PlozziOSSeriesDownloadPicker: View {
             Button {
                 onRequestSeasons([number])
             } label: {
-                HStack(spacing: 12) {
-                    SeasonDownloadRowLabel(
-                        title: row.title,
-                        status: row.statusTitle,
-                        statusSystemImage: row.statusSystemImage
-                    )
-                    Spacer()
-                    Text("Request")
-                        .font(.subheadline.weight(.semibold))
-                        .fixedSize()
-                }
+                PlozziOSSeasonDownloadRow(row: row, series: series, viewModel: viewModel)
             }
+            .buttonStyle(.plain)
             .disabled(isRequestingSeasons)
             .accessibilityLabel(Text("Request \(Text(row.title))"))
         } else {
-            SeasonDownloadRowLabel(
-                title: row.title,
-                status: row.statusTitle,
-                statusSystemImage: row.statusSystemImage
-            )
+            PlozziOSSeasonDownloadRow(row: row, series: series, viewModel: viewModel)
         }
     }
 
@@ -2212,25 +2199,25 @@ private struct PlozziOSSeasonDownloadRow: View {
     let viewModel: ItemDetailViewModel
 
     var body: some View {
-        HStack(spacing: 12) {
-            PlozziOSDownloadThumbnail(
-                item: row.librarySeasons.first ?? row.looseEpisodes.first ?? series,
-                style: row.librarySeasons.isEmpty ? .episode : .season
-            )
-            VStack(alignment: .leading, spacing: 4) {
-                SeasonDownloadRowLabel(
-                    title: row.title,
-                    status: row.statusTitle,
-                    statusSystemImage: row.statusSystemImage
+        let downloadState = self.downloadState
+        SeasonDownloadRowContent(
+            title: row.title,
+            status: row.statusTitle,
+            statusSystemImage: row.statusSystemImage,
+            showsRequestAction: row.canRequest,
+            completedDownloadCount: downloadState == nil ? completedEpisodeCount : 0
+        ) {
+            if row.hasLibraryContent {
+                PlozziOSDownloadThumbnail(
+                    item: row.librarySeasons.first ?? series,
+                    style: .season
                 )
-                if completedEpisodeCount > 0, downloadState == nil {
-                    Text("Downloaded: \(completedEpisodeCount.formatted())")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            } else {
+                SeasonDownloadRowArtwork {
+                    MediaArtworkPlaceholder(glyphSize: 16)
                 }
             }
-            Spacer()
+        } accessory: {
             if let downloadState {
                 PlozziOSDownloadControl(state: downloadState)
             }
@@ -2249,6 +2236,7 @@ private struct PlozziOSSeasonDownloadRow: View {
     }
 
     private var downloadRecords: [DownloadedMediaRecord] {
+        guard row.hasLibraryContent else { return [] }
         guard row.number != nil || episodes != nil else { return [] }
         return matchingDownloadRecords(
             downloads: appModel.downloads,
@@ -2594,22 +2582,18 @@ private struct PlozziOSDownloadThumbnail: View {
     var body: some View {
         switch style {
         case .season:
-            FallbackAsyncImage(
-                references: item.artworkReferences(for: .poster),
-                variant: .posterCard,
-                asyncFallbackURL: {
-                    await ArtworkRouter.shared.artworkURL(.poster, for: item)
-                },
-                pinIdentity: item.stablePresentationID
-            ) {
-                MediaArtworkPlaceholder(glyphSize: 16)
+            SeasonDownloadRowArtwork {
+                FallbackAsyncImage(
+                    references: item.artworkReferences(for: .poster),
+                    variant: .posterCard,
+                    asyncFallbackURL: {
+                        await ArtworkRouter.shared.artworkURL(.poster, for: item)
+                    },
+                    pinIdentity: item.stablePresentationID
+                ) {
+                    MediaArtworkPlaceholder(glyphSize: 16)
+                }
             }
-            .frame(width: 46, height: 68)
-            .clipped()
-            .clipShape(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-            )
-            .plozzMediaEdge(cornerRadius: 6)
 
         case .episode:
             FallbackAsyncImage(

@@ -27,8 +27,33 @@ public struct SeriesDownloadSeason: Identifiable, Equatable, Sendable {
 
     public var statusTitle: LocalizedStringResource {
         if canRequest { return "Missing" }
-        if let requestState { return requestState.statusTitle }
-        return "In Library"
+        guard let requestState else { return "In Library" }
+        if requestState.status == .available {
+            return hasLibraryContent ? "In Library" : "Available on Server"
+        }
+        if requestState.status == .partiallyAvailable {
+            switch requestState.effectiveRequestStatus {
+            case .pending:
+                return hasLibraryContent
+                    ? "Partially in Library · Requested"
+                    : "Partially Available on Server · Requested"
+            case .processing:
+                return hasLibraryContent
+                    ? "Partially in Library · Processing"
+                    : "Partially Available on Server · Processing"
+            case .failed:
+                return hasLibraryContent
+                    ? "Partially in Library · Request Failed"
+                    : "Partially Available on Server · Request Failed"
+            case .declined:
+                return hasLibraryContent
+                    ? "Partially in Library · Request Declined"
+                    : "Partially Available on Server · Request Declined"
+            case .completed, nil:
+                return hasLibraryContent ? "Partially in Library" : "Partially Available on Server"
+            }
+        }
+        return requestState.statusTitle
     }
 
     public var statusSystemImage: String {

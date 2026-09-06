@@ -68,7 +68,7 @@ final class SeriesDownloadSeasonsTests: XCTestCase {
         XCTAssertEqual(after.rows.count, 1)
         XCTAssertTrue(after.rows[0].hasLibraryContent)
         XCTAssertFalse(after.rows[0].canRequest)
-        XCTAssertEqual(english(after.rows[0].statusTitle), "Partially Available · Requested")
+        XCTAssertEqual(english(after.rows[0].statusTitle), "Partially in Library · Requested")
     }
 
     func testLocalContentDoesNotBecomeFullyAvailableOrRequestable() {
@@ -90,8 +90,8 @@ final class SeriesDownloadSeasonsTests: XCTestCase {
             librarySeasons: [librarySeason(1), librarySeason(2)], looseEpisodes: [],
             requestAvailability: .init(status: .processing, seasons: [state(1, .processing), failed])
         )
-        XCTAssertEqual(english(list.rows[0].statusTitle), "Partially Available · Processing")
-        XCTAssertEqual(english(list.rows[1].statusTitle), "Partially Available · Request Failed")
+        XCTAssertEqual(english(list.rows[0].statusTitle), "Partially in Library · Processing")
+        XCTAssertEqual(english(list.rows[1].statusTitle), "Partially in Library · Request Failed")
         XCTAssertTrue(list.rows[0].requestState?.isInFlight == true)
         XCTAssertFalse(list.rows[1].canRequest)
     }
@@ -156,6 +156,64 @@ final class SeriesDownloadSeasonsTests: XCTestCase {
         XCTAssertEqual(list.rows.count, 1)
         XCTAssertFalse(list.rows[0].hasLibraryContent)
         XCTAssertFalse(list.rows[0].canRequest)
+        XCTAssertEqual(english(list.rows[0].statusTitle), "Available on Server")
+    }
+
+    func testLibraryAvailabilityDoesNotImplyAnOfflineDownload() {
+        let list = SeriesDownloadSeasons(
+            librarySeasons: [librarySeason(1)], looseEpisodes: [],
+            requestAvailability: .init(status: .available, seasons: [state(1, .available)])
+        )
+        XCTAssertEqual(english(list.rows[0].statusTitle), "In Library")
+        XCTAssertFalse(list.rows[0].canRequest)
+    }
+
+    func testPartialLibraryAndServerCoveragePreserveEveryRequestStatus() {
+        let cases: [(MediaSeasonRequestStatus?, String, String)] = [
+            (nil, "Partially in Library", "Partially Available on Server"),
+            (.pending, "Partially in Library · Requested", "Partially Available on Server · Requested"),
+            (.processing, "Partially in Library · Processing", "Partially Available on Server · Processing"),
+            (.failed, "Partially in Library · Request Failed", "Partially Available on Server · Request Failed"),
+            (.declined, "Partially in Library · Request Declined", "Partially Available on Server · Request Declined"),
+            (.completed, "Partially in Library", "Partially Available on Server")
+        ]
+        for (requestStatus, libraryTitle, serverTitle) in cases {
+            let availability = MediaRequestAvailability(
+                status: .partiallyAvailable,
+                seasons: [.init(
+                    number: 1, title: "Season 1",
+                    status: .partiallyAvailable, requestStatus: requestStatus
+                )]
+            )
+            for hasLibraryContent in [false, true] {
+                let list = SeriesDownloadSeasons(
+                    librarySeasons: hasLibraryContent ? [librarySeason(1)] : [],
+                    looseEpisodes: [], requestAvailability: availability
+                )
+                XCTAssertEqual(
+                    english(list.rows[0].statusTitle),
+                    hasLibraryContent ? libraryTitle : serverTitle
+                )
+                XCTAssertFalse(list.rows[0].canRequest)
+                XCTAssertEqual(list.rows[0].requestState?.requestStatus, requestStatus)
+            }
+        }
+    }
+
+    func testMissingPendingAndFailedRowsKeepTheirStatusAndEligibility() {
+        let list = SeriesDownloadSeasons(
+            librarySeasons: [], looseEpisodes: [],
+            requestAvailability: .init(status: .pending, seasons: [
+                state(1, .unknown), state(2, .pending), state(3, .processing),
+                .init(number: 4, title: "Season 4", status: .unknown, requestFailed: true),
+                .init(number: 5, title: "Season 5", status: .unknown, requestStatus: .declined)
+            ])
+        )
+        XCTAssertEqual(list.rows.map { english($0.statusTitle) }, [
+            "Missing", "Requested", "Processing", "Request Failed", "Request Declined"
+        ])
+        XCTAssertEqual(list.requestableSeasonNumbers, [1])
+        XCTAssertEqual(list.rows[1].statusSystemImage, "clock")
     }
 
     func testLoadingAndDisconnectedStatesKeepLibraryRows() {
