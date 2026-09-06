@@ -15,9 +15,9 @@ struct PinnedSidebarPageButton: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "chevron.backward")
-                .font(.system(size: 28, weight: .light))
-                .scaleEffect(x: 0.8, y: 1)
-                .frame(width: 12)
+                .font(.system(size: 30, weight: .semibold))
+                .scaleEffect(x: 0.65, y: 1)
+                .frame(width: 11)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
 
