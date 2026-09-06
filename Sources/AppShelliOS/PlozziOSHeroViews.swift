@@ -344,22 +344,10 @@ struct PlozziOSHeroRequestButton: View {
                 }
             case let .downloading(progress):
                 statusPill {
-                    HStack(spacing: 10) {
-                        Image(systemName: "arrow.down.circle")
-                        ResumeProgressCapsule(
-                            progress: progress,
-                            // The status pill uses the secondary (card) surface, so
-                            // the bar's ink tracks the *palette* lightness — dark ink
-                            // on a light theme, light ink on dark — not the raw
-                            // colour scheme (which left a dark bar on the dark pill).
-                            onLight: palette.isLight,
-                            width: 54,
-                            height: 5,
-                            floorsMinimumFill: false
-                        )
-                        Text("\(Int((progress * 100).rounded()))%")
-                            .lineLimit(1)
-                    }
+                    DownloadProgressButtonLabel(
+                        progress: progress,
+                        onLight: palette.isLight
+                    )
                 }
             case .play, .unavailable:
                 EmptyView()
@@ -406,12 +394,12 @@ struct PlozziOSSeasonRequestSummaryLabel: View {
             Image(systemName: presentation.systemImage)
             VStack(alignment: .leading, spacing: 1) {
                 Text(presentation.title)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let detail = presentation.detail {
                     Text(detail)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -1597,10 +1585,12 @@ struct PlozziOSHomeHeroForeground: View {
             // the progress bar) so the row fits instead of wrapping. A vertical
             // stack is only the last resort (e.g. very large Dynamic Type).
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { actionButtons(resumeTrailingStyle: .full) }
-                HStack(spacing: 12) { actionButtons(resumeTrailingStyle: .seasonEpisodeOnly) }
-                HStack(spacing: 12) { actionButtons(resumeTrailingStyle: .hidden) }
-                VStack(spacing: 12) { actionButtons(resumeTrailingStyle: .full) }
+                HeroActionRow { actionButtons(resumeTrailingStyle: .full) }
+                HeroActionRow { actionButtons(resumeTrailingStyle: .seasonEpisodeOnly) }
+                HeroActionRow { actionButtons(resumeTrailingStyle: .hidden) }
+                HeroActionRow(stacksVertically: true) {
+                    actionButtons(resumeTrailingStyle: .full, wrapsText: true)
+                }
             }
             .controlSize(.large)
         }
@@ -1610,7 +1600,8 @@ struct PlozziOSHomeHeroForeground: View {
 
     @ViewBuilder
     private func actionButtons(
-        resumeTrailingStyle: PlayResumeButtonLabel.ResumeTrailingStyle
+        resumeTrailingStyle: PlayResumeButtonLabel.ResumeTrailingStyle,
+        wrapsText: Bool = false
     ) -> some View {
         if hasPlayAction {
             Button {
@@ -1625,7 +1616,8 @@ struct PlozziOSHomeHeroForeground: View {
                     spacing: 10,
                     capsuleWidth: 60,
                     resumeTrailingStyle: resumeTrailingStyle,
-                    separatesEpisodeText: item.startsWatching
+                    separatesEpisodeText: item.startsWatching,
+                    wrapsText: wrapsText
                 )
             }
             .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
@@ -1927,6 +1919,12 @@ private struct PlozziOSDetailHeroForeground: View {
                     labelledTrailer: false,
                     resume: .hidden
                 )
+                actionRow(
+                    collapsing: orderedInlineExtras.count,
+                    labelledTrailer: false,
+                    resume: .full,
+                    stacksVertically: true
+                )
             }
             .controlSize(.large)
         }
@@ -2091,7 +2089,8 @@ private struct PlozziOSDetailHeroForeground: View {
     private func actionRow(
         collapsing collapseCount: Int,
         labelledTrailer: Bool,
-        resume: PlayResumeButtonLabel.ResumeTrailingStyle
+        resume: PlayResumeButtonLabel.ResumeTrailingStyle,
+        stacksVertically: Bool = false
     ) -> some View {
         let extras = orderedInlineExtras
         // Fold by priority, then render what survives in display order, so the
@@ -2109,8 +2108,11 @@ private struct PlozziOSDetailHeroForeground: View {
             .map(\.element)
         let collapsed = doomed.map(\.element)
         let menu = menuActions(collapsing: collapsed)
-        return HStack(spacing: 12) {
-            playActionButton(resume: resume)
+        return HeroActionRow(
+            stacksVertically: stacksVertically,
+            alignment: style == .compactPortrait ? .center : .leading
+        ) {
+            playActionButton(resume: resume, wrapsText: stacksVertically)
             heroRequestButton
             ForEach(inline) { extra in
                 inlineExtraButton(extra, labelled: labelledTrailer)
@@ -2187,7 +2189,8 @@ private struct PlozziOSDetailHeroForeground: View {
 
     @ViewBuilder
     private func playActionButton(
-        resume: PlayResumeButtonLabel.ResumeTrailingStyle = .full
+        resume: PlayResumeButtonLabel.ResumeTrailingStyle = .full,
+        wrapsText: Bool = false
     ) -> some View {
         if playableItem != nil || showsPlayPlaceholder {
             Button {
@@ -2203,11 +2206,9 @@ private struct PlozziOSDetailHeroForeground: View {
                     capsuleWidth: 60,
                     resumeTrailingStyle: resume,
                     isPlaceholder: playableItem == nil,
-                    separatesEpisodeText: playableItem?.startsWatching ?? false
+                    separatesEpisodeText: playableItem?.startsWatching ?? false,
+                    wrapsText: wrapsText
                 )
-                // ViewThatFits can only collapse lower-priority actions when the
-                // Play label reports its readable width instead of truncating.
-                .fixedSize(horizontal: true, vertical: false)
             }
             .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
             .disabled(playableItem == nil)
@@ -2591,6 +2592,8 @@ private struct PlozziOSHeroActionButtonStyle: ButtonStyle {
                 }
         } else {
             configuration.label
+            .lineLimit(nil)
+            .fixedSize(horizontal: false, vertical: true)
             .font(.headline.weight(.semibold))
             .foregroundStyle(
                 kind == .primary

@@ -69,7 +69,7 @@ final class MediaLibraryMarkTests: XCTestCase {
                 subject.kind = kind
                 let mark = MediaLibraryMark.mark(for: subject, seerConnected: true)
                 XCTAssertEqual(mark, .requested)
-                XCTAssertEqual(mark?.systemImage, "clock.circle.fill")
+                XCTAssertEqual(mark?.systemImage, "clock")
                 XCTAssertEqual(
                     MediaPlaybackIndicatorState(subject).libraryMark(seerConnected: true),
                     .requested
@@ -95,7 +95,7 @@ final class MediaLibraryMarkTests: XCTestCase {
 
     #if canImport(UIKit)
     @MainActor
-    func testRequestedClockKeepsThePlusBadgeEnclosure() throws {
+    func testOutlinedClockKeepsTheSubtlePlusBadgeBackground() throws {
         for size in [CGFloat(25), 42] {
             let plusRenderer = ImageRenderer(content: MediaLibraryMarkView(mark: .requestable, size: size))
             let clockRenderer = ImageRenderer(content: MediaLibraryMarkView(mark: .requested, size: size))
@@ -109,19 +109,15 @@ final class MediaLibraryMarkTests: XCTestCase {
             let plusPixels = try XCTUnwrap(plus.dataProvider?.data) as Data
             let clockPixels = try XCTUnwrap(clock.dataProvider?.data) as Data
             let bytesPerPixel = plus.bitsPerPixel / 8
-            let border = Int(Double(plus.width) * 0.15)
-            var plusEnclosure = Data()
-            var clockEnclosure = Data()
-            for y in 0..<min(plus.height, clock.height) {
-                for x in 0..<min(plus.width, clock.width)
-                    where x < border || y < border || x >= plus.width - border || y >= plus.height - border {
-                    let plusOffset = y * plus.bytesPerRow + x * bytesPerPixel
-                    let clockOffset = y * clock.bytesPerRow + x * bytesPerPixel
-                    plusEnclosure.append(contentsOf: plusPixels[plusOffset..<(plusOffset + bytesPerPixel)])
-                    clockEnclosure.append(contentsOf: clockPixels[clockOffset..<(clockOffset + bytesPerPixel)])
-                }
-            }
-            XCTAssertEqual(clockEnclosure, plusEnclosure, "The circle's shape, color and opacity must match.")
+            // Sample inside the disc, away from both glyphs and the clock's outline.
+            let x = min(plus.width, clock.width) * 3 / 10
+            let y = min(plus.height, clock.height) * 7 / 10
+            let plusOffset = y * plus.bytesPerRow + x * bytesPerPixel
+            let clockOffset = y * clock.bytesPerRow + x * bytesPerPixel
+            let plusBackground = plusPixels[plusOffset..<(plusOffset + bytesPerPixel)]
+            let clockBackground = clockPixels[clockOffset..<(clockOffset + bytesPerPixel)]
+            XCTAssertTrue(plusBackground.contains { $0 > 0 }, "The sample must be inside the visible background.")
+            XCTAssertEqual(clockBackground, plusBackground, "The subtle grey background must stay unchanged.")
             for (name, image) in [("requestable", plus), ("requested", clock)] {
                 let attachment = XCTAttachment(image: UIImage(cgImage: image))
                 attachment.name = "\(name)-\(Int(size))pt"
