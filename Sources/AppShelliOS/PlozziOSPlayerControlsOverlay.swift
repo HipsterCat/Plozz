@@ -1149,13 +1149,15 @@ private struct PlozziOSSubtitleAppearanceView: View {
                         $0.formatted(.percent.precision(.fractionLength(0...1)).locale(locale))
                     }
                 )
-                Picker(
-                    "Extra Line Position",
-                    selection: subtitleStyleBinding(viewModel, \.verticalAnchor)
-                ) {
+                Picker(selection: subtitleStyleBinding(viewModel, \.verticalAnchor)) {
                     ForEach(SubtitleStyle.VerticalAnchor.allCases, id: \.self) { anchor in
                         Text(anchor.displayName).tag(anchor)
                     }
+                } label: {
+                    Text(
+                        "Extra Line Position",
+                        comment: "Subtitle setting for where additional wrapped lines appear: Above, Center, or Below. Not the placement of a second-language subtitle track."
+                    )
                 }
                 PlozziOSSubtitleSliderRow(
                     title: "Horizontal Offset",

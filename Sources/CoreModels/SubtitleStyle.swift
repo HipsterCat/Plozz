@@ -167,7 +167,10 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
         public var displayName: LocalizedStringResource {
             switch self {
             case .bottom: "Above"
-            case .center: "Center"
+            case .center: LocalizedStringResource(
+                "Center",
+                comment: "Extra Line Position option: additional subtitle lines expand around the same vertical midpoint, rather than only above or below."
+            )
             case .top: "Below"
             }
         }
