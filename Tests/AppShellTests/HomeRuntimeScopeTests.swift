@@ -1,5 +1,6 @@
 import XCTest
 import CoreModels
+import CoreUI
 @testable import AppShell
 
 /// Locks the profile-isolation invariant behind the Home tab's `.id`: the
@@ -8,6 +9,18 @@ import CoreModels
 /// hero items can never leak into another. The `.id` string is the mechanism, so
 /// asserting it changes on those transitions guards the invariant.
 final class HomeRuntimeScopeTests: XCTestCase {
+    @MainActor
+    func testRetainedResumeModelIsOnlyVisibleInItsOwnScope() {
+        let box = LazyViewState<String>()
+        XCTAssertNil(box.existingValue(forKey: "alice"))
+        _ = box.value(forKey: "alice") { "alice-resume" }
+        XCTAssertEqual(box.existingValue(forKey: "alice"), "alice-resume")
+        XCTAssertNil(box.existingValue(forKey: "bob"))
+        _ = box.value(forKey: "bob") { "bob-resume" }
+        XCTAssertNil(box.existingValue(forKey: "alice"))
+        XCTAssertEqual(box.existingValue(forKey: "bob"), "bob-resume")
+    }
+
     func testIdentityKeyChangesOnProfileSwitch() {
         let alice = HomeRuntimeScope.identityKey(profileID: "alice", plexPlaybackIdentityKey: "")
         let bob = HomeRuntimeScope.identityKey(profileID: "bob", plexPlaybackIdentityKey: "")

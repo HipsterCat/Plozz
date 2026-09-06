@@ -1482,7 +1482,7 @@ public struct JellyfinProvider: MediaProvider {
         try await client.downloadRemoteSubtitle(itemID: itemID, subtitleID: subtitleID)
     }
 
-    /// The item's current subtitle tracks (text sidecars get VTT delivery sources),
+    /// The item's current subtitle tracks (text sidecars get delivery sources),
     /// fetched via a plain item lookup — no `PlaybackInfo`/transcode. Used to
     /// observe a just-downloaded subtitle so it can be hot-loaded.
     public func subtitleTracks(forItemID itemID: String) async throws -> [MediaTrack] {
@@ -2035,10 +2035,10 @@ public struct JellyfinProvider: MediaProvider {
         )
     }
 
-    /// Maps a subtitle stream, attaching a WebVTT delivery source for text-based
+    /// Maps a subtitle stream, attaching a delivery source for text-based
     /// subtitles so the player can inject them into the native picker even on
-    /// direct play. Image-based subs (PGS/VOBSUB) get no URL — they need server
-    /// burn-in, which the native picker can't drive.
+    /// direct play. Image-based subs (PGS/VOBSUB) get no text delivery source;
+    /// their engine-decoded bitmap cues keep their authored placement.
     private func map(
         subtitleStream dto: MediaStreamDto,
         itemID: String,
@@ -2049,7 +2049,8 @@ public struct JellyfinProvider: MediaProvider {
             ? try subtitleDeliverySource(
                 itemID: itemID,
                 sourceID: sourceID,
-                streamIndex: dto.Index
+                streamIndex: dto.Index,
+                codec: dto.Codec
             )
             : nil
         return MediaTrack(
@@ -2061,7 +2062,8 @@ public struct JellyfinProvider: MediaProvider {
             isDefault: dto.IsDefault ?? false,
             isForced: dto.IsForced ?? false,
             deliverySource: deliverySource,
-            isImageBasedSubtitle: !isText
+            isImageBasedSubtitle: !isText,
+            isExternal: dto.IsExternal ?? false
         )
     }
 
@@ -2072,16 +2074,19 @@ public struct JellyfinProvider: MediaProvider {
         return ["subrip", "srt", "ass", "ssa", "webvtt", "vtt", "mov_text", "text", "ttml", "subviewer", "sami", "smi"].contains(codec)
     }
 
-    /// `GET /Videos/{itemId}/{mediaSourceId}/Subtitles/{index}/0/Stream.vtt` —
-    /// the server converts SRT/ASS/embedded-text subtitles to WebVTT on the fly.
+    /// Keep SubRip as SRT: Jellyfin's WebVTT conversion adds `line:90%` even to
+    /// plain dialogue, which falsely makes it source-positioned in our renderer.
+    /// Other text formats retain the existing WebVTT conversion.
     private func subtitleDeliverySource(
         itemID: String,
         sourceID: String,
-        streamIndex: Int
+        streamIndex: Int,
+        codec: String?
     ) throws -> SubtitleDeliverySource {
+        let format = ["srt", "subrip"].contains(codec?.lowercased() ?? "") ? "srt" : "vtt"
         var pathComponents = URLComponents()
         pathComponents.path =
-            "/Videos/\(itemID)/\(sourceID)/Subtitles/\(streamIndex)/0/Stream.vtt"
+            "/Videos/\(itemID)/\(sourceID)/Subtitles/\(streamIndex)/0/Stream.\(format)"
         let resource = try AuthenticatedHTTPResource(
             pathBase: .configuredBaseURL,
             path: String(
@@ -2096,7 +2101,7 @@ public struct JellyfinProvider: MediaProvider {
                 itemID: itemID,
                 mediaSourceID: sourceID,
                 deliveryMode: .directFile,
-                formatHint: MediaFormatHint(container: "vtt"),
+                formatHint: MediaFormatHint(container: format),
                 purpose: .subtitle,
                 resource: resource
             )

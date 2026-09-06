@@ -123,6 +123,7 @@ public enum CrossServerSourceResolver {
                     // Each query widens recall; dedupe within the account so the
                     // raw and normalized passes don't double-count the same hit.
                     for query in queries {
+                        guard !Task.isCancelled else { return (index, []) }
                         for hit in await search(accountID, query) where seenItemIDs.insert(hit.id).inserted {
                             accountHits.append(hit.taggingSource(accountID))
                         }
@@ -156,7 +157,7 @@ public enum CrossServerSourceResolver {
             for index in otherAccountIDs.indices { all.append(contentsOf: byIndex[index] ?? []) }
             return all
         }
-        guard !hits.isEmpty else { return [] }
+        guard !Task.isCancelled, !hits.isEmpty else { return [] }
 
         let merged = MediaItemMerger.merge([primary] + hits, serverInfo: serverInfo)
         return merged.first(where: { $0.id == primary.id })?.sources ?? []

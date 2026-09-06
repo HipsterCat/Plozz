@@ -39,6 +39,12 @@ public final class LazyViewState<Value> {
 
     public init() {}
 
+    /// Reads only the requested scope; never constructs a model or exposes a
+    /// previously active profile's retained value.
+    public func existingValue(forKey key: some Hashable) -> Value? {
+        storedKey == AnyHashable(key) ? stored : nil
+    }
+
     /// The held value, building it with `make` on first use only.
     public func value(_ make: () -> Value) -> Value {
         value(forKey: 0, make)

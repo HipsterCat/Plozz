@@ -40,6 +40,38 @@ final class EmbyProviderParityTests: XCTestCase {
         XCTAssertTrue(provider.kind.usesMediaBrowserAPI)
     }
 
+    func testSubtitleDeliveryPreservesSRTWithoutAddingWebVTTPositioning() async throws {
+        for kind in [ProviderKind.jellyfin, .emby] {
+            let stub = StubHTTPClient()
+            stub.stub(pathSuffix: "/Users/u1/Items/episode1", json: """
+            {"Id":"episode1","Name":"Episode","Type":"Episode","MediaSources":[
+              {"Id":"source1","MediaStreams":[
+                {"Index":2,"Type":"Subtitle","Codec":"SRT","IsExternal":true,"IsTextSubtitleStream":true},
+                {"Index":3,"Type":"Subtitle","Codec":"subrip","IsTextSubtitleStream":true},
+                {"Index":4,"Type":"Subtitle","Codec":"webvtt","IsTextSubtitleStream":true},
+                {"Index":5,"Type":"Subtitle","Codec":"ass","IsTextSubtitleStream":true},
+                {"Index":6,"Type":"Subtitle","Codec":"hdmv_pgs_subtitle","IsTextSubtitleStream":false}
+              ]}
+            ]}
+            """)
+            let provider = JellyfinProvider(session: makeSession(provider: kind), http: stub)
+            let tracks = try await provider.subtitleTracks(forItemID: "episode1")
+            XCTAssertEqual(tracks.count, 5)
+            for (track, format) in zip(tracks.prefix(4), ["srt", "srt", "vtt", "vtt"]) {
+                guard case .authenticatedHTTP(let locator)? = track.deliverySource else {
+                    return XCTFail("Expected subtitle delivery source")
+                }
+                XCTAssertEqual(locator.provider, kind)
+                XCTAssertEqual(locator.resource.path, "Videos/episode1/source1/Subtitles/\(track.id)/0/Stream.\(format)")
+                XCTAssertEqual(locator.formatHint.container, format)
+            }
+            XCTAssertTrue(tracks[0].isExternal)
+            XCTAssertFalse(tracks[1].isExternal)
+            XCTAssertTrue(tracks[4].isImageBasedSubtitle)
+            XCTAssertNil(tracks[4].deliverySource)
+        }
+    }
+
     func testEmbyUsesMediaBrowserExtrasRoutesAndMapping() async throws {
         let stub = StubHTTPClient()
         stub.stub(pathSuffix: "/Items/movie1/LocalTrailers", json: "[]")

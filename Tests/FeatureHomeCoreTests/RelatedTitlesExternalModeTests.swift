@@ -133,6 +133,30 @@ final class RelatedTitlesExternalModeTests: XCTestCase {
         )
     }
 
+    func testResolvedLibraryDetailReplacesExternalRelatedResults() async {
+        let search = SearchCallFlag()
+        let loader = makeLoader(related: related(), search: search)
+        let seed = MediaItem(
+            id: "external",
+            title: "Seed",
+            kind: .movie,
+            providerIDs: ["Tmdb": "1"],
+            locallyValidatedPlayableSource: false
+        )
+        await loader.load(for: seed)
+        XCTAssertEqual(loader.entries.count, 1)
+        XCTAssertFalse(search.value)
+
+        let owned = seed.selectingSource(
+            MediaSourceRef(accountID: "account", itemID: "library-id", kind: .movie)
+        )
+        await loader.load(for: owned, displayMode: .libraryOnly)
+
+        XCTAssertTrue(search.value)
+        XCTAssertTrue(loader.entries.isEmpty, "Owned detail must not keep unmatched external results")
+        XCTAssertTrue(loader.hasResolved)
+    }
+
     func testExternalModePublishesWithoutSearchingEveryLibrary() async {
         let search = SearchCallFlag()
         let loader = makeLoader(
