@@ -35,6 +35,10 @@ for arg in "$@"; do
   esac
 done
 
+. tools/lib/apple-build-lease.sh
+acquire_apple_build_shared_lease "plozz/generate-project"
+install_apple_build_lease_traps
+
 # Per-branch bundle-id / display-name suffixes (see project.yml). Default EMPTY so
 # a normal run generates the canonical `com.thatcube.Plozz` / "Plozz". An opt-in
 # per-branch build (tools/deploy-*.sh --branded) exports these before calling us so

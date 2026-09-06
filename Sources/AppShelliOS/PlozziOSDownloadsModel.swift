@@ -129,11 +129,10 @@ final class PlozziOSDownloadsModel {
     private var notifiedBatchIDs: Set<String> = []
     private var isUsingUncappedBackgroundPolicy = false
     private let uncappedBackgroundPolicyKey: String
+    private var applicationActivityRevision: UInt64 = 0
     private var applicationActivityGeneration = 0
     private var applicationIsActive: Bool
     private var acceptsNewWork = true
-    private var inFlightEnqueueCount = 0
-    private var enqueueDrainWaiters: [CheckedContinuation<Void, Never>] = []
     private let providerKind: @MainActor (String) -> ProviderKind?
     private let preferredAudioLanguages: @MainActor (MediaItem) -> [String]
     @ObservationIgnored
@@ -142,6 +141,12 @@ final class PlozziOSDownloadsModel {
     nonisolated(unsafe) private var networkTask: Task<Void, Never>?
     @ObservationIgnored
     nonisolated(unsafe) private var metricsExpiryTask: Task<Void, Never>?
+    private struct ArtworkTask {
+        let id: UUID
+        let task: Task<Void, Never>
+    }
+    @ObservationIgnored
+    nonisolated(unsafe) private var artworkTasks: [String: ArtworkTask] = [:]
 
     init(
         profileID: String,
@@ -186,7 +191,8 @@ final class PlozziOSDownloadsModel {
             storage: storage,
             engine: engine,
             observer: networkObserver,
-            policy: policy
+            policy: policy,
+            applicationIsActive: startsActive
         )
 
         self.registry = registry
@@ -235,14 +241,10 @@ final class PlozziOSDownloadsModel {
                 await self?.reload()
             }
         }
-        networkTask = Task { [weak self, queue, networkObserver] in
+        networkTask = Task { [weak self, networkObserver] in
             for await conditions in networkObserver.updates() {
                 guard !Task.isCancelled else { return }
-                await self?.enforceSpeedLimitPausePolicy()
-                guard !Task.isCancelled else { return }
-                await queue.networkConditionsDidChange(conditions)
-                guard !Task.isCancelled else { return }
-                await self?.reload()
+                await self?.applyNetworkConditionsIfActive(conditions)
             }
         }
         Task { [weak self] in
@@ -286,23 +288,23 @@ final class PlozziOSDownloadsModel {
         eventsTask?.cancel()
         networkTask?.cancel()
         metricsExpiryTask?.cancel()
+        artworkTasks.values.forEach { $0.task.cancel() }
     }
 
     func beginProfileTransition() {
         acceptsNewWork = false
         applicationActivityGeneration += 1
         networkTask?.cancel()
+        cancelArtworkTasks()
     }
 
     func quiesceForProfileSwitch() async {
         beginProfileTransition()
         guard let queue else { return }
+        // In-flight request construction may be blocked on a provider indefinitely.
+        // The two-phase enqueue path rechecks `acceptsNewWork` before persistence and
+        // after deferred persistence, so switching profiles never waits for it.
         await queue.suspendScheduling()
-        if inFlightEnqueueCount > 0 {
-            await withCheckedContinuation { continuation in
-                enqueueDrainWaiters.append(continuation)
-            }
-        }
         while true {
             let active = (await registry?.all() ?? []).filter {
                 $0.status.isActive
@@ -441,21 +443,30 @@ final class PlozziOSDownloadsModel {
         quality: DownloadQuality? = nil
     ) async throws -> DownloadedMediaRecord {
         try beginEnqueue()
-        defer { finishEnqueue() }
         let request = try await makeRequest(
             item: item,
             provider: provider,
             groupID: nil,
             requestedQuality: quality
         )
+        try ensureEnqueueMayPersist()
         guard let queue else {
             throw PlozziOSDownloadError.unavailable(
                 initializationError ?? "Downloads are unavailable."
             )
         }
-        let record = try await queue.enqueue(request)
+        let record = try await queue.enqueue(
+            request,
+            startImmediately: false
+        )
+        let remainsForeground = try await activateEnqueued(
+            [record],
+            using: queue
+        )
         await reload()
-        pinArtworkIfAvailable(for: item, record: record)
+        if remainsForeground, acceptsNewWork, applicationIsActive {
+            pinArtworkIfAvailable(for: item, record: record)
+        }
         return record
     }
 
@@ -498,7 +509,6 @@ final class PlozziOSDownloadsModel {
         quality: DownloadQuality? = nil
     ) async throws -> [DownloadedMediaRecord] {
         try beginEnqueue()
-        defer { finishEnqueue() }
         guard let queue else {
             throw PlozziOSDownloadError.unavailable(
                 initializationError ?? "Downloads are unavailable."
@@ -536,10 +546,20 @@ final class PlozziOSDownloadsModel {
                 artworkItems.append(episode)
             }
         }
-        let records = try await queue.enqueueGroup(requests)
+        try ensureEnqueueMayPersist()
+        let records = try await queue.enqueueGroup(
+            requests,
+            startImmediately: false
+        )
+        let remainsForeground = try await activateEnqueued(
+            records,
+            using: queue
+        )
         await reload()
-        for (episode, record) in zip(artworkItems, records) {
-            pinArtworkIfAvailable(for: episode, record: record)
+        if remainsForeground, acceptsNewWork, applicationIsActive {
+            for (episode, record) in zip(artworkItems, records) {
+                pinArtworkIfAvailable(for: episode, record: record)
+            }
         }
         return records
     }
@@ -863,12 +883,20 @@ final class PlozziOSDownloadsModel {
               let sourceURL = artworkSourceURL(for: item) else {
             return
         }
-        Task { [weak self] in
-            await self?.pinArtwork(
+        artworkTasks[record.identityKey]?.task.cancel()
+        let taskID = UUID()
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.pinArtwork(
                 sourceURL: sourceURL,
                 identityKey: record.identityKey
             )
+            self.artworkTaskFinished(
+                identityKey: record.identityKey,
+                taskID: taskID
+            )
         }
+        artworkTasks[record.identityKey] = ArtworkTask(id: taskID, task: task)
     }
 
     private func pinArtwork(
@@ -878,7 +906,10 @@ final class PlozziOSDownloadsModel {
         guard let storage, let registry else { return }
         do {
             let (data, response) = try await URLSession.shared.data(from: sourceURL)
-            guard let response = response as? HTTPURLResponse,
+            guard !Task.isCancelled,
+                  acceptsNewWork,
+                  applicationIsActive,
+                  let response = response as? HTTPURLResponse,
                   (200..<300).contains(response.statusCode),
                   !data.isEmpty,
                   data.count <= 15_000_000 else {
@@ -912,6 +943,20 @@ final class PlozziOSDownloadsModel {
         }
     }
 
+    private func cancelArtworkTasks() {
+        let tasks = artworkTasks.values.map(\.task)
+        artworkTasks.removeAll()
+        tasks.forEach { $0.cancel() }
+    }
+
+    private func artworkTaskFinished(
+        identityKey: String,
+        taskID: UUID
+    ) {
+        guard artworkTasks[identityKey]?.id == taskID else { return }
+        artworkTasks[identityKey] = nil
+    }
+
     private func artworkSourceURL(for item: MediaItem) -> URL? {
         item.backdropURL
             ?? item.fallbackArtworkURL
@@ -940,7 +985,7 @@ final class PlozziOSDownloadsModel {
     }
 
     private func resumeWithoutReload(_ record: DownloadedMediaRecord) async {
-        guard acceptsNewWork else { return }
+        guard acceptsNewWork, applicationIsActive else { return }
         if mustRemainPausedForSpeedLimit(record) {
             await queue?.pause(
                 identityKey: record.identityKey,
@@ -1208,11 +1253,38 @@ final class PlozziOSDownloadsModel {
     }
 
     func setApplicationActive(_ isActive: Bool) async {
+        await setApplicationActive(
+            isActive,
+            revision: applicationActivityRevision &+ 1
+        )
+    }
+
+    func setApplicationActive(
+        _ isActive: Bool,
+        revision: UInt64
+    ) async {
+        guard revision > applicationActivityRevision
+                || (revision == applicationActivityRevision
+                    && isActive == applicationIsActive) else {
+            return
+        }
+        if revision > applicationActivityRevision {
+            applicationActivityRevision = revision
+        }
         applicationIsActive = isActive
+        if !isActive {
+            cancelArtworkTasks()
+        }
         guard acceptsNewWork else { return }
         guard let queue else { return }
         applicationActivityGeneration += 1
         let generation = applicationActivityGeneration
+        await queue.setApplicationActive(isActive, revision: revision)
+        guard applicationTransitionIsCurrent(generation) else { return }
+        if isActive {
+            await queue.updatePolicy(policy, applicationRevision: revision)
+            guard applicationTransitionIsCurrent(generation) else { return }
+        }
         let currentRecords = await registry?.all() ?? records
         guard applicationTransitionIsCurrent(generation) else { return }
         if isActive {
@@ -1225,18 +1297,19 @@ final class PlozziOSDownloadsModel {
                     }
                     await queue.pause(
                         identityKey: record.identityKey,
-                        reason: .backgroundPolicy
+                        reason: .backgroundPolicy,
+                        applicationRevision: revision
                     )
                     await queue.discardPersistentWork(
                         identityKey: record.identityKey
                     )
                 }
                 guard applicationTransitionIsCurrent(generation) else { return }
-                await queue.updatePolicy(policy)
+                await queue.updatePolicy(policy, applicationRevision: revision)
                 guard applicationTransitionIsCurrent(generation) else { return }
                 await enforceSpeedLimitPausePolicy()
                 guard applicationTransitionIsCurrent(generation) else { return }
-                await queue.resumePaused(reason: .backgroundPolicy)
+                await queue.resumePaused(reason: .backgroundPolicy, applicationRevision: revision)
                 guard applicationTransitionIsCurrent(generation) else { return }
                 isUsingUncappedBackgroundPolicy = false
                 defaults?.set(false, forKey: uncappedBackgroundPolicyKey)
@@ -1244,17 +1317,19 @@ final class PlozziOSDownloadsModel {
             guard applicationTransitionIsCurrent(generation) else { return }
             await enforceSpeedLimitPausePolicy()
             guard applicationTransitionIsCurrent(generation) else { return }
+            await queue.reevaluateNetworkConditions()
+            guard applicationTransitionIsCurrent(generation) else { return }
             if policy.maximumBytesPerSecond == nil {
-                await queue.resumePaused(reason: .speedLimitPolicy)
+                await queue.resumePaused(reason: .speedLimitPolicy, applicationRevision: revision)
                 guard applicationTransitionIsCurrent(generation) else { return }
             }
-            await queue.resumeInterrupted()
+            await queue.resumeInterrupted(applicationRevision: revision)
             guard applicationTransitionIsCurrent(generation) else { return }
-            await queue.resumePaused(reason: .inactiveProfile)
+            await queue.resumePaused(reason: .inactiveProfile, applicationRevision: revision)
             guard applicationTransitionIsCurrent(generation) else { return }
-            await queue.resumePaused(reason: .directShareBackground)
+            await queue.resumePaused(reason: .directShareBackground, applicationRevision: revision)
             guard applicationTransitionIsCurrent(generation) else { return }
-            await queue.resumePaused(reason: .backgroundPolicy)
+            await queue.resumePaused(reason: .backgroundPolicy, applicationRevision: revision)
             guard applicationTransitionIsCurrent(generation) else { return }
             await reload()
             return
@@ -1262,6 +1337,8 @@ final class PlozziOSDownloadsModel {
 
         if policy.maximumBytesPerSecond != nil,
            policy.cappedBackgroundBehavior == .continueAtFullSpeed {
+            isUsingUncappedBackgroundPolicy = true
+            defaults?.set(true, forKey: uncappedBackgroundPolicyKey)
             var backgroundPolicy = policy
             backgroundPolicy.maximumBytesPerSecond = nil
             for record in currentRecords
@@ -1272,19 +1349,18 @@ final class PlozziOSDownloadsModel {
                 }
                 await queue.pause(
                     identityKey: record.identityKey,
-                    reason: .backgroundPolicy
+                    reason: .backgroundPolicy,
+                    applicationRevision: revision
                 )
                 await queue.discardPersistentWork(
                     identityKey: record.identityKey
                 )
             }
             guard applicationTransitionIsCurrent(generation) else { return }
-            await queue.updatePolicy(backgroundPolicy)
+            await queue.updatePolicy(backgroundPolicy, applicationRevision: revision)
             guard applicationTransitionIsCurrent(generation) else { return }
-            await queue.resumePaused(reason: .backgroundPolicy)
+            await queue.resumePaused(reason: .backgroundPolicy, applicationRevision: revision)
             guard applicationTransitionIsCurrent(generation) else { return }
-            isUsingUncappedBackgroundPolicy = true
-            defaults?.set(true, forKey: uncappedBackgroundPolicyKey)
         }
 
         for record in currentRecords where record.status.isActive {
@@ -1293,20 +1369,40 @@ final class PlozziOSDownloadsModel {
             case .directShare:
                 await queue.pause(
                     identityKey: record.identityKey,
-                    reason: .directShareBackground
+                    reason: .directShareBackground,
+                    applicationRevision: revision
                 )
             case .managedHTTP
                 where policy.maximumBytesPerSecond != nil
                     && policy.cappedBackgroundBehavior == .pause:
                 await queue.pause(
                     identityKey: record.identityKey,
-                    reason: .backgroundPolicy
+                    reason: .backgroundPolicy,
+                    applicationRevision: revision
                 )
             case .managedHTTP:
                 break
             }
         }
         guard applicationTransitionIsCurrent(generation) else { return }
+        await reload()
+    }
+
+    private func applyNetworkConditionsIfActive(
+        _ conditions: DownloadNetworkConditions
+    ) async {
+        guard acceptsNewWork, applicationIsActive, let queue else { return }
+        let generation = applicationActivityGeneration
+        await enforceSpeedLimitPausePolicy()
+        guard applicationTransitionIsCurrent(generation),
+              applicationIsActive else {
+            return
+        }
+        await queue.networkConditionsDidChange(conditions)
+        guard applicationTransitionIsCurrent(generation),
+              applicationIsActive else {
+            return
+        }
         await reload()
     }
 
@@ -1347,18 +1443,67 @@ final class PlozziOSDownloadsModel {
                 "The active profile changed. Try the download again."
             )
         }
-        inFlightEnqueueCount += 1
+        guard applicationIsActive else {
+            throw PlozziOSDownloadError.unavailable(
+                "Plozz moved to the background. Try the download again."
+            )
+        }
     }
 
-    private func finishEnqueue() {
-        precondition(inFlightEnqueueCount > 0)
-        inFlightEnqueueCount -= 1
-        guard inFlightEnqueueCount == 0 else { return }
-        let waiters = enqueueDrainWaiters
-        enqueueDrainWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
+    private func ensureEnqueueMayPersist() throws {
+        guard acceptsNewWork else {
+            throw PlozziOSDownloadError.unavailable(
+                "The active profile changed. Try the download again."
+            )
         }
+        guard applicationIsActive else {
+            throw PlozziOSDownloadError.unavailable(
+                "Plozz moved to the background. Try the download again."
+            )
+        }
+    }
+
+    /// A lifecycle or profile transition can land while request construction or
+    /// queue persistence is awaiting another actor. Records are persisted without
+    /// starting transport, then activated only after current state is rechecked.
+    private func activateEnqueued(
+        _ records: [DownloadedMediaRecord],
+        using queue: DownloadQueue
+    ) async throws -> Bool {
+        for record in records where record.status != .completed {
+            guard acceptsNewWork, applicationIsActive else { break }
+            await queue.resume(identityKey: record.identityKey)
+        }
+
+        guard acceptsNewWork else {
+            for record in records where record.status != .completed {
+                await queue.pause(
+                    identityKey: record.identityKey,
+                    reason: .inactiveProfile
+                )
+            }
+            throw PlozziOSDownloadError.unavailable(
+                "The active profile changed. Try the download again."
+            )
+        }
+        guard applicationIsActive else {
+            for record in records where record.status != .completed {
+                await queue.pause(
+                    identityKey: record.identityKey,
+                    reason: backgroundPauseReason(for: record)
+                )
+            }
+            return false
+        }
+        return true
+    }
+
+    private func backgroundPauseReason(
+        for record: DownloadedMediaRecord
+    ) -> DownloadPauseReason {
+        record.sourceKind == .directShare
+            ? .directShareBackground
+            : .backgroundPolicy
     }
 
     private func reload() async {
@@ -1377,8 +1522,13 @@ final class PlozziOSDownloadsModel {
         if let data = try? JSONEncoder().encode(policy) {
             defaults?.set(data, forKey: policyKey)
         }
+        let activityGeneration = applicationActivityGeneration
         Task {
-            guard acceptsNewWork else { return }
+            guard acceptsNewWork,
+                  applicationIsActive,
+                  applicationTransitionIsCurrent(activityGeneration) else {
+                return
+            }
             let active = restartActiveManagedDownloads
                 ? records.filter {
                     $0.sourceKind == .managedHTTP && $0.status.isActive
@@ -1395,11 +1545,23 @@ final class PlozziOSDownloadsModel {
                     )
                 }
             }
-            guard acceptsNewWork else { return }
+            guard acceptsNewWork,
+                  applicationIsActive,
+                  applicationTransitionIsCurrent(activityGeneration) else {
+                return
+            }
             await queue.updatePolicy(policy)
-            guard acceptsNewWork else { return }
+            guard acceptsNewWork,
+                  applicationIsActive,
+                  applicationTransitionIsCurrent(activityGeneration) else {
+                return
+            }
             await enforceSpeedLimitPausePolicy()
-            guard acceptsNewWork else { return }
+            guard acceptsNewWork,
+                  applicationIsActive,
+                  applicationTransitionIsCurrent(activityGeneration) else {
+                return
+            }
             if restartActiveManagedDownloads {
                 if policy.maximumBytesPerSecond != nil {
                     for record in active where
@@ -1413,7 +1575,17 @@ final class PlozziOSDownloadsModel {
                 } else {
                     await queue.resumePaused(reason: .speedLimitPolicy)
                 }
+                guard acceptsNewWork,
+                      applicationIsActive,
+                      applicationTransitionIsCurrent(activityGeneration) else {
+                    return
+                }
                 await queue.resumePaused(reason: .backgroundPolicy)
+                guard acceptsNewWork,
+                      applicationIsActive,
+                      applicationTransitionIsCurrent(activityGeneration) else {
+                    return
+                }
                 await reload()
             }
         }

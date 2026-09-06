@@ -76,6 +76,7 @@ final class ShareMetadataWorkSchedulerTests: XCTestCase {
 
     private actor WorkGate {
         private var started = false
+        private var isOpen = false
         private var continuation: CheckedContinuation<Void, Never>?
         private var startWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -84,6 +85,7 @@ final class ShareMetadataWorkSchedulerTests: XCTestCase {
             let waiters = startWaiters
             startWaiters.removeAll()
             waiters.forEach { $0.resume() }
+            guard !isOpen else { return }
             await withCheckedContinuation { continuation = $0 }
         }
 
@@ -93,6 +95,7 @@ final class ShareMetadataWorkSchedulerTests: XCTestCase {
         }
 
         func open() {
+            isOpen = true
             continuation?.resume()
             continuation = nil
         }
@@ -360,6 +363,78 @@ final class ShareMetadataWorkSchedulerTests: XCTestCase {
         XCTAssertEqual(finalEvents, ["slice-1", "slice-2"])
     }
 
+    func testForegroundServesOtherAccountsWhileCancelledWorkStillDrains() async {
+        let recorder = Recorder()
+        let gate = WorkGate()
+        let scheduler = ShareMetadataWorkScheduler(
+            adaptiveBudget: false,
+            configuration: .init(
+                maxItemsPerSlice: 1,
+                maxSliceDuration: .seconds(1),
+                delayBetweenSlices: .milliseconds(1),
+                interactiveIdleDelay: .milliseconds(1),
+                blockedPollDelay: .milliseconds(1)
+            )
+        )
+        await scheduler.register(
+            accountKey: "stalled",
+            mayRun: { true },
+            runSlice: { _ in
+                await recorder.begin("stalled")
+                await gate.wait()
+                if Task.isCancelled {
+                    await recorder.noteCancelled()
+                }
+                await recorder.end()
+                return .init(attempted: 0, hasMore: true)
+            },
+            runItem: { _ in }
+        )
+        await scheduler.register(
+            accountKey: "ready",
+            mayRun: { true },
+            runSlice: { _ in
+                await recorder.begin("ready")
+                await recorder.end()
+                return .init(attempted: 1, hasMore: false)
+            },
+            runItem: { _ in }
+        )
+
+        await scheduler.enqueueBacklog(accountKey: "stalled")
+        await gate.waitUntilStarted()
+
+        let suspension = Task {
+            await scheduler.setBackgroundWorkAllowed(false, revision: 1)
+            await recorder.begin("suspended")
+            await recorder.end()
+        }
+        let suspensionReturned = await waitUntil {
+            (await recorder.events).contains("suspended")
+        }
+        XCTAssertTrue(
+            suspensionReturned,
+            "suspension admission must not await cancellation-insensitive work"
+        )
+
+        await scheduler.setBackgroundWorkAllowed(true, revision: 2)
+        await scheduler.enqueueBacklog(accountKey: "ready")
+        let unrelatedResumed = await waitUntil {
+            (await recorder.events).contains("ready")
+        }
+        XCTAssertTrue(
+            unrelatedResumed,
+            "foreground must resume unrelated accounts while old work drains"
+        )
+
+        await gate.open()
+        _ = await suspension.value
+        let oldCancelled = await waitUntil { await recorder.cancelled == 1 }
+        XCTAssertTrue(oldCancelled)
+        await scheduler.remove(accountKey: "stalled")
+        await scheduler.remove(accountKey: "ready")
+    }
+
     func testStaleBackgroundRevisionCannotOverrideNewerForegroundState() async {
         let recorder = Recorder()
         let scheduler = ShareMetadataWorkScheduler(adaptiveBudget: false)
@@ -380,6 +455,51 @@ final class ShareMetadataWorkSchedulerTests: XCTestCase {
 
         let ran = await waitUntil { await recorder.events == ["slice"] }
         XCTAssertTrue(ran)
+        await scheduler.remove(accountKey: "a")
+    }
+
+    func testStaleAdmissionCallbackCannotStartWorkAfterLifecycleRestart() async {
+        let recorder = Recorder()
+        let gate = AdmissionGate()
+        let scheduler = ShareMetadataWorkScheduler(
+            adaptiveBudget: false,
+            configuration: .init(
+                maxItemsPerSlice: 1,
+                maxSliceDuration: .seconds(1),
+                delayBetweenSlices: .milliseconds(1),
+                interactiveIdleDelay: .milliseconds(1),
+                blockedPollDelay: .milliseconds(1)
+            )
+        )
+        await scheduler.register(
+            accountKey: "a",
+            mayRun: { await gate.mayRun() },
+            runSlice: { _ in
+                await recorder.begin("slice")
+                await recorder.end()
+                return .init(attempted: 1, hasMore: false)
+            },
+            runItem: { _ in }
+        )
+
+        await scheduler.enqueueBacklog(accountKey: "a")
+        await gate.waitUntilFirstCallStarts()
+        await scheduler.setBackgroundWorkAllowed(false, revision: 1)
+        await scheduler.setBackgroundWorkAllowed(true, revision: 2)
+        await gate.allowLaterCalls()
+        await gate.releaseFirstCall()
+
+        let recovered = await waitUntil {
+            await recorder.events == ["slice"]
+        }
+        XCTAssertTrue(recovered)
+        try? await Task.sleep(for: .milliseconds(20))
+        let finalEvents = await recorder.events
+        XCTAssertEqual(
+            finalEvents,
+            ["slice"],
+            "the stale pre-suspension admission must not also launch"
+        )
         await scheduler.remove(accountKey: "a")
     }
 

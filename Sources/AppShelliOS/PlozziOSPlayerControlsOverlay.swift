@@ -1080,13 +1080,14 @@ private struct PlozziOSSubtitleOptionsSheet: View {
     private var secondaryStatusText: LocalizedStringResource? {
         switch viewModel.controls.secondarySubtitleStatus {
         case .idle:
-            nil
+            return nil
         case .loading:
-            "Loading second subtitle…"
+            return LocalizedStringResource("Loading second subtitle…")
         case let .loaded(cueCount):
-            cueCount == 0 ? "The selected track contains no cues." : nil
+            guard cueCount == 0 else { return nil }
+            return LocalizedStringResource("The selected track contains no cues.")
         case .unavailable:
-            "The selected second subtitle could not be loaded."
+            return LocalizedStringResource("The selected second subtitle could not be loaded.")
         }
     }
 

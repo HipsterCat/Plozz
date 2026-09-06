@@ -3,6 +3,47 @@ import CoreModels
 
 /// Platform-neutral detail-page server and media-version selection.
 public enum DetailPlaybackSelection {
+    public static func showsPlayPlaceholder(
+        for item: MediaItem,
+        hasPlayTarget: Bool,
+        childrenLoaded: Bool,
+        seasonLoadState: SeasonLoadState?
+    ) -> Bool {
+        guard !hasPlayTarget,
+              item.kind == .series || item.kind == .season,
+              item.hasPlayableLibraryTarget() else { return false }
+        if !childrenLoaded { return true }
+        if case .notLoaded? = seasonLoadState { return true }
+        return false
+    }
+
+    public static func resumeItem(for item: MediaItem, in continueWatching: [MediaItem]) -> MediaItem? {
+        guard let account = item.sourceAccountID else { return nil }
+        return continueWatching.first { candidate in
+            guard candidate.sourceAccountID == account,
+                  candidate.locallyValidatedPlayableSource else { return false }
+            if item.kind == .series {
+                return candidate.kind == .episode && candidate.seriesID == item.id
+            }
+            return candidate.kind == item.kind && candidate.id == item.id
+        }
+    }
+
+    public static func applyingResumeItem(_ resume: MediaItem?, to item: MediaItem) -> MediaItem {
+        guard let resume,
+              resume.id == item.id,
+              resume.kind == item.kind,
+              resume.sourceAccountID == item.sourceAccountID else { return item }
+        var copy = item
+        copy.resumePosition = resume.resumePosition
+        copy.playedPercentage = resume.playedPercentage
+        copy.isPlayed = resume.isPlayed
+        copy.hasBeenPlayed = resume.hasBeenPlayed
+        copy.lastPlayedAt = resume.lastPlayedAt
+        if copy.runtime == nil { copy.runtime = resume.runtime }
+        return copy
+    }
+
     public static func serverChoices(from sources: [MediaSourceRef]) -> [MediaSourceRef] {
         var seen = Set<String>()
         return sources.filter { seen.insert($0.accountID).inserted }
