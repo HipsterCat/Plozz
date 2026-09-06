@@ -102,6 +102,32 @@ The paired `FeatureLiveTV` / `FeatureLiveTVCore` types are explicitly named
 30-channel fixture catalog remains for deterministic guide/filter/state tests,
 separate from the real catalog used by the app.
 
+## Live activity and diagnostics
+
+The centered activity indicator is owned by `LiveChannelPlayerModel`, not
+AetherEngine. This prototype currently uses native AVPlayer playback.
+`LivePlaybackActivity` reconciles the ready video surface and advancing playback
+clock with transport hints. A one-second no-progress grace prevents a transient
+transport wait from flashing the overlay over moving video. A genuinely frozen
+clock still becomes buffering, even if transport claims to be playing.
+Startup, explicit seeks, pause, foreground recovery and retries have separate
+readiness/progress boundaries; a seek jump is not counted as playback.
+
+Debug diagnostics use the existing `HandoffDiagnostics` bounded playback journal
+and `PlozzLog` recent-log ring, tagged `LIVE_TV`. Snapshots include transport and
+item states, waiting reason, layer readiness/attachment, clock advancement, rate,
+buffer flags and DVR-window duration. Changes are coalesced to at most one
+snapshot per second; steady playback emits a heartbeat every ten seconds.
+Lifecycle and classified failure events are also recorded. Correlation uses a
+random session ID, not a channel name, locator or credential. Error text and
+raw URLs are never included in these new events.
+
+The journal is `Library/Caches/Plozz/playback-trace.log` (64 KiB limit).
+Use existing in-app diagnostics export when available. Do not copy the active
+tvOS app container, attach a debugger, or relaunch with `--console` during
+someone's viewing without authorization: these can interrupt playback.
+No replacement `EngineLog.handler` is installed.
+
 Run the focused model tests through the existing simulator runner:
 
 ```sh

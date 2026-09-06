@@ -557,8 +557,12 @@ private final class LiveChannelPlayerModel {
     private let request: PlaybackRequest
     private let idleSleepGuard = IdleSleepGuard()
     private var monitorTask: Task<Void, Never>?
-    private var attemptStartedAt = Date()
-    private var bufferingStartedAt: Date?
+    private var attemptStartedAt = ProcessInfo.processInfo.systemUptime
+    private var bufferingStartedAt: TimeInterval?
+    @ObservationIgnored private var activity = LivePlaybackActivity()
+    @ObservationIgnored private var diagnostics = LiveChannelDiagnostics()
+    private var attemptGeneration = 0
+    private var isSeeking = false
     private var isSuspended = false
     private var shouldResumeWhenActive = false
     private var userPaused = false
@@ -619,6 +623,7 @@ private final class LiveChannelPlayerModel {
     func retry() async {
         guard canRetry else { return }
         manualRetryCount += 1
+        diagnostics.event(.retry, attempt: manualRetryCount + 1)
         await loadAttempt()
     }
 
@@ -626,14 +631,18 @@ private final class LiveChannelPlayerModel {
         guard !phase.isInterrupted else { return }
         if userPaused {
             userPaused = false
+            activity.reset(preservingFrame: true)
+            diagnostics.event(.resume, attempt: manualRetryCount + 1)
             if !isSuspended {
                 engine.play()
                 phase = hasPresentedFrame ? .buffering : .loading
-                bufferingStartedAt = Date()
+                bufferingStartedAt = ProcessInfo.processInfo.systemUptime
             }
         } else {
             guard canPause else { return }
             userPaused = true
+            activity.reset(preservingFrame: true)
+            diagnostics.event(.pause, attempt: manualRetryCount + 1)
             shouldResumeWhenActive = false
             engine.pause()
             phase = .paused
@@ -644,11 +653,19 @@ private final class LiveChannelPlayerModel {
 
     func goLive() async {
         guard let target = seekableWindow?.liveTarget, canGoLive else { return }
+        let generation = attemptGeneration
         userPaused = false
+        isSeeking = true
+        activity.reset(preservingFrame: true)
+        diagnostics.event(.seek, attempt: manualRetryCount + 1)
         phase = .buffering
-        bufferingStartedAt = Date()
+        bufferingStartedAt = ProcessInfo.processInfo.systemUptime
         await engine.seek(to: target, kind: .exact)
-        guard !stopped, !isSuspended, !phase.isInterrupted else { return }
+        guard generation == attemptGeneration else { return }
+        isSeeking = false
+        activity.reset(preservingFrame: true)
+        diagnostics.event(.seekCompleted, attempt: manualRetryCount + 1)
+        guard !stopped, !isSuspended, !phase.isInterrupted, !userPaused else { return }
         engine.play()
         refreshFromPlayer()
     }
@@ -656,14 +673,18 @@ private final class LiveChannelPlayerModel {
     func handleScenePhase(_ scenePhase: ScenePhase) {
         switch scenePhase {
         case .active:
+            if isSuspended {
+                diagnostics.event(.foreground, attempt: manualRetryCount + 1)
+                activity.reset(preservingFrame: true)
+            }
             isSuspended = false
             let shouldResume = shouldResumeWhenActive && !userPaused && !phase.isInterrupted
             shouldResumeWhenActive = false
             if shouldResume {
                 if hasPresentedFrame {
-                    bufferingStartedAt = Date()
+                    bufferingStartedAt = ProcessInfo.processInfo.systemUptime
                 } else {
-                    attemptStartedAt = Date()
+                    attemptStartedAt = ProcessInfo.processInfo.systemUptime
                 }
                 engine.play()
                 phase = hasPresentedFrame ? .buffering : .loading
@@ -671,11 +692,15 @@ private final class LiveChannelPlayerModel {
         case .inactive, .background:
             guard !isSuspended else { return }
             isSuspended = true
+            activity.reset(preservingFrame: true)
+            diagnostics.event(.suspend, attempt: manualRetryCount + 1)
             shouldResumeWhenActive = !userPaused && !phase.isInterrupted
             engine.pause()
             idleSleepGuard.allowSleep()
         @unknown default:
             isSuspended = true
+            activity.reset(preservingFrame: true)
+            diagnostics.event(.suspend, attempt: manualRetryCount + 1)
             shouldResumeWhenActive = false
             engine.pause()
             idleSleepGuard.allowSleep()
@@ -685,6 +710,8 @@ private final class LiveChannelPlayerModel {
     func stop() {
         guard !stopped else { return }
         stopped = true
+        attemptGeneration += 1
+        diagnostics.event(.stop, attempt: manualRetryCount + 1)
         monitorTask?.cancel()
         monitorTask = nil
         engine.onFailure = nil
@@ -694,14 +721,19 @@ private final class LiveChannelPlayerModel {
     }
 
     private func loadAttempt() async {
+        attemptGeneration += 1
+        diagnostics.event(.load, attempt: manualRetryCount + 1)
+        activity.reset()
+        isSeeking = false
         phase = .loading
         hasPresentedFrame = false
         seekableWindow = nil
         isAtLiveEdge = true
-        attemptStartedAt = Date()
+        attemptStartedAt = ProcessInfo.processInfo.systemUptime
         bufferingStartedAt = nil
         userPaused = false
-        engine.stop()
+        // load() already tears down the old item. Keep its mounted surface so a
+        // retry does not insert a new video layer beneath the old black one.
         await engine.load(request: request, startPosition: 0)
         guard !stopped, !phase.isInterrupted else { return }
         if isSuspended {
@@ -715,7 +747,7 @@ private final class LiveChannelPlayerModel {
         monitorTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(250))
-                guard let self else { return }
+                guard !Task.isCancelled, let self else { return }
                 self.refreshFromPlayer()
             }
         }
@@ -733,6 +765,12 @@ private final class LiveChannelPlayerModel {
 
         guard let player = engine.underlyingPlayer,
               let item = player.currentItem else {
+            recordSnapshot(
+                player: engine.underlyingPlayer, item: nil, surface: nil,
+                result: .loading, transport: .unknown,
+                layerReady: false, layerMatchesPlayer: false,
+                uptime: ProcessInfo.processInfo.systemUptime
+            )
             enforceStartupTimeout()
             idleSleepGuard.allowSleep()
             return
@@ -755,60 +793,100 @@ private final class LiveChannelPlayerModel {
             isAtLiveEdge = true
         }
 
-        let hadPresentedFrame = hasPresentedFrame
-        if let surface = engine.makeVideoOutputView() as? PlayerLayerView,
-           surface.playerLayer.isReadyForDisplay {
-            hasPresentedFrame = true
-        }
-        if !hadPresentedFrame, hasPresentedFrame {
-            bufferingStartedAt = nil
-        }
-
-        if isSuspended || userPaused {
-            phase = .paused
-            bufferingStartedAt = nil
-            idleSleepGuard.allowSleep()
-            return
-        }
-
+        let transport: LivePlaybackActivity.Transport
         switch player.timeControlStatus {
-        case .playing where hasPresentedFrame:
+        case .playing: transport = .playing
+        case .waitingToPlayAtSpecifiedRate: transport = .waiting
+        case .paused: transport = .paused
+        @unknown default: transport = .unknown
+        }
+        let uptime = ProcessInfo.processInfo.systemUptime
+        let surface = engine.makeVideoOutputView() as? PlayerLayerView
+        let layerMatchesPlayer = surface?.player === player
+        let layerReady = surface?.playerLayer.isReadyForDisplay == true
+        let result = activity.update(
+            .init(
+                uptime: uptime, position: player.currentTime().seconds,
+                presentationReady: layerReady && layerMatchesPlayer,
+                transport: transport
+            ),
+            intent: userPaused ? .pause : (isSeeking ? .seek : .play)
+        )
+        hasPresentedFrame = activity.hasPresentedFrame
+        switch result {
+        case .playing:
             phase = .playing
             bufferingStartedAt = nil
-        case .waitingToPlayAtSpecifiedRate:
-            beginOrContinueWaiting()
-        case .paused:
-            beginOrContinueWaiting()
-        case .playing:
+        case .loading:
             phase = .loading
-        @unknown default:
-            beginOrContinueWaiting()
+        case .buffering:
+            phase = .buffering
+            if bufferingStartedAt == nil { bufferingStartedAt = uptime }
+        case .paused:
+            phase = .paused
+            bufferingStartedAt = nil
         }
+        recordSnapshot(
+            player: player, item: item, surface: surface, result: result,
+            transport: transport, layerReady: layerReady,
+            layerMatchesPlayer: layerMatchesPlayer, uptime: uptime
+        )
 
-        if hasPresentedFrame {
+        if userPaused {
+            idleSleepGuard.allowSleep()
+            return
+        } else if hasPresentedFrame {
             enforceBufferingTimeout()
         } else {
             enforceStartupTimeout()
         }
-        idleSleepGuard.keepAwake(phase == .playing && engine.preventsDisplaySleep)
+        idleSleepGuard.keepAwake(phase == .playing)
     }
 
-    private func beginOrContinueWaiting() {
-        phase = hasPresentedFrame ? .buffering : .loading
-        if bufferingStartedAt == nil {
-            bufferingStartedAt = Date()
+    private func recordSnapshot(
+        player: AVPlayer?, item: AVPlayerItem?, surface: PlayerLayerView?,
+        result: LivePlaybackActivity.State, transport: LivePlaybackActivity.Transport,
+        layerReady: Bool, layerMatchesPlayer: Bool, uptime: TimeInterval
+    ) {
+        let itemState: LiveChannelDiagnostics.ItemState
+        switch item?.status {
+        case nil: itemState = .missing
+        case .unknown: itemState = .unknown
+        case .readyToPlay: itemState = .ready
+        case .failed: itemState = .failed
+        @unknown default: itemState = .unknown
         }
+        let wait: LiveChannelDiagnostics.WaitReason
+        switch player?.reasonForWaitingToPlay {
+        case nil: wait = .none
+        case .toMinimizeStalls: wait = .minimizeStalls
+        case .evaluatingBufferingRate: wait = .evaluatingRate
+        case .noItemToPlay: wait = .noItem
+        default: wait = .other
+        }
+        diagnostics.sample(
+            .init(
+                phase: result, transport: transport, item: itemState, wait: wait,
+                layerReady: layerReady, layerMatchesPlayer: layerMatchesPlayer,
+                attached: surface?.window != nil, clockAdvanced: activity.clockAdvanced,
+                position: player?.currentTime().seconds ?? .nan, stalledFor: activity.stalledFor,
+                rate: player?.rate ?? 0, bufferEmpty: item?.isPlaybackBufferEmpty == true,
+                likelyToKeepUp: item?.isPlaybackLikelyToKeepUp == true,
+                seekableDuration: seekableWindow?.duration
+            ),
+            uptime: uptime, attempt: manualRetryCount + 1
+        )
     }
 
     private func enforceStartupTimeout() {
-        guard Date().timeIntervalSince(attemptStartedAt) >= Self.startupTimeout else { return }
+        guard ProcessInfo.processInfo.systemUptime - attemptStartedAt >= Self.startupTimeout else { return }
         fail(.startupTimedOut)
     }
 
     private func enforceBufferingTimeout() {
         guard phase == .buffering,
               let bufferingStartedAt,
-              Date().timeIntervalSince(bufferingStartedAt) >= Self.bufferingTimeout else {
+              ProcessInfo.processInfo.systemUptime - bufferingStartedAt >= Self.bufferingTimeout else {
             return
         }
         fail(.bufferingTimedOut)
@@ -816,6 +894,14 @@ private final class LiveChannelPlayerModel {
 
     private func fail(_ failure: LiveChannelPlaybackFailure) {
         guard !stopped, !phase.isInterrupted else { return }
+        switch failure {
+        case .engine(let error):
+            diagnostics.event(.failure, attempt: manualRetryCount + 1, error: error)
+        case .startupTimedOut:
+            diagnostics.event(.startupTimeout, attempt: manualRetryCount + 1)
+        case .bufferingTimedOut:
+            diagnostics.event(.stallTimeout, attempt: manualRetryCount + 1)
+        }
         engine.pause()
         idleSleepGuard.allowSleep()
         phase = .failed(failure)
@@ -823,6 +909,7 @@ private final class LiveChannelPlayerModel {
 
     private func streamEnded() {
         guard !stopped, !phase.isInterrupted else { return }
+        diagnostics.event(.ended, attempt: manualRetryCount + 1)
         engine.pause()
         idleSleepGuard.allowSleep()
         phase = .ended
