@@ -122,13 +122,12 @@ public final class HomeViewModel {
                 && libraries.isEmpty && librarySections.isEmpty
         }
 
-        /// A copy bounded for launch persistence. Ordinary Home preview rows keep
-        /// only enough cards for the first paint, while Watchlist keeps its complete
-        /// presentation: unlike the previews, that same snapshot backs a dedicated
-        /// browse destination and must not strand navigation at 30 items.
+        /// Bounds discovery previews for launch persistence, not Continue Watching.
+        /// The complete resume row must survive a relaunch or failed refresh.
+        /// Watchlist likewise keeps its separate full-browsing budget.
         func bounded(perRow: Int, watchlistLimit: Int) -> Content {
             Content(
-                continueWatching: Array(continueWatching.prefix(perRow)),
+                continueWatching: continueWatching,
                 latest: Array(latest.prefix(perRow)),
                 watchlist: Array(watchlist.prefix(watchlistLimit)),
                 libraries: libraries,

@@ -418,6 +418,30 @@ final class ItemDetailViewModelTests: XCTestCase {
         XCTAssertTrue(provider.itemCallCounts.isEmpty)
     }
 
+    func testSeriesResumeFindsNextEpisodeBeyondSixtyTitles() async {
+        let show = series("old-series")
+        let nextEpisode = MediaItem(
+            id: "old-next",
+            title: "Next Episode",
+            kind: .episode,
+            episodeNumber: 2,
+            seriesID: show.id
+        )
+        let provider = FakeMediaProvider(allItems: [show])
+        provider.continueWatchingItems = (0..<125).map {
+            MediaItem(id: "other-\($0)", title: "Other \($0)", kind: .movie)
+        } + [nextEpisode]
+        let vm = ItemDetailViewModel(
+            provider: provider,
+            itemID: show.id,
+            onlineTrailerResolver: { _ in [] },
+            playableVideoIDResolver: { _ in nil },
+            trailerCache: TrailerResolutionCache()
+        )
+        await vm.load()
+        XCTAssertEqual(vm.serverResumeEpisode?.id, nextEpisode.id)
+    }
+
     func testDiscoveryLoadsRichMetadataWithoutCallingMediaProvider() async {
         var seed = MediaItem(
             id: "seer:movie:42",

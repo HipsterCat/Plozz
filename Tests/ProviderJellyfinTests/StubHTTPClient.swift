@@ -8,8 +8,13 @@ import FoundationNetworking
 /// Configurable `HTTPClient` test double matching by path suffix.
 final class StubHTTPClient: HTTPClient, @unchecked Sendable {
     struct Stub { var status: Int = 200; var body: Data }
+    private struct RegisteredStub {
+        let suffix: String
+        let requiredQueryItems: [URLQueryItem]
+        let stub: Stub
+    }
 
-    var responses: [(suffix: String, stub: Stub)] = []
+    private var responses: [RegisteredStub] = []
     private var queues: [String: [Stub]] = [:]
     var error: AppError?
     /// Guards the request-recording arrays below: the provider now issues several
@@ -22,7 +27,22 @@ final class StubHTTPClient: HTTPClient, @unchecked Sendable {
     private(set) var sentQueryItems: [[URLQueryItem]] = []
 
     func stub(pathSuffix: String, json: String, status: Int = 200) {
-        responses.append((pathSuffix, Stub(status: status, body: Data(json.utf8))))
+        stub(pathSuffix: pathSuffix, requiring: [], json: json, status: status)
+    }
+
+    func stub(
+        pathSuffix: String,
+        requiring queryItems: [URLQueryItem],
+        json: String,
+        status: Int = 200
+    ) {
+        responses.append(
+            RegisteredStub(
+                suffix: pathSuffix,
+                requiredQueryItems: queryItems,
+                stub: Stub(status: status, body: Data(json.utf8))
+            )
+        )
     }
 
     func stubSequence(pathSuffix: String, jsons: [String]) {
@@ -68,6 +88,7 @@ final class StubHTTPClient: HTTPClient, @unchecked Sendable {
         guard let match = queued
             ?? responses.first(where: {
                 endpoint.path.hasSuffix($0.suffix)
+                    && $0.requiredQueryItems.allSatisfy(endpoint.queryItems.contains)
             })?.stub else {
             throw AppError.notFound
         }

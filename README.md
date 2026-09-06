@@ -82,6 +82,9 @@ presents them as a single library rather than a set of tabs you switch between.
 
 ### Watching
 
+- **Continue Watching without an app-imposed cutoff** — all titles supplied by
+  your servers remain reachable, ordered by recency. Older next-up episodes move
+  back instead of disappearing; server settings and your removals still apply.
 - **Plays essentially anything** — HDR, Dolby Vision, AV1, and the awkward files
   other clients hand back to you, powered by
   [AetherEngine](https://github.com/superuser404notfound/AetherEngine).
