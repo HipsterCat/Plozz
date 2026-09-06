@@ -96,19 +96,6 @@ final class HomeHeroRecedeModel {
     var isReceded = false
 }
 
-private struct HomeHeroNavigationReporter: View {
-    let hasHero: Bool
-    let recede: HomeHeroRecedeModel
-
-    var body: some View {
-        Color.clear
-            .preference(
-                key: HomeHeroNavigationPreference.self,
-                value: .resolve(hasHero: hasHero, isReceded: recede.isReceded)
-            )
-    }
-}
-
 /// The Home screen: an optional cinematic **hero** carousel followed by
 /// Continue Watching, Latest, and library shortcuts.
 public struct HomeView: View {
@@ -310,13 +297,7 @@ public struct HomeView: View {
             state: viewModel.state,
             emptyMessage: "Your libraries are empty. Add media on your media server to see it here.",
             onRetry: { Task { await viewModel.load() } },
-            loadingContent: {
-                HomeSkeletonView(layout: viewModel.skeletonLayout, heroActive: heroSettings?.settings.isActive ?? false, continueWatchingShowsSeriesArtwork: visibility.continueWatchingShowsSeriesArtwork)
-                    .preference(
-                        key: HomeHeroNavigationPreference.self,
-                        value: .resolve(hasHero: heroSettings?.settings.isActive ?? false, isReceded: false)
-                    )
-            }
+            loadingContent: { HomeSkeletonView(layout: viewModel.skeletonLayout, heroActive: heroSettings?.settings.isActive ?? false, continueWatchingShowsSeriesArtwork: visibility.continueWatchingShowsSeriesArtwork) }
         ) { content in
             // The screen is a data-driven list of rows. Both this loaded view and
             // the skeleton render from the same ordered `HomeRow`/`HomeRowKind`
@@ -477,10 +458,6 @@ public struct HomeView: View {
                                 onPinnedItemsChanged: { heroRuntime.pinnedItemIDs = $0 },
                                 recedeModel: heroRecedeModel
                             )
-                            // Rows keep their fixed navigation gutter. The hero
-                            // uses the compact Home button and needs no rail inset,
-                            // even while receding, so Down never shifts it sideways.
-                            .environment(\.plozzNavigationContentInset, navigationStyle == .rail ? 0 : navigationContentInset)
                             .id(Self.heroTopID)
                             // (touch-pan disabler lives as a sibling below so it is
                             //  unambiguously inside the scroll content — see note.)
@@ -590,7 +567,7 @@ public struct HomeView: View {
                 // robust where `.onMoveCommand` was not (a Down that relocates focus
                 // is consumed by the engine and never delivered to the hero).
                 .onScrollGeometryChange(for: Bool.self) { geometry in
-                    heroLayoutActive && geometry.contentOffset.y > Self.recedeScrollThreshold
+                    heroActive && geometry.contentOffset.y > Self.recedeScrollThreshold
                 } action: { _, shouldRecede in
                     withAnimation(.smooth(duration: Self.recedeAnimationDuration)) {
                         heroRecedeModel.isReceded = shouldRecede
@@ -605,9 +582,6 @@ public struct HomeView: View {
                 // otherwise leaves each row short of the physical edge. Native
                 // top/sidebar styles retain their original safe-area behavior.
                 .ignoresSafeArea(.container, edges: ignoredScrollEdges)
-            }
-            .background {
-                HomeHeroNavigationReporter(hasHero: heroLayoutActive, recede: heroRecedeModel)
             }
             // Remember the structure we actually rendered (post-visibility), keyed
             // on kinds *and* counts so a changed card count re-persists too. Only in
