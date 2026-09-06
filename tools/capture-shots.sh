@@ -180,6 +180,10 @@ case "$PLATFORM" in
     exit 2 ;;
 esac
 
+source tools/lib/apple-build-lease.sh
+acquire_apple_build_shared_lease "plozz/capture-shots"
+install_apple_build_lease_traps
+
 mkdir -p "$OUT"
 
 # Resolves the newest available Simulator UDID for a device name on this

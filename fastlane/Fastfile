@@ -21,6 +21,7 @@
 
 require "json"
 require "shellwords"
+require File.expand_path("../tools/lib/apple_build_lease", __dir__)
 
 APP_IDENTIFIER = "com.thatcube.Plozz"
 APP_NAME       = "Plozz"
@@ -479,13 +480,16 @@ end
 
 desc "Regenerate the Xcode project from project.yml via XcodeGen"
 lane :generate_project do
+  AppleBuildLease.with_shared("plozz/fastlane/generate-project") do
   # generate-project.sh runs xcodegen and bakes the build number (PLOZZ_BUILD_NUMBER
   # override, else git commit count) into CFBundleVersion so it's never missed.
   sh("cd .. && ./tools/generate-project.sh")
+  end
 end
 
 desc "Archive signed tvOS and universal iOS/iPadOS App Store .ipa files"
 lane :build do |options|
+  AppleBuildLease.with_shared("plozz/fastlane/build") do
   # App Store Connect rejects beta-SDK builds, and this machine's active toolchain
   # is the Xcode beta — force a release Xcode before anything compiles.
   select_release_xcode
@@ -539,10 +543,12 @@ lane :build do |options|
       xcargs: prov_args
     )
   end
+  end
 end
 
 desc "Build and upload tvOS plus iOS/iPadOS to TestFlight"
 lane :beta do
+  AppleBuildLease.with_shared("plozz/fastlane/beta") do
   api_key = asc_api_key
   # Bake the channel into the binary rather than leaving the app to infer it from
   # an App Store receipt — on tvOS that receipt can be absent, which would make a
@@ -589,10 +595,12 @@ lane :beta do
     true
   )
   report_release_tagging_failures
+  end
 end
 
 desc "Build and upload tvOS plus iOS/iPadOS to the App Store"
 lane :release do
+  AppleBuildLease.with_shared("plozz/fastlane/release") do
   api_key = asc_api_key
   ENV["PLOZZ_RELEASE_CHANNEL"] = "production"
   entry = release_notes_entry
@@ -637,4 +645,5 @@ lane :release do
     false
   )
   report_release_tagging_failures
+  end
 end
