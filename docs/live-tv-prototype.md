@@ -2,7 +2,7 @@
 
 A native, Debug-only harness for iterating on a physical Apple TV, iPhone and
 iPad. It browses real public channels and plays their HLS streams through
-Plozz's existing `NativeVideoEngine`. Production onboarding and navigation
+Plozz's existing AetherEngine (`PlozzigenVideoEngine`) integration. Production onboarding and navigation
 are unchanged.
 
 ## Run
@@ -96,6 +96,9 @@ constructing the VOD `PlayerViewModel`, media-provider reporting sessions, resum
 writers or trackers. This avoids incorrectly treating an endless channel as a
 movie while leaving ordinary library playback unchanged. App targets inject the
 player into `FeatureLiveTV`; UI feature modules do not import one another.
+The app also injects the `LiveChannelEngine` implementation into the host, so
+`FeaturePlayback` does not depend back on `EnginePlozzigen`. Engine initialization
+failures are visible; the prototype never silently substitutes direct AVPlayer.
 
 The paired `FeatureLiveTV` / `FeatureLiveTVCore` types are explicitly named
 `LiveTVPrototype*`; they are not a final provider API. The core's synthetic
@@ -104,19 +107,39 @@ separate from the real catalog used by the app.
 
 ## Live activity and diagnostics
 
-The centered activity indicator is owned by `LiveChannelPlayerModel`, not
-AetherEngine. This prototype currently uses native AVPlayer playback.
-`LivePlaybackActivity` reconciles the ready video surface and advancing playback
-clock with transport hints. A one-second no-progress grace prevents a transient
-transport wait from flashing the overlay over moving video. A genuinely frozen
-clock still becomes buffering, even if transport claims to be playing.
-Startup, explicit seeks, pause, foreground recovery and retries have separate
-readiness/progress boundaries; a seek jump is not counted as playback.
+The centered activity indicator is owned by `LiveChannelPlayerModel` and driven
+by AetherEngine's typed `playbackPhase`, gated on
+`hasFirstFrameReadyForDisplay` for initial video. Connecting, buffering, seeking
+and reconnecting are distinct. The host no longer reconstructs engine state
+from AVPlayer transport hints or a second playback-clock classifier.
+
+Live loads use `isLive: true`, the stable `.standard` join profile and native
+remote HLS with Aether's compatibility fallback. A native HLS route still uses
+AVPlayer internally; Aether owns route selection, engine state and recovery.
+The host uses actual live seekable ranges and Aether's Go Live API, never a
+fabricated movie timeline or a guessed seek target.
+Native HLS uses the origin's actual sliding window; no local DVR duration is
+invented. If compatibility recovery switches to ingest without a DVR window,
+timeshift controls disable rather than promising unavailable rewind.
+
+The host subscribes to `liveSourceReset` before loading. A fixed public channel
+reopens the same URL, with one automatic retune in flight, at least 20 seconds
+between automatic attempts and at most three per channel-viewing session.
+Duplicate signals coalesce, pause/inactivity defers recovery, and exhaustion is
+visible. Two manual retries remain available; they do not replenish automatic
+recovery's budget. Startup is bounded at 30 seconds and sustained activity/stall
+at 60 seconds, leaving room for Aether's own recovery before failing visibly.
+
+This prototype is foreground-only. Inactivity pauses; actual background entry
+stops its engine, and foreground return opens a fresh live session. A user-paused
+channel stays paused until explicitly resumed. Stop, failure, backgrounding and
+replacement invalidate outstanding loads and seeks. Ordinary VOD playback and
+its lifecycle remain unchanged.
 
 Debug diagnostics use the existing `HandoffDiagnostics` bounded playback journal
-and `PlozzLog` recent-log ring, tagged `LIVE_TV`. Snapshots include transport and
-item states, waiting reason, layer readiness/attachment, clock advancement, rate,
-buffer flags and DVR-window duration. Changes are coalesced to at most one
+and `PlozzLog` recent-log ring, tagged `LIVE_TV` with `engine=AetherEngine`.
+Snapshots include typed playback phase, actual video route, first-frame readiness,
+playback/buffered positions, behind-live time and seekable bounds. Changes are coalesced to at most one
 snapshot per second; steady playback emits a heartbeat every ten seconds.
 Lifecycle and classified failure events are also recorded. Correlation uses a
 random session ID, not a channel name, locator or credential. Error text and
@@ -126,10 +149,12 @@ The journal is `Library/Caches/Plozz/playback-trace.log` (64 KiB limit).
 Use existing in-app diagnostics export when available. Do not copy the active
 tvOS app container, attach a debugger, or relaunch with `--console` during
 someone's viewing without authorization: these can interrupt playback.
-No replacement `EngineLog.handler` is installed.
+The existing `PlozzigenVideoEngine` log mirror is reused; the live host installs
+no competing `EngineLog.handler`.
 
 Run the focused model tests through the existing simulator runner:
 
 ```sh
 tools/run-tests.sh FeatureLiveTVCoreTests
+tools/run-tests.sh FeaturePlaybackTests EnginePlozzigenTests
 ```

@@ -1,15 +1,14 @@
-#if DEBUG
 import Foundation
 
-/// The real DVR window advertised by a live `AVPlayerItem`.
+/// The real seekable window advertised by the live engine.
 ///
 /// Kept independent of AVFoundation so the range normalization and live-edge
 /// decisions can be covered without constructing a player item.
-struct LiveSeekableWindow: Equatable {
-    let lowerBound: TimeInterval
-    let upperBound: TimeInterval
+public struct LiveSeekableWindow: Equatable {
+    public let lowerBound: TimeInterval
+    public let upperBound: TimeInterval
 
-    init?(ranges: [(start: TimeInterval, duration: TimeInterval)]) {
+    public init?(ranges: [(start: TimeInterval, duration: TimeInterval)]) {
         let validRanges = ranges.compactMap { range -> (TimeInterval, TimeInterval)? in
             guard range.start.isFinite,
                   range.duration.isFinite,
@@ -47,11 +46,4 @@ struct LiveSeekableWindow: Equatable {
         guard currentTime.isFinite else { return false }
         return upperBound - currentTime <= tolerance
     }
-
-    /// Seeking a fraction behind the exact boundary is more reliable for HLS
-    /// playlists whose newest segment is still being finalized.
-    var liveTarget: TimeInterval {
-        max(lowerBound, upperBound - min(0.5, duration / 2))
-    }
 }
-#endif

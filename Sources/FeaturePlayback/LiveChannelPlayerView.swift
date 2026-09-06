@@ -11,19 +11,21 @@ import UIKit
 /// The host deliberately bypasses `PlayerViewModel`: live channels have no
 /// provider playback session, watch history, resume point, duration, or
 /// scrobbling lifecycle. Video still runs through Plozz's production
-/// `NativeVideoEngine` and its existing `AVPlayerLayer` surface.
+/// AetherEngine adapter and its existing video surface.
 public struct LiveChannelPlayerView: View {
     private let channelID: String
     private let title: String
     private let streamURL: URL
     private let logoURL: URL?
     private let logoNeedsDarkBackground: Bool
+    private let makeEngine: @MainActor () throws -> any LiveChannelEngine
     private let onPreviousChannel: () -> Void
     private let onNextChannel: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var model: LiveChannelPlayerModel?
+    @State private var engineInitializationFailed = false
     @State private var controlsVisible = true
     @State private var autoHideRevision = 0
     @FocusState private var focusedControl: LiveChannelControl?
@@ -34,6 +36,7 @@ public struct LiveChannelPlayerView: View {
         streamURL: URL,
         logoURL: URL?,
         logoNeedsDarkBackground: Bool = false,
+        makeEngine: @escaping @MainActor () throws -> any LiveChannelEngine,
         onPreviousChannel: @escaping () -> Void,
         onNextChannel: @escaping () -> Void
     ) {
@@ -42,6 +45,7 @@ public struct LiveChannelPlayerView: View {
         self.streamURL = streamURL
         self.logoURL = logoURL
         self.logoNeedsDarkBackground = logoNeedsDarkBackground
+        self.makeEngine = makeEngine
         self.onPreviousChannel = onPreviousChannel
         self.onNextChannel = onNextChannel
     }
@@ -89,8 +93,16 @@ public struct LiveChannelPlayerView: View {
                         onClose: dismissPlayer
                     )
                 } else if model.showsActivityIndicator {
-                    LiveChannelActivityView(isBuffering: model.hasPresentedFrame)
+                    LiveChannelActivityView(phase: model.phase)
                 }
+            } else if engineInitializationFailed {
+                LiveChannelInterruptionView(
+                    interruption: .failure(.engine(.unknown("engine initialization")), retryLimitReached: false),
+                    canRetry: false,
+                    focus: $focusedControl,
+                    onRetry: {},
+                    onClose: dismissPlayer
+                )
             } else {
                 ProgressView()
                     .controlSize(.large)
@@ -120,11 +132,16 @@ public struct LiveChannelPlayerView: View {
             model?.handleScenePhase(phase)
         }
         .task(id: channelID) {
-            let playerModel = LiveChannelPlayerModel(
-                channelID: channelID,
-                title: title,
-                streamURL: streamURL
-            )
+            let engine: any LiveChannelEngine
+            do {
+                engine = try makeEngine()
+            } catch {
+                LiveChannelDiagnostics().event(.initializationFailure, attempt: 0)
+                engineInitializationFailed = true
+                focusAfterPresentation(.close)
+                return
+            }
+            let playerModel = LiveChannelPlayerModel(engine: engine, streamURL: streamURL)
             model = playerModel
             playerModel.handleScenePhase(scenePhase)
             await playerModel.start()
@@ -482,22 +499,16 @@ private struct LiveChannelTransport: View {
 }
 
 private struct LiveChannelActivityView: View {
-    let isBuffering: Bool
+    let phase: LiveChannelPlaybackPhase
 
     var body: some View {
         VStack(spacing: 14) {
             ProgressView()
                 .controlSize(.large)
                 .tint(.white)
-            if isBuffering {
-                Text("Buffering Live Stream…")
-                    .font(.headline)
-                    .foregroundStyle(.white)
-            } else {
-                Text("Connecting to Live Stream…")
-                    .font(.headline)
-                    .foregroundStyle(.white)
-            }
+            Text(phase.activityLabel)
+                .font(.headline)
+                .foregroundStyle(.white)
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 22)
@@ -546,43 +557,50 @@ private struct LiveChannelInterruptionView: View {
 
 @MainActor
 @Observable
-private final class LiveChannelPlayerModel {
-    let engine: NativeVideoEngine
+final class LiveChannelPlayerModel {
+    let engine: any LiveChannelEngine
     private(set) var phase: LiveChannelPlaybackPhase = .loading
     private(set) var hasPresentedFrame = false
     private(set) var seekableWindow: LiveSeekableWindow?
     private(set) var isAtLiveEdge = true
     private(set) var manualRetryCount = 0
 
-    private let request: PlaybackRequest
+    private let streamURL: URL
+    private let uptime: @MainActor () -> TimeInterval
     private let idleSleepGuard = IdleSleepGuard()
     private var monitorTask: Task<Void, Never>?
-    private var attemptStartedAt = ProcessInfo.processInfo.systemUptime
+    private var attemptStartedAt: TimeInterval = 0
     private var bufferingStartedAt: TimeInterval?
-    @ObservationIgnored private var activity = LivePlaybackActivity()
     @ObservationIgnored private var diagnostics = LiveChannelDiagnostics()
+    @ObservationIgnored private var retuneBudget = LiveChannelRetuneBudget()
+    @ObservationIgnored private var recoveryTask: Task<Void, Never>?
+    @ObservationIgnored private var foregroundTask: Task<Void, Never>?
+    private var recoveryGeneration = 0
     private var attemptGeneration = 0
-    private var isSeeking = false
+    private var attemptCount = 0
+    private var isLoading = false
     private var isSuspended = false
-    private var shouldResumeWhenActive = false
+    private var needsForegroundLoad = false
+    private var pendingSourceReset = false
     private var userPaused = false
     private var stopped = false
 
-    private static let startupTimeout: TimeInterval = 15
-    private static let bufferingTimeout: TimeInterval = 20
+    private static let startupTimeout: TimeInterval = 30
+    private static let bufferingTimeout: TimeInterval = 60
     private static let maximumManualRetries = 2
 
-    init(channelID: String, title: String, streamURL: URL) {
-        engine = NativeVideoEngine()
-        request = PlaybackRequest(
-            item: MediaItem(id: channelID, title: title, kind: .video),
-            streamURL: streamURL,
-            sourceFileName: streamURL.lastPathComponent
-        )
+    init(
+        engine: any LiveChannelEngine,
+        streamURL: URL,
+        uptime: @escaping @MainActor () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    ) {
+        self.engine = engine
+        self.streamURL = streamURL
+        self.uptime = uptime
     }
 
     var canPause: Bool {
-        hasPresentedFrame && seekableWindow?.supportsTimeShift == true
+        !phase.isInterrupted && hasPresentedFrame && seekableWindow?.supportsTimeShift == true
     }
 
     var canGoLive: Bool {
@@ -593,19 +611,19 @@ private final class LiveChannelPlayerModel {
         phase.isInterrupted && manualRetryCount < Self.maximumManualRetries
     }
 
-    var interruption: LiveChannelInterruption? {
+    fileprivate var interruption: LiveChannelInterruption? {
         switch phase {
         case .failed(let failure):
             return .failure(failure, retryLimitReached: !canRetry)
         case .ended:
             return .ended(retryLimitReached: !canRetry)
-        case .loading, .buffering, .playing, .paused:
+        case .loading, .buffering, .seeking, .reconnecting, .playing, .paused:
             return nil
         }
     }
 
     var showsActivityIndicator: Bool {
-        phase == .loading || phase == .buffering
+        phase == .loading || phase == .buffering || phase == .seeking || phase == .reconnecting
     }
 
     func start() async {
@@ -616,34 +634,39 @@ private final class LiveChannelPlayerModel {
         engine.onEnded = { [weak self] in
             self?.streamEnded()
         }
+        engine.onLiveSourceReset = { [weak self] in
+            self?.sourceNeedsRetune()
+        }
         startMonitor()
+        guard !isSuspended else {
+            needsForegroundLoad = true
+            return
+        }
         await loadAttempt()
     }
 
     func retry() async {
         guard canRetry else { return }
+        cancelRecovery()
         manualRetryCount += 1
-        diagnostics.event(.retry, attempt: manualRetryCount + 1)
+        diagnostics.event(.retry, attempt: attemptCount + 1)
+        pendingSourceReset = false
+        userPaused = false
         await loadAttempt()
     }
 
     func togglePlayPause() {
         guard !phase.isInterrupted else { return }
-        if userPaused {
+        if userPaused || phase == .paused {
             userPaused = false
-            activity.reset(preservingFrame: true)
-            diagnostics.event(.resume, attempt: manualRetryCount + 1)
-            if !isSuspended {
-                engine.play()
-                phase = hasPresentedFrame ? .buffering : .loading
-                bufferingStartedAt = ProcessInfo.processInfo.systemUptime
-            }
+            diagnostics.event(.resume, attempt: attemptCount)
+            guard !isSuspended else { return }
+            resumeActivePlayback()
         } else {
             guard canPause else { return }
             userPaused = true
-            activity.reset(preservingFrame: true)
-            diagnostics.event(.pause, attempt: manualRetryCount + 1)
-            shouldResumeWhenActive = false
+            diagnostics.event(.pause, attempt: attemptCount)
+            if !isLoading { cancelRecovery() }
             engine.pause()
             phase = .paused
             bufferingStartedAt = nil
@@ -652,56 +675,51 @@ private final class LiveChannelPlayerModel {
     }
 
     func goLive() async {
-        guard let target = seekableWindow?.liveTarget, canGoLive else { return }
+        guard canGoLive, !isSuspended, !isLoading else { return }
         let generation = attemptGeneration
         userPaused = false
-        isSeeking = true
-        activity.reset(preservingFrame: true)
-        diagnostics.event(.seek, attempt: manualRetryCount + 1)
-        phase = .buffering
-        bufferingStartedAt = ProcessInfo.processInfo.systemUptime
-        await engine.seek(to: target, kind: .exact)
+        diagnostics.event(.seek, attempt: attemptCount)
+        phase = .seeking
+        bufferingStartedAt = uptime()
+        await engine.seekToLiveEdge()
         guard generation == attemptGeneration else { return }
-        isSeeking = false
-        activity.reset(preservingFrame: true)
-        diagnostics.event(.seekCompleted, attempt: manualRetryCount + 1)
+        diagnostics.event(.seekCompleted, attempt: attemptCount)
         guard !stopped, !isSuspended, !phase.isInterrupted, !userPaused else { return }
         engine.play()
-        refreshFromPlayer()
+        refreshFromEngine()
     }
 
     func handleScenePhase(_ scenePhase: ScenePhase) {
         switch scenePhase {
         case .active:
-            if isSuspended {
-                diagnostics.event(.foreground, attempt: manualRetryCount + 1)
-                activity.reset(preservingFrame: true)
-            }
+            guard isSuspended, !stopped else { return }
+            diagnostics.event(.foreground, attempt: attemptCount)
             isSuspended = false
-            let shouldResume = shouldResumeWhenActive && !userPaused && !phase.isInterrupted
-            shouldResumeWhenActive = false
-            if shouldResume {
-                if hasPresentedFrame {
-                    bufferingStartedAt = ProcessInfo.processInfo.systemUptime
-                } else {
-                    attemptStartedAt = ProcessInfo.processInfo.systemUptime
-                }
-                engine.play()
-                phase = hasPresentedFrame ? .buffering : .loading
-            }
+            guard !userPaused, !phase.isInterrupted else { return }
+            resumeActivePlayback()
         case .inactive, .background:
-            guard !isSuspended else { return }
+            guard !stopped else { return }
+            if !isSuspended {
+                diagnostics.event(.suspend, attempt: attemptCount)
+            }
             isSuspended = true
-            activity.reset(preservingFrame: true)
-            diagnostics.event(.suspend, attempt: manualRetryCount + 1)
-            shouldResumeWhenActive = !userPaused && !phase.isInterrupted
+            if !isLoading || scenePhase == .background { cancelRecovery() }
             engine.pause()
+            if scenePhase == .background {
+                // This foreground-only harness has no PiP session. Stop both
+                // platforms explicitly rather than racing Aether's auto-reload.
+                needsForegroundLoad = true
+                attemptGeneration += 1
+                isLoading = false
+                foregroundTask?.cancel()
+                foregroundTask = nil
+                engine.stop()
+            }
             idleSleepGuard.allowSleep()
         @unknown default:
             isSuspended = true
-            activity.reset(preservingFrame: true)
-            diagnostics.event(.suspend, attempt: manualRetryCount + 1)
-            shouldResumeWhenActive = false
+            diagnostics.event(.suspend, attempt: attemptCount)
+            cancelRecovery()
             engine.pause()
             idleSleepGuard.allowSleep()
         }
@@ -711,35 +729,44 @@ private final class LiveChannelPlayerModel {
         guard !stopped else { return }
         stopped = true
         attemptGeneration += 1
-        diagnostics.event(.stop, attempt: manualRetryCount + 1)
+        diagnostics.event(.stop, attempt: attemptCount)
+        cancelRecovery()
+        foregroundTask?.cancel()
+        foregroundTask = nil
         monitorTask?.cancel()
         monitorTask = nil
         engine.onFailure = nil
         engine.onEnded = nil
+        engine.onLiveSourceReset = nil
         engine.stop()
         idleSleepGuard.allowSleep()
     }
 
     private func loadAttempt() async {
+        guard !stopped, !isSuspended else {
+            needsForegroundLoad = true
+            return
+        }
         attemptGeneration += 1
-        diagnostics.event(.load, attempt: manualRetryCount + 1)
-        activity.reset()
-        isSeeking = false
+        let generation = attemptGeneration
+        attemptCount += 1
+        diagnostics.event(.load, attempt: attemptCount)
+        isLoading = true
         phase = .loading
         hasPresentedFrame = false
         seekableWindow = nil
         isAtLiveEdge = true
-        attemptStartedAt = ProcessInfo.processInfo.systemUptime
+        attemptStartedAt = uptime()
         bufferingStartedAt = nil
-        userPaused = false
-        // load() already tears down the old item. Keep its mounted surface so a
-        // retry does not insert a new video layer beneath the old black one.
-        await engine.load(request: request, startPosition: 0)
-        guard !stopped, !phase.isInterrupted else { return }
-        if isSuspended {
+        needsForegroundLoad = false
+        await engine.loadLive(url: streamURL, httpHeaders: [:])
+        guard generation == attemptGeneration, !stopped, !phase.isInterrupted else { return }
+        isLoading = false
+        if isSuspended || userPaused {
             engine.pause()
         }
-        refreshFromPlayer()
+        refreshFromEngine()
+        if pendingSourceReset { requestRetune() }
     }
 
     private func startMonitor() {
@@ -748,12 +775,12 @@ private final class LiveChannelPlayerModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard !Task.isCancelled, let self else { return }
-                self.refreshFromPlayer()
+                self.refreshFromEngine()
             }
         }
     }
 
-    private func refreshFromPlayer() {
+    func refreshFromEngine() {
         guard !stopped, !phase.isInterrupted else {
             idleSleepGuard.allowSleep()
             return
@@ -763,130 +790,141 @@ private final class LiveChannelPlayerModel {
             return
         }
 
-        guard let player = engine.underlyingPlayer,
-              let item = player.currentItem else {
-            recordSnapshot(
-                player: engine.underlyingPlayer, item: nil, surface: nil,
-                result: .loading, transport: .unknown,
-                layerReady: false, layerMatchesPlayer: false,
-                uptime: ProcessInfo.processInfo.systemUptime
-            )
-            enforceStartupTimeout()
-            idleSleepGuard.allowSleep()
+        let snapshot = engine.liveSnapshot
+        diagnostics.sample(snapshot, uptime: uptime(), attempt: attemptCount)
+        if snapshot.phase == .failed {
+            if case .failed(let error) = engine.status {
+                fail(.engine(error))
+            } else {
+                fail(.engine(.invalidResponse))
+            }
             return
         }
-
-        if item.status == .failed || item.error != nil {
-            fail(.engine(.invalidResponse))
+        if snapshot.phase == .ended {
+            streamEnded()
             return
         }
-
-        let ranges = item.seekableTimeRanges.map {
-            let range = $0.timeRangeValue
-            return (start: range.start.seconds, duration: range.duration.seconds)
+        seekableWindow = snapshot.seekableRange.flatMap {
+            LiveSeekableWindow(ranges: [(start: $0.lowerBound, duration: $0.upperBound - $0.lowerBound)])
         }
-        seekableWindow = LiveSeekableWindow(ranges: ranges)
-        if let seekableWindow,
-           engine.currentTime >= seekableWindow.lowerBound - 1 {
-            isAtLiveEdge = seekableWindow.isAtLiveEdge(currentTime: engine.currentTime)
+        if let behind = snapshot.behindLiveSeconds, behind.isFinite {
+            isAtLiveEdge = behind <= 3
         } else {
-            isAtLiveEdge = true
+            isAtLiveEdge = seekableWindow?.isAtLiveEdge(currentTime: snapshot.position) ?? true
         }
-
-        let transport: LivePlaybackActivity.Transport
-        switch player.timeControlStatus {
-        case .playing: transport = .playing
-        case .waitingToPlayAtSpecifiedRate: transport = .waiting
-        case .paused: transport = .paused
-        @unknown default: transport = .unknown
-        }
-        let uptime = ProcessInfo.processInfo.systemUptime
-        let surface = engine.makeVideoOutputView() as? PlayerLayerView
-        let layerMatchesPlayer = surface?.player === player
-        let layerReady = surface?.playerLayer.isReadyForDisplay == true
-        let result = activity.update(
-            .init(
-                uptime: uptime, position: player.currentTime().seconds,
-                presentationReady: layerReady && layerMatchesPlayer,
-                transport: transport
-            ),
-            intent: userPaused ? .pause : (isSeeking ? .seek : .play)
-        )
-        hasPresentedFrame = activity.hasPresentedFrame
-        switch result {
-        case .playing:
-            phase = .playing
-            bufferingStartedAt = nil
-        case .loading:
-            phase = .loading
-        case .buffering:
-            phase = .buffering
-            if bufferingStartedAt == nil { bufferingStartedAt = uptime }
-        case .paused:
-            phase = .paused
-            bufferingStartedAt = nil
-        }
-        recordSnapshot(
-            player: player, item: item, surface: surface, result: result,
-            transport: transport, layerReady: layerReady,
-            layerMatchesPlayer: layerMatchesPlayer, uptime: uptime
-        )
-
+        hasPresentedFrame = hasPresentedFrame || snapshot.firstFrameReady
         if userPaused {
-            idleSleepGuard.allowSleep()
-            return
-        } else if hasPresentedFrame {
-            enforceBufferingTimeout()
+            phase = .paused
+        } else if pendingSourceReset || recoveryTask != nil {
+            phase = .reconnecting
+        } else if !hasPresentedFrame {
+            phase = .loading
         } else {
-            enforceStartupTimeout()
+            switch snapshot.phase {
+            case .idle, .loading: phase = .loading
+            case .playing: phase = snapshot.firstFrameReady ? .playing : .buffering
+            case .paused: phase = .paused
+            case .seeking: phase = .seeking
+            case .rebuffering: phase = .buffering
+            case .stalled(let reconnecting): phase = reconnecting ? .reconnecting : .buffering
+            case .ended, .failed: break
+            }
+        }
+        if showsActivityIndicator {
+            if bufferingStartedAt == nil { bufferingStartedAt = uptime() }
+        } else {
+            bufferingStartedAt = nil
+        }
+        if !userPaused, phase != .paused {
+            if hasPresentedFrame {
+                enforceBufferingTimeout()
+            } else {
+                enforceStartupTimeout()
+            }
         }
         idleSleepGuard.keepAwake(phase == .playing)
     }
 
-    private func recordSnapshot(
-        player: AVPlayer?, item: AVPlayerItem?, surface: PlayerLayerView?,
-        result: LivePlaybackActivity.State, transport: LivePlaybackActivity.Transport,
-        layerReady: Bool, layerMatchesPlayer: Bool, uptime: TimeInterval
-    ) {
-        let itemState: LiveChannelDiagnostics.ItemState
-        switch item?.status {
-        case nil: itemState = .missing
-        case .unknown: itemState = .unknown
-        case .readyToPlay: itemState = .ready
-        case .failed: itemState = .failed
-        @unknown default: itemState = .unknown
+    private func resumeActivePlayback() {
+        attemptStartedAt = uptime()
+        bufferingStartedAt = nil
+        if needsForegroundLoad {
+            guard foregroundTask == nil else { return }
+            foregroundTask = Task { [weak self] in
+                guard let self else { return }
+                await self.loadAttempt()
+                guard !Task.isCancelled else { return }
+                self.foregroundTask = nil
+            }
+        } else if pendingSourceReset {
+            requestRetune()
+        } else {
+            engine.play()
+            refreshFromEngine()
         }
-        let wait: LiveChannelDiagnostics.WaitReason
-        switch player?.reasonForWaitingToPlay {
-        case nil: wait = .none
-        case .toMinimizeStalls: wait = .minimizeStalls
-        case .evaluatingBufferingRate: wait = .evaluatingRate
-        case .noItemToPlay: wait = .noItem
-        default: wait = .other
+    }
+
+    private func sourceNeedsRetune() {
+        guard !stopped, !phase.isInterrupted else { return }
+        if !pendingSourceReset {
+            diagnostics.event(.sourceReset, attempt: attemptCount)
+            pendingSourceReset = true
         }
-        diagnostics.sample(
-            .init(
-                phase: result, transport: transport, item: itemState, wait: wait,
-                layerReady: layerReady, layerMatchesPlayer: layerMatchesPlayer,
-                attached: surface?.window != nil, clockAdvanced: activity.clockAdvanced,
-                position: player?.currentTime().seconds ?? .nan, stalledFor: activity.stalledFor,
-                rate: player?.rate ?? 0, bufferEmpty: item?.isPlaybackBufferEmpty == true,
-                likelyToKeepUp: item?.isPlaybackLikelyToKeepUp == true,
-                seekableDuration: seekableWindow?.duration
-            ),
-            uptime: uptime, attempt: manualRetryCount + 1
-        )
+        requestRetune()
+    }
+
+    @discardableResult
+    func requestRetune() -> Task<Void, Never>? {
+        guard pendingSourceReset, !stopped, !phase.isInterrupted,
+              !isSuspended, !userPaused, !isLoading else { return nil }
+        if let recoveryTask { return recoveryTask }
+        guard !retuneBudget.isExhausted else {
+            fail(.recoveryExhausted)
+            return nil
+        }
+        phase = .reconnecting
+        let recovery = recoveryGeneration
+        let delay = retuneBudget.delayBeforeNextAttempt(uptime: uptime())
+        let task = Task { [weak self] in
+            do {
+                if delay > 0 { try await Task.sleep(for: .seconds(delay)) }
+            } catch is CancellationError {
+                return
+            } catch {
+                self?.fail(.engine(.unknown("recovery scheduling")))
+                return
+            }
+            guard let self, !Task.isCancelled,
+                  self.recoveryGeneration == recovery, !self.stopped,
+                  !self.isSuspended, !self.userPaused else { return }
+            self.retuneBudget.recordAttempt(uptime: self.uptime())
+            self.pendingSourceReset = false
+            self.diagnostics.event(.retune, attempt: self.attemptCount + 1)
+            await self.loadAttempt()
+            guard self.recoveryGeneration == recovery else { return }
+            self.recoveryTask = nil
+            self.refreshFromEngine()
+            if self.pendingSourceReset { self.requestRetune() }
+        }
+        recoveryTask = task
+        return task
+    }
+
+    private func cancelRecovery() {
+        recoveryGeneration += 1
+        recoveryTask?.cancel()
+        recoveryTask = nil
     }
 
     private func enforceStartupTimeout() {
-        guard ProcessInfo.processInfo.systemUptime - attemptStartedAt >= Self.startupTimeout else { return }
+        guard uptime() - attemptStartedAt >= Self.startupTimeout else { return }
         fail(.startupTimedOut)
     }
 
     private func enforceBufferingTimeout() {
-        guard phase == .buffering,
+        guard showsActivityIndicator,
               let bufferingStartedAt,
-              ProcessInfo.processInfo.systemUptime - bufferingStartedAt >= Self.bufferingTimeout else {
+              uptime() - bufferingStartedAt >= Self.bufferingTimeout else {
             return
         }
         fail(.bufferingTimedOut)
@@ -896,29 +934,43 @@ private final class LiveChannelPlayerModel {
         guard !stopped, !phase.isInterrupted else { return }
         switch failure {
         case .engine(let error):
-            diagnostics.event(.failure, attempt: manualRetryCount + 1, error: error)
+            diagnostics.event(.failure, attempt: attemptCount, error: error)
         case .startupTimedOut:
-            diagnostics.event(.startupTimeout, attempt: manualRetryCount + 1)
+            diagnostics.event(.startupTimeout, attempt: attemptCount)
         case .bufferingTimedOut:
-            diagnostics.event(.stallTimeout, attempt: manualRetryCount + 1)
+            diagnostics.event(.stallTimeout, attempt: attemptCount)
+        case .recoveryExhausted:
+            diagnostics.event(.retuneExhausted, attempt: attemptCount)
         }
-        engine.pause()
-        idleSleepGuard.allowSleep()
         phase = .failed(failure)
+        attemptGeneration += 1
+        isLoading = false
+        cancelRecovery()
+        foregroundTask?.cancel()
+        foregroundTask = nil
+        engine.stop()
+        idleSleepGuard.allowSleep()
     }
 
     private func streamEnded() {
         guard !stopped, !phase.isInterrupted else { return }
-        diagnostics.event(.ended, attempt: manualRetryCount + 1)
-        engine.pause()
-        idleSleepGuard.allowSleep()
+        diagnostics.event(.ended, attempt: attemptCount)
         phase = .ended
+        attemptGeneration += 1
+        isLoading = false
+        cancelRecovery()
+        foregroundTask?.cancel()
+        foregroundTask = nil
+        engine.stop()
+        idleSleepGuard.allowSleep()
     }
 }
 
-private enum LiveChannelPlaybackPhase: Equatable {
+enum LiveChannelPlaybackPhase: Equatable {
     case loading
     case buffering
+    case seeking
+    case reconnecting
     case playing
     case paused
     case failed(LiveChannelPlaybackFailure)
@@ -928,7 +980,7 @@ private enum LiveChannelPlaybackPhase: Equatable {
         switch self {
         case .failed, .ended:
             return true
-        case .loading, .buffering, .playing, .paused:
+        case .loading, .buffering, .seeking, .reconnecting, .playing, .paused:
             return false
         }
     }
@@ -939,6 +991,10 @@ private enum LiveChannelPlaybackPhase: Equatable {
             return "CONNECTING"
         case .buffering:
             return "BUFFERING"
+        case .seeking:
+            return "SEEKING"
+        case .reconnecting:
+            return "RECONNECTING"
         case .playing:
             return isAtLiveEdge ? "LIVE" : "BEHIND LIVE"
         case .paused:
@@ -958,15 +1014,25 @@ private enum LiveChannelPlaybackPhase: Equatable {
             return .red
         case .paused:
             return .yellow
-        case .loading, .buffering, .playing:
+        case .loading, .buffering, .seeking, .reconnecting, .playing:
             return .white.opacity(0.82)
+        }
+    }
+
+    var activityLabel: LocalizedStringResource {
+        switch self {
+        case .seeking: "Returning to Live…"
+        case .reconnecting: "Reconnecting to Live Stream…"
+        case .buffering: "Buffering Live Stream…"
+        default: "Connecting to Live Stream…"
         }
     }
 }
 
-private enum LiveChannelPlaybackFailure: Equatable {
+enum LiveChannelPlaybackFailure: Equatable {
     case startupTimedOut
     case bufferingTimedOut
+    case recoveryExhausted
     case engine(AppError)
 }
 
@@ -998,6 +1064,12 @@ private struct LiveChannelInterruption {
                 icon: "exclamationmark.triangle.fill",
                 title: "Unable to Play Channel",
                 message: error.userMessage
+            )
+        case .recoveryExhausted:
+            base = LiveChannelInterruption(
+                icon: "wifi.exclamationmark",
+                title: "Unable to Reconnect",
+                message: "This channel keeps disconnecting. Try again or choose another channel."
             )
         }
         return retryLimitReached ? base.withRetryLimitMessage() : base

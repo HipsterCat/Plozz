@@ -3,6 +3,7 @@ import AppShell
 import CoreModels
 import CoreUI
 #if DEBUG
+import EnginePlozzigen
 import FeatureLiveTV
 import FeaturePlayback
 #endif
@@ -37,6 +38,7 @@ struct PlozzApp: App {
                             channelID: playback.channel.id, title: playback.channel.name,
                             streamURL: playback.streamURL, logoURL: playback.channel.logoURL,
                             logoNeedsDarkBackground: playback.channel.logoNeedsDarkBackground,
+                            makeEngine: { try PlozzigenVideoEngine() },
                             onPreviousChannel: playback.previousChannel,
                             onNextChannel: playback.nextChannel
                         )

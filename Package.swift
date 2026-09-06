@@ -49,6 +49,7 @@ let package = Package(
         .library(name: "FeatureHome", targets: ["FeatureHome"]),
         .library(name: "FeatureSearchCore", targets: ["FeatureSearchCore"]),
         .library(name: "FeaturePlayback", targets: ["FeaturePlayback"]),
+        .library(name: "EnginePlozzigen", targets: ["EnginePlozzigen"]),
         .library(name: "FeatureSearch", targets: ["FeatureSearch"]),
         .library(name: "FeatureLiveTVCore", targets: ["FeatureLiveTVCore"]),
         .library(name: "FeatureLiveTV", targets: ["FeatureLiveTV"]),
