@@ -80,10 +80,8 @@ public struct HomeAggregator: Sendable {
         let serverInfo = accounts.sourceServerInfo()
         let resolve: (String) -> SourceServerInfo? = { serverInfo[$0] }
 
-        // Retire stale next-up suggestions BEFORE the merge, so the row's limited
-        // slots are filled with titles worth showing instead of being spent on
-        // suggestions for series abandoned months ago. In-progress titles are never
-        // touched — see `ContinueWatchingPolicy`.
+        // Home keeps the entire provider feed. Apply restrictions only when a
+        // caller explicitly opts in; recency sorting below never removes titles.
         let curatedContinueWatching = perAccount.map { policy.curated($0.continueWatching) }
         Self.logContinueWatchingCuration(perAccount.map(\.continueWatching), curated: curatedContinueWatching)
         Self.logContinueWatchingMergeInputs(curatedContinueWatching)

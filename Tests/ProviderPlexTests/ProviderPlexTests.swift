@@ -431,6 +431,15 @@ final class PlexProviderMappingTests: XCTestCase {
         )
     }
 
+    private func makeClient(_ stub: StubHTTPClient) -> PlexClient {
+        PlexClient(
+            baseURL: URL(string: "https://plex.host:32400")!,
+            deviceProfile: PlexDeviceProfile(clientIdentifier: "dev1"),
+            token: "TOKEN",
+            http: stub
+        )
+    }
+
     func testLibrariesMapSectionType() async throws {
         let stub = StubHTTPClient()
         stub.stub(pathSuffix: "/library/sections", json: """
@@ -560,8 +569,7 @@ final class PlexProviderMappingTests: XCTestCase {
     /// r6-plex-cw-recency regression: an onDeck *next* episode has no
     /// `lastViewedAt` of its own (it's unwatched), so without stamping it sorts to
     /// the bottom of a merged Continue Watching row. The provider must stamp it with
-    /// its series' last-viewed date, harvested from `/library/all?type=2`, keyed by
-    /// the episode's `grandparentRatingKey`.
+    /// its exact series' last-viewed date, keyed by `grandparentRatingKey`.
     func testContinueWatchingStampsNextEpisodeWithSeriesRecency() async throws {
         let stub = StubHTTPClient()
         // onDeck: an unwatched next episode (no viewOffset, no lastViewedAt) whose
@@ -572,9 +580,7 @@ final class PlexProviderMappingTests: XCTestCase {
            "grandparentRatingKey":"900","grandparentTitle":"The Series","duration":1800000}
         ]}}
         """)
-        // /library/all (type=2 shows, sorted lastViewedAt:desc) reports the series'
-        // real recency.
-        stub.stub(pathSuffix: "/library/all", json: """
+        stub.stub(pathSuffix: "/library/metadata/900", json: """
         {"MediaContainer":{"size":1,"Metadata":[
           {"ratingKey":"900","type":"show","title":"The Series","lastViewedAt":1700000000}
         ]}}
@@ -589,10 +595,9 @@ final class PlexProviderMappingTests: XCTestCase {
         XCTAssertEqual(item.lastPlayedAt, Date(timeIntervalSince1970: 1_700_000_000),
                        "A next-up episode with no lastViewedAt must inherit its series' recency")
 
-        // The recently-viewed-shows query must ask for shows (type=2) by recency.
-        let query = try XCTUnwrap(stub.queryItems(forPathSuffix: "/library/all"))
-        XCTAssertEqual(query.first(where: { $0.name == "type" })?.value, "2")
-        XCTAssertEqual(query.first(where: { $0.name == "sort" })?.value, "lastViewedAt:desc")
+        let query = try XCTUnwrap(stub.queryItems(forPathSuffix: "/library/metadata/900"))
+        XCTAssertEqual(query.first(where: { $0.name == "includeGuids" })?.value, "1")
+        XCTAssertFalse(stub.sentPaths.contains { $0.hasSuffix("/library/all") })
     }
 
     /// An in-progress onDeck item already carries its own `lastViewedAt`; stamping
@@ -606,16 +611,448 @@ final class PlexProviderMappingTests: XCTestCase {
            "lastViewedAt":1650000000}
         ]}}
         """)
-        stub.stub(pathSuffix: "/library/all", json: """
-        {"MediaContainer":{"size":1,"Metadata":[
-          {"ratingKey":"900","type":"show","title":"The Series","lastViewedAt":1700000000}
-        ]}}
-        """)
         let provider = PlexProvider(session: makeSession(), http: stub)
 
         let items = try await provider.continueWatching(limit: 10)
         XCTAssertEqual(items.first?.lastPlayedAt, Date(timeIntervalSince1970: 1_650_000_000),
                        "An in-progress item's own timestamp must win over its series recency")
+        XCTAssertFalse(stub.sentPaths.contains { $0.contains("/library/metadata/900") })
+    }
+
+    func testContinueWatchingUnlimitedReadsPastSixtyAcrossShortPages() async throws {
+        let stub = StubHTTPClient()
+        let first = (0..<40).map {
+            #"{"ratingKey":"m\#($0)","type":"movie","title":"Movie \#($0)"}"#
+        }.joined(separator: ",")
+        let second = (40..<65).map {
+            #"{"ratingKey":"m\#($0)","type":"movie","title":"Movie \#($0)"}"#
+        }.joined(separator: ",")
+        stub.stubSequence(pathSuffix: "/hubs/home/continueWatching", jsons: [
+            """
+            {"MediaContainer":{"size":1,"Hub":[{
+              "size":40,"totalSize":65,"offset":0,"more":true,
+              "Metadata":[\(first)]
+            }]}}
+            """,
+            """
+            {"MediaContainer":{
+              "size":25,"totalSize":65,"offset":40,"Metadata":[\(second)]
+            }}
+            """
+        ])
+
+        let items = try await PlexProvider(
+            session: makeSession(),
+            http: stub
+        ).continueWatching(limit: Int.max)
+
+        XCTAssertEqual(items.count, 65)
+        XCTAssertEqual(items.first?.id, "m0")
+        XCTAssertEqual(items.last?.id, "m64")
+        let hubRequests = zip(stub.sentPaths, stub.sentQueryItems).filter {
+            $0.0.hasSuffix("/hubs/home/continueWatching")
+        }
+        XCTAssertEqual(
+            hubRequests.compactMap {
+                $0.1.first { $0.name == "X-Plex-Container-Start" }?.value
+            },
+            ["0", "40"]
+        )
+        let sizes = hubRequests.compactMap {
+            $0.1.first { $0.name == "X-Plex-Container-Size" }?.value
+                .flatMap { Int($0) }
+        }
+        XCTAssertEqual(sizes, [100, 100])
+        XCTAssertTrue(sizes.allSatisfy { $0 <= 100 })
+    }
+
+    func testContinueWatchingUnlimitedHandlesServerPageCapWithoutTotal() async throws {
+        let stub = StubHTTPClient()
+        stub.stubSequence(pathSuffix: "/hubs/home/continueWatching", jsons: [
+            """
+            {"MediaContainer":{"size":2,"offset":0,"Metadata":[
+              {"ratingKey":"m0","type":"movie","title":"Zero"},
+              {"ratingKey":"m1","type":"movie","title":"One"}
+            ]}}
+            """,
+            """
+            {"MediaContainer":{"size":1,"offset":2,"Metadata":[
+              {"ratingKey":"m2","type":"movie","title":"Two"}
+            ]}}
+            """,
+            """
+            {"MediaContainer":{"size":0,"offset":3,"Metadata":[]}}
+            """
+        ])
+
+        let items = try await makeClient(stub).continueWatchingHub(limit: Int.max)
+
+        XCTAssertEqual(items.map(\.ratingKey), ["m0", "m1", "m2"])
+        XCTAssertEqual(
+            stub.sentQueryItems.compactMap {
+                $0.first { $0.name == "X-Plex-Container-Start" }?.value
+            },
+            ["0", "2", "3"]
+        )
+    }
+
+    func testContinueWatchingEmptyHomeHubIsAuthoritative() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/hubs/home/continueWatching", json: """
+        {"MediaContainer":{"size":1,"Hub":[{
+          "size":0,"totalSize":0,"offset":0,"more":false,"Metadata":[]
+        }]}}
+        """)
+        stub.stub(pathSuffix: "/hubs/continueWatching", json: """
+        {"MediaContainer":{"size":1,"Metadata":[
+          {"ratingKey":"dismissed","type":"movie","title":"Dismissed"}
+        ]}}
+        """)
+        stub.stub(pathSuffix: "/library/onDeck", json: """
+        {"MediaContainer":{"size":1,"Metadata":[
+          {"ratingKey":"dismissed","type":"movie","title":"Dismissed"}
+        ]}}
+        """)
+
+        let items = try await PlexProvider(
+            session: makeSession(),
+            http: stub
+        ).continueWatching(limit: Int.max)
+
+        XCTAssertTrue(items.isEmpty)
+        XCTAssertEqual(stub.sentPaths, ["/hubs/home/continueWatching"])
+    }
+
+    func testContinueWatchingUnlimitedKeepsNextUpWithoutViewOffset() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/hubs/home/continueWatching", json: """
+        {"MediaContainer":{"size":1,"totalSize":1,"offset":0,"Metadata":[
+          {"ratingKey":"e2","type":"episode","title":"Episode 2",
+           "grandparentRatingKey":"900","grandparentTitle":"The Series",
+           "duration":1800000}
+        ]}}
+        """)
+        stub.stub(pathSuffix: "/library/metadata/900", json: """
+        {"MediaContainer":{"size":1,"Metadata":[
+          {"ratingKey":"900","type":"show","title":"The Series","lastViewedAt":1700000000}
+        ]}}
+        """)
+
+        let items = try await PlexProvider(
+            session: makeSession(),
+            http: stub
+        ).continueWatching(limit: Int.max)
+
+        XCTAssertEqual(items.map(\.id), ["e2"])
+        XCTAssertNil(items[0].resumePosition)
+        XCTAssertEqual(
+            items[0].lastPlayedAt,
+            Date(timeIntervalSince1970: 1_700_000_000)
+        )
+    }
+
+    func testContinueWatchingRecencyUsesOnlyReferencedSeriesInBoundedBatches() async throws {
+        let stub = StubHTTPClient()
+        let episodes = (0..<51).map {
+            """
+            {"ratingKey":"e\($0)","type":"episode","title":"Episode \($0)",
+             "grandparentRatingKey":"s\($0)","grandparentTitle":"Series \($0)"}
+            """
+        }.joined(separator: ",")
+        stub.stub(pathSuffix: "/hubs/home/continueWatching", json: """
+        {"MediaContainer":{"size":51,"totalSize":51,"offset":0,"Metadata":[\(episodes)]}}
+        """)
+
+        let seriesIDs = (0..<51).map { "s\($0)" }.sorted()
+        for start in stride(from: 0, to: seriesIDs.count, by: 50) {
+            let batch = Array(seriesIDs[start..<min(start + 50, seriesIDs.count)])
+            let shows = batch.map {
+                #"{"ratingKey":"\#($0)","type":"show","title":"\#($0)","lastViewedAt":1700000000}"#
+            }.joined(separator: ",")
+            stub.stub(
+                pathSuffix: "/library/metadata/\(batch.joined(separator: ","))",
+                json: """
+                {"MediaContainer":{"size":\(batch.count),"Metadata":[\(shows)]}}
+                """
+            )
+        }
+
+        let items = try await PlexProvider(
+            session: makeSession(),
+            http: stub
+        ).continueWatching(limit: Int.max)
+
+        XCTAssertEqual(items.count, 51)
+        XCTAssertTrue(items.allSatisfy { $0.lastPlayedAt != nil })
+        let metadataPaths = stub.sentPaths.filter {
+            $0.hasPrefix("/library/metadata/")
+        }
+        XCTAssertEqual(metadataPaths.count, 2)
+        XCTAssertTrue(metadataPaths.allSatisfy {
+            $0.dropFirst("/library/metadata/".count).split(separator: ",").count <= 50
+        })
+        XCTAssertFalse(stub.sentPaths.contains { $0.hasSuffix("/library/all") })
+        let requestedSizes = stub.sentQueryItems.compactMap {
+            $0.first { $0.name == "X-Plex-Container-Size" }?.value
+                .flatMap { Int($0) }
+        }
+        XCTAssertTrue(requestedSizes.allSatisfy { $0 <= 100 })
+    }
+
+    func testContinueWatchingRecencyFailureKeepsFeedItemUnstamped() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/hubs/home/continueWatching", json: """
+        {"MediaContainer":{"size":1,"Metadata":[
+          {"ratingKey":"e2","type":"episode","title":"Episode 2",
+           "grandparentRatingKey":"900","grandparentTitle":"The Series"}
+        ]}}
+        """)
+
+        let items = try await PlexProvider(
+            session: makeSession(),
+            http: stub
+        ).continueWatching(limit: 10)
+
+        XCTAssertEqual(items.map(\.id), ["e2"])
+        XCTAssertNil(items[0].lastPlayedAt)
+        XCTAssertTrue(stub.sentPaths.contains("/library/metadata/900"))
+        XCTAssertFalse(stub.sentPaths.contains("/hubs/continueWatching"))
+        XCTAssertFalse(stub.sentPaths.contains("/library/onDeck"))
+    }
+
+    func testContinueWatchingFiniteLimitFallsBackOnlyAfterEndpointFailure() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(
+            pathSuffix: "/hubs/home/continueWatching",
+            json: #"{"error":"unsupported"}"#,
+            status: 404
+        )
+        stub.stub(pathSuffix: "/hubs/continueWatching", json: """
+        {"MediaContainer":{"size":1,"Metadata":[
+          {"ratingKey":"plain","type":"movie","title":"Plain Hub"}
+        ]}}
+        """)
+
+        let items = try await PlexProvider(
+            session: makeSession(),
+            http: stub
+        ).continueWatching(limit: 7)
+
+        XCTAssertEqual(items.map(\.id), ["plain"])
+        XCTAssertEqual(
+            stub.sentPaths,
+            ["/hubs/home/continueWatching", "/hubs/continueWatching"]
+        )
+        XCTAssertEqual(
+            stub.sentQueryItems.compactMap {
+                $0.first { $0.name == "X-Plex-Container-Size" }?.value
+            },
+            ["7", "7"]
+        )
+    }
+
+    func testContinueWatchingUnlimitedFallsBackWhenInitialEndpointIsUnavailable() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(
+            pathSuffix: "/hubs/home/continueWatching",
+            json: #"{"error":"unsupported"}"#,
+            status: 404
+        )
+        stub.stub(pathSuffix: "/hubs/continueWatching", json: """
+        {"MediaContainer":{"size":1,"totalSize":1,"offset":0,"Metadata":[
+          {"ratingKey":"plain","type":"movie","title":"Plain Hub"}
+        ]}}
+        """)
+
+        let items = try await PlexProvider(
+            session: makeSession(),
+            http: stub
+        ).continueWatching(limit: Int.max)
+
+        XCTAssertEqual(items.map(\.id), ["plain"])
+        XCTAssertEqual(
+            stub.sentPaths,
+            ["/hubs/home/continueWatching", "/hubs/continueWatching"]
+        )
+        XCTAssertEqual(
+            stub.sentQueryItems.compactMap {
+                $0.first { $0.name == "X-Plex-Container-Size" }?.value
+            },
+            ["100", "100"]
+        )
+    }
+
+    func testContinueWatchingUnlimitedRejectsRepeatedPage() async throws {
+        let stub = StubHTTPClient()
+        stub.stubSequence(pathSuffix: "/hubs/home/continueWatching", jsons: [
+            """
+            {"MediaContainer":{"size":2,"offset":0,"Metadata":[
+              {"ratingKey":"m0","type":"movie","title":"Zero"},
+              {"ratingKey":"m1","type":"movie","title":"One"}
+            ]}}
+            """,
+            """
+            {"MediaContainer":{"size":2,"offset":2,"Metadata":[
+              {"ratingKey":"m0","type":"movie","title":"Zero Again"},
+              {"ratingKey":"m1","type":"movie","title":"One Again"}
+            ]}}
+            """
+        ])
+        stub.stub(pathSuffix: "/hubs/continueWatching", json: """
+        {"MediaContainer":{"size":1,"totalSize":1,"offset":0,"Metadata":[
+          {"ratingKey":"dismissed","type":"movie","title":"Dismissed"}
+        ]}}
+        """)
+        stub.stub(pathSuffix: "/library/onDeck", json: """
+        {"MediaContainer":{"size":1,"totalSize":1,"offset":0,"Metadata":[
+          {"ratingKey":"dismissed","type":"movie","title":"Dismissed"}
+        ]}}
+        """)
+
+        do {
+            _ = try await PlexProvider(
+                session: makeSession(),
+                http: stub
+            ).continueWatching(limit: Int.max)
+            XCTFail("Expected a repeated page to fail")
+        } catch {
+            XCTAssertEqual(error as? AppError, .invalidResponse)
+        }
+        XCTAssertEqual(stub.sentPaths.count, 2)
+        XCTAssertFalse(stub.sentPaths.contains("/hubs/continueWatching"))
+        XCTAssertFalse(stub.sentPaths.contains("/library/onDeck"))
+    }
+
+    func testContinueWatchingUnlimitedRejectsNonAdvancingOffset() async throws {
+        let stub = StubHTTPClient()
+        stub.stubSequence(pathSuffix: "/hubs/home/continueWatching", jsons: [
+            """
+            {"MediaContainer":{"size":1,"offset":0,"Metadata":[
+              {"ratingKey":"m0","type":"movie","title":"Zero"}
+            ]}}
+            """,
+            """
+            {"MediaContainer":{"size":1,"offset":0,"Metadata":[
+              {"ratingKey":"m1","type":"movie","title":"One"}
+            ]}}
+            """
+        ])
+        stub.stub(pathSuffix: "/hubs/continueWatching", json: """
+        {"MediaContainer":{"size":1,"totalSize":1,"offset":0,"Metadata":[
+          {"ratingKey":"dismissed","type":"movie","title":"Dismissed"}
+        ]}}
+        """)
+        stub.stub(pathSuffix: "/library/onDeck", json: """
+        {"MediaContainer":{"size":1,"totalSize":1,"offset":0,"Metadata":[
+          {"ratingKey":"dismissed","type":"movie","title":"Dismissed"}
+        ]}}
+        """)
+
+        do {
+            _ = try await PlexProvider(
+                session: makeSession(),
+                http: stub
+            ).continueWatching(limit: Int.max)
+            XCTFail("Expected a non-advancing offset to fail")
+        } catch {
+            XCTAssertEqual(error as? AppError, .invalidResponse)
+        }
+        XCTAssertFalse(stub.sentPaths.contains("/hubs/continueWatching"))
+        XCTAssertFalse(stub.sentPaths.contains("/library/onDeck"))
+    }
+
+    func testContinueWatchingUnlimitedPlainHubMidstreamFailureDoesNotUseOnDeck() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(
+            pathSuffix: "/hubs/home/continueWatching",
+            json: #"{"error":"unsupported"}"#,
+            status: 404
+        )
+        stub.stubSequence(
+            pathSuffix: "/hubs/continueWatching",
+            responses: [
+                (
+                    json: """
+                    {"MediaContainer":{"size":1,"offset":0,"Metadata":[
+                      {"ratingKey":"kept","type":"movie","title":"Kept"}
+                    ]}}
+                    """,
+                    status: 200
+                ),
+                (
+                    json: #"{"error":"paging failed"}"#,
+                    status: 404
+                )
+            ]
+        )
+        stub.stub(pathSuffix: "/library/onDeck", json: """
+        {"MediaContainer":{"size":1,"totalSize":1,"offset":0,"Metadata":[
+          {"ratingKey":"dismissed","type":"movie","title":"Dismissed"}
+        ]}}
+        """)
+
+        do {
+            _ = try await PlexProvider(
+                session: makeSession(),
+                http: stub
+            ).continueWatching(limit: Int.max)
+            XCTFail("Expected the midstream failure to propagate")
+        } catch {
+            XCTAssertEqual(error as? AppError, .notFound)
+        }
+        XCTAssertEqual(
+            stub.sentPaths,
+            [
+                "/hubs/home/continueWatching",
+                "/hubs/continueWatching",
+                "/hubs/continueWatching"
+            ]
+        )
+        XCTAssertFalse(stub.sentPaths.contains("/library/onDeck"))
+    }
+
+    func testContinueWatchingThrowsWhenEveryEndpointFails() async throws {
+        let stub = StubHTTPClient()
+        for path in [
+            "/hubs/home/continueWatching",
+            "/hubs/continueWatching",
+            "/library/onDeck"
+        ] {
+            stub.stub(
+                pathSuffix: path,
+                json: #"{"error":"failed"}"#,
+                status: 500
+            )
+        }
+
+        do {
+            _ = try await PlexProvider(
+                session: makeSession(),
+                http: stub
+            ).continueWatching(limit: Int.max)
+            XCTFail("Expected all endpoint failures to propagate")
+        } catch {
+            XCTAssertEqual(error as? AppError, .invalidResponse)
+        }
+        XCTAssertTrue(stub.sentPaths.contains("/hubs/home/continueWatching"))
+        XCTAssertTrue(stub.sentPaths.contains("/hubs/continueWatching"))
+        XCTAssertTrue(stub.sentPaths.contains("/library/onDeck"))
+    }
+
+    func testContinueWatchingCancellationDoesNotFallThroughToLegacyFeeds() async {
+        let stub = StubHTTPClient()
+        stub.error = .cancelled
+
+        do {
+            _ = try await PlexProvider(
+                session: makeSession(),
+                http: stub
+            ).continueWatching(limit: Int.max)
+            XCTFail("Expected cancellation to propagate")
+        } catch {
+            XCTAssertEqual(error as? AppError, .cancelled)
+        }
+        XCTAssertEqual(stub.sentPaths, ["/hubs/home/continueWatching"])
     }
 
     func testConnectionLocalityUnknownUntilReachableConfirmed() async {

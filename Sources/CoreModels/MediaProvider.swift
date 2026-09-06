@@ -22,7 +22,9 @@ public protocol MediaProvider: Sendable {
     /// Top-level libraries/views available to the user.
     func libraries() async throws -> [MediaLibrary]
 
-    /// "Continue Watching" — partially played, resumable items.
+    /// "Continue Watching" — resumable items and the provider's next-up episodes.
+    /// `Int.max` requests the complete feed; network providers must page with
+    /// bounded request sizes rather than send that value as a server limit.
     func continueWatching(limit: Int) async throws -> [MediaItem]
 
     /// Recently added items across the user's libraries.
