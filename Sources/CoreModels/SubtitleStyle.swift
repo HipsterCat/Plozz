@@ -12,12 +12,12 @@ import Foundation
 public enum SubtitleFontFamily: String, Codable, Sendable, Equatable, CaseIterable {
     case atkinson
     case system
-    case sfRounded
     case roboto
+    case avenir
     case lexend
+    case sfRounded
     case fredoka
     case openDyslexic
-    case avenir
 
     public var displayName: String {  // l10n:content — bundled font family names (proper nouns), never translated
         switch self {

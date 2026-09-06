@@ -6,6 +6,12 @@ import CoreModels
 /// `PlayerControls`. These pin the human-readable readouts (precise positions,
 /// signed offsets, preset color names, edge summary) that the style rows show.
 final class PlayerControlsFormattingTests: XCTestCase {
+    func testSubtitleFontPickerGroupsSimilarFacesAfterTheDefault() {
+        XCTAssertEqual(SubtitleFontFamily.allCases, [
+            .atkinson, .system, .roboto, .avenir, .lexend, .sfRounded, .fredoka, .openDyslexic
+        ])
+    }
+
     func testAvenirSelectionPersistsPerProfileWithoutChangingDefaults() throws {
         let suite = "SubtitleAvenirTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
