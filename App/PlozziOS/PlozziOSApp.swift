@@ -2,6 +2,10 @@ import AppShelliOS
 import CoreUI
 import SwiftUI
 import UIKit
+#if DEBUG
+import FeatureLiveTV
+import FeaturePlayback
+#endif
 
 private final class PlozziOSAppDelegate: NSObject, UIApplicationDelegate {
     func application(
@@ -9,6 +13,11 @@ private final class PlozziOSAppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions:
             [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        #if DEBUG
+        if LiveTVPrototypeEntry.isEnabled {
+            return true
+        }
+        #endif
         PlozziOSBackgroundSessionBridge.activate()
         return true
     }
@@ -42,7 +51,23 @@ struct PlozziOSApp: App {
             // Same scope as tvOS so the two shells can't drift on how the
             // language override is applied. See CoreUI.AppLanguageScope.
             AppLanguageScope {
+                #if DEBUG
+                if LiveTVPrototypeEntry.isEnabled {
+                    LiveTVPrototypeView { playback in
+                        LiveChannelPlayerView(
+                            channelID: playback.channel.id, title: playback.channel.name,
+                            streamURL: playback.streamURL, logoURL: playback.channel.logoURL,
+                            logoNeedsDarkBackground: playback.channel.logoNeedsDarkBackground,
+                            onPreviousChannel: playback.previousChannel,
+                            onNextChannel: playback.nextChannel
+                        )
+                    }
+                } else {
+                    PlozziOSRootView()
+                }
+                #else
                 PlozziOSRootView()
+                #endif
             }
         }
     }

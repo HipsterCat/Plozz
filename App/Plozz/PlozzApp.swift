@@ -2,6 +2,10 @@ import SwiftUI
 import AppShell
 import CoreModels
 import CoreUI
+#if DEBUG
+import FeatureLiveTV
+import FeaturePlayback
+#endif
 
 /// Plozz — an open-source tvOS client for Jellyfin, Emby, Plex, and media shares.
 @main
@@ -26,7 +30,23 @@ struct PlozzApp: App {
             // only way a household can run Plozz in a language other than the
             // device's. See CoreUI.AppLanguageScope.
             AppLanguageScope {
+                #if DEBUG
+                if LiveTVPrototypeEntry.isEnabled {
+                    LiveTVPrototypeView { playback in
+                        LiveChannelPlayerView(
+                            channelID: playback.channel.id, title: playback.channel.name,
+                            streamURL: playback.streamURL, logoURL: playback.channel.logoURL,
+                            logoNeedsDarkBackground: playback.channel.logoNeedsDarkBackground,
+                            onPreviousChannel: playback.previousChannel,
+                            onNextChannel: playback.nextChannel
+                        )
+                    }
+                } else {
+                    RootView()
+                }
+                #else
                 RootView()
+                #endif
             }
             // Back must never quit the app just because focus hasn't settled —
             // see `TVBackButtonGuard`.

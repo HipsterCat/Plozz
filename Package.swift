@@ -50,6 +50,8 @@ let package = Package(
         .library(name: "FeatureSearchCore", targets: ["FeatureSearchCore"]),
         .library(name: "FeaturePlayback", targets: ["FeaturePlayback"]),
         .library(name: "FeatureSearch", targets: ["FeatureSearch"]),
+        .library(name: "FeatureLiveTVCore", targets: ["FeatureLiveTVCore"]),
+        .library(name: "FeatureLiveTV", targets: ["FeatureLiveTV"]),
         .library(name: "FeatureSettings", targets: ["FeatureSettings"]),
         .library(name: "FeatureProfiles", targets: ["FeatureProfiles"]),
         .library(name: "FeatureWatchlistCore", targets: ["FeatureWatchlistCore"]),
@@ -390,6 +392,11 @@ let package = Package(
         .target(
             name: "FeatureSearch",
             dependencies: ["CoreModels", "CoreUI", "FeatureSearchCore"]
+        ),
+        .target(name: "FeatureLiveTVCore"),
+        .target(
+            name: "FeatureLiveTV",
+            dependencies: ["CoreModels", "CoreUI", "FeatureLiveTVCore"]
         ),
         .target(
             name: "FeatureSettings",
@@ -877,6 +884,10 @@ let package = Package(
         .testTarget(
             name: "FeatureSearchCoreTests",
             dependencies: ["FeatureSearchCore", "CoreModels"]
+        ),
+        .testTarget(
+            name: "FeatureLiveTVCoreTests",
+            dependencies: ["FeatureLiveTVCore"]
         ),
         .testTarget(
             name: "FeatureProfilesTests",
