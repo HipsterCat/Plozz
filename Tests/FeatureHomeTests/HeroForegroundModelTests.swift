@@ -56,6 +56,22 @@ final class HeroForegroundModelTests: XCTestCase {
 
     // MARK: - seasonEpisodeButtonText
 
+    func testStartWatchingPillNamesTheFirstEpisode() {
+        let pill = Builder.pill(for: .init(
+            kind: .play, isStarting: true, seasonEpisodeText: "S1, E1"
+        ))
+        XCTAssertEqual(pill.text, "Start watching · S1, E1")
+    }
+
+    func testInProgressFirstEpisodeKeepsTheResumePill() {
+        let pill = Builder.pill(for: .init(
+            kind: .play, resumeProgress: 0.3, isResume: true, isStarting: true,
+            resumeRemainingText: "35m", seasonEpisodeText: "S1, E1"
+        ))
+        XCTAssertEqual(pill.text, "S1, E1 • 35m")
+        XCTAssertEqual(pill.progress, 0.3)
+    }
+
     private func episode(
         id: String = "e1",
         title: String = "Pilot",

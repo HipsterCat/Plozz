@@ -11,7 +11,7 @@ final class PlayResumeButtonLabelTests: XCTestCase {
         return host.sizeThatFits(in: CGSize(width: 2_000, height: 200))
     }
 
-    func testPlaceholderPlainAndResumeLabelsReserveTheSameSpace() {
+    func testPlaceholderIsCompactWithoutConstrainingReadyButtons() {
         for fontSize in [CGFloat(17), 30] {
             for style in [
                 PlayResumeButtonLabel.ResumeTrailingStyle.full,
@@ -28,8 +28,7 @@ final class PlayResumeButtonLabelTests: XCTestCase {
                         spacing: fontSize == 17 ? 10 : 16,
                         capsuleWidth: fontSize == 17 ? 60 : 75,
                         resumeTrailingStyle: style,
-                        isPlaceholder: pending,
-                        reservesProgressSpace: true
+                        isPlaceholder: pending
                     )
                     .font(.system(size: fontSize))
                 }
@@ -38,14 +37,47 @@ final class PlayResumeButtonLabelTests: XCTestCase {
                 let resume = size(of: label(pending: false, progress: 0.3))
                 XCTAssertGreaterThan(placeholder.width, 0)
                 XCTAssertGreaterThan(placeholder.height, 0)
-                if style != .hidden {
-                    XCTAssertEqual(placeholder.width, plain.width, accuracy: 0.5)
+                XCTAssertLessThanOrEqual(placeholder.width, plain.width * 1.15)
+                if style == .full {
+                    XCTAssertLessThan(placeholder.width, resume.width)
                 }
-                XCTAssertEqual(placeholder.width, resume.width, accuracy: 0.5)
                 XCTAssertEqual(placeholder.height, plain.height, accuracy: 0.5)
                 XCTAssertEqual(placeholder.height, resume.height, accuracy: 0.5)
             }
         }
+    }
+
+    func testStartWatchingUsesTheSeparatedEpisodeLabelAtItsNaturalWidth() {
+        let label = PlayResumeButtonLabel(
+            title: "Start watching", progress: nil, remainingText: nil,
+            seasonEpisodeText: "S1, E1", onLight: true, separatesEpisodeText: true
+        )
+        let expected = HStack(spacing: 16) {
+            Image(systemName: "play.fill")
+            Text("Start watching · S1, E1")
+        }
+        XCTAssertEqual(
+            size(of: label.font(.system(size: 30))).width,
+            size(of: expected.font(.system(size: 30))).width,
+            accuracy: 0.5
+        )
+    }
+
+    func testReadyResumeLabelHasNoHiddenPlaceholderWidth() {
+        let label = PlayResumeButtonLabel(
+            title: "Play", progress: 0.3, remainingText: "35m",
+            seasonEpisodeText: "S4, E1", onLight: true
+        )
+        let expected = HStack(spacing: 16) {
+            Image(systemName: "play.fill")
+            ResumeProgressCapsule(progress: 0.3, onLight: true, width: 75)
+            Text("S4, E1 • 35m")
+        }
+        XCTAssertEqual(
+            size(of: label.font(.system(size: 30))).width,
+            size(of: expected.font(.system(size: 30))).width,
+            accuracy: 0.5
+        )
     }
 
     func testExistingPlainButtonsKeepTheirCompactSizeByDefault() {

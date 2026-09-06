@@ -138,8 +138,7 @@ public struct PlayResumeButtonLabel: View {
     /// width-constrained caller can request a shorter form to avoid wrapping.
     public var resumeTrailingStyle: ResumeTrailingStyle
     public var isPlaceholder: Bool
-    /// Keeps a series' action row from shifting when its episode/progress arrives.
-    public var reservesProgressSpace: Bool
+    public var separatesEpisodeText: Bool
 
     /// Supplies the default bar height, which tracks the reader's text size.
     @Environment(\.plozzMetrics) private var metrics
@@ -155,7 +154,7 @@ public struct PlayResumeButtonLabel: View {
         barHeight: CGFloat? = nil,
         resumeTrailingStyle: ResumeTrailingStyle = .full,
         isPlaceholder: Bool = false,
-        reservesProgressSpace: Bool = false
+        separatesEpisodeText: Bool = false
     ) {
         self.title = title
         self.progress = progress
@@ -167,7 +166,7 @@ public struct PlayResumeButtonLabel: View {
         self.barHeight = barHeight
         self.resumeTrailingStyle = resumeTrailingStyle
         self.isPlaceholder = isPlaceholder
-        self.reservesProgressSpace = reservesProgressSpace
+        self.separatesEpisodeText = separatesEpisodeText
     }
 
     /// The in-progress fraction that switches the label to the resume form: a
@@ -203,15 +202,13 @@ public struct PlayResumeButtonLabel: View {
     /// String would drop the title's localization on the floor.
     private var plainTitle: Text {
         guard let seasonEpisodeText else { return Text(title) }
-        return Text(title) + Text(verbatim: " " + seasonEpisodeText)
+        let separator = separatesEpisodeText ? " · " : " "
+        return Text(title) + Text(verbatim: separator + seasonEpisodeText)
     }
 
     public var body: some View {
-        ZStack {
-            if reservesProgressSpace || isPlaceholder {
-                Text(title).hidden().accessibilityHidden(true)
-                placeholderContent.hidden().accessibilityHidden(true)
-            }
+        ZStack(alignment: .leading) {
+            Text(title).lineLimit(1).hidden().frame(width: 0).accessibilityHidden(true)
             if isPlaceholder {
                 placeholderContent
                     .accessibilityElement(children: .ignore)
@@ -225,19 +222,15 @@ public struct PlayResumeButtonLabel: View {
     private var placeholderContent: some View {
         HStack(spacing: spacing) {
             Image(systemName: "play.fill")
-            Capsule()
-                .fill(onLight ? Color.black.opacity(0.18) : Color.white.opacity(0.18))
-                .frame(width: capsuleWidth, height: barHeight ?? metrics.heroProgressBarHeight)
-            if resumeTrailingStyle != .hidden {
-                Text(title)
-                    .hidden()
-                    .frame(width: capsuleWidth * (resumeTrailingStyle == .full ? 2.5 : 1.5))
-                    .overlay {
-                        Capsule()
-                            .fill(onLight ? Color.black.opacity(0.18) : Color.white.opacity(0.18))
-                            .frame(height: barHeight ?? metrics.heroProgressBarHeight)
-                    }
-            }
+            Text(title)
+                .lineLimit(1)
+                .hidden()
+                .padding(.trailing, capsuleWidth)
+                .overlay {
+                    Capsule()
+                        .fill(onLight ? Color.black.opacity(0.18) : Color.white.opacity(0.18))
+                        .frame(height: barHeight ?? metrics.heroProgressBarHeight)
+                }
         }
     }
 

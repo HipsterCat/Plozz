@@ -116,6 +116,7 @@ enum HeroForegroundModelBuilder {
         var resumeProgress: Double? = nil
         /// For `.play`: whether the item is resumable (Play vs Resume label).
         var isResume: Bool = false
+        var isStarting: Bool = false
         /// For `.play`: the remaining-time text ("20m") shown in the resume form.
         /// When present alongside an in-range ``resumeProgress`` the pill renders the
         /// glyph + inline progress bar + this text (no "Resume" word), matching
@@ -194,8 +195,10 @@ enum HeroForegroundModelBuilder {
             }
             // Plain pill: base label with the episode appended when known
             // ("Play S21, E8"), else just "Resume"/"Play".
-            let base = input.isResume ? "Resume" : "Play"
-            let plain = input.seasonEpisodeText.map { "\(base) \($0)" } ?? base
+            let startsWatching = input.isStarting && !input.isResume
+            let base = startsWatching ? String(localized: "Start watching") : (input.isResume ? "Resume" : "Play")
+            let separator = startsWatching ? " · " : " "
+            let plain = input.seasonEpisodeText.map { base + separator + $0 } ?? base
             return HeroForegroundModel.Pill(
                 kind: .play,
                 text: plain,

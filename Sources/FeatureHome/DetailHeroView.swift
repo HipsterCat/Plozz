@@ -1196,8 +1196,8 @@ struct DetailHeroView: View, Equatable {
         // user marks the item Watched, which clears the live resume text — never
         // resizes Play or shifts the action row beside it. We size to a *latched*
         // resume text (`reservedResumeText`) that survives the watched transition,
-        // rather than shrinking after a watched transition. Series also reserve
-        // their initial placeholder width; plain movie buttons stay compact.
+        // rather than shrinking after a watched transition. Placeholder dimensions
+        // never constrain the ready button.
         let liveResumeText = resumeText
         let sizingText = reservedResumeText ?? liveResumeText
         let button = Button {
@@ -1217,8 +1217,7 @@ struct DetailHeroView: View, Equatable {
                     seasonEpisodeText: playSeasonEpisodeText,
                     onLight: playButtonHasFocus || colorScheme == .light,
                     isPlaceholder: action == nil,
-                    reservesProgressSpace: backdropItem?.kind == .series
-                        || item.kind == .series || item.kind == .season
+                    separatesEpisodeText: (actionItem ?? item).startsWatching
                 )
             }
         }

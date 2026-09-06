@@ -5,6 +5,60 @@ import CoreModels
 /// no-button for featured (Seerr) titles, and Play/Resume for ordinary library
 /// items. Kept exhaustive so the UI's button choice can never drift.
 final class HeroCTATests: XCTestCase {
+    func testFreshFirstEpisodesUseStartWatching() {
+        for season in [1, 4] {
+            let episode = MediaItem(
+                id: "episode", title: "Episode", kind: .episode,
+                seasonNumber: season, episodeNumber: 1
+            )
+            XCTAssertTrue(episode.startsWatching)
+            var title = episode.playActionTitle
+            title.locale = Locale(identifier: "en")
+            XCTAssertEqual(String(localized: title), "Start watching")
+        }
+    }
+
+    func testResumeRewatchSpecialsAndUnknownEpisodesDoNotClaimAFreshStart() {
+        let first = MediaItem(
+            id: "episode", title: "Episode", kind: .episode,
+            seasonNumber: 1, episodeNumber: 1
+        )
+        var variants: [MediaItem] = []
+        var item = first
+        item.resumePosition = 867
+        variants.append(item)
+        item = first
+        item.playedPercentage = 0.2
+        variants.append(item)
+        item = first
+        item.isPlayed = true
+        variants.append(item)
+        item = first
+        item.hasBeenPlayed = true
+        variants.append(item)
+        item = first
+        item.seasonNumber = 0
+        variants.append(item)
+        item = first
+        item.seasonNumber = nil
+        variants.append(item)
+        item = first
+        item.episodeNumber = 2
+        variants.append(item)
+        item = first
+        item.locallyValidatedPlayableSource = false
+        variants.append(item)
+        item = first
+        item.kind = .movie
+        variants.append(item)
+        for variant in variants {
+            XCTAssertFalse(variant.startsWatching)
+            var title = variant.playActionTitle
+            title.locale = Locale(identifier: "en")
+            XCTAssertEqual(String(localized: title), "Play")
+        }
+    }
+
     private func item(_ availability: MediaAvailabilityStatus?, download: Double? = nil) -> MediaItem {
         let isOwned = availability == nil
             || availability == .available

@@ -1552,14 +1552,15 @@ struct PlozziOSHomeHeroForeground: View {
                 onPlay(item)
             } label: {
                 PlayResumeButtonLabel(
-                    title: "Play",
+                    title: item.playActionTitle,
                     progress: item.resumeProgressFraction,
                     remainingText: item.resumeRemainingText,
                     seasonEpisodeText: seasonEpisodeText,
                     onLight: colorScheme == .dark,
                     spacing: 10,
                     capsuleWidth: 60,
-                    resumeTrailingStyle: resumeTrailingStyle
+                    resumeTrailingStyle: resumeTrailingStyle,
+                    separatesEpisodeText: item.startsWatching
                 )
             }
             .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
@@ -2128,7 +2129,7 @@ private struct PlozziOSDetailHeroForeground: View {
                 if let playableItem { onPlay(playableItem, false) }
             } label: {
                 PlayResumeButtonLabel(
-                    title: "Play",
+                    title: playableItem?.playActionTitle ?? "Play",
                     progress: playableItem?.resumeProgressFraction,
                     remainingText: playableItem?.resumeRemainingText,
                     seasonEpisodeText: playableItem.flatMap { seasonEpisodeText(for: $0) },
@@ -2137,7 +2138,7 @@ private struct PlozziOSDetailHeroForeground: View {
                     capsuleWidth: 60,
                     resumeTrailingStyle: resume,
                     isPlaceholder: playableItem == nil,
-                    reservesProgressSpace: rootItem.kind == .series || rootItem.kind == .season
+                    separatesEpisodeText: playableItem?.startsWatching ?? false
                 )
                 // ViewThatFits can only collapse lower-priority actions when the
                 // Play label reports its readable width instead of truncating.
