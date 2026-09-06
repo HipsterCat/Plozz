@@ -200,6 +200,73 @@ final class SubtitleLineRenderingTests: XCTestCase {
         XCTAssertEqual(view.measure(maxWidth: 400), .zero)
     }
 
+    func testPositionEditsMoveAnAlreadyDisplayedSRTCue() async throws {
+        try await assertLiveSRTPositionUpdates(startingWithBitmap: false)
+    }
+
+    func testPositionEditsMoveDownloadedSRTAfterSwitchingFromPGS() async throws {
+        try await assertLiveSRTPositionUpdates(startingWithBitmap: true)
+    }
+
+    private func assertLiveSRTPositionUpdates(startingWithBitmap: Bool) async throws {
+        try registerFonts()
+        let screen = CGSize(width: 960, height: 540)
+        let model = LiveSubtitleModel()
+        let host = UIHostingController(rootView: LiveSubtitleOverlay(model: model))
+        host.safeAreaRegions = []
+        let window = UIWindow(frame: CGRect(origin: .zero, size: screen))
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        host.view.frame = CGRect(origin: .zero, size: screen)
+        host.view.layoutIfNeeded()
+
+        var bitmapCues: [SubtitleCue] = []
+        if startingWithBitmap {
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 200, height: 30)).image { context in
+                UIColor.white.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 200, height: 30))
+            }
+            bitmapCues = [.init(
+                id: 0, start: 0, end: 60,
+                body: .image(.init(
+                    cgImage: try XCTUnwrap(image.cgImage),
+                    normalizedRect: CGRect(x: 0.25, y: 0.85, width: 0.5, height: 0.1)
+                ))
+            )]
+            model.beginLiveFeed()
+            model.tick(5)
+            model.updateLiveCues(bitmapCues)
+            await Task.yield()
+        }
+
+        let srt = """
+        1
+        00:00:00,000 --> 00:01:00,000
+        A downloaded subtitle that stays on screen.
+        """
+        model.loadPrimary(SubtitleCueParser.parse(srt, id: 900_000))
+        model.tick(5)
+        // A late decoder callback from the previous PGS track must not take over.
+        model.updateLiveCues(bitmapCues)
+        XCTAssertEqual(model.primary.first?.text, "A downloaded subtitle that stays on screen.")
+
+        for position in [0.5, 0.005, 0.75, 0.06] {
+            model.style.verticalPosition = position
+            let deadline = ContinuousClock.now + .seconds(2)
+            var bottom: CGFloat?
+            repeat {
+                await Task.yield()
+                host.view.layoutIfNeeded()
+                bottom = subtitleViews(in: host.view).map { $0.convert($0.bounds, to: host.view).maxY }.max()
+                if let bottom, abs(bottom - screen.height * (1 - position)) <= 1 { break }
+                try await Task.sleep(for: .milliseconds(10))
+            } while ContinuousClock.now < deadline
+            XCTAssertEqual(try XCTUnwrap(bottom), screen.height * (1 - position), accuracy: 1,
+                           "Live position edit to \(position) startingWithBitmap=\(startingWithBitmap)")
+        }
+    }
+
     func testMultilineAndDifferentlySizedDualSubtitlesTouchBothEdges() throws {
         try registerFonts()
         let screen = CGSize(width: 960, height: 540)

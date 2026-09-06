@@ -77,4 +77,32 @@ final class PlexRemoteSubtitleTests: XCTestCase {
         XCTAssertTrue(provider.capabilities.contains(.music), "must not drop the Music capability")
         XCTAssertTrue(provider.capabilities.contains(.video))
     }
+
+    func testDownloadedSRTIsMarkedExternalAndKeepsItsOriginalDeliveryFormat() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/library/metadata/rk1", json: """
+        {"MediaContainer":{"Metadata":[
+          {"ratingKey":"rk1","title":"Episode","type":"episode","Media":[
+            {"id":1,"Part":[{"id":2,"Stream":[
+              {"id":20,"index":3,"streamType":3,"codec":"pgs","languageCode":"en"},
+              {"id":21,"index":4,"streamType":3,"codec":"srt","languageCode":"en",
+               "key":"/library/streams/21/subtitle.srt"}
+            ]}]}
+          ]}
+        ]}}
+        """)
+        let provider = PlexProvider(session: makeSession(), http: stub)
+        let tracks = try await provider.subtitleTracks(forItemID: "rk1")
+        XCTAssertEqual(tracks.count, 2)
+        XCTAssertFalse(tracks[0].isExternal)
+        XCTAssertTrue(tracks[0].isImageBasedSubtitle)
+        XCTAssertTrue(tracks[1].isExternal)
+        XCTAssertFalse(tracks[1].isImageBasedSubtitle)
+        guard case .authenticatedHTTP(let locator)? = tracks[1].deliverySource else {
+            return XCTFail("Expected the downloaded subtitle's delivery source")
+        }
+        XCTAssertTrue(locator.resource.path.hasSuffix("/library/streams/21/subtitle.srt")
+                      || locator.resource.path == "library/streams/21/subtitle.srt")
+        XCTAssertEqual(locator.formatHint.container, "srt")
+    }
 }

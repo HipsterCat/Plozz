@@ -2240,7 +2240,8 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
             isForced: dto.forced ?? false,
             channels: isSubtitle ? nil : dto.channels,
             deliverySource: deliverySource,
-            isImageBasedSubtitle: isSubtitle && !isTextSubtitleCodec(dto.codec)
+            isImageBasedSubtitle: isSubtitle && !isTextSubtitleCodec(dto.codec),
+            isExternal: isSubtitle && dto.key != nil
         )
     }
 
