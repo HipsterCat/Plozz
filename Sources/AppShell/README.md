@@ -52,6 +52,21 @@ registry.
   rebuilt on profile change (`rebuildSettingsModels`) so settings,
   Trakt, and watched-state stay isolated.
 
+## Pinned sidebar remote navigation
+
+`NavigationRailEdgeCatcher` passively observes arrow presses and indirect-touch
+swipes. Left at an unresolved content edge opens the sidebar; Right at an
+unresolved sidebar edge returns to the page. Both paths wait for native focus to
+settle and do nothing if it moved or the sidebar's focus state changed. The Home
+hero disables this fallback and requests entry at its own logical leading edge.
+
+On tvOS, indirect touch-down and subsequent movement can use different coordinate
+frames inside wide scrolling rows. `SwipeTravel` anchors at the first movement
+sample, not touch-down; otherwise a left swipe from Continue Watching can look
+like thousands of points to the right. The observer never recognizes, cancels,
+or delays native touch gestures. Enable `PLZHFOCUS_STDOUT=1` for sidebar decisions
+in the device console.
+
 ## Where to look first
 
 - `AppState.swift` — the orchestration entry point.

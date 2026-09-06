@@ -56,13 +56,29 @@ final class ScrubGestureInterpreterTests: XCTestCase {
         XCTAssertEqual(next, .ignore)
     }
 
-    func testVerticalUpIsIgnoredNotControlBar() {
+    func testVerticalUpMovesUpAndLocksVertical() {
         var g = makeInterpreter()
         g.begin()
         let outcome = g.changed(translationX: 3, translationY: -25, velocityX: 0,
                                 isScrubbing: false, seekWithoutPausing: true, isPaused: true)
-        XCTAssertEqual(outcome, .ignore)
+        XCTAssertEqual(outcome, .moveUp)
         XCTAssertEqual(g.axis, .verticalIgnored)
+        let next = g.changed(translationX: 60, translationY: -40, velocityX: 500,
+                             isScrubbing: false, seekWithoutPausing: true, isPaused: true)
+        XCTAssertEqual(next, .ignore)
+    }
+
+    func testVerticalNavigationDoesNotRequirePausing() {
+        for (translationY, expected) in [(25.0, ScrubGestureInterpreter.PanOutcome.enterControlBar),
+                                         (-25.0, .moveUp)] {
+            var g = makeInterpreter()
+            g.begin()
+            XCTAssertEqual(
+                g.changed(translationX: 3, translationY: translationY, velocityX: 0,
+                          isScrubbing: false, seekWithoutPausing: false, isPaused: false),
+                expected)
+            XCTAssertEqual(g.ended(gestureEnded: true, velocityX: 0, isScrubbing: false), .none)
+        }
     }
 
     func testAxisLockKeepsScrubbingDespiteVerticalDrift() {

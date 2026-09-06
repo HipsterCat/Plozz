@@ -50,6 +50,34 @@ and the diagnostics overlay.
 - **No secrets in URLs logged.** Stream URLs frequently embed tokens —
   `PlayerViewModel` redacts before logging.
 
+## Siri Remote input
+
+`ScrubGestureInterpreter` routes upward and downward swipes through the same
+actions as the corresponding directional presses: Up reaches the track controls
+(or a pending Skip/Up Next affordance), and Down opens Info.
+
+First-generation touchpad edge clicks arrive as UIKit **Select** presses, not
+Left/Right. `RemoteTouchInput` reads the old remote's absolute GameController
+position while leaving UIKit in charge of input and menu focus. The tvOS app
+declares both remote profiles and separate micro gamepads in `project.yml`;
+newer directional remotes keep their native press behavior.
+
+`RemoteClickInterpreter` resolves left/right edges to the configured skip
+intervals and keeps center clicks as Select. UIKit press timestamps use uptime,
+while GameController snapshots use Unix time, so event matching converts clocks
+before rejecting stale samples. Do not require `buttonA.isPressed`: rapid clicks
+can already be released when UIKit delivers their press.
+
+A clicked touch cannot also pan into a menu or scrub when the finger lifts.
+Suppression lasts for that contact only; the next touch can swipe immediately.
+These rules are covered by `RemoteClickInterpreterTests` and
+`ScrubGestureInterpreterTests`.
+
+For live input diagnostics, launch with `SCRUB_DIAG=1` and capture stdout.
+`PLZSCRUB remote-` lines include touch boundaries, press types, sampled positions,
+resolved click actions, pan decisions, and focus transitions. The probe is
+disabled by default and logs no media URLs or credentials.
+
 ## Transport layout — read before moving anything in `PlayerControls`
 
 The controls look like a simple stack, but four rules hold it together. Each was

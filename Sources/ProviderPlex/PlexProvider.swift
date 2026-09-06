@@ -151,12 +151,13 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
     /// variant, and a viewer on an older one must still get a row. The plain hub
     /// is tried next, and `onDeck` last.
     public func continueWatching(limit: Int) async throws -> [MediaItem] {
-        // The series-recency map is needed by every path and costs nothing next to
-        // the feed request, so it starts now regardless of which feed wins.
-        async let seriesDatesTask = seriesLastPlayedDatesBestEffort(limit: limit)
         let (items, endpoint) = try await resumeFeed(limit: limit)
-        let seriesDates = await seriesDatesTask
-        logContinueWatchingFeed(items, endpoint: endpoint)
+        let seriesDates = try await seriesLastPlayedDatesBestEffort(for: items)
+        logContinueWatchingFeed(
+            items,
+            endpoint: endpoint,
+            requestedLimit: limit
+        )
         return items.map(map(metadata:)).map { stampingSeriesRecency($0, using: seriesDates) }
     }
 
@@ -169,15 +170,33 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
     private func resumeFeed(limit: Int) async throws -> ([PlexMetadata], String) {
         do {
             return (try await client.continueWatchingHub(limit: limit, homeVariant: true), "/hubs/home/continueWatching")
+        } catch let cancellation as CancellationError {
+            throw cancellation
+        } catch AppError.cancelled {
+            throw AppError.cancelled
+        } catch let pagingFailure as PlexClient.ResumeFeedPagingFailure {
+            throw pagingFailure.underlying
         } catch {
+            try Task.checkCancellation()
             PlozzLog.networking.error("Plex home Continue Watching hub unavailable; trying the plain hub")
         }
         do {
             return (try await client.continueWatchingHub(limit: limit, homeVariant: false), "/hubs/continueWatching")
+        } catch let cancellation as CancellationError {
+            throw cancellation
+        } catch AppError.cancelled {
+            throw AppError.cancelled
+        } catch let pagingFailure as PlexClient.ResumeFeedPagingFailure {
+            throw pagingFailure.underlying
         } catch {
+            try Task.checkCancellation()
             PlozzLog.networking.error("Plex Continue Watching hub unavailable; falling back to /library/onDeck")
         }
-        return (try await client.onDeck(limit: limit), "/library/onDeck")
+        do {
+            return (try await client.onDeck(limit: limit), "/library/onDeck")
+        } catch let pagingFailure as PlexClient.ResumeFeedPagingFailure {
+            throw pagingFailure.underlying
+        }
     }
 
     /// Records the resume feed exactly as Plex returned it, before any mapping.
@@ -188,7 +207,11 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
     /// Continue Watching" action. So a row built from it can disagree with the
     /// Plex app while every line of client code behaves correctly — and only the
     /// raw feed can tell us that is what happened. Gated and free when off.
-    private func logContinueWatchingFeed(_ items: [PlexMetadata], endpoint: String) {
+    private func logContinueWatchingFeed(
+        _ items: [PlexMetadata],
+        endpoint: String,
+        requestedLimit: Int
+    ) {
         guard ContinueWatchingDiagnostics.isEnabled else { return }
         let rows = items.map(Self.diagnosticRow)
         ContinueWatchingDiagnostics.emit(
@@ -209,7 +232,9 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
         // Ask the legacy feed for materially more than the hub returned. Capping it
         // at the hub's size makes anything past that cut look like a disagreement,
         // which reads as a finding and is only an artefact of the request.
-        let limit = max(items.count * 2, 100)
+        let limit = requestedLimit == Int.max
+            ? Int.max
+            : max(items.count * 2, 100)
         Task.detached(priority: .utility) {
             await Self.logHubVersusOnDeck(hub: rows, client: client, limit: limit)
         }
@@ -256,17 +281,53 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
     }
 
     /// Best-effort map of `series ratingKey → last-viewed date`, used to stamp
-    /// onDeck *next* episodes (unwatched, so no `lastViewedAt` of their own) with
-    /// their series' true recency. Mirrors
-    /// ``JellyfinProvider``'s Jellyfin-side stamping. Run concurrently with the
-    /// onDeck fetch; a failure yields an empty map and Continue Watching falls back
-    /// to unstamped ordering.
-    private func seriesLastPlayedDatesBestEffort(limit: Int) async -> [String: Date] {
-        guard let shows = try? await client.recentlyViewedShows(limit: limit) else { return [:] }
+    /// next episodes (unwatched, so no `lastViewedAt` of their own) with their
+    /// series' true recency. Only series actually referenced by this feed are
+    /// fetched. That keeps both finite and exhaustive Continue Watching loads from
+    /// turning into a broad `/library/all` scan or an `Int.max` HTTP request.
+    private func seriesLastPlayedDatesBestEffort(
+        for items: [PlexMetadata]
+    ) async throws -> [String: Date] {
+        let seriesIDs = Set(
+            items.compactMap { item -> String? in
+                guard item.lastViewedAt == nil, item.type == "episode" else {
+                    return nil
+                }
+                guard let seriesID = item.grandparentRatingKey,
+                      !seriesID.isEmpty else { return nil }
+                return seriesID
+            }
+        ).sorted()
+        guard !seriesIDs.isEmpty else { return [:] }
+
+        let batchSize = 50
         var result: [String: Date] = [:]
-        for show in shows {
-            guard let ratingKey = show.ratingKey, let seconds = show.lastViewedAt else { continue }
-            result[ratingKey] = Date(timeIntervalSince1970: TimeInterval(seconds))
+        for start in stride(from: 0, to: seriesIDs.count, by: batchSize) {
+            try Task.checkCancellation()
+            let end = min(start + batchSize, seriesIDs.count)
+            let shows: [PlexMetadata]
+            do {
+                shows = try await client.metadata(
+                    ratingKeys: Array(seriesIDs[start..<end])
+                )
+            } catch let cancellation as CancellationError {
+                throw cancellation
+            } catch AppError.cancelled {
+                throw AppError.cancelled
+            } catch {
+                try Task.checkCancellation()
+                PlozzLog.networking.error(
+                    "Plex Continue Watching series-recency enrichment failed: \(String(describing: error))"
+                )
+                return result
+            }
+            for show in shows {
+                guard let ratingKey = show.ratingKey,
+                      let seconds = show.lastViewedAt else { continue }
+                result[ratingKey] = Date(
+                    timeIntervalSince1970: TimeInterval(seconds)
+                )
+            }
         }
         return result
     }

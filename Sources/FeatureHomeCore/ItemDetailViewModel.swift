@@ -1706,10 +1706,9 @@ public final class ItemDetailViewModel {
         provider: any MediaProvider
     ) async -> MediaItem? {
         guard item.kind == .series else { return nil }
-        // A generous limit: the feed is ordered by recency across the whole
-        // library, and this series' entry can sit well down it for someone who
-        // watches a lot of different shows.
-        guard let feed = try? await provider.continueWatching(limit: 60) else { return nil }
+        // The series may sit anywhere in the unlimited Home row. A preview-sized
+        // lookup must not make an older show's detail page restart at episode one.
+        guard let feed = try? await provider.continueWatching(limit: .max) else { return nil }
         return feed.first { $0.seriesID == item.id }
     }
 
