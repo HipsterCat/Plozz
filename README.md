@@ -75,6 +75,9 @@ presents them as a single library rather than a set of tabs you switch between.
   shows opening their usual details, seasons, and episodes.
   Choose movie, TV, mixed, or personal-video content, with a separate anime
   option. Personal videos stay as files without movie or TV matching.
+  Library scans run while the app is active: normal passes skip unchanged
+  folders, while a daily deep pass (or **Scan now**) rechecks all contents,
+  including changes a server's folder timestamps cannot reveal.
   (Shares are supported, but still the newest and roughest part.)
 - **One merged library** — connect several servers and see one set of rows
   instead of picking a server first.

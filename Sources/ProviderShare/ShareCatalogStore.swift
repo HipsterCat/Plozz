@@ -187,7 +187,8 @@ actor ShareCatalogStore {
         _ assets: [CatalogAsset],
         scanID: Int64,
         now: Date = Date(),
-        scanGeneration: UUID? = nil
+        scanGeneration: UUID? = nil,
+        recordPlayableInventory: Bool = true
     ) async {
         ensureOpen()
         guard admits(scanGeneration), db != nil, !assets.isEmpty else { return }
@@ -260,11 +261,13 @@ actor ShareCatalogStore {
             if index < assets.count { await Task.yield() }
         }
         reassociateArtwork(afterUpserting: assets)
-        _ = upsertPlayablePaths(
-            assets.map(\.relPath),
-            scanID: scanID,
-            scanGeneration: scanGeneration
-        )
+        if recordPlayableInventory {
+            _ = upsertPlayablePaths(
+                assets.map(\.relPath),
+                scanID: scanID,
+                scanGeneration: scanGeneration
+            )
+        }
         if slowestChunkMs >= 20 {
             PlozzLog.boot(
                 "share.catalog slow upsert files=\(assets.count) total=\(Int(Date().timeIntervalSince(started) * 1_000))ms maxChunk=\(slowestChunkMs)ms"
@@ -278,18 +281,21 @@ actor ShareCatalogStore {
     func upsertExtras(
         _ extras: [CatalogExtraCandidate],
         scanID: Int64,
-        scanGeneration: UUID? = nil
+        scanGeneration: UUID? = nil,
+        recordPlayableInventory: Bool = true
     ) {
         ensureOpen()
         guard admits(scanGeneration), db != nil, !extras.isEmpty else { return }
         if !extraRepo.upsert(extras, scanID: scanID) {
             PlozzLog.boot("share.catalog extras upsert failed count=\(extras.count)")
         }
-        _ = upsertPlayablePaths(
-            extras.map(\.relPath),
-            scanID: scanID,
-            scanGeneration: scanGeneration
-        )
+        if recordPlayableInventory {
+            _ = upsertPlayablePaths(
+                extras.map(\.relPath),
+                scanID: scanID,
+                scanGeneration: scanGeneration
+            )
+        }
     }
 
     /// A partial pass never prunes, but may safely expose newly found extras whose
@@ -2971,56 +2977,54 @@ extension ShareCatalogStore {
     ///
     /// Semantics are unchanged: the same rows end up with the same `last_scan`,
     /// so the prune behaves exactly as before.
+    @discardableResult
     func touchDirectoryContents(
         relPaths: [String],
         scanID: Int64,
         scanGeneration: UUID? = nil
-    ) {
+    ) -> Bool {
         ensureOpen()
-        guard admits(scanGeneration), db != nil, !relPaths.isEmpty else { return }
+        guard admits(scanGeneration), db != nil else { return false }
+        guard !relPaths.isEmpty else { return true }
 
-        _ = exec("CREATE TEMP TABLE IF NOT EXISTS skipped_dirs(rel_path TEXT PRIMARY KEY);")
-        _ = exec("DELETE FROM skipped_dirs;")
-        // Guarded, and the COMMIT is conditional on it: an unguarded BEGIN that
-        // fails because a transaction is already open would leave the later
-        // COMMIT to close *that* one early, ending someone else's write halfway.
-        let owningTransaction = exec("BEGIN IMMEDIATE;")
+        guard exec("CREATE TEMP TABLE IF NOT EXISTS skipped_dirs(rel_path TEXT PRIMARY KEY);"),
+              exec("BEGIN IMMEDIATE;") else { return false }
+        func rollback() -> Bool {
+            _ = exec("ROLLBACK;")
+            PlozzLog.boot("share.catalog skipped-directory stamp failed count=\(relPaths.count)")
+            return false
+        }
+        guard exec("DELETE FROM skipped_dirs;") else { return rollback() }
 
         var insert: OpaquePointer?
-        if sqlite3_prepare_v2(
+        guard sqlite3_prepare_v2(
             db, "INSERT OR IGNORE INTO skipped_dirs(rel_path) VALUES(?);", -1, &insert, nil
-        ) == SQLITE_OK {
-            for path in relPaths {
-                sqlite3_reset(insert)
-                bindText(insert, 1, path)
-                _ = sqlite3_step(insert)
-            }
+        ) == SQLITE_OK, let insert else { return rollback() }
+        defer { sqlite3_finalize(insert) }
+        for path in relPaths {
+            sqlite3_reset(insert)
+            bindText(insert, 1, path)
+            guard sqlite3_step(insert) == SQLITE_DONE else { return rollback() }
         }
-        sqlite3_finalize(insert)
 
         // Files directly inside a skipped directory. `basename` makes the parent
         // exactly computable, so this is one pass rather than a pattern match per
         // directory.
-        stampScan(
+        guard stampScan(
             "UPDATE assets SET last_scan=? WHERE substr(rel_path, 1, length(rel_path) - length(basename) - 1) IN (SELECT rel_path FROM skipped_dirs);",
             scanID: scanID
-        )
-        for table in ["extras", "local_metadata_files", "local_artwork_files"] {
-            stampScan(
+        ) else { return rollback() }
+        for table in ["extras", "local_metadata_files", "local_artwork_files", "playable_inventory"] {
+            guard stampScan(
                 "UPDATE \(table) SET last_scan=? WHERE parent_dir IN (SELECT rel_path FROM skipped_dirs);",
                 scanID: scanID
-            )
+            ) else { return rollback() }
         }
-        stampScan(
-            "UPDATE playable_inventory SET last_scan=? WHERE parent_dir IN (SELECT rel_path FROM skipped_dirs);",
-            scanID: scanID
-        )
-        stampScan(
+        guard stampScan(
             "UPDATE dir_state SET last_scan=? WHERE rel_path IN (SELECT rel_path FROM skipped_dirs);",
             scanID: scanID
-        )
-        if owningTransaction, !exec("COMMIT;") { _ = exec("ROLLBACK;") }
-        _ = exec("DELETE FROM skipped_dirs;")
+        ), exec("DELETE FROM skipped_dirs;"), exec("COMMIT;") else { return rollback() }
+        return true
     }
 
     /// Total assets in the catalog, and how many were first seen within the last
@@ -3048,12 +3052,12 @@ extension ShareCatalogStore {
         return (total, recent)
     }
 
-    private func stampScan(_ sql: String, scanID: Int64) {
+    private func stampScan(_ sql: String, scanID: Int64) -> Bool {
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int64(stmt, 1, scanID)
-        _ = sqlite3_step(stmt)
+        return sqlite3_step(stmt) == SQLITE_DONE
     }
 
     func touchDirectoryContents(
