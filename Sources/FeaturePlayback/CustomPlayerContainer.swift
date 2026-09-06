@@ -175,7 +175,7 @@ final class PlayerInputView: UIView {
 /// so the scrub stays perfectly smooth regardless of stream/seek latency. All
 /// playback is driven through the `VideoEngine` protocol + `PlayerActions`, never
 /// a concrete player, so this UI is reused verbatim by every engine.
-final class PlayerInputViewController: UIViewController {
+final class PlayerInputViewController: UIViewController, UIGestureRecognizerDelegate {
     var actions: PlayerActions
     private let engine: any VideoEngine
     private let model: PlayerControlsModel
@@ -206,6 +206,11 @@ final class PlayerInputViewController: UIViewController {
     /// hitches, pan-sample cadence, per-sample handler cost, and thumbnail cache
     /// hit/miss, emitting one `PLZSCRUB` line per scrub for off-device capture.
     private let scrubDiag = ScrubDiagnostics()
+#if os(tvOS)
+    private let remoteTouchInput = RemoteTouchInput()
+#endif
+    private var surfacePan: PlayerSurfacePanGestureRecognizer?
+    private var selectRecognizer: UIGestureRecognizer?
 
     /// Suppresses the tvOS screensaver / Apple TV sleep while video is actively
     /// playing, and releases it the instant playback pauses, ends, or this host
@@ -307,6 +312,9 @@ final class PlayerInputViewController: UIViewController {
         updateFocusIfNeeded()
         startRefreshLoop()
         startSubtitleClock()
+#if os(tvOS)
+        remoteTouchInput.start()
+#endif
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -319,6 +327,9 @@ final class PlayerInputViewController: UIViewController {
         subtitleClock = nil
         // Leaving playback: let the screensaver / Apple TV sleep resume.
         idleSleepGuard.allowSleep()
+#if os(tvOS)
+        remoteTouchInput.stop()
+#endif
     }
 
     override var canBecomeFirstResponder: Bool { true }
@@ -828,15 +839,29 @@ final class PlayerInputViewController: UIViewController {
         return [view]
     }
 
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        guard ScrubDiagnostics.enabled else { return }
+        let previous = context.previouslyFocusedView.map { String(describing: type(of: $0)) } ?? "none"
+        let next = context.nextFocusedView.map { String(describing: type(of: $0)) } ?? "none"
+        ScrubDiagnostics.note(
+            "remote-focus from=\(previous) to=\(next) heading=\(context.focusHeading.rawValue) context=\(focusContext)")
+    }
+
     // MARK: Gestures
 
     private func installGestures() {
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        let pan = PlayerSurfacePanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         pan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
+        pan.allowedPressTypes = []
+        pan.delegate = self
         view.addGestureRecognizer(pan)
         surfaceRecognizers.append(pan)
+        surfacePan = pan
 
-        surfaceRecognizers.append(addPress(.select, #selector(handleSelect)))
+        let select = addPress(.select, #selector(handleSelect))
+        selectRecognizer = select
+        surfaceRecognizers.append(select)
         surfaceRecognizers.append(addPress(.playPause, #selector(handlePlayPause)))
         surfaceRecognizers.append(addPress(.menu, #selector(handleMenu)))
         surfaceRecognizers.append(addPress(.leftArrow, #selector(handleLeft)))
@@ -849,8 +874,48 @@ final class PlayerInputViewController: UIViewController {
     private func addPress(_ type: UIPress.PressType, _ action: Selector) -> UIGestureRecognizer {
         let recognizer = UITapGestureRecognizer(target: self, action: action)
         recognizer.allowedPressTypes = [NSNumber(value: type.rawValue)]
+        // These recognize physical/synthesized presses, not an additional tap of
+        // the touch surface. Touch movement belongs exclusively to the pan.
+        recognizer.allowedTouchTypes = []
+        recognizer.delegate = self
         view.addGestureRecognizer(recognizer)
         return recognizer
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive press: UIPress) -> Bool {
+        if gestureRecognizer === selectRecognizer, press.type == .select, focusContext == .surface {
+            var position: RemoteClickInterpreter.Position?
+#if os(tvOS)
+            if press.key == nil {
+                position = remoteTouchInput.pressedPosition(at: press.timestamp)
+            }
+#endif
+            surfacePan?.click.selectBegan(position: position)
+            if model.isScrubbing { cancelScrubCommit() }
+        }
+        if ScrubDiagnostics.enabled,
+           gestureRecognizer.allowedPressTypes.contains(NSNumber(value: press.type.rawValue)) {
+            ScrubDiagnostics.note(
+                "remote-press type=\(press.type.rawValue) phase=\(press.phase.rawValue) force=\(press.force) "
+                    + "time=\(press.timestamp) context=\(focusContext) paused=\(model.isPaused) scrubbing=\(model.isScrubbing)")
+        }
+        return true
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === surfacePan {
+            return surfacePan?.click.suppressesPan != true
+        }
+        return true
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        // A click must still complete if its contact had already started a pan.
+        (gestureRecognizer === surfacePan && otherGestureRecognizer === selectRecognizer)
+            || (gestureRecognizer === selectRecognizer && otherGestureRecognizer === surfacePan)
     }
 
     // MARK: Scrubbing
@@ -877,12 +942,15 @@ final class PlayerInputViewController: UIViewController {
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
         guard model.duration > 0 else { return }
         guard focusContext == .surface else { return }
+        guard surfacePan?.click.suppressesPan != true else { return }
         switch gesture.state {
         case .began:
             scrubGesture.begin()
+            ScrubDiagnostics.note("remote-pan began context=\(focusContext)")
         case .changed:
             let translation = gesture.translation(in: view)
             let sampleStart = ScrubDiagnostics.enabled ? CACurrentMediaTime() : 0
+            let wasUndecided = scrubGesture.axis == .undecided
             let outcome = scrubGesture.changed(
                 translationX: Double(translation.x),
                 translationY: Double(translation.y),
@@ -890,13 +958,18 @@ final class PlayerInputViewController: UIViewController {
                 isScrubbing: model.isScrubbing,
                 seekWithoutPausing: model.skipGesture.seekWithoutPausing,
                 isPaused: model.isPaused)
+            if ScrubDiagnostics.enabled, wasUndecided, scrubGesture.axis != .undecided {
+                ScrubDiagnostics.note(
+                    "remote-pan lock x=\(translation.x) y=\(translation.y) outcome=\(outcome) "
+                        + "paused=\(model.isPaused) scrubbing=\(model.isScrubbing)")
+            }
             switch outcome {
             case .ignore:
                 break
             case .enterControlBar:
-                // A deliberate downward swipe reveals the controls and brings the
-                // Info card up, tab focused — same as a Down press.
-                enterControlBar(entry: .info)
+                handleDown()
+            case .moveUp:
+                handleUp()
             case .flashAndSuppress:
                 // Pause-to-seek gate: flash the transport for feedback only.
                 flashControls()
@@ -919,6 +992,7 @@ final class PlayerInputViewController: UIViewController {
                 }
             }
         case .ended, .cancelled, .failed:
+            ScrubDiagnostics.note("remote-pan end state=\(gesture.state.rawValue) axis=\(scrubGesture.axis)")
             // Auto-commit a horizontal scrub on lift, like Apple's own
             // AVPlayerViewController — but distinguish a deliberate landing
             // (commit + resume now) from a fast flick (keep the session alive and
@@ -1027,6 +1101,18 @@ final class PlayerInputViewController: UIViewController {
 
     @objc private func handleSelect() {
         guard focusContext == .surface else { return }
+        let action = surfacePan?.click.takeAction() ?? .select
+        ScrubDiagnostics.note("remote-select action=\(action) scrubbing=\(model.isScrubbing) paused=\(model.isPaused)")
+        switch action {
+        case .skipBackward:
+            handleLeft()
+            return
+        case .skipForward:
+            handleRight()
+            return
+        case .select:
+            break
+        }
         if model.isScrubbing {
             commitScrub()
         } else {
@@ -1243,6 +1329,7 @@ final class PlayerInputViewController: UIViewController {
     /// Playback keeps running so track/speed/sync tweaks apply live (Infuse-style).
     private func enterControlBar(entry: ControlBarEntryModel.Entry) {
         guard focusContext == .surface else { return }
+        ScrubDiagnostics.note("remote-control-entry requested=\(entry)")
         guard hasControlBarContent(for: entry) else {
             // Nothing to configure for this engine/source — just flash the
             // transport instead of dropping focus into an empty row.
@@ -1320,6 +1407,7 @@ final class PlayerInputViewController: UIViewController {
     /// schedule a fresh countdown for a transport that's about to disappear).
     private func returnFocusToSurface() {
         guard focusContext == .controlBar else { return }
+        ScrubDiagnostics.note("remote-control-exit")
         focusContext = .surface
         model.controlBarVisible = false
         model.controlBar.focusArmed = false

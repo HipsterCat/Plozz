@@ -1,6 +1,7 @@
 #if os(tvOS)
 import SwiftUI
 import UIKit
+import FeatureHome
 
 /// Resolves a directional press that had nowhere else to go: Left opens the
 /// navigation rail, Right returns focus to the page.
@@ -16,8 +17,8 @@ import UIKit
 /// was always there and focusable, the engine simply never moved to it.
 ///
 /// ### What this does instead
-/// A passive recognizer on the window observes Left presses without consuming
-/// them, so every existing Left behaviour is untouched — stepping between hero
+/// Passive recognizers observe arrow presses and touchpad swipes. Neither consumes
+/// input, so existing Left behaviour is untouched — stepping between hero
 /// buttons, paging the carousel, moving along a row. It then checks whether focus
 /// actually moved. Only when it did NOT — a Left that went nowhere — does the
 /// rail claim focus.
@@ -51,14 +52,21 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
         view.recognizer.onLeaveNavigation = onLeaveNavigation
         view.recognizer.railHasFocus = railHasFocus
         view.recognizer.isEnabled = isEnabled
+        view.swipeRecognizer.isEnabled = isEnabled
+        view.swipeRecognizer.railHasFocus = railHasFocus
         return view
     }
 
     func updateUIView(_ uiView: InstallerView, context: Context) {
+        if uiView.recognizer.isEnabled != isEnabled || uiView.recognizer.railHasFocus != railHasFocus {
+            HeroFocusDiagnostics.emit("sidebar observer enabled=\(isEnabled) rail=\(railHasFocus)")
+        }
         uiView.recognizer.onOpenNavigation = onOpenNavigation
         uiView.recognizer.onLeaveNavigation = onLeaveNavigation
         uiView.recognizer.railHasFocus = railHasFocus
         uiView.recognizer.isEnabled = isEnabled
+        uiView.swipeRecognizer.isEnabled = isEnabled
+        uiView.swipeRecognizer.railHasFocus = railHasFocus
     }
 
     /// Hosts the recognizer on the window.
@@ -68,18 +76,104 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
     /// off to one side is never part of.
     final class InstallerView: UIView {
         let recognizer = LeftPressRecognizer()
+        let swipeRecognizer = BoundarySwipeRecognizer()
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            swipeRecognizer.onSwipe = { [weak recognizer] before, wasInRail in
+                recognizer?.checkFocusAfterInput(before: before, wasInRail: wasInRail)
+            }
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
             guard recognizer.view !== window else { return }
             recognizer.view?.removeGestureRecognizer(recognizer)
+            swipeRecognizer.view?.removeGestureRecognizer(swipeRecognizer)
             window?.addGestureRecognizer(recognizer)
+            window?.addGestureRecognizer(swipeRecognizer)
         }
 
         deinit {
             MainActor.assumeIsolated {
                 recognizer.view?.removeGestureRecognizer(recognizer)
+                swipeRecognizer.view?.removeGestureRecognizer(swipeRecognizer)
             }
+        }
+    }
+
+    final class BoundarySwipeRecognizer: UIGestureRecognizer {
+        var onSwipe: ((UIFocusItem?, Bool) -> Void)?
+        var railHasFocus = false
+        private var before: UIFocusItem?
+        private var wasInRail = false
+        private var travel = SwipeTravel()
+
+        override init(target: Any?, action: Selector?) {
+            super.init(target: target, action: action)
+            allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
+            allowedPressTypes = []
+            cancelsTouchesInView = false
+            delaysTouchesBegan = false
+            delaysTouchesEnded = false
+        }
+
+        convenience init() { self.init(target: nil, action: nil) }
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            before = NavigationRailEdgeCatcher.focusedItem(in: view)
+            wasInRail = railHasFocus
+            travel = SwipeTravel()
+        }
+
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+            guard let touch = touches.first else { return }
+            let position = touch.location(in: view)
+            travel.moved(to: position)
+        }
+
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+            HeroFocusDiagnostics.emit("sidebar touch ended travel=\(travel.translation) rail=\(wasInRail)")
+            if travel.direction == (wasInRail ? .right : .left) {
+                onSwipe?(before, wasInRail)
+            }
+            state = .failed
+        }
+
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+            state = .failed
+        }
+
+        override func reset() {
+            super.reset()
+            before = nil
+            travel = SwipeTravel()
+        }
+
+        override func canPrevent(_ other: UIGestureRecognizer) -> Bool { false }
+        override func canBePrevented(by other: UIGestureRecognizer) -> Bool { false }
+    }
+
+    struct SwipeTravel {
+        private var origin: CGPoint?
+        private(set) var translation = CGPoint.zero
+
+        mutating func moved(to point: CGPoint) {
+            // Indirect touch-down can be in a different coordinate frame from
+            // the movement samples inside a scrolling row. Anchor on movement.
+            guard let origin else {
+                self.origin = point
+                return
+            }
+            translation = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
+        }
+
+        var direction: UISwipeGestureRecognizer.Direction? {
+            guard abs(translation.x) >= 40, abs(translation.x) > abs(translation.y) * 1.5 else { return nil }
+            return translation.x < 0 ? .left : .right
         }
     }
 
@@ -105,6 +199,7 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
                 NSNumber(value: UIPress.PressType.leftArrow.rawValue),
                 NSNumber(value: UIPress.PressType.rightArrow.rawValue)
             ]
+            allowedTouchTypes = []
             // Purely an observer: it must never swallow the press, delay it, or
             // interfere with the gestures that implement normal navigation.
             cancelsTouchesInView = false
@@ -125,41 +220,42 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
                 return
             }
 
-            let before = Self.focusedItem()
+            let before = NavigationRailEdgeCatcher.focusedItem(in: view)
             let wasInRail = railHasFocus
-            pendingCheck?.cancel()
-            pendingCheck = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: Self.settleDelay)
-                guard !Task.isCancelled, let self, self.isEnabled else { return }
-                // Focus moved, so the press had a genuine use and neither the
-                // navigation nor the page needs to intervene.
-                guard Self.focusedItem() === before else { return }
-                if wasInRail {
-                    self.onLeaveNavigation?()
-                } else {
-                    self.onOpenNavigation?()
-                }
-            }
+            checkFocusAfterInput(before: before, wasInRail: wasInRail)
 
             // Never recognise: the press belongs to whatever the page does with it.
             state = .failed
             super.pressesBegan(presses, with: event)
         }
 
+        func checkFocusAfterInput(before: UIFocusItem?, wasInRail: Bool) {
+            guard let before else { return }
+            pendingCheck?.cancel()
+            pendingCheck = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: Self.settleDelay)
+                guard !Task.isCancelled, let self, self.isEnabled,
+                      self.railHasFocus == wasInRail else { return }
+                // Focus moved, so the press had a genuine use and neither the
+                // navigation nor the page needs to intervene.
+                guard NavigationRailEdgeCatcher.focusedItem(in: self.view) === before else { return }
+                HeroFocusDiagnostics.emit("sidebar fallback \(wasInRail ? "leave" : "open")")
+                if wasInRail {
+                    self.onLeaveNavigation?()
+                } else {
+                    self.onOpenNavigation?()
+                }
+            }
+        }
+
         override func canPrevent(_ other: UIGestureRecognizer) -> Bool { false }
         override func canBePrevented(by other: UIGestureRecognizer) -> Bool { false }
 
-        /// The element that currently holds focus, or `nil` if there is none.
-        @MainActor
-        private static func focusedItem() -> UIFocusItem? {
-            let windows = UIApplication.shared.connectedScenes
-                .compactMap { $0 as? UIWindowScene }
-                .flatMap(\.windows)
-            guard let window = windows.first(where: \.isKeyWindow) ?? windows.first else {
-                return nil
-            }
-            return UIFocusSystem(for: window)?.focusedItem
-        }
+    }
+
+    private static func focusedItem(in view: UIView?) -> UIFocusItem? {
+        guard let window = (view as? UIWindow) ?? view?.window else { return nil }
+        return UIFocusSystem(for: window)?.focusedItem
     }
 }
 #endif
