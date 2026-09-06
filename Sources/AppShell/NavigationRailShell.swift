@@ -107,13 +107,15 @@ struct NavigationRailShell<Content: View>: View {
             // it from unresolved rail edges. The Home hero disables this fallback
             // while focused because its logical button moves share one UIKit focus
             // item; it explicitly requests the rail only at its true leading edge.
-            // Search owns horizontal input and opens navigation through its capsule.
+            // Search only allows the edge fallback from results, never its keyboard.
             if !hidden {
                 NavigationRailEdgeCatcher(
                     onOpenNavigation: requestNavigationFocus,
                     onLeaveNavigation: { railReturnToken &+= 1 },
                     railHasFocus: railExpanded,
-                    isEnabled: presentation.isEdgeNavigationEnabled
+                    isEnabled: presentation.isEdgeNavigationEnabled(
+                        searchResultsHaveFocus: pinnedSidebarInteraction.searchResultsHaveFocus
+                    )
                         && !pinnedSidebarInteraction.heroHasFocus
                 )
                 .frame(width: 0, height: 0)
@@ -157,6 +159,7 @@ struct NavigationRailShell<Content: View>: View {
                 chrome.resetForDestinationChange()
                 isOpeningNavigation = false
                 hasEnteredSearchContent = false
+                pinnedSidebarInteraction.setSearchResultsFocused(false)
             }
         }
         .onChange(of: railExpanded) { _, _ in
@@ -191,7 +194,11 @@ struct NavigationRailPresentation: Equatable {
     var showsPageButton: Bool { !chromeHidden && usesPageButton }
     var opensExpanded: Bool { showsPageButton && isOpening }
     var shouldEnterSearchContent: Bool { showsPageButton && !isExpanded && !isOpening }
-    var isEdgeNavigationEnabled: Bool { !chromeHidden && (!usesPageButton || isExpanded) }
+    func isEdgeNavigationEnabled(searchResultsHaveFocus: Bool = false) -> Bool {
+        !chromeHidden && (
+            !usesPageButton || isExpanded || (!isOpening && searchResultsHaveFocus)
+        )
+    }
     func isPageButtonEnabled(hasEnteredContent: Bool) -> Bool {
         shouldEnterSearchContent && hasEnteredContent
     }

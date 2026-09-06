@@ -40,12 +40,17 @@ final class NavigationRailPresentationTests: XCTestCase {
     }
 
     func testSearchPageKeepsLeftPressesAndSwipesForNativeNavigation() {
-        XCTAssertFalse(make(.search).isEdgeNavigationEnabled)
-        XCTAssertFalse(make(.search, opening: true).isEdgeNavigationEnabled)
+        XCTAssertFalse(make(.search).isEdgeNavigationEnabled())
+        XCTAssertFalse(make(.search, opening: true).isEdgeNavigationEnabled())
     }
 
     func testExpandedSearchNavigationStillAllowsRightToReturnToThePage() {
-        XCTAssertTrue(make(.search, expanded: true).isEdgeNavigationEnabled)
+        XCTAssertTrue(make(.search, expanded: true).isEdgeNavigationEnabled())
+    }
+
+    func testSearchResultsAllowLeadingEdgeNavigationButNotWhileMenuIsOpening() {
+        XCTAssertTrue(make(.search).isEdgeNavigationEnabled(searchResultsHaveFocus: true))
+        XCTAssertFalse(make(.search, opening: true).isEdgeNavigationEnabled(searchResultsHaveFocus: true))
     }
 
     func testOtherRootDestinationsKeepPinnedNavigation() {
@@ -54,7 +59,7 @@ final class NavigationRailPresentationTests: XCTestCase {
             XCTAssertFalse(presentation.usesPageButton)
             XCTAssertTrue(presentation.isRailVisible)
             XCTAssertTrue(presentation.isRailEnabled)
-            XCTAssertTrue(presentation.isEdgeNavigationEnabled)
+            XCTAssertTrue(presentation.isEdgeNavigationEnabled())
             XCTAssertEqual(presentation.contentInset, NavigationRailMetrics.contentInset)
             XCTAssertEqual(presentation.headerHeight, 0)
             XCTAssertFalse(presentation.shouldEnterSearchContent)
@@ -71,7 +76,8 @@ final class NavigationRailPresentationTests: XCTestCase {
         )
         XCTAssertFalse(presentation.isRailVisible)
         XCTAssertFalse(presentation.isRailEnabled)
-        XCTAssertFalse(presentation.isEdgeNavigationEnabled)
+        XCTAssertFalse(presentation.isEdgeNavigationEnabled())
+        XCTAssertFalse(presentation.isEdgeNavigationEnabled(searchResultsHaveFocus: true))
         XCTAssertEqual(presentation.contentInset, 0)
         XCTAssertFalse(presentation.showsPageButton)
         XCTAssertEqual(presentation.headerHeight, 0)
