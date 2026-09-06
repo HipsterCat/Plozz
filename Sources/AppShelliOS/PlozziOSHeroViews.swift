@@ -1558,7 +1558,7 @@ struct PlozziOSHomeHeroForeground: View {
                     seasonEpisodeText: seasonEpisodeText,
                     onLight: colorScheme == .dark,
                     spacing: 10,
-                    capsuleWidth: 60,
+                    capsuleWidth: 48,
                     resumeTrailingStyle: resumeTrailingStyle,
                     separatesEpisodeText: item.startsWatching
                 )
@@ -2135,7 +2135,7 @@ private struct PlozziOSDetailHeroForeground: View {
                     seasonEpisodeText: playableItem.flatMap { seasonEpisodeText(for: $0) },
                     onLight: colorScheme == .dark,
                     spacing: 10,
-                    capsuleWidth: 60,
+                    capsuleWidth: 48,
                     resumeTrailingStyle: resume,
                     isPlaceholder: playableItem == nil,
                     separatesEpisodeText: playableItem?.startsWatching ?? false

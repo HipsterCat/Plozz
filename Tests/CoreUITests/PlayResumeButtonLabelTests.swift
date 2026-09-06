@@ -26,7 +26,7 @@ final class PlayResumeButtonLabelTests: XCTestCase {
                         seasonEpisodeText: pending ? nil : "S4, E1",
                         onLight: true,
                         spacing: fontSize == 17 ? 10 : 16,
-                        capsuleWidth: fontSize == 17 ? 60 : 75,
+                        capsuleWidth: fontSize == 17 ? 48 : 75,
                         resumeTrailingStyle: style,
                         isPlaceholder: pending
                     )
@@ -92,6 +92,21 @@ final class PlayResumeButtonLabelTests: XCTestCase {
         let expected = size(of: original.font(.system(size: 30)))
         XCTAssertEqual(actual.width, expected.width, accuracy: 0.5)
         XCTAssertEqual(actual.height, expected.height, accuracy: 0.5)
+    }
+
+    func testShorterProgressBarReducesResumeButtonWidthWithoutChangingHeight() {
+        func label(barWidth: CGFloat) -> some View {
+            PlayResumeButtonLabel(
+                title: "Play", progress: 0.03, remainingText: "47m",
+                seasonEpisodeText: "S3, E1", onLight: true,
+                spacing: 10, capsuleWidth: barWidth
+            )
+            .font(.system(size: 17))
+        }
+        let previous = size(of: label(barWidth: 60))
+        let compact = size(of: label(barWidth: 48))
+        XCTAssertEqual(previous.width - compact.width, 12, accuracy: 0.5)
+        XCTAssertEqual(previous.height, compact.height, accuracy: 0.5)
     }
 }
 #endif
