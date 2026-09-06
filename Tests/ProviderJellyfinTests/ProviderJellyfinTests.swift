@@ -832,8 +832,9 @@ final class JellyfinProviderMappingTests: XCTestCase {
         XCTAssertEqual(subtitleLocator.purpose, .subtitle)
         XCTAssertEqual(
             subtitleLocator.resource.path,
-            "Videos/i1/src1/Subtitles/2/0/Stream.vtt"
+            "Videos/i1/src1/Subtitles/2/0/Stream.srt"
         )
+        XCTAssertEqual(subtitleLocator.formatHint.container, "srt")
         XCTAssertTrue(subtitleLocator.resource.queryItems.isEmpty)
         XCTAssertFalse(String(describing: subtitleLocator).contains("TOKEN"))
         guard case .authenticatedHTTP(let locator) = request.playbackSource else {

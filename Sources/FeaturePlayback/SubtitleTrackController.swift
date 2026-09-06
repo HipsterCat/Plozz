@@ -64,9 +64,8 @@ final class SubtitleTrackController {
 
     // MARK: Selection state
 
-    /// Subtitles downloaded (Jellyfin/Plex) or otherwise sourced during *this*
-    /// session and hot-loaded into the menu — kept separate from the engine's
-    /// demuxed list (which can't be mutated). Rendered through the overlay.
+    /// Server sidecars and subtitles downloaded during this session, kept
+    /// separate from the engine's embedded tracks. Rendered through the overlay.
     private var hotLoadedSubtitleTracks: [MediaTrack] = []
     /// Next synthetic id for a hot-loaded subtitle. Starts high so it can never
     /// collide with an engine/provider stream id.
@@ -136,6 +135,7 @@ final class SubtitleTrackController {
     /// menu behaves identically across engines.
     func loadTrackOptions() {
         guard let host else { return }
+        registerProviderSidecars()
         let engine = host.trackEngine
         // Enrich the engine's demuxed tracks with the provider's probe of the
         // same file (matched by stream id), filling in any language/codec/title
@@ -325,7 +325,13 @@ final class SubtitleTrackController {
             initialSubtitleApplied = true
             applyDefaultSubtitleThroughOverlay(from: request.subtitleTracks)
         case .plozzigen:
-            let tracks = host.trackEngine.subtitleTracks
+            registerProviderSidecars()
+            let embedded = host.trackEngine.subtitleTracks
+            // A server sidecar is known before demux completes. Don't let it
+            // consume the initial selection before embedded tracks arrive.
+            guard !embedded.isEmpty
+                    || (host.trackEngine.status == .ready && pendingImageSubtitleMatch == nil) else { return }
+            let tracks = embedded + hotLoadedSubtitleTracks
             guard !tracks.isEmpty else { return }
             initialSubtitleApplied = true
             if let picked = pendingImageSubtitleMatch {
@@ -509,12 +515,26 @@ final class SubtitleTrackController {
     /// eligible; when the primary is bitmap, dual is disabled entirely.
     private func eligibleSecondarySubtitleTracks() -> [MediaTrack] {
         guard let host else { return [] }
-        return TrackMenuBuilder.eligibleSecondaryTracks(
+        let engineTracks = host.trackEngine.subtitleTracks
+        let providerTracks = host.trackRequest?.subtitleTracks ?? []
+        guard TrackMenuBuilder.imagePrimaryFormat(
             selectedPrimaryID: selectedSubtitleTrackID,
-            engineTracks: host.trackEngine.subtitleTracks,
-            providerTracks: host.trackRequest?.subtitleTracks ?? [],
+            engineTracks: engineTracks,
+            providerTracks: providerTracks
+        ) == nil else { return [] }
+        let eligible = TrackMenuBuilder.eligibleSecondaryTracks(
+            selectedPrimaryID: selectedSubtitleTrackID,
+            engineTracks: engineTracks,
+            providerTracks: providerTracks,
             engineSupportsDualDecode: host.trackEngine.capabilities.contains(.dualSubtitleDecode)
         )
+        let sidecars = hotLoadedSubtitleTracks.filter {
+            $0.id != selectedSubtitleTrackID && $0.deliverySource != nil && !$0.isBitmapSubtitle
+        }
+        let sources = Set(hotLoadedSubtitleTracks.compactMap(\.deliverySource))
+        return eligible.filter { track in
+            track.deliverySource.map { !sources.contains($0) } ?? true
+        } + sidecars
     }
 
     /// Selects the second (dual) subtitle track, or turns the second line off.
@@ -551,7 +571,7 @@ final class SubtitleTrackController {
             enabled.secondary = SubtitleStyle.Secondary()
             host.trackApplySubtitleStyle(enabled)
         }
-        if engineDual {
+        if engineDual, !hotLoadedSubtitleTracks.contains(where: { $0.id == id }) {
             // Engine decodes the embedded second track itself and publishes cues
             // via the secondary-cues callback, which the model draws through
             // secondary-live mode. Status flips to `.loaded` when cues land.
@@ -559,6 +579,7 @@ final class SubtitleTrackController {
             host.trackLiveSubtitles.beginSecondaryLiveFeed()
             engine.selectSecondarySubtitleTrack(track)
         } else {
+            if engineDual { engine.selectSecondarySubtitleTrack(nil) }
             host.trackSubtitleOverlay.loadSecondary(track)
         }
         loadTrackOptions()
@@ -585,6 +606,26 @@ final class SubtitleTrackController {
     /// with engine/provider stream ids) and rebuilds the menu so it becomes a
     /// first-class, reselectable row. Returns the assigned id.
     func hotLoadSubtitleTrack(_ track: MediaTrack, preferredLanguage: String?, forced: Bool) -> Int {
+        let id = registerSidecar(track, preferredLanguage: preferredLanguage, forced: forced)
+        loadTrackOptions()
+        return id
+    }
+
+    /// A demuxer cannot discover files downloaded alongside the media. Bring the
+    /// provider's external tracks into the same overlay route on every playback.
+    private func registerProviderSidecars() {
+        guard let host, host.trackEngineKind == .plozzigen else { return }
+        for track in host.trackRequest?.subtitleTracks ?? []
+        where track.isExternal && track.deliverySource != nil && !track.isBitmapSubtitle {
+            _ = registerSidecar(track, preferredLanguage: track.language, forced: track.isForced)
+        }
+    }
+
+    private func registerSidecar(_ track: MediaTrack, preferredLanguage: String?, forced: Bool) -> Int {
+        if let source = track.deliverySource,
+           let existing = hotLoadedSubtitleTracks.first(where: { $0.deliverySource == source }) {
+            return existing.id
+        }
         var t = track
         t.id = nextHotLoadedSubtitleID
         nextHotLoadedSubtitleID += 1
@@ -593,7 +634,6 @@ final class SubtitleTrackController {
         t.isImageBasedSubtitle = false
         t.isExternal = true
         hotLoadedSubtitleTracks.append(t)
-        loadTrackOptions()
         return t.id
     }
 

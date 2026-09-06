@@ -259,6 +259,77 @@ final class SubtitleTrackControllerTests: XCTestCase {
         XCTAssertTrue(engine.lastSubtitleSelectionCleared)
     }
 
+    func testServerSidecarRemainsAvailableOnReplayWithoutCollidingWithPGS() async throws {
+        let (sut, host, engine) = makeSUT(engineKind: .plozzigen, capabilities: [.dualSubtitleDecode])
+        var sidecar = textSidecar(5)
+        sidecar.codec = "srt"
+        sidecar.isExternal = true
+        host.request = PlaybackRequest(
+            item: MediaItem(id: "episode", title: "Episode", kind: .episode),
+            streamURL: URL(string: "https://example.test/e.mkv")!,
+            subtitleTracks: [sidecar]
+        )
+        engine.subtitleTracks = [imageSub(5)]
+        sut.loadTrackOptions()
+        let added = try XCTUnwrap(host.controls.subtitleOptions.first { $0.id >= 900_000 })
+        sut.loadTrackOptions()
+        XCTAssertEqual(host.controls.subtitleOptions.filter { $0.id >= 900_000 }.count, 1)
+        XCTAssertEqual(sut.hotLoadSubtitleTrack(sidecar, preferredLanguage: "en", forced: false), added.id)
+
+        sut.selectSubtitleOption(id: 5)
+        XCTAssertNotNil(host.controls.secondarySubtitleImagePrimaryFormat)
+        sut.selectSubtitleOption(id: added.id)
+        XCTAssertNil(host.controls.secondarySubtitleImagePrimaryFormat)
+        XCTAssertTrue(engine.lastSubtitleSelectionCleared)
+        await waitUntil { host.liveSubtitles.rendersPrimary }
+        host.liveSubtitles.tick(5)
+        XCTAssertEqual(host.liveSubtitles.primary.first?.text, "Downloaded dialogue.")
+        var moved = host.style
+        moved.verticalPosition = 0.5
+        host.trackApplySubtitleStyle(moved)
+        XCTAssertEqual(host.liveSubtitles.style.verticalPosition, 0.5)
+
+        let (replayed, replayHost, replayEngine) = makeSUT(engineKind: .plozzigen)
+        replayHost.request = host.request
+        replayHost.remembered = .language("en")
+        replayEngine.subtitleTracks = [imageSub(5, language: "ja")]
+        replayed.applyInitialSubtitleSelectionIfReady(for: try XCTUnwrap(replayHost.request))
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(replayed.selectedSubtitleTrackID), 900_000)
+        XCTAssertTrue(replayEngine.lastSubtitleSelectionCleared)
+    }
+
+    func testEarlyServerSidecarDoesNotConsumeInitialSelectionBeforeDemuxCompletes() throws {
+        let (sut, host, engine) = makeSUT(engineKind: .plozzigen)
+        var sidecar = textSidecar(5)
+        sidecar.isExternal = true
+        host.request = PlaybackRequest(
+            item: MediaItem(id: "episode", title: "Episode", kind: .episode),
+            streamURL: URL(string: "https://example.test/e.mkv")!,
+            subtitleTracks: [sidecar]
+        )
+        host.remembered = .language("en")
+        engine.status = .loading
+        sut.applyInitialSubtitleSelectionIfReady(for: try XCTUnwrap(host.request))
+        XCTAssertNil(sut.selectedSubtitleTrackID)
+        XCTAssertTrue(engine.subtitleSelections.isEmpty)
+        engine.status = .ready
+        sut.applyInitialSubtitleSelectionIfReady(for: try XCTUnwrap(host.request))
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(sut.selectedSubtitleTrackID), 900_000)
+    }
+
+    func testDownloadedSecondaryUsesSidecarEvenWhenEngineSupportsDualDecode() async throws {
+        let (sut, host, engine) = makeSUT(engineKind: .plozzigen, capabilities: [.dualSubtitleDecode])
+        engine.subtitleTracks = [embeddedText(1)]
+        sut.selectSubtitleOption(id: 1)
+        let sidecarID = sut.hotLoadSubtitleTrack(textSidecar(2), preferredLanguage: "en", forced: false)
+        XCTAssertTrue(host.controls.secondarySubtitleOptions.contains { $0.id == sidecarID })
+        sut.selectSecondarySubtitleOption(id: sidecarID)
+        XCTAssertTrue(engine.secondarySelections.last.map { $0 == nil } ?? false)
+        await waitUntil { host.controls.secondarySubtitleStatus == .loaded(cueCount: 1) }
+        host.liveSubtitles.tick(5)
+        XCTAssertEqual(host.liveSubtitles.secondary.first?.text, "Downloaded dialogue.")
+    }
+
     // MARK: - Dual (secondary) subtitle
 
     func testSelectSecondaryEnablesStylingAndLoadingStatus() {
@@ -309,7 +380,7 @@ final class SubtitleTrackControllerTests: XCTestCase {
 // MARK: - Spies
 
 @MainActor
-private final class SpyTrackHost: SubtitleTrackControllerHost {
+private final class SpyTrackHost: SubtitleTrackControllerHost, SubtitleOverlayLoaderHost {
     private let engine: SpyTrackEngine
     weak var controller: SubtitleTrackController?
 
@@ -318,7 +389,9 @@ private final class SpyTrackHost: SubtitleTrackControllerHost {
     var behavior = SubtitleBehavior.default
     let controls = PlayerControlsModel()
     let liveSubtitles = LiveSubtitleModel()
-    let overlay: SubtitleOverlayLoader
+    lazy var overlay = SubtitleOverlayLoader(host: self, fetch: { _ in
+        Data("1\n00:00:00,000 --> 00:01:00,000\nDownloaded dialogue.\n".utf8)
+    })
     var style = SubtitleStyle.default
     var plozzigenAvailable = true
     var remembered: RememberedSubtitleSelection?
@@ -334,7 +407,6 @@ private final class SpyTrackHost: SubtitleTrackControllerHost {
     init(engine: SpyTrackEngine, engineKind: PlaybackEngineKind) {
         self.engine = engine
         self.engineKind = engineKind
-        self.overlay = SubtitleOverlayLoader(host: StubOverlayHost(), fetch: { _ in Data() })
     }
 
     var trackEngine: any VideoEngine { engine }
@@ -351,7 +423,11 @@ private final class SpyTrackHost: SubtitleTrackControllerHost {
     var trackAppLocale: Locale = Locale(identifier: "en_US")
     var trackAuthenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)? { nil }
 
-    func trackApplySubtitleStyle(_ style: SubtitleStyle) { self.style = style }
+    func trackApplySubtitleStyle(_ style: SubtitleStyle) {
+        self.style = style
+        liveSubtitles.style = style
+        controls.subtitleStyle = style
+    }
     func trackRememberedSubtitle(for item: MediaItem) -> RememberedSubtitleSelection? { remembered }
     func trackEffectiveSubtitleRule(for item: MediaItem) -> SubtitlePolicy.Rule { rule }
     func trackRecordAudioSelection(language: String?) { recordedAudioLanguage.append(language) }
@@ -364,22 +440,15 @@ private final class SpyTrackHost: SubtitleTrackControllerHost {
         swapCalls += 1
         engineKind = .plozzigen   // mimic the real handoff so a follow-up applies against Plozzigen
     }
-}
-
-/// A minimal `SubtitleOverlayLoaderHost` so the controller's real overlay can be
-/// built without a view model. The overlay effects themselves are covered by
-/// `SubtitleOverlayLoaderTests`; here we only need it to exist and not crash.
-@MainActor
-private final class StubOverlayHost: SubtitleOverlayLoaderHost {
-    var primarySubtitleSelectionID: Int?
-    var secondarySubtitleSelectionID: Int?
-    func overlayResolveDeliveryURL(_ track: MediaTrack) async throws -> URL? { nil }
-    func overlayApplyPrimaryCues(_ stream: SubtitleCueStream?) {}
-    func overlayApplySecondaryCues(_ stream: SubtitleCueStream?) {}
+    var primarySubtitleSelectionID: Int? { controller?.selectedSubtitleTrackID }
+    var secondarySubtitleSelectionID: Int? { controller?.selectedSecondarySubtitleTrackID }
+    func overlayResolveDeliveryURL(_ track: MediaTrack) async throws -> URL? { track.deliverySource?.immediateURL }
+    func overlayApplyPrimaryCues(_ stream: SubtitleCueStream?) { liveSubtitles.loadPrimary(stream) }
+    func overlayApplySecondaryCues(_ stream: SubtitleCueStream?) { liveSubtitles.loadSecondary(stream) }
     func overlayDetectedLanguage(for id: Int) -> String? { nil }
     func overlayRecordDetectedLanguage(_ language: String, for id: Int) {}
     func overlayReloadTrackOptions() {}
-    func overlaySetSecondaryStatus(_ status: SecondarySubtitleStatus) {}
+    func overlaySetSecondaryStatus(_ status: SecondarySubtitleStatus) { controls.secondarySubtitleStatus = status }
     #if DEBUG
     func overlaySetPrimaryDiagnostic(route: String, cues: Int?) {}
     #endif
