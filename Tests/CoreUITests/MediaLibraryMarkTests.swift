@@ -48,13 +48,44 @@ final class MediaLibraryMarkTests: XCTestCase {
     }
 
     func testSeerrUpgradesTheMarkToRequestable() {
-        for availability in [MediaAvailabilityStatus.unknown, .pending, .processing, .deleted] {
+        for availability in [MediaAvailabilityStatus.unknown, .deleted] {
             XCTAssertEqual(
                 MediaLibraryMark.mark(for: item(availability: availability), seerConnected: true),
                 .requestable,
                 "\(availability) becomes actionable once Seerr is connected"
             )
         }
+    }
+
+    func testExistingMovieAndSeriesRequestsShowClockInsteadOfPlus() {
+        for kind in [MediaItemKind.movie, .series] {
+            for availability in [MediaAvailabilityStatus.pending, .processing] {
+                var subject = item(availability: availability)
+                subject.kind = kind
+                let mark = MediaLibraryMark.mark(for: subject, seerConnected: true)
+                XCTAssertEqual(mark, .requested)
+                XCTAssertEqual(mark?.systemImage, "clock.fill")
+                XCTAssertEqual(
+                    MediaPlaybackIndicatorState(subject).libraryMark(seerConnected: true),
+                    .requested
+                )
+            }
+        }
+    }
+
+    func testRequestStatusChangeInvalidatesNarrowedCardSnapshot() {
+        let missing = MediaPlaybackIndicatorState(item(availability: .unknown))
+        let requested = MediaPlaybackIndicatorState(item(availability: .pending))
+        XCTAssertNotEqual(missing, requested)
+        XCTAssertEqual(missing.libraryMark(seerConnected: true), .requestable)
+        XCTAssertEqual(requested.libraryMark(seerConnected: true), .requested)
+        XCTAssertEqual(requested.libraryMark(seerConnected: false), .notInLibrary)
+    }
+
+    func testRequestedClockAccessibilityDescribesRequestNotPlayback() {
+        var label = MediaLibraryMark.requested.accessibilityLabel
+        label.locale = Locale(identifier: "en")
+        XCTAssertEqual(String(localized: label), "Not in your library — already requested")
     }
 
     func testMarkAgreesWithTheItemPredicateItIsDerivedFrom() {
