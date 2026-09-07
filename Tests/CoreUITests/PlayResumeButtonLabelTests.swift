@@ -93,5 +93,18 @@ final class PlayResumeButtonLabelTests: XCTestCase {
         XCTAssertEqual(actual.width, expected.width, accuracy: 0.5)
         XCTAssertEqual(actual.height, expected.height, accuracy: 0.5)
     }
+
+    func testResumeTextCanWrapInTheVerticalActionFallback() {
+        let label = PlayResumeButtonLabel(
+            title: "Play", progress: 0.64, remainingText: "1h 43m",
+            seasonEpisodeText: "S20, E100", onLight: true, wrapsText: true
+        )
+        .font(.system(size: 34))
+        let host = UIHostingController(rootView: label)
+        let wide = host.sizeThatFits(in: CGSize(width: 2_000, height: 500))
+        let narrow = host.sizeThatFits(in: CGSize(width: 200, height: 500))
+        XCTAssertLessThanOrEqual(narrow.width, 200)
+        XCTAssertGreaterThan(narrow.height, wide.height)
+    }
 }
 #endif

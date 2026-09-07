@@ -215,7 +215,10 @@ public struct PosterCardView: View {
                 .overlay { resumeChip }
                 .overlay { pendingRemovalOverlay }
                 .clipShape(RoundedRectangle(cornerRadius: PlozzTheme.Metrics.posterArtCornerRadius, style: .continuous))
-                .plozzMediaEdge(cornerRadius: PlozzTheme.Metrics.posterArtCornerRadius)
+                .plozzMediaEdge(
+                    cornerRadius: PlozzTheme.Metrics.posterArtCornerRadius,
+                    isEnabled: MediaArtworkPlaceholder.Symbol(for: item) == .playback
+                )
 
             captionBlock(inset: metrics.posterCaptionInset, spacing: 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -263,7 +266,10 @@ public struct PosterCardView: View {
                 .overlay { resumeChip }
                 .overlay { pendingRemovalOverlay }
                 .clipShape(RoundedRectangle(cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius, style: .continuous))
-                .plozzMediaEdge(cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius)
+                .plozzMediaEdge(
+                    cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius,
+                    isEnabled: MediaArtworkPlaceholder.Symbol(for: item) == .playback
+                )
 
             // Series-artwork cards say everything on the artwork itself — the show
             // as its logo, the episode and time in the chip — so there is no
@@ -357,7 +363,10 @@ public struct PosterCardView: View {
             .overlay { resumeChip }
             .overlay { pendingRemovalOverlay }
             .clipShape(RoundedRectangle(cornerRadius: borderlessCornerRadius, style: .continuous))
-            .plozzMediaEdge(cornerRadius: borderlessCornerRadius)
+            .plozzMediaEdge(
+                cornerRadius: borderlessCornerRadius,
+                isEnabled: MediaArtworkPlaceholder.Symbol(for: item) == .playback
+            )
             .plozzFocusHalo(
                 cornerRadius: borderlessCornerRadius,
                 focusScale: borderlessFocusScale,
@@ -922,7 +931,10 @@ public struct PosterCardView: View {
     /// `MediaArtworkPlaceholder` so every surface looks identical, tinted with
     /// the caption colour so it flips on focus and respects reduced-transparency.
     private var neutralPlaceholder: some View {
-        MediaArtworkPlaceholder(tint: subtitleColor)
+        let radius = cardStyle == .framed
+            ? (style == .poster ? PlozzTheme.Metrics.posterArtCornerRadius : PlozzTheme.Metrics.mediumMediaCornerRadius)
+            : borderlessCornerRadius
+        return MediaArtworkPlaceholder(tint: subtitleColor, symbol: .init(for: item), cornerRadius: radius)
     }
 
     // MARK: Series-identified artwork (Continue Watching)

@@ -1,0 +1,174 @@
+import CoreModels
+import SwiftUI
+
+public extension Text {
+    init(_ title: SeriesDownloadSeasonTitle) {
+        switch title {
+        case .content(let value): self.init(verbatim: value)
+        case .localized(let resource): self.init(resource)
+        }
+    }
+}
+
+public struct SeasonDownloadRowLabel: View {
+    @ScaledMetric(relativeTo: .caption) private var statusIconWidth: CGFloat = 14
+
+    private let title: Text
+    private let status: LocalizedStringResource
+    private let statusSystemImage: String
+
+    public init(
+        title: LocalizedStringResource,
+        status: LocalizedStringResource,
+        statusSystemImage: String
+    ) {
+        self.init(title: Text(title), status: status, statusSystemImage: statusSystemImage)
+    }
+
+    public init(
+        title: Text,
+        status: LocalizedStringResource,
+        statusSystemImage: String
+    ) {
+        self.title = title
+        self.status = status
+        self.statusSystemImage = statusSystemImage
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            title
+                .foregroundStyle(Color.primary)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: statusSystemImage)
+                    .frame(width: statusIconWidth)
+                    .accessibilityHidden(true)
+                Text(status)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.caption)
+            .foregroundStyle(Color.secondary)
+            .accessibilityElement(children: .combine)
+        }
+    }
+}
+
+private enum SeasonDownloadRowMetrics {
+    static let artworkWidth: CGFloat = 46
+    static let artworkHeight: CGFloat = 68
+    static let spacing: CGFloat = 12
+}
+
+public struct SeasonDownloadRowArtwork<Content: View>: View {
+    private let content: Content
+    private let showsMediaEdge: Bool
+
+    public init(showsMediaEdge: Bool = true, @ViewBuilder content: () -> Content) {
+        self.content = content()
+        self.showsMediaEdge = showsMediaEdge
+    }
+
+    public var body: some View {
+        content
+            .frame(
+                width: SeasonDownloadRowMetrics.artworkWidth,
+                height: SeasonDownloadRowMetrics.artworkHeight
+            )
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .plozzMediaEdge(cornerRadius: 6, isEnabled: showsMediaEdge)
+            .accessibilityHidden(true)
+    }
+}
+
+public struct SeasonDownloadRowContent<Artwork: View, Accessory: View>: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private let title: Text
+    private let status: LocalizedStringResource
+    private let statusSystemImage: String
+    private let showsRequestAction: Bool
+    private let completedDownloadCount: Int
+    private let artwork: Artwork
+    private let accessory: Accessory
+
+    public init(
+        title: LocalizedStringResource,
+        status: LocalizedStringResource,
+        statusSystemImage: String,
+        showsRequestAction: Bool = false,
+        completedDownloadCount: Int = 0,
+        @ViewBuilder artwork: () -> Artwork,
+        @ViewBuilder accessory: () -> Accessory
+    ) {
+        self.init(
+            title: Text(title), status: status, statusSystemImage: statusSystemImage,
+            showsRequestAction: showsRequestAction, completedDownloadCount: completedDownloadCount,
+            artwork: artwork, accessory: accessory
+        )
+    }
+
+    public init(
+        title: Text,
+        status: LocalizedStringResource,
+        statusSystemImage: String,
+        showsRequestAction: Bool = false,
+        completedDownloadCount: Int = 0,
+        @ViewBuilder artwork: () -> Artwork,
+        @ViewBuilder accessory: () -> Accessory
+    ) {
+        self.title = title
+        self.status = status
+        self.statusSystemImage = statusSystemImage
+        self.showsRequestAction = showsRequestAction
+        self.completedDownloadCount = completedDownloadCount
+        self.artwork = artwork()
+        self.accessory = accessory()
+    }
+
+    public var body: some View {
+        let contentLayout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(spacing: SeasonDownloadRowMetrics.spacing))
+        HStack(
+            alignment: dynamicTypeSize.isAccessibilitySize ? .top : .center,
+            spacing: SeasonDownloadRowMetrics.spacing
+        ) {
+            artwork
+            contentLayout {
+                VStack(alignment: .leading, spacing: 4) {
+                    SeasonDownloadRowLabel(
+                        title: title,
+                        status: status,
+                        statusSystemImage: statusSystemImage
+                    )
+                    if completedDownloadCount > 0 {
+                        Text("Downloaded: \(completedDownloadCount.formatted())")
+                            .font(.caption)
+                            .foregroundStyle(Color.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if showsRequestAction {
+                    Text("Request")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.tint)
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .layoutPriority(1)
+                }
+                accessory
+            }
+        }
+        .contentShape(Rectangle())
+        #if os(iOS)
+        .alignmentGuide(.listRowSeparatorLeading) {
+            $0[.leading] + SeasonDownloadRowMetrics.artworkWidth + SeasonDownloadRowMetrics.spacing
+        }
+        #endif
+    }
+}

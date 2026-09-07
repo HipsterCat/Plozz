@@ -811,9 +811,10 @@ struct MainTabView: View {
                 detailSnapshotCache: detailSnapshotCache,
                 authenticatedHTTPResolver: authenticatedHTTPResolver,
                 seer: seer,
-                activeSeerrUserID: activeProfile.seerrUserID,
+                activeSeerrIdentity: activeProfile.seerrRequestIdentity,
                 activeSeerrUserName: activeProfile.seerrUserName,
-                confirmAdminRequest: profiles.count > 1,
+                confirmAdminRequest: profiles.count > 1
+                    && activeProfile.seerrRequestIdentity == .admin,
                 homeVisibility: homeVisibility,
                 homeLayoutStore: homeLayoutStore,
                 homeContentStore: homeContentStore,
@@ -883,9 +884,10 @@ struct MainTabView: View {
                 detailSnapshotCache: detailSnapshotCache,
                 authenticatedHTTPResolver: authenticatedHTTPResolver,
                 seer: seer,
-                activeSeerrUserID: activeProfile.seerrUserID,
+                activeSeerrIdentity: activeProfile.seerrRequestIdentity,
                 activeSeerrUserName: activeProfile.seerrUserName,
-                confirmAdminRequest: profiles.count > 1,
+                confirmAdminRequest: profiles.count > 1
+                    && activeProfile.seerrRequestIdentity == .admin,
                 homeVisibility: homeVisibility,
                 behavior: subtitleBehaviorModel.settings,
                 style: subtitleStyleModel.style,
@@ -1314,6 +1316,10 @@ struct MainTabView: View {
             }
         )
         .environment(\.themeMusicController, themeMusicController)
+        .environment(
+            \.seasonRequestContextID,
+            "\(seer.connectionRevision)|\(activeProfile.id)|\(activeProfile.seerrUserID.map(String.init) ?? "admin")|\(activeProfile.seerrServerIdentity?.canonicalURL ?? "")"
+        )
         .environment(\.themeMusicSettings, themeMusicModel.settings)
         .environment(heroTrailerController)
         .environment(heroBackgroundModel)

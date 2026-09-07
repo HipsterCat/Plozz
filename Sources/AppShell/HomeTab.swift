@@ -65,9 +65,9 @@ struct HomeTab: View {
     let authenticatedHTTPResolver: any AuthenticatedHTTPResourceResolving
     /// Seerr discovery service backing the hero's featured content seam.
     let seer: SeerService
-    /// The active profile's linked Seerr user (`X-API-User`) for requests, or
-    /// `nil` to request as admin. Read at request time from the current profile.
-    let activeSeerrUserID: Int?
+    /// The active profile's complete Seerr request identity. A server-bound user
+    /// stays distinct from both admin and a legacy/mismatched mapping.
+    let activeSeerrIdentity: SeerRequestIdentity
     /// Display name of the active profile's linked Seerr user, for the pre-press
     /// "Request as <name>" label. `nil` when requesting as admin.
     let activeSeerrUserName: String?
@@ -89,6 +89,14 @@ struct HomeTab: View {
     /// App-wide navigation style, so the carousel's left-edge focus behaviour
     /// (escape to sidebar vs. wrap) matches the surrounding chrome.
     let navigationStyle: NavigationStyle
+
+    private var requestActingName: String? {
+        guard activeSeerrIdentity.userID != nil,
+              !activeSeerrIdentity.requiresRelink(to: seer.serverIdentity) else {
+            return nil
+        }
+        return activeSeerrUserName
+    }
     let behavior: SubtitleBehavior
     let style: SubtitleStyle
     let playbackSettings: PlaybackSettings
@@ -150,6 +158,7 @@ struct HomeTab: View {
     let isActiveTab: Bool
 
     @State private var path = NavigationPath()
+    @State private var heroRequestFailure: SeerRequestFailure?
     /// Handles owned above the tab so tab re-hosting cannot destroy them.
     let runtime: HomeTabRuntime
     /// Detail view models, kept across `navigationDestination` re-evaluations.
@@ -260,15 +269,11 @@ struct HomeTab: View {
                 homePerfOverlayEnabled: homePerfOverlayEnabled,
                 seerConnected: seer.isConfigured,
                 onRequestItem: { item in
-                    let outcome = await seer.request(item, actingUserID: activeSeerrUserID)
-                    if case let .success(status) = outcome { return status }
-                    return nil
+                    await requestFromHero(item)
                 },
                 onRequestAvailability: { await seer.requestAvailability(for: $0) },
                 onRequestSeasonsItem: { item, seasons in
-                    let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
-                    if case let .success(status) = outcome { return status }
-                    return nil
+                    await requestFromHero(item, seasons: seasons)
                 },
                 navigationStyle: navigationStyle,
                 onSelectItem: {
@@ -308,6 +313,32 @@ struct HomeTab: View {
                 configuredServerCount: configuredServerCount,
                 enabledServerCount: accounts.count
             )
+            .alert(
+                "Request Failed",
+                isPresented: Binding(
+                    get: { heroRequestFailure != nil },
+                    set: { if !$0 { heroRequestFailure = nil } }
+                ),
+                presenting: heroRequestFailure
+            ) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { failure in
+                Text(failure.userMessage)
+            }
+    }
+
+    private func requestFromHero(
+        _ item: MediaItem,
+        seasons: [Int]? = nil
+    ) async -> MediaAvailabilityStatus? {
+        let outcome = await seer.request(item, seasons: seasons, identity: activeSeerrIdentity)
+        switch outcome {
+        case let .success(status):
+            return status
+        case let .failure(reason):
+            heroRequestFailure = reason
+            return nil
+        }
     }
 
     private var watchlistRoot: some View {
@@ -499,10 +530,14 @@ struct HomeTab: View {
                     seerConnected: seer.isConfigured,
                     requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
                     onRequestSeasons: { item, seasons in
-                        let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
-                        return seerRequestResult(outcome, actingName: activeSeerrUserName)
+                        let outcome = await seer.request(
+                            item,
+                            seasons: seasons,
+                            identity: activeSeerrIdentity
+                        )
+                        return seerRequestResult(outcome, actingName: requestActingName)
                     },
-                    requestActingName: activeSeerrUserName,
+                    requestActingName: requestActingName,
                     confirmAdminRequest: confirmAdminRequest
                 )
             }
@@ -530,10 +565,14 @@ struct HomeTab: View {
                     seerConnected: seer.isConfigured,
                     requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
                     onRequestSeasons: { item, seasons in
-                        let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
-                        return seerRequestResult(outcome, actingName: activeSeerrUserName)
+                        let outcome = await seer.request(
+                            item,
+                            seasons: seasons,
+                            identity: activeSeerrIdentity
+                        )
+                        return seerRequestResult(outcome, actingName: requestActingName)
                     },
-                    requestActingName: activeSeerrUserName,
+                    requestActingName: requestActingName,
                     confirmAdminRequest: confirmAdminRequest
                 )
             }
@@ -1002,6 +1041,7 @@ struct HomeTab: View {
             continueWatchingSnapshot: { runtime.continueWatchingForDetail },
             ratingsProvider: ratingsProvider,
             discoveryStatusRefresh: { await seer.availability(for: $0) },
+            loadSeasonEpisodeRoster: { await seer.seasonEpisodeRoster(for: $0, seasonNumber: $1) },
             makeRelatedTitlesLoader: {
                 makeRelatedTitlesLoader(
                     in: accounts,
@@ -1056,15 +1096,19 @@ struct HomeTab: View {
             initialSeasonID: item.seasonID,
             seerConnected: seer.isConfigured,
             onRequest: { item in
-                let outcome = await seer.request(item, actingUserID: activeSeerrUserID)
-                return seerRequestResult(outcome, actingName: activeSeerrUserName)
+                let outcome = await seer.request(item, identity: activeSeerrIdentity)
+                return seerRequestResult(outcome, actingName: requestActingName)
             },
             requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
             onRequestSeasons: { item, seasons in
-                let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
-                return seerRequestResult(outcome, actingName: activeSeerrUserName)
+                let outcome = await seer.request(
+                    item,
+                    seasons: seasons,
+                    identity: activeSeerrIdentity
+                )
+                return seerRequestResult(outcome, actingName: requestActingName)
             },
-            requestActingName: activeSeerrUserName,
+            requestActingName: requestActingName,
             confirmAdminRequest: confirmAdminRequest
         )
     }

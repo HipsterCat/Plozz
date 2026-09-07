@@ -763,6 +763,7 @@ final class PlozziOSAppModel {
         }
         prepareMediaAliasLedger()
         startCloudSyncIfEnabled()
+        observeApplicationScenes()
     }
 
     var accounts: [Account] {
@@ -794,7 +795,6 @@ final class PlozziOSAppModel {
         heroTrailerCache.removeAll()
         accountsProviders.reloadAccounts()
         applyCrashReportingPreference()
-        observeApplicationScenes()
     }
 
     func provider(for item: MediaItem) -> (any MediaProvider)? {
@@ -852,6 +852,7 @@ final class PlozziOSAppModel {
     }
 
     private func observeApplicationScenes() {
+        guard sceneNotificationTokens.isEmpty else { return }
         for name in [
             UIScene.didActivateNotification,
             UIScene.willDeactivateNotification,
@@ -2103,32 +2104,47 @@ final class PlozziOSAppModel {
         Task { await seerService.setActiveProfile(namespace: profiles.activeNamespace) }
     }
 
-    var activeSeerrUserID: Int? {
-        profiles.activeProfile.seerrUserID
+    var activeSeerrRequestIdentity: SeerRequestIdentity {
+        profiles.activeProfile.seerrRequestIdentity
     }
 
-    var activeSeerrUserName: String? {
-        profiles.activeProfile.seerrUserName
+    var activeSeerrRequestActingName: String? {
+        let identity = activeSeerrRequestIdentity
+        guard identity.userID != nil,
+              !identity.requiresRelink(to: seerService.serverIdentity) else {
+            return nil
+        }
+        return profiles.activeProfile.seerrUserName
     }
 
     func setSeerrUser(_ user: SeerUser?, for profileID: String) {
-        guard var profile = profiles.profiles.first(where: { $0.id == profileID }) else {
+        guard let profile = profiles.profiles.first(where: { $0.id == profileID }) else {
             return
         }
-        profile.seerrUserID = user?.id
-        profile.seerrUserName = user?.name
-        profile.seerrUserAvatarURL = user?.avatarURL?.absoluteString
-        profiles.update(profile)
+        if let user {
+            guard let userServer = user.serverIdentity,
+                  let currentServer = seerService.serverIdentity,
+                  userServer == currentServer else {
+                PlozzLog.auth.error(
+                    "Rejected Seerr profile mapping without matching server provenance"
+                )
+                return
+            }
+        }
+        profiles.update(
+            profile.settingSeerrUser(
+                id: user?.id,
+                name: user?.name,
+                avatarURL: user?.avatarURL?.absoluteString,
+                serverIdentity: user?.serverIdentity
+            )
+        )
     }
 
     func disconnectSeerr() {
+        // Keep server-bound profile mappings so reconnecting the same endpoint
+        // restores them. A different endpoint is blocked until each is relinked.
         seerService.disconnect()
-        for var profile in profiles.profiles where profile.seerrUserID != nil {
-            profile.seerrUserID = nil
-            profile.seerrUserName = nil
-            profile.seerrUserAvatarURL = nil
-            profiles.update(profile)
-        }
     }
 
     func activeAccountIDs(for profileID: String) -> Set<String> {

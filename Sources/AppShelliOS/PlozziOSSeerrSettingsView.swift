@@ -1,4 +1,5 @@
 #if os(iOS)
+import CoreModels
 import CoreUI
 import SeerService
 import SwiftUI
@@ -53,10 +54,17 @@ struct PlozziOSSeerrSettingsView: View {
         }
         .settingsPageSurface()
         .navigationTitle(Text(verbatim: "Seerr"))
-        .task {
+        .task(id: appModel.seerService.connectionRevision) {
+            let revision = appModel.seerService.connectionRevision
+            users = []
+            usersError = nil
             await appModel.seerService.refreshStatus()
+            guard !Task.isCancelled,
+                  appModel.seerService.connectionRevision == revision else {
+                return
+            }
             if appModel.seerService.isConfigured {
-                await loadUsers()
+                await loadUsers(for: revision)
             } else {
                 await scanForServers(reset: true)
             }
@@ -95,7 +103,6 @@ struct PlozziOSSeerrSettingsView: View {
             }
             Button("Disconnect", role: .destructive) {
                 appModel.disconnectSeerr()
-                users = []
             }
         case let .failed(message):
             Label(message, systemImage: "exclamationmark.triangle.fill")
@@ -106,7 +113,6 @@ struct PlozziOSSeerrSettingsView: View {
                 }
                 Button("Disconnect", role: .destructive) {
                     appModel.disconnectSeerr()
-                    users = []
                 }
             } else {
                 connectionFields
@@ -177,34 +183,49 @@ struct PlozziOSSeerrSettingsView: View {
             Label(usersError, systemImage: "exclamationmark.triangle")
                 .foregroundStyle(.red)
             Button("Try Again") {
-                Task { await loadUsers() }
+                Task {
+                    await loadUsers(for: appModel.seerService.connectionRevision)
+                }
             }
-        } else if users.isEmpty {
-            Text("No users found.")
-                .plozzForeground(.secondary)
         } else {
+            if users.isEmpty {
+                Text("No users found.")
+                    .plozzForeground(.secondary)
+            }
             ForEach(appModel.profiles.profiles) { profile in
-                Picker(
-                    profile.name,
-                    selection: Binding(
-                        get: { profile.seerrUserID },
-                        set: { userID in
-                            let user = users.first(where: { $0.id == userID })
-                            appModel.setSeerrUser(user, for: profile.id)
+                Menu {
+                    Button {
+                        appModel.setSeerrUser(nil, for: profile.id)
+                    } label: {
+                        Label(
+                            "Admin — unrestricted",
+                            systemImage: profile.seerrRequestIdentity == .admin
+                                ? "checkmark"
+                                : "person.crop.circle.badge.checkmark"
+                        )
+                    }
+                    if !users.isEmpty {
+                        Divider()
+                        ForEach(users) { user in
+                            Button {
+                                guard isCurrentServerUser(user) else { return }
+                                appModel.setSeerrUser(user, for: profile.id)
+                            } label: {
+                                Label {
+                                    Text(verbatim: user.name)
+                                } icon: {
+                                    Image(
+                                        systemName: isSelected(user, for: profile)
+                                            ? "checkmark"
+                                            : "person"
+                                    )
+                                }
+                            }
+                            .disabled(!isCurrentServerUser(user))
                         }
-                    )
-                ) {
-                    Text("Admin — unrestricted")
-                        .tag(Optional<Int>.none)
-                    if let currentID = profile.seerrUserID,
-                       !users.contains(where: { $0.id == currentID }) {
-                        (profile.seerrUserName.map { Text(verbatim: $0) } ?? Text("Unavailable user"))
-                            .tag(Optional(currentID))
                     }
-                    ForEach(users) { user in
-                        Text(user.name)
-                            .tag(Optional(user.id))
-                    }
+                } label: {
+                    profileMappingLabel(profile)
                 }
             }
         }
@@ -221,19 +242,74 @@ struct PlozziOSSeerrSettingsView: View {
             await appModel.seerService.connect(baseURL: url, apiKey: apiKey)
             guard appModel.seerService.isConfigured else { return }
             apiKey = ""
-            await loadUsers()
         }
     }
 
-    private func loadUsers() async {
+    private func loadUsers(for revision: UUID) async {
         isLoadingUsers = true
         usersError = nil
-        defer { isLoadingUsers = false }
+        defer {
+            if appModel.seerService.connectionRevision == revision {
+                isLoadingUsers = false
+            }
+        }
         do {
-            users = try await appModel.seerService.users()
+            let loadedUsers = try await appModel.seerService.users()
+            guard appModel.seerService.connectionRevision == revision else { return }
+            users = loadedUsers
+        } catch is CancellationError {
+            return
         } catch {
+            guard appModel.seerService.connectionRevision == revision else { return }
             usersError = "Couldn’t load Seerr users."
         }
+    }
+
+    private func isCurrentServerUser(_ user: SeerUser) -> Bool {
+        guard let serverIdentity = appModel.seerService.serverIdentity else {
+            return false
+        }
+        return user.serverIdentity == serverIdentity
+    }
+
+    private func currentUser(for profile: Profile) -> SeerUser? {
+        let identity = profile.seerrRequestIdentity
+        guard !identity.requiresRelink(to: appModel.seerService.serverIdentity),
+              let userID = identity.userID,
+              let serverIdentity = appModel.seerService.serverIdentity else {
+            return nil
+        }
+        return users.first {
+            $0.id == userID && $0.serverIdentity == serverIdentity
+        }
+    }
+
+    private func isSelected(_ user: SeerUser, for profile: Profile) -> Bool {
+        guard isCurrentServerUser(user) else { return false }
+        return currentUser(for: profile) == user
+    }
+
+    private func profileMappingLabel(_ profile: Profile) -> some View {
+        let mappedUser = currentUser(for: profile)
+        let needsRelink = profile.seerrRequestIdentity.userID != nil && mappedUser == nil
+        return HStack {
+            Text(profile.name)
+            Spacer()
+            if needsRelink {
+                Text("Relink required")
+                    .foregroundStyle(.orange)
+            } else if let mappedUser {
+                Text(verbatim: mappedUser.name)
+                    .plozzForeground(.secondary)
+            } else {
+                Text("Admin — unrestricted")
+                    .plozzForeground(.secondary)
+            }
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.caption)
+                .plozzForeground(.tertiary)
+        }
+        .contentShape(Rectangle())
     }
 
     private var knownServerHosts: [String] {

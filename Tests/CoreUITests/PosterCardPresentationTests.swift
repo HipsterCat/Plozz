@@ -66,6 +66,37 @@ final class MediaFolderCardLayoutTests: XCTestCase {
 #endif
 
 final class PosterCardPresentationTests: XCTestCase {
+    func testMissingLibraryArtworkUsesNeutralMediaInsteadOfPlaybackSymbol() {
+        for status in [
+            MediaAvailabilityStatus.unknown, .pending, .processing,
+            .partiallyAvailable, .available,
+        ] {
+            let item = MediaItem(
+                id: "metadata", title: "Not in Library", kind: .movie,
+                availability: status, locallyValidatedPlayableSource: false
+            )
+            XCTAssertEqual(MediaArtworkPlaceholder.Symbol(for: item), .media)
+        }
+        XCTAssertEqual(MediaArtworkPlaceholder.Symbol.media.rawValue, "rectangle.dashed")
+    }
+
+    func testLibraryItemsWithMissingArtworkKeepTheirPlaybackSymbol() {
+        for kind in [MediaItemKind.movie, .series, .season, .episode] {
+            let item = MediaItem(id: "library-item", title: "In Library", kind: kind)
+            XCTAssertEqual(MediaArtworkPlaceholder.Symbol(for: item), .playback)
+        }
+    }
+
+    func testSchedulePlaceholdersNeverSuggestPlaybackEvenAfterTheirAirDate() {
+        for date in [Date(timeIntervalSince1970: 0), Date.distantFuture] {
+            let item = MediaItem(
+                id: "scheduled", title: "Scheduled Episode", kind: .episode,
+                scheduledAirDate: date
+            )
+            XCTAssertEqual(MediaArtworkPlaceholder.Symbol(for: item), .media)
+        }
+    }
+
     func testFolderUsesDedicatedArtworkWithoutPlaybackChrome() {
         XCTAssertTrue(PosterCardPresentation.usesFolderArtwork(for: .folder))
         XCTAssertFalse(PosterCardPresentation.showsWatchStatus(for: .folder))

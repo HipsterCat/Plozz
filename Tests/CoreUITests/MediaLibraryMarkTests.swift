@@ -3,6 +3,11 @@ import XCTest
 @testable import CoreUI
 
 #if canImport(SwiftUI)
+import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
+
 /// Covers which mark a card wears, because the decision is easy to get subtly
 /// wrong in the direction that matters most: the informational mark must survive
 /// Seerr being absent, which is the majority case and the reason it exists.
@@ -48,7 +53,7 @@ final class MediaLibraryMarkTests: XCTestCase {
     }
 
     func testSeerrUpgradesTheMarkToRequestable() {
-        for availability in [MediaAvailabilityStatus.unknown, .pending, .processing, .deleted] {
+        for availability in [MediaAvailabilityStatus.unknown, .deleted] {
             XCTAssertEqual(
                 MediaLibraryMark.mark(for: item(availability: availability), seerConnected: true),
                 .requestable,
@@ -56,6 +61,72 @@ final class MediaLibraryMarkTests: XCTestCase {
             )
         }
     }
+
+    func testExistingMovieAndSeriesRequestsShowClockInsteadOfPlus() {
+        for kind in [MediaItemKind.movie, .series] {
+            for availability in [MediaAvailabilityStatus.pending, .processing] {
+                var subject = item(availability: availability)
+                subject.kind = kind
+                let mark = MediaLibraryMark.mark(for: subject, seerConnected: true)
+                XCTAssertEqual(mark, .requested)
+                XCTAssertEqual(mark?.systemImage, "clock")
+                XCTAssertEqual(
+                    MediaPlaybackIndicatorState(subject).libraryMark(seerConnected: true),
+                    .requested
+                )
+            }
+        }
+    }
+
+    func testRequestStatusChangeInvalidatesNarrowedCardSnapshot() {
+        let missing = MediaPlaybackIndicatorState(item(availability: .unknown))
+        let requested = MediaPlaybackIndicatorState(item(availability: .pending))
+        XCTAssertNotEqual(missing, requested)
+        XCTAssertEqual(missing.libraryMark(seerConnected: true), .requestable)
+        XCTAssertEqual(requested.libraryMark(seerConnected: true), .requested)
+        XCTAssertEqual(requested.libraryMark(seerConnected: false), .notInLibrary)
+    }
+
+    func testRequestedClockAccessibilityDescribesRequestNotPlayback() {
+        var label = MediaLibraryMark.requested.accessibilityLabel
+        label.locale = Locale(identifier: "en")
+        XCTAssertEqual(String(localized: label), "Not in your library — already requested")
+    }
+
+    #if canImport(UIKit)
+    @MainActor
+    func testOutlinedClockKeepsTheSubtlePlusBadgeBackground() throws {
+        for size in [CGFloat(25), 42] {
+            let plusRenderer = ImageRenderer(content: MediaLibraryMarkView(mark: .requestable, size: size))
+            let clockRenderer = ImageRenderer(content: MediaLibraryMarkView(mark: .requested, size: size))
+            plusRenderer.scale = 2
+            clockRenderer.scale = 2
+            let plus = try XCTUnwrap(plusRenderer.cgImage)
+            let clock = try XCTUnwrap(clockRenderer.cgImage)
+            XCTAssertEqual(clock.width, plus.width)
+            XCTAssertEqual(clock.height, plus.height)
+            XCTAssertEqual(clock.bitsPerPixel, plus.bitsPerPixel)
+            let plusPixels = try XCTUnwrap(plus.dataProvider?.data) as Data
+            let clockPixels = try XCTUnwrap(clock.dataProvider?.data) as Data
+            let bytesPerPixel = plus.bitsPerPixel / 8
+            // Sample inside the disc, away from both glyphs and the clock's outline.
+            let x = min(plus.width, clock.width) * 3 / 10
+            let y = min(plus.height, clock.height) * 7 / 10
+            let plusOffset = y * plus.bytesPerRow + x * bytesPerPixel
+            let clockOffset = y * clock.bytesPerRow + x * bytesPerPixel
+            let plusBackground = plusPixels[plusOffset..<(plusOffset + bytesPerPixel)]
+            let clockBackground = clockPixels[clockOffset..<(clockOffset + bytesPerPixel)]
+            XCTAssertTrue(plusBackground.contains { $0 > 0 }, "The sample must be inside the visible background.")
+            XCTAssertEqual(clockBackground, plusBackground, "The subtle grey background must stay unchanged.")
+            for (name, image) in [("requestable", plus), ("requested", clock)] {
+                let attachment = XCTAttachment(image: UIImage(cgImage: image))
+                attachment.name = "\(name)-\(Int(size))pt"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+    #endif
 
     func testMarkAgreesWithTheItemPredicateItIsDerivedFrom() {
         // The mark must never disagree with `isNotInLibraryDiscovery`, which is

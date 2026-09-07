@@ -1327,10 +1327,21 @@ public final class AppState {
     /// profile, so a mapping change takes effect on the next request.
     public func setSeerrUserForProfile(profileID: String, user: SeerUser?) {
         guard let profile = profilesModel.profiles.first(where: { $0.id == profileID }) else { return }
+        if let user {
+            guard let userServer = user.serverIdentity,
+                  let currentServer = seerService.serverIdentity,
+                  userServer == currentServer else {
+                PlozzLog.auth.error(
+                    "Rejected Seerr profile mapping without matching server provenance"
+                )
+                return
+            }
+        }
         let updated = profile.settingSeerrUser(
             id: user?.id,
             name: user?.name,
-            avatarURL: user?.avatarURL?.absoluteString
+            avatarURL: user?.avatarURL?.absoluteString,
+            serverIdentity: user?.serverIdentity
         )
         profilesModel.update(updated)
     }

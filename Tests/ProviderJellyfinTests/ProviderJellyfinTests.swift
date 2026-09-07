@@ -1033,6 +1033,25 @@ final class JellyfinProviderMappingTests: XCTestCase {
         XCTAssertFalse(item.ratings.contains { $0.source == .critic })
     }
 
+    func testEpisodeChildrenPreserveCombinedRangesAndExcludeVirtualPlayback() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/Users/u1/Items", json: """
+        {"Items":[
+            {"Id":"combined","Name":"Episodes 1 and 2","Type":"Episode",
+             "ParentIndexNumber":1,"IndexNumber":1,"IndexNumberEnd":2,"LocationType":"FileSystem"},
+            {"Id":"missing","Name":"Episode 3","Type":"Episode",
+             "ParentIndexNumber":1,"IndexNumber":3,"LocationType":"Virtual"}
+        ],"TotalRecordCount":2}
+        """)
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+        let episodes = try await provider.children(of: "season1")
+
+        XCTAssertEqual(episodes[0].episodeNumberEnd, 2)
+        XCTAssertTrue(episodes[0].locallyValidatedPlayableSource)
+        XCTAssertFalse(episodes[1].locallyValidatedPlayableSource)
+        XCTAssertNil(episodes[1].episodeNumberEnd)
+    }
+
     func testItemCommunityRatingDoesNotInventTMDBProvenance() async throws {
         let stub = StubHTTPClient()
         stub.stub(pathSuffix: "/Users/u1/Items/i3", json: """
