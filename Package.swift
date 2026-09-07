@@ -891,6 +891,10 @@ let package = Package(
             dependencies: ["FeatureLiveTVCore"]
         ),
         .testTarget(
+            name: "FeatureLiveTVTests",
+            dependencies: ["FeatureLiveTV", "FeatureLiveTVCore"]
+        ),
+        .testTarget(
             name: "FeatureProfilesTests",
             dependencies: ["FeatureProfiles", "CoreModels"]
         ),

@@ -82,6 +82,12 @@ the process resets them.
   The time anchor does not jump at the half hour while browsing; **Now** recenters
   it on the current wall clock. Program progress and current-title labels still
   update with the clock.
+- Wide-guide stations, programme cells and horizontal scrollers share one scaled
+  row height. Short programmes and clipped edge intervals cannot enlarge an
+  entire row through timestamp wrapping, including cells outside the viewport.
+  Narrow cells omit secondary text; very small slices show an ellipsis.
+  Their time widths remain accurate, and full titles/times remain available
+  through accessibility and programme details.
 - iPhone and narrow iPad windows use compact rows with horizontally browsable
   program cards; no-guide rows put genre directly under the channel name.
   Video stays above the scrolling list. Touch browsing does not automatically
@@ -289,8 +295,8 @@ HTTP status unless the engine actually supplies it. Bounded failure diagnostics
 include an allowlisted error kind/domain and numeric code; messages are not
 regex-parsed for classification, and raw locators are not added to those fields.
 
-Run the focused model tests through the existing simulator runner:
+Run the focused model and native layout tests through the existing simulator runner:
 
 ```sh
-tools/run-tests.sh FeatureLiveTVCoreTests FeaturePlaybackTests EnginePlozzigenTests
+tools/run-tests.sh FeatureLiveTVTests FeatureLiveTVCoreTests FeaturePlaybackTests EnginePlozzigenTests
 ```

@@ -45,4 +45,18 @@ final class LiveTVGuideTimelineTests: XCTestCase {
         XCTAssertEqual(slots[1].start, slots[0].end)
         XCTAssertEqual(slots[2].start, slots[1].end)
     }
+
+    func testShortLeadingSliceKeepsTheOriginalProgramTimes() throws {
+        let original = program("already-started", -1_080, 660)
+        let slots = LiveTVGuideTimeline.slots(
+            programs: [original, program("next", 660, 2_400)],
+            from: start, to: start.addingTimeInterval(7_200)
+        )
+        let leading = try XCTUnwrap(slots.first)
+        XCTAssertEqual(leading.start, start)
+        XCTAssertEqual(leading.end.timeIntervalSince(leading.start), 660)
+        XCTAssertEqual(leading.program, original)
+        XCTAssertEqual(slots[1].start, original.end)
+        XCTAssertEqual(slots.map { $0.end.timeIntervalSince($0.start) }.reduce(0, +), 7_200)
+    }
 }

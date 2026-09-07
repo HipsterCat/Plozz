@@ -262,7 +262,7 @@ private struct PrototypeTimeRuler: View {
     }
 }
 
-private struct PrototypeGuideRow: View {
+struct PrototypeGuideRow: View {
     let channel: LiveTVPrototypeChannel
     let programs: [LiveTVPrototypeProgram]
     let start: Date
@@ -281,6 +281,7 @@ private struct PrototypeGuideRow: View {
     let top: () -> Void
     let goToNow: () -> Void
     @Environment(\.themePalette) private var palette
+    @ScaledMetric(relativeTo: .subheadline) private var rowHeight: CGFloat = PrototypeLayout.rowHeight
 
     var body: some View {
         if width < 650 {
@@ -313,13 +314,13 @@ private struct PrototypeGuideRow: View {
             HStack(spacing: PrototypeLayout.smallGap) {
                 PrototypeGuideStation(
                     channel: channel, favorite: favorite, playing: playing, tune: tune, toggleFavorite: toggleFavorite,
-                    controls: controls, top: top
+                    controls: controls, top: top, height: rowHeight
                 )
                     .frame(width: width > 1_100 ? 300 : 210)
                     .focused(focus, equals: .channel(channel.id))
                     .disabled(railActive && returnTarget != .channel(channel.id))
                 if programs.isEmpty {
-                    PrototypeGuideGap(category: channel.category)
+                    PrototypeGuideGap(category: channel.category, height: rowHeight)
                         .frame(maxWidth: .infinity)
                 } else {
                     PrototypeSynchronizedTimeline(
@@ -333,14 +334,18 @@ private struct PrototypeGuideRow: View {
                             )) { slot in
                                 if let program = slot.program {
                                     Button { open(program) } label: {
-                                        PrototypeProgramLabel(program: program, now: now)
-                                            .frame(maxWidth: .infinity, minHeight: PrototypeLayout.rowHeight, alignment: .leading)
-                                            .padding(.horizontal, PrototypeLayout.smallGap)
+                                        PrototypeProgramLabel(
+                                            program: program, now: now,
+                                            availableWidth: max(0, slotWidth(slot) - PrototypeLayout.smallGap * 2)
+                                        )
+                                        .padding(.horizontal, min(PrototypeLayout.smallGap, slotWidth(slot) / 4))
+                                        .frame(width: slotWidth(slot), height: rowHeight, alignment: .leading)
+                                        .clipped()
                                     }
                                     .buttonStyle(PrototypeButtonStyle(
                                         selected: program.start <= now && now < program.end, padded: false
                                     ))
-                                    .frame(width: slotWidth(slot))
+                                    .frame(width: slotWidth(slot), height: rowHeight)
                                     .clipped()
                                     .focused(focus, equals: .program(channelID: channel.id, programID: program.id))
                                     .disabled(
@@ -358,16 +363,17 @@ private struct PrototypeGuideRow: View {
                                         Button("Now", systemImage: "clock", action: goToNow)
                                     }
                                 } else {
-                                    PrototypeGuideGap(category: channel.category)
+                                    PrototypeGuideGap(category: channel.category, height: rowHeight)
                                         .frame(width: slotWidth(slot)).clipped()
                                 }
                             }
                         }
-                        .frame(width: timelineWidth * 3)
+                        .frame(width: timelineWidth * 3, height: rowHeight)
                     }
-                    .frame(width: timelineWidth)
+                    .frame(width: timelineWidth, height: rowHeight)
                 }
             }
+            .frame(height: rowHeight)
         }
     }
 
@@ -395,6 +401,7 @@ private struct PrototypeGuideStation: View {
     let controls: () -> Void
     let top: () -> Void
     var subtitle: String? = nil
+    var height: CGFloat? = nil
 
     var body: some View {
         Button(action: tune) {
@@ -418,6 +425,8 @@ private struct PrototypeGuideStation: View {
             }
             .frame(minHeight: PrototypeLayout.rowHeight)
             .padding(.horizontal, PrototypeLayout.smallGap)
+            .frame(height: height)
+            .clipped()
         }
         .buttonStyle(PrototypeButtonStyle(selected: playing, padded: false))
         .accessibilityIdentifier("live-tv-channel-\(channel.number)")
@@ -435,29 +444,46 @@ private struct PrototypeGuideStation: View {
 struct PrototypeProgramLabel: View {
     let program: LiveTVPrototypeProgram
     let now: Date
+    var availableWidth: CGFloat? = nil
+    @ScaledMetric(relativeTo: .caption) private var minimumTimeWidth: CGFloat = 140
+    @ScaledMetric(relativeTo: .subheadline) private var minimumTitleWidth: CGFloat = 44
 
     var body: some View {
         VStack(alignment: .leading, spacing: PrototypeLayout.smallGap) {
-            Text(program.title).font(.subheadline.weight(.semibold)).lineLimit(2)
-            Text(program.start, format: .dateTime.hour().minute())
-                .font(.caption.monospacedDigit()).opacity(0.7)
+            if let availableWidth, availableWidth < minimumTitleWidth {
+                Image(systemName: "ellipsis").font(.caption)
+            } else {
+                Text(program.title).font(.subheadline.weight(.semibold))
+                    .lineLimit(availableWidth == nil ? 2 : 1)
+            }
+            if availableWidth.map({ $0 >= minimumTimeWidth }) ?? true {
+                Text(program.start, format: .dateTime.hour().minute())
+                    .font(.caption.monospacedDigit()).opacity(0.7)
+                    .lineLimit(1)
+            }
             if program.start <= now && now < program.end {
                 ProgressView(value: program.progress(at: now)).tint(ThemePalette.brandBlue)
                     .accessibilityLabel("Program progress")
             }
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(program.title))
+        .accessibilityValue(
+            Text("\(program.start, format: .dateTime.hour().minute()) to \(program.end, format: .dateTime.hour().minute())")
+        )
     }
 }
 
 private struct PrototypeGuideGap: View {
     let category: String
+    let height: CGFloat
     @Environment(\.themePalette) private var palette
     var body: some View {
         Text(category)
             .font(.subheadline).foregroundStyle(palette.secondaryText).lineLimit(2)
             .padding(.horizontal, PrototypeLayout.smallGap)
-            .frame(maxWidth: .infinity, minHeight: PrototypeLayout.rowHeight, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: height)
             .background(palette.fillSubtle, in: RoundedRectangle(cornerRadius: PrototypeLayout.radius))
             .accessibilityHint("Channel genre. No program listing for this time.")
     }
