@@ -86,7 +86,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         previousChannel: { changeChannel(by: -1) },
                         nextChannel: { changeChannel(by: 1) },
                         isExpanded: preview.isExpanded,
-                        returnToGuide: { preview.returnToGuide() },
+                        returnToGuide: returnToGuide,
                         playPauseRequest: playPauseRequest
                     ))
                     .environment(\.themePalette, ThemePalette.dark)
@@ -137,6 +137,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         filters: { sheet = .filters },
                         more: { sheet = .options }
                     )
+                    .disabled(preview.isRestoringGuideFocus)
                     PrototypeBrowser(
                         model: model, imports: imports,
                         selectedID: $selectedChannelID, railActive: $controlsActive,
@@ -145,10 +146,13 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         topRequest: topRequest, guideOffset: $guideOffset,
                         restoreFocusRequest: preview.focusRestoreRequest,
                         isPresented: !preview.isExpanded,
+                        isRestoringFocus: preview.isRestoringGuideFocus,
+                        focusRestored: { preview.completeGuideFocusRestore($0) },
                         tune: tune,
                         details: { sheet = .program($0) },
                         openControls: { sheet = .options },
                         openToolbar: {
+                            guard !preview.isRestoringGuideFocus else { return }
                             controlsActive = true
                             toolbarFocusRequest &+= 1
                         },
@@ -260,7 +264,9 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             updatePreviewAvailability()
             if active { preview.focus(selectedChannelID) }
         }
-        .onChange(of: preview.isExpanded) { _, expanded in onExpandedChange(expanded) }
+        .onChange(of: preview.isExpanded || preview.isRestoringGuideFocus) { _, hidesChrome in
+            onExpandedChange(hidesChrome)
+        }
         .onDisappear {
             preview.stop()
             onExpandedChange(false)
@@ -285,6 +291,16 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         preview.setBrowsingActive(
             isActive && scenePhase == .active && sheet == nil && !controlsActive && canFollowFocus
         )
+    }
+
+    private func returnToGuide() {
+        model.synchronizeClock()
+        controlsActive = false
+        #if os(tvOS)
+        preview.returnToGuide()
+        #else
+        preview.returnToGuide(restoresFocus: false)
+        #endif
     }
 
     private func tune(_ id: String) {

@@ -104,6 +104,24 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
         }
     }
 
+    func testLogoPlateSupportsDarkInkAndPreservesBrightWordmarks() {
+        XCTAssertTrue(PrototypeLogoPlate.usesLightBackground(luminance: 0.12, brightInk: 0))
+        XCTAssertTrue(PrototypeLogoPlate.usesLightBackground(luminance: 0.3, brightInk: 0.1))
+        XCTAssertFalse(PrototypeLogoPlate.usesLightBackground(luminance: 0.95, brightInk: 0.9))
+        XCTAssertFalse(PrototypeLogoPlate.usesLightBackground(luminance: 0.3, brightInk: 0.4))
+    }
+
+    func testEnlargedLogoKeepsItsFixedSlotWithMissingArtwork() {
+        let channel = LiveTVPrototypeChannel(
+            id: "missing-logo", number: 1, name: "Test station",
+            category: "News", symbol: "tv", accent: 0, source: .iptv, tagline: ""
+        )
+        let size = UIHostingController(rootView: PrototypeStationMark(channel: channel, size: 64))
+            .sizeThatFits(in: CGSize(width: 400, height: 400))
+        XCTAssertEqual(size.width, 112, accuracy: 0.5)
+        XCTAssertEqual(size.height, 64, accuracy: 0.5)
+    }
+
     private func program(
         _ title: String,
         from: TimeInterval,

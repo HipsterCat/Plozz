@@ -19,6 +19,7 @@ public final class LiveTVPreviewController {
     public private(set) var followsFocus: Bool
     public private(set) var pendingRequest: LiveTVPreviewRequest?
     public private(set) var focusRestoreRequest = 0
+    public private(set) var isRestoringGuideFocus = false
     private let model: LiveTVPrototypeModel
     private var focusedChannelID: String?
     private var browsingActive = true
@@ -61,17 +62,25 @@ public final class LiveTVPreviewController {
         model.tune(channelID)
         guard !model.tuneFailed else { return }
         followsFocus = false
+        isRestoringGuideFocus = false
         isExpanded = true
     }
 
-    public func returnToGuide() {
+    public func returnToGuide(restoresFocus: Bool = true) {
         guard isExpanded else { return }
+        isRestoringGuideFocus = restoresFocus
         isExpanded = false
         focusRestoreRequest &+= 1
     }
 
+    public func completeGuideFocusRestore(_ request: Int) {
+        guard request == focusRestoreRequest else { return }
+        isRestoringGuideFocus = false
+    }
+
     public func playbackEnded() {
         isExpanded = false
+        isRestoringGuideFocus = false
         cancelPendingPreview()
     }
 
@@ -79,6 +88,7 @@ public final class LiveTVPreviewController {
         cancelPendingPreview()
         focusedChannelID = nil
         isExpanded = false
+        isRestoringGuideFocus = false
         model.stop()
     }
 

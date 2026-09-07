@@ -64,6 +64,8 @@ public enum HeroLogoPresentationPolicy: Sendable, Equatable {
 /// opt into `.center`. By default it crossfades over the readable title once
 /// decoded; arrival-sensitive callers can suppress a late replacement.
 /// Unlike poster art there is no aspect-ratio guard — logos are legitimately wide.
+/// Fixed-height surfaces can set `constrainsToBounds` to contain the whole logo;
+/// existing hero callers retain their flexible area-based sizing.
 /// What a resolved logo turned out to look like, reported to hosts that adapt
 /// their backdrop to it.
 ///
@@ -125,6 +127,7 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
     private let backgroundSample: (@Sendable () async -> HeroBackgroundSample?)?
     private let maxWidth: CGFloat
     private let maxHeight: CGFloat
+    private let constrainsToBounds: Bool
     private let presentationPolicy: HeroLogoPresentationPolicy
     private let alignment: Alignment
     private let haloStyle: HeroLogoHaloStyle
@@ -138,6 +141,7 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
         backgroundSample: (@Sendable () async -> HeroBackgroundSample?)? = nil,
         maxWidth: CGFloat = 620,
         maxHeight: CGFloat = 200,
+        constrainsToBounds: Bool = false,
         presentationPolicy: HeroLogoPresentationPolicy = .whenReady,
         alignment: Alignment = .leading,
         haloStyle: HeroLogoHaloStyle = .standard,
@@ -150,6 +154,7 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
         self.backgroundSample = backgroundSample
         self.maxWidth = maxWidth
         self.maxHeight = maxHeight
+        self.constrainsToBounds = constrainsToBounds
         self.presentationPolicy = presentationPolicy
         self.alignment = alignment
         self.haloStyle = haloStyle
@@ -167,6 +172,7 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
         backgroundSample: (@Sendable () async -> HeroBackgroundSample?)? = nil,
         maxWidth: CGFloat = 620,
         maxHeight: CGFloat = 200,
+        constrainsToBounds: Bool = false,
         presentationPolicy: HeroLogoPresentationPolicy = .whenReady,
         alignment: Alignment = .leading,
         haloStyle: HeroLogoHaloStyle = .standard,
@@ -179,6 +185,7 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
         self.backgroundSample = backgroundSample
         self.maxWidth = maxWidth
         self.maxHeight = maxHeight
+        self.constrainsToBounds = constrainsToBounds
         self.presentationPolicy = presentationPolicy
         self.alignment = alignment
         self.haloStyle = haloStyle
@@ -195,6 +202,7 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
             backgroundSample: backgroundSample,
             maxWidth: maxWidth,
             maxHeight: maxHeight,
+            constrainsToBounds: constrainsToBounds,
             presentationPolicy: presentationPolicy,
             alignment: alignment,
             haloStyle: haloStyle,
@@ -247,6 +255,7 @@ private struct LoadedLogo<TextFallback: View>: View {
     let backgroundSample: (@Sendable () async -> HeroBackgroundSample?)?
     let maxWidth: CGFloat
     let maxHeight: CGFloat
+    let constrainsToBounds: Bool
     let presentationPolicy: HeroLogoPresentationPolicy
     let alignment: Alignment
     let haloStyle: HeroLogoHaloStyle
@@ -304,7 +313,8 @@ private struct LoadedLogo<TextFallback: View>: View {
             for: processed.image.size,
             maxWidth: maxWidth,
             maxHeight: maxHeight,
-            coverage: processed.coverage
+            coverage: processed.coverage,
+            constrainsToBounds: constrainsToBounds
         )
     }
 

@@ -186,9 +186,9 @@ private struct PrototypeOptionsForm: View {
                 } label: {
                     Label("Filter channels", systemImage: "line.3.horizontal.decrease")
                 }
-                Picker("Sort", selection: $model.sort) {
-                    ForEach(LiveTVPrototypeSort.allCases) { sort in Text(sort.title).tag(sort) }
-                }
+                PrototypeSelectionLink(
+                    title: "Sort", selection: $model.sort, options: LiveTVPrototypeSort.allCases
+                ) { Text($0.title) }
                 Toggle("Auto preview", isOn: Binding(
                     get: { followsFocus },
                     set: { if $0 != followsFocus { togglePreview() } }
@@ -239,7 +239,7 @@ private struct PrototypeSearchForm: View {
                 ForEach(model.visibleChannels.prefix(8)) { channel in
                     Button { tune(channel.id) } label: {
                         HStack {
-                            PrototypeStationMark(channel: channel, size: 32)
+                            PrototypeStationMark(channel: channel, size: 48)
                             Text(channel.name)
                             Spacer()
                             Text(channel.number, format: .number.grouping(.never)).monospacedDigit()
@@ -258,30 +258,77 @@ private struct PrototypeFilterForm: View {
         Form {
             Section {
                 TextField("Search channels", text: $model.query).autocorrectionDisabled()
-                Picker("Category", selection: $model.category) {
-                    Text("All categories").tag(String?.none)
-                    ForEach(model.categories, id: \.self) { category in
-                        Text(category).tag(Optional(category))
-                    }
+                PrototypeSelectionLink(
+                    title: "Category", selection: $model.category,
+                    options: [nil] + model.categories.map(Optional.some)
+                ) { category in
+                    if let category { Text(category) }
+                    else { Text("All categories") }
                 }
-                Picker("Source", selection: $model.source) {
-                    Text("All sources").tag(LiveTVPrototypeSource?.none)
-                    ForEach(LiveTVPrototypeSource.allCases.filter { source in
+                PrototypeSelectionLink(
+                    title: "Source", selection: $model.source,
+                    options: [nil] + LiveTVPrototypeSource.allCases.filter { source in
                         model.channels.contains { $0.source == source }
-                    }) { source in
-                        Text(source.title).tag(Optional(source))
-                    }
+                    }.map(Optional.some)
+                ) { source in
+                    if let source { Text(source.title) }
+                    else { Text("All sources") }
                 }
                 Toggle("Favorites only", isOn: $model.favoritesOnly)
                 Toggle("With guide listings", isOn: $model.guideOnly)
-                Picker("Sort", selection: $model.sort) {
-                    ForEach(LiveTVPrototypeSort.allCases) { sort in Text(sort.title).tag(sort) }
-                }
+                PrototypeSelectionLink(
+                    title: "Sort", selection: $model.sort, options: LiveTVPrototypeSort.allCases
+                ) { Text($0.title) }
             }
             Section {
                 Button("Clear filters") { model.resetFilters() }
                 Text("\(model.visibleChannels.count) matching channels")
             }
+        }
+    }
+}
+
+struct PrototypeSelectionLink<Option: Hashable, OptionLabel: View>: View {
+    let title: LocalizedStringKey
+    @Binding var selection: Option
+    let options: [Option]
+    @ViewBuilder let optionLabel: (Option) -> OptionLabel
+
+    var body: some View {
+        NavigationLink {
+            PrototypeSelectionList(selection: $selection, options: options, optionLabel: optionLabel)
+                .navigationTitle(title)
+        } label: {
+            HStack {
+                Text(title)
+                Spacer()
+                optionLabel(selection).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+struct PrototypeSelectionList<Option: Hashable, OptionLabel: View>: View {
+    @Binding var selection: Option
+    let options: [Option]
+    @ViewBuilder let optionLabel: (Option) -> OptionLabel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List(options, id: \.self) { option in
+            Button {
+                selection = option
+                dismiss()
+            } label: {
+                HStack {
+                    optionLabel(option)
+                    Spacer()
+                    if option == selection {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+            .accessibilityAddTraits(option == selection ? .isSelected : [])
         }
     }
 }

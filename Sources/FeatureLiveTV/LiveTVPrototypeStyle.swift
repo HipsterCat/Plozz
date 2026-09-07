@@ -19,7 +19,7 @@ enum PrototypeLayout {
     #endif
 
     static func stationWidth(for width: CGFloat) -> CGFloat {
-        width > 1_100 ? 280 : 210
+        width > 1_100 ? 320 : 260
     }
 }
 
@@ -59,29 +59,42 @@ extension LiveTVPrototypeSort {
 struct PrototypeStationMark: View {
     let channel: LiveTVPrototypeChannel
     var size: CGFloat = PrototypeLayout.stationSize
+    @State private var resolvedTone: ResolvedLogoTone?
+
+    private var lightPlate: Bool {
+        guard let resolvedTone else { return false }
+        return PrototypeLogoPlate.usesLightBackground(
+            luminance: resolvedTone.luminance, brightInk: resolvedTone.brightInk
+        )
+    }
 
     var body: some View {
-        FallbackAsyncImage(
-            references: channel.logoURL.map { [.remote($0)] } ?? [],
-            variant: .serviceLogo
-        ) { image in
-            image.resizable().scaledToFit()
-        } placeholder: {
+        HeroLogoArtwork(
+            primaryURL: channel.logoURL,
+            maxWidth: size * 1.75 - 12, maxHeight: size - 12,
+            constrainsToBounds: true, alignment: .center, haloStyle: .gentle,
+            onResolve: { resolvedTone = $0 }
+        ) {
             Text(channel.name)
-                .font(.system(size: size * 0.28, weight: .bold, design: .rounded))
+                .font(.system(size: size * 0.25, weight: .semibold))
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
-                .minimumScaleFactor(0.6)
-                .foregroundStyle(channel.logoNeedsDarkBackground ? .white : .black)
+                .foregroundStyle(lightPlate ? .black : .white)
         }
-            .padding(size * 0.15)
+            .environment(\.colorScheme, lightPlate ? .light : .dark)
             .frame(width: size * 1.75, height: size)
-            // Preserve transparent black wordmarks rather than recoloring station artwork.
             .background(
-                channel.logoNeedsDarkBackground ? Color.black : Color.white,
-                in: RoundedRectangle(cornerRadius: size * 0.16)
+                lightPlate ? Color.white : Color(white: 0.07),
+                in: RoundedRectangle(cornerRadius: 8)
             )
+            .onChange(of: channel.logoURL) { _, _ in resolvedTone = nil }
             .accessibilityHidden(true)
+    }
+}
+
+enum PrototypeLogoPlate {
+    static func usesLightBackground(luminance: Double, brightInk: Double) -> Bool {
+        luminance < 0.42 && brightInk < 0.20
     }
 }
 

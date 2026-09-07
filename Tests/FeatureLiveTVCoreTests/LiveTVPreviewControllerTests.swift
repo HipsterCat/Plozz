@@ -175,4 +175,104 @@ final class LiveTVPreviewControllerTests: XCTestCase {
         XCTAssertFalse(preview.isExpanded)
         XCTAssertEqual(model.playingChannelID, model.channels[0].id)
     }
+
+    func testReturningGuideGatesControlsUntilItsOwnFocusRequestCompletes() {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        let channelID = model.channels[0].id
+        preview.watch(channelID)
+        preview.returnToGuide()
+        let first = preview.focusRestoreRequest
+        XCTAssertTrue(preview.isRestoringGuideFocus)
+        XCTAssertFalse(preview.isExpanded)
+        XCTAssertEqual(model.playingChannelID, channelID)
+        preview.watch(channelID)
+        preview.returnToGuide()
+        preview.completeGuideFocusRestore(first)
+        XCTAssertTrue(preview.isRestoringGuideFocus)
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest)
+        XCTAssertFalse(preview.isRestoringGuideFocus)
+        XCTAssertEqual(model.playingChannelID, channelID)
+    }
+
+    func testStoppingAndTouchReturnCannotLeaveFocusRestorationLatched() {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        let channelID = model.channels[0].id
+        preview.watch(channelID)
+        preview.returnToGuide()
+        preview.stop()
+        XCTAssertFalse(preview.isRestoringGuideFocus)
+        preview.watch(channelID)
+        preview.returnToGuide(restoresFocus: false)
+        XCTAssertFalse(preview.isRestoringGuideFocus)
+        XCTAssertEqual(model.playingChannelID, channelID)
+    }
+}
+
+@MainActor
+final class LiveTVGuideFocusTargetTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func testReturnChoosesPlayingProgramRatherThanAnotherBrowsedChannel() throws {
+        let model = try makeModel()
+        model.tune("playing")
+        XCTAssertEqual(
+            LiveTVGuideFocusTarget.returningToPlayback(in: model, selectedChannelID: "other"),
+            .program(channelID: "playing", programID: "current")
+        )
+    }
+
+    func testReturnFollowsProgramRolloverWhileWatching() throws {
+        let model = try makeModel()
+        model.tune("playing")
+        model.synchronizeClock(to: now.addingTimeInterval(1_801))
+        XCTAssertEqual(
+            LiveTVGuideFocusTarget.returningToPlayback(in: model, selectedChannelID: "playing"),
+            .program(channelID: "playing", programID: "next")
+        )
+    }
+
+    func testMissingGuideReturnsToThePlayingChannel() throws {
+        let model = try makeModel()
+        model.tune("other")
+        XCTAssertEqual(
+            LiveTVGuideFocusTarget.returningToPlayback(in: model, selectedChannelID: "playing"),
+            .channel("other")
+        )
+    }
+
+    func testReturnHonorsFiltersAndHandlesAnEmptyGuide() throws {
+        let model = try makeModel()
+        model.tune("playing")
+        model.query = "other"
+        XCTAssertEqual(
+            LiveTVGuideFocusTarget.returningToPlayback(in: model, selectedChannelID: "playing"),
+            .channel("other")
+        )
+        XCTAssertEqual(model.query, "other")
+        model.query = "no matching channel"
+        XCTAssertNil(LiveTVGuideFocusTarget.returningToPlayback(in: model, selectedChannelID: "playing"))
+    }
+
+    private func makeModel() throws -> LiveTVPrototypeModel {
+        let channels = ["playing", "other"].enumerated().map { number, id in
+            LiveTVPrototypeChannel(
+                id: id, number: number, name: id, category: "News",
+                symbol: "tv", accent: 0, source: .iptv, tagline: ""
+            )
+        }
+        let model = LiveTVPrototypeModel(now: now, channels: channels)
+        try model.replacePrograms([
+            LiveTVPrototypeProgram(
+                id: "current", channelID: "playing", title: "Current show", subtitle: "",
+                start: now.addingTimeInterval(-1_800), end: now.addingTimeInterval(1_800)
+            ),
+            LiveTVPrototypeProgram(
+                id: "next", channelID: "playing", title: "Next show", subtitle: "",
+                start: now.addingTimeInterval(1_800), end: now.addingTimeInterval(3_600)
+            )
+        ])
+        return model
+    }
 }

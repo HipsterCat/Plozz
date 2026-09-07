@@ -69,6 +69,8 @@ reset them.
   its context menu with Search and options and Back to top.
   **More** contains source management, sorting, Auto preview and Back to top.
   Back to top works without resetting the selected time.
+- Category, source and sorting choices use explicit navigation lists with
+  checkmarked selections, not nested system Picker presentations inside a sheet.
 - **Sources** reports playlist entries, skipped entries, guide matches, listings,
   coverage dates and per-feed failures. Its toggles enable or disable the five
   preset guides; disabling one immediately removes its contribution. Results
@@ -127,6 +129,10 @@ navigation rail's leading inset. Selecting a ready preview slides/fades the guid
 away and expands the existing surface to unobscured, aspect-fit playback.
 Back restores the guide's row, program, filters and time position; it does not
 stop, reload or replace the engine. Reduced Motion removes the spatial animation.
+On Apple TV, Search and surrounding navigation remain unavailable during the
+focus handoff. The playing channel's currently airing programme receives focus;
+programme rollover selects the new programme, and missing listings fall back to
+the channel. A changed channel or offscreen programme is brought into view.
 Returning from fullscreen keeps the chosen channel playing rather than retuning
 on the first navigation press. **Auto preview** in More re-enables
 following channel focus. The remote's Play/Pause also works during browsing.
@@ -163,9 +169,12 @@ Playlist entries are not necessarily distinct stations: feeds can include
 alternate resolutions and stream providers. Stable stream identities preserve
 variants without duplicate row IDs. Channel logos come from `tvg-logo` metadata
 in the [iptv-org catalog](https://github.com/iptv-org/iptv).
-Artwork uses the existing decoded-image cache, logo-sized downsampling and
-aspect-fit rendering. Light/dark plates preserve the original wordmarks;
-failed/missing artwork retains a fixed-size text fallback.
+Channel and hero marks reuse `HeroLogoArtwork`: cached off-main preparation,
+transparent/solid-margin trimming, ink-aware sizing, monochrome contrast and
+colour-logo halos. A bounded fit contains the whole mark inside a larger slot
+(112 x 64 points in channel rows); measured ink chooses a light or dark plate.
+Multicolour artwork is not recoloured. Failed/missing artwork keeps a readable
+fixed-size text fallback, and larger logos do not increase guide row height.
 
 The original nine-channel `LiveTVPrototypeCatalog` remains a small regression
 fixture, not the app's default catalog or a channel limit.

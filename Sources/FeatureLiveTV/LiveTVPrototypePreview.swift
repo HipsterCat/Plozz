@@ -100,7 +100,7 @@ struct PrototypePreviewHero: View {
         VStack(alignment: .leading, spacing: PrototypeLayout.smallGap) {
             if let channel {
                 HStack(spacing: PrototypeLayout.smallGap) {
-                    PrototypeStationMark(channel: channel, size: 32)
+                    PrototypeStationMark(channel: channel, size: 72)
                     Text(channel.name).lineLimit(1)
                     if isPlaying {
                         Image(systemName: "speaker.wave.2.fill")
