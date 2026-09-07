@@ -16,6 +16,7 @@ enum PrototypeBrowseFocus: Hashable {
 
 struct PrototypeBrowser: View {
     let model: LiveTVPrototypeModel
+    let imports: LiveTVPrototypeImportModel
     let guide: Bool
     @Binding var selectedID: String?
     @Binding var railActive: Bool
@@ -67,9 +68,17 @@ struct PrototypeBrowser: View {
                     }
                 } else if model.visibleChannels.isEmpty {
                     ContentUnavailableView {
-                        Label("No matching channels", systemImage: "line.3.horizontal.decrease.circle")
+                        if model.guideOnly && imports.guidePhase == .loading {
+                            Label("Loading guide listings", systemImage: "calendar")
+                        } else {
+                            Label("No matching channels", systemImage: "line.3.horizontal.decrease.circle")
+                        }
                     } description: {
-                        Text("Try another search or clear your filters.")
+                        if model.guideOnly && imports.guidePhase == .loading {
+                            Text("Matching channels appear as each guide source loads. Clear filters to browse all channels now.")
+                        } else {
+                            Text("Try another search or clear your filters.")
+                        }
                     } actions: {
                         Button("Clear filters") { model.resetFilters() }
                             .buttonStyle(PrototypeButtonStyle())
@@ -81,7 +90,7 @@ struct PrototypeBrowser: View {
                                 ForEach(model.visibleChannels) { channel in
                                     if guide {
                                         PrototypeGuideRow(
-                                            channel: channel,
+                                            channel: channel, gapState: imports.gapState(for: channel),
                                             programs: model.programs(for: channel.id, from: guideStart, hours: 2),
                                             start: guideStart, now: model.now,
                                             width: geometry.size.width,
@@ -309,6 +318,7 @@ private struct PrototypeTimeRuler: View {
 
 private struct PrototypeGuideRow: View {
     let channel: LiveTVPrototypeChannel
+    let gapState: LiveTVGuideGapState
     let programs: [LiveTVPrototypeProgram]
     let start: Date
     let now: Date
@@ -343,7 +353,7 @@ private struct PrototypeGuideRow: View {
                     .focused(focus, equals: .program(channelID: channel.id, programID: program.id))
                     .disabled(railActive && returnTarget != .program(channelID: channel.id, programID: program.id))
                 }
-                if programs.isEmpty { PrototypeGuideGap() }
+                if programs.isEmpty { PrototypeGuideGap(state: gapState) }
             }
             .padding(.bottom, PrototypeLayout.gap)
         } else {
@@ -385,7 +395,7 @@ private struct PrototypeGuideRow: View {
                                 Button("Now", systemImage: "clock", action: goToNow)
                             }
                         } else {
-                            PrototypeGuideGap().frame(width: slotWidth(slot)).clipped()
+                            PrototypeGuideGap(state: gapState).frame(width: slotWidth(slot)).clipped()
                         }
                     }
                 }
@@ -456,10 +466,12 @@ struct PrototypeProgramLabel: View {
 }
 
 private struct PrototypeGuideGap: View {
+    let state: LiveTVGuideGapState
     @Environment(\.themePalette) private var palette
     var body: some View {
-        Text("Program information unavailable")
+        Text(state.title)
             .font(.subheadline).foregroundStyle(palette.secondaryText).lineLimit(2)
+            .padding(.horizontal, PrototypeLayout.smallGap)
             .frame(maxWidth: .infinity, minHeight: PrototypeLayout.rowHeight)
             .background(palette.fillSubtle, in: RoundedRectangle(cornerRadius: PrototypeLayout.radius))
     }

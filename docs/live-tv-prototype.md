@@ -45,11 +45,12 @@ Release builds.
 
 ## Try
 
-The preview loads the complete supplied US playlist, then its XMLTV guide.
+The preview loads the complete supplied US playlist, then the enabled XMLTV guides.
 Channels become available before guide loading finishes. **Channels / Guide**
 switches presentation of the same catalog; **Favorites** is an independent filter.
 Search, categories, sorting and Favorites carry across both views and refreshes.
-Favorites and filters are still in-memory; restarting the process resets them.
+Favorites, filters and guide-source selections are still in-memory; restarting
+the process resets them.
 
 - Browse, search names/numbers/categories/sources, filter and sort.
 - Favorite channels through the context menu or iPad channel inspector.
@@ -58,11 +59,17 @@ Favorites and filters are still in-memory; restarting the process resets them.
   in an unreachable header corner. Left returns to the channel/program.
   Back to top works in both presentations.
 - **Sources** reports playlist entries, skipped entries, guide matches, listings,
-  coverage dates and failures. **Show channels with guide listings** opens Guide
+  coverage dates and per-feed failures. Its toggles enable or disable the five
+  preset guides; disabling one immediately removes its contribution. Results
+  appear incrementally, and a failed feed does not block the remaining feeds.
+  **Show channels with guide listings** opens Guide
   with the corresponding filter, making the populated rows easy to find.
 - Guide retains all channels, even if none has a schedule. Unknown intervals
   remain honest gaps; they do not hide channels or shift later programs under
   the wrong time. Channel buttons still tune live without guide data.
+  Empty cells distinguish loading, disabled sources, a failed relevant source,
+  an unmatched station and an identified station with no listings for that time.
+  Program details identify the selected guide source.
 - Guide dates and now-playing labels advance with the wall clock. Earlier/Later
   pages from one day back through seven days ahead, subject to source coverage.
 - iPhone and narrow iPad windows use compact channel lists. At wider widths,
@@ -78,13 +85,20 @@ Favorites and filters are still in-memory; restarting the process resets them.
 The default inputs are:
 
 - Playlist: `https://iptv-org.github.io/iptv/countries/us.m3u`
-- Guide: `https://epgshare01.online/epgshare01/epg_ripper_US2.xml.gz`
+- Pluto TV US: `https://i.mjh.nz/PlutoTV/us.xml.gz`
+- Samsung TV Plus US: `https://i.mjh.nz/SamsungTVPlus/us.xml.gz`
+- Plex US: `https://i.mjh.nz/Plex/us.xml.gz`
+- EPGShare US2: `https://epgshare01.online/epgshare01/epg_ripper_US2.xml.gz`
+- EPGShare Plex: `https://epgshare01.online/epgshare01/epg_ripper_PLEX1.xml.gz`
 
-The September 6, 2026 source snapshot imports 1,468 stream entries across 28
-primary categories, with 1,443 logo URLs. The paired guide declares 765 stations;
-70 imported streams match conservatively and have 8,259 retained listings.
-These counts describe that snapshot, not guaranteed availability or coverage.
-Other streams remain available without program information.
+The September 6, 2026 source snapshots import 1,468 stream entries across 28
+primary categories, with 1,443 logo URLs. The multi-feed import provides listings
+for 253 streams, compared with 70 in the original US2-only build. Evaluated at
+2026-09-07 03:04 UTC, all 253 had current listings, with 11,257 programs retained.
+The selected sources supply 185 Pluto, two Samsung, three Plex and 63 US2
+schedules; EPGShare Plex supplies overlapping fallback data, not extra channels.
+These counts describe those snapshots, not guaranteed availability or coverage.
+The remaining 1,215 streams stay available without invented program information.
 
 Playlist entries are not necessarily distinct stations: feeds can include
 alternate resolutions and stream providers. Stable stream identities preserve
@@ -113,21 +127,39 @@ ambiguous matches receive no schedule. Guide failure does not remove a working
 playlist; failed refreshes preserve the last successfully imported data that
 still belongs to current channels.
 
-Matching prefers exact guide IDs and a small set of verified provider aliases,
-then unique display names. Country, affiliate and time-shift conflicts prevent
-name-based matches. Streams sharing one exact guide identity can share listings.
-Compressed input, expanded XML, retained text and program counts are bounded;
-unmatched programs are discarded during parsing. XML entity declarations are
-rejected. Plain XML and gzip responses are both accepted. General source
-configuration and persistent guide caching are not exposed in this prototype.
+Matching first uses exact native Pluto IDs from recognized stream URLs, then
+explicit guide IDs, verified aliases and unique display names. Provider guides
+only use name matching for streams identified as that provider; similarly named
+streams from unknown or different providers are not silently assigned a FAST
+schedule. Explicit foreign Samsung stream origins are excluded from the US
+guide even when the playlist's station ID ends in `.us`. Country, affiliate
+and time-shift conflicts continue to prevent name-based matches. An unmatched
+native Pluto ID is not replaced with a guessed same-name station.
+
+Each stream receives one whole schedule, never interleaved programs from
+different feeds. Stronger identity evidence wins. Equal-confidence matches
+prefer a schedule with upcoming listings, then the source order shown above.
+An unavailable refresh retains that source's last good data for current channels.
+Source changes fence late network/parse results before reloading.
+
+Compressed input, expanded XML, retained text and program counts are bounded.
+The combined in-memory guide cache is also capped at 250,000 programs and
+32 MiB of program title/subtitle text. Sequential feed loading limits transient
+memory. Two streaming XML passes discover channel metadata before retaining
+matched programs, supporting feeds that interleave channel declarations and
+listings without keeping all unmatched programs in memory. Plain XML and gzip
+are accepted. Normal external XMLTV DOCTYPE headers are accepted without
+retrieving the DTD; entity declarations remain rejected.
+Custom-source onboarding and persistent guide caching are not exposed.
 
 ## Boundaries
 
 General source onboarding, manual guide mapping, Plex/Jellyfin/Emby tuner
 adapters, generated library channels, profile persistence/sync, PiP, AirPlay
 integration, parental policy and recording management remain planned. This
-iteration connects the supplied public source pair, not a finished multi-source
-account manager.
+iteration connects selectable public guide presets, not a finished multi-source
+account manager. Many streams still lack a confidently identified schedule;
+more name guesses are not a substitute for accurate provider/region mapping.
 
 The harness does not construct production account/profile models. The small
 `FeaturePlayback.LiveChannelPlayerView` hosts the existing real engine without

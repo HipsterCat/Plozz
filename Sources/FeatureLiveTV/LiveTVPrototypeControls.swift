@@ -131,7 +131,12 @@ struct PrototypeSheetContent: View {
                     }
                     .navigationTitle("Live TV sources")
                 case .program(let program):
-                    PrototypeProgramDetails(program: program, model: model) {
+                    PrototypeProgramDetails(
+                        program: program, model: model,
+                        guideSourceName: imports.guideSources.first {
+                            $0.id == imports.selectedSourceByChannel[program.channelID]
+                        }?.source.name
+                    ) {
                         tune(program.channelID)
                         dismiss()
                     }
@@ -221,6 +226,7 @@ private struct PrototypeSourcesForm: View {
     let imports: LiveTVPrototypeImportModel
     let reload: () -> Void
     let showGuide: () -> Void
+    @State private var selectionFailed = false
 
     var body: some View {
         Form {
@@ -235,8 +241,6 @@ private struct PrototypeSourcesForm: View {
                 Text("Stream variants can share a station name. Availability varies by channel and region.")
             }
             Section {
-                Text("EPGShare · US2").font(.headline)
-                Text(imports.guideURL.absoluteString).font(.caption)
                 Text("\(imports.matchedChannelCount) channel matches")
                 Text("\(model.guideChannelCount) channels with listings · \(imports.programCount) programs")
                 if let start = imports.coverageStart, let end = imports.coverageEnd {
@@ -250,7 +254,29 @@ private struct PrototypeSourcesForm: View {
             } header: {
                 Text("Program guide")
             } footer: {
-                Text("Only identified channel matches receive schedules. Unmatched channels stay watchable and show no invented program information.")
+                Text("Each channel uses one guide. Exact channel IDs take priority; equally strong matches prefer available listings, then the source order below. Unknown channels remain watchable.")
+            }
+            ForEach(imports.guideSources) { status in
+                Section {
+                    Toggle(isOn: Binding(
+                        get: { imports.enabledSourceIDs.contains(status.id) },
+                        set: { enabled in
+                            do {
+                                try imports.setSourceEnabled(status.id, enabled: enabled, into: model)
+                                reload()
+                            } catch {
+                                selectionFailed = true
+                            }
+                        }
+                    )) {
+                        Text(status.source.name).font(.headline)
+                    }
+                    .accessibilityIdentifier("live-tv-guide-source-\(status.id)")
+                    Text(status.source.url.absoluteString).font(.caption)
+                    PrototypeGuideSourceStatus(
+                        status: status, enabled: imports.enabledSourceIDs.contains(status.id)
+                    )
+                }
             }
             Section {
                 PrototypeImportStatus(imports: imports, listedChannels: model.guideChannelCount)
@@ -270,10 +296,42 @@ private struct PrototypeSourcesForm: View {
             } header: {
                 Text("Browse testing")
             } footer: {
-                Text("Repeats the imported channels into labeled copies; it does not add stations. Favorites and filters currently last until this preview closes.")
+                Text("Repeats the imported channels into labeled copies; it does not add stations. Favorites, filters and guide source choices currently last until this preview closes.")
             }
             Section {
                 Text("Playback uses AetherEngine without writing watched history. Plex, Jellyfin and Emby tuning are not connected yet.")
+            }
+        }
+        .alert("Guide selection could not be applied", isPresented: $selectionFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Reload the sources and try again. Your channels remain available.")
+        }
+    }
+}
+
+private struct PrototypeGuideSourceStatus: View {
+    let status: LiveTVGuideSourceStatus
+    let enabled: Bool
+
+    var body: some View {
+        if !enabled {
+            Text("Disabled")
+        } else {
+            switch status.phase {
+            case .idle:
+                Text("Waiting to load")
+            case .loading:
+                Label("Loading guide", systemImage: "arrow.down.circle")
+            case .loaded:
+                Text("\(status.matchedChannelCount) channel matches · \(status.programCount) programs")
+            case .failed:
+                if let failure = status.failure { Text(failure.userDescription) }
+                if status.lastRefresh != nil { Text("Keeping previously loaded listings") }
+            }
+            if let date = status.lastRefresh {
+                Text("Last refreshed: \(date, format: .dateTime.month().day().hour().minute())")
+                    .font(.caption)
             }
         }
     }
@@ -282,6 +340,7 @@ private struct PrototypeSourcesForm: View {
 private struct PrototypeProgramDetails: View {
     let program: LiveTVPrototypeProgram
     let model: LiveTVPrototypeModel
+    let guideSourceName: String?
     let tune: () -> Void
 
     var body: some View {
@@ -293,6 +352,7 @@ private struct PrototypeProgramDetails: View {
                 if let channel = model.channel(id: program.channelID) {
                     Label(channel.name, systemImage: channel.symbol)
                 }
+                if let guideSourceName { Text("Guide: \(guideSourceName)").font(.caption) }
             } footer: {
                 Text("Watching tunes the channel live, not this program from the beginning.")
             }

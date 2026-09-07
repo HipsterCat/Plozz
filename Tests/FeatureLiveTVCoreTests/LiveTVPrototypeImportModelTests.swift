@@ -10,7 +10,7 @@ final class LiveTVPrototypeImportModelTests: XCTestCase {
         let loader = ImportLoaderStub(channels: channels, guideFails: true) { @MainActor in
             XCTAssertEqual(model.channels, channels)
         }
-        let imports = LiveTVPrototypeImportModel(loader: loader)
+        let imports = LiveTVPrototypeImportModel(sources: [.us2], loader: loader)
         await imports.reload(into: model)
         XCTAssertEqual(imports.playlistPhase, .loaded)
         XCTAssertEqual(imports.guidePhase, .failed)
@@ -29,7 +29,7 @@ final class LiveTVPrototypeImportModelTests: XCTestCase {
         )
         let loader = ImportLoaderStub(channels: channels, programs: [program])
         let model = LiveTVPrototypeModel(now: now, channels: [])
-        let imports = LiveTVPrototypeImportModel(loader: loader)
+        let imports = LiveTVPrototypeImportModel(sources: [.us2], loader: loader)
         await imports.reload(into: model)
         XCTAssertEqual(imports.guidePhase, .loaded)
         XCTAssertEqual(imports.matchedChannelCount, 1)
@@ -45,7 +45,7 @@ final class LiveTVPrototypeImportModelTests: XCTestCase {
         let loader = ImportLoaderStub(channels: channels, playlistFails: true)
         let model = LiveTVPrototypeModel(channels: channels)
         model.toggleFavorite(channels[0].id)
-        let imports = LiveTVPrototypeImportModel(loader: loader)
+        let imports = LiveTVPrototypeImportModel(sources: [.us2], loader: loader)
         await imports.reload(into: model)
         XCTAssertEqual(imports.playlistPhase, .failed)
         XCTAssertEqual(model.channels, channels)
@@ -59,7 +59,7 @@ final class LiveTVPrototypeImportModelTests: XCTestCase {
         let channels = LiveTVPrototypeCatalog.channels
         let loader = ImportLoaderStub(channels: channels)
         let model = LiveTVPrototypeModel(isLargeCatalog: true, channels: [])
-        let imports = LiveTVPrototypeImportModel(loader: loader)
+        let imports = LiveTVPrototypeImportModel(sources: [.us2], loader: loader)
         await imports.reload(into: model)
         XCTAssertEqual(model.channels.count, 5_000)
         let submittedChannels = await loader.submittedChannelCount
@@ -73,7 +73,7 @@ final class LiveTVPrototypeImportModelTests: XCTestCase {
             let fresh = LiveTVPrototypeCatalog.channels[1]
             let loader = OverlappingImportLoader(old: old, fresh: fresh, started: started)
             let model = LiveTVPrototypeModel(channels: [])
-            let imports = LiveTVPrototypeImportModel(loader: loader)
+            let imports = LiveTVPrototypeImportModel(sources: [.us2], loader: loader)
             let first = Task { await imports.reload(into: model) }
             await fulfillment(of: [started], timeout: 2)
             if cancelFirst { first.cancel() }
@@ -85,6 +85,251 @@ final class LiveTVPrototypeImportModelTests: XCTestCase {
             XCTAssertEqual(imports.guidePhase, .loaded)
             XCTAssertFalse(imports.isLoading)
         }
+    }
+
+    func testMultipleFeedsPublishIncrementallyAndKeepOneAuthoritativeSchedule() async {
+        let channels = Array(LiveTVPrototypeCatalog.channels.prefix(2))
+        let now = Date()
+        let first = guide(channelID: channels[0].id, title: "Primary", method: .nativeID, now: now)
+        let other = guide(channelID: channels[0].id, title: "Other provider", method: .displayName, now: now)
+        let model = LiveTVPrototypeModel(now: now, channels: [])
+        let sources = testSources()
+        let loader = MultiGuideLoader(
+            channels: channels, guides: [sources[0].url: first, sources[1].url: other],
+            failures: [sources[2].url]
+        ) { url in
+            if url == sources[1].url {
+                await MainActor.run {
+                    XCTAssertEqual(model.currentProgram(for: channels[0].id)?.title, "Primary")
+                }
+            }
+        }
+        let imports = LiveTVPrototypeImportModel(sources: sources, loader: loader)
+        await imports.reload(into: model)
+        XCTAssertEqual(imports.guidePhase, .loaded)
+        XCTAssertEqual(imports.failedSourceCount, 1)
+        XCTAssertEqual(imports.completedSourceCount, 3)
+        XCTAssertEqual(imports.programCount, 1)
+        XCTAssertEqual(imports.matchedChannelCount, 1)
+        XCTAssertEqual(imports.selectedSourceByChannel[channels[0].id], sources[0].id)
+        XCTAssertEqual(model.currentProgram(for: channels[0].id)?.title, "Primary")
+        XCTAssertEqual(imports.gapState(for: channels[0]), .noListings)
+    }
+
+    func testHigherConfidenceWinsAndDisablingRemovesItsContributionImmediately() async throws {
+        let channel = LiveTVPrototypeCatalog.channels[0]
+        let now = Date()
+        let sources = Array(testSources().prefix(2))
+        let lower = guide(channelID: channel.id, title: "Name match", method: .displayName, now: now)
+        let higher = guide(channelID: channel.id, title: "Native match", method: .nativeID, now: now)
+        let loader = MultiGuideLoader(channels: [channel], guides: [sources[0].url: lower, sources[1].url: higher])
+        let imports = LiveTVPrototypeImportModel(sources: sources, loader: loader)
+        let model = LiveTVPrototypeModel(now: now, channels: [])
+        await imports.reload(into: model)
+        XCTAssertEqual(model.currentProgram(for: channel.id)?.title, "Native match")
+        await loader.setFailure(sources[1].url)
+        await imports.reload(into: model)
+        XCTAssertEqual(model.currentProgram(for: channel.id)?.title, "Native match")
+        XCTAssertEqual(imports.failedSourceCount, 1)
+        XCTAssertNotNil(imports.guideSources[1].lastRefresh)
+        try imports.setSourceEnabled(sources[1].id, enabled: false, into: model)
+        XCTAssertEqual(model.currentProgram(for: channel.id)?.title, "Name match")
+        try imports.setSourceEnabled(sources[0].id, enabled: false, into: model)
+        XCTAssertNil(model.currentProgram(for: channel.id))
+        XCTAssertEqual(imports.programCount, 0)
+        XCTAssertEqual(imports.gapState(for: channel), .disabled)
+        XCTAssertFalse(imports.isLoading)
+    }
+
+    func testEqualConfidenceUsesSourceOrderButEmptyScheduleCanFallBack() async {
+        let channel = LiveTVPrototypeCatalog.channels[0]
+        let now = Date()
+        let sources = Array(testSources().prefix(2))
+        let first = guide(channelID: channel.id, title: "First", method: .providerName, now: now)
+        let second = guide(channelID: channel.id, title: "Second", method: .providerName, now: now)
+        for firstHasPrograms in [true, false] {
+            let empty = LiveTVGuideImport(
+                programs: [], matchedChannelCount: 1, guideChannelCount: 1,
+                programCount: 0, coverageStart: nil, coverageEnd: nil, matches: first.matches
+            )
+            let loader = MultiGuideLoader(
+                channels: [channel], guides: [sources[0].url: firstHasPrograms ? first : empty, sources[1].url: second]
+            )
+            let imports = LiveTVPrototypeImportModel(sources: sources, loader: loader)
+            let model = LiveTVPrototypeModel(now: now, channels: [])
+            await imports.reload(into: model)
+            XCTAssertEqual(model.currentProgram(for: channel.id)?.title, firstHasPrograms ? "First" : "Second")
+            XCTAssertEqual(imports.programCount, 1)
+        }
+    }
+
+    func testGuideLoadingAndUnmatchedAndEmptyListingStatesAreDistinct() async {
+        let channels = Array(LiveTVPrototypeCatalog.channels.prefix(2))
+        let source = LiveTVGuideSource.us2
+        let empty = LiveTVGuideImport(
+            programs: [], matchedChannelCount: 1, guideChannelCount: 1,
+            programCount: 0, coverageStart: nil, coverageEnd: nil,
+            matches: [channels[0].id: LiveTVGuideMatch(guideChannelID: "station", method: .exactID)]
+        )
+        let loader = MultiGuideLoader(channels: channels, guides: [source.url: empty])
+        let imports = LiveTVPrototypeImportModel(sources: [source], loader: loader)
+        let model = LiveTVPrototypeModel(channels: [])
+        XCTAssertEqual(imports.gapState(for: channels[0]), .loading)
+        await imports.reload(into: model)
+        XCTAssertEqual(imports.gapState(for: channels[0]), .noListings)
+        XCTAssertEqual(imports.gapState(for: channels[1]), .unmatched)
+        await loader.setFailure(source.url)
+        await imports.reload(into: model)
+        XCTAssertEqual(imports.gapState(for: channels[0]), .noListings)
+        XCTAssertEqual(imports.gapState(for: channels[1]), .failed)
+        XCTAssertEqual(model.channels.count, 2)
+    }
+
+    func testSourceSelectionFencesLateGuideResults() async throws {
+        let channel = LiveTVPrototypeCatalog.channels[0]
+        let now = Date()
+        let started = expectation(description: "Guide suspended")
+        let source = LiveTVGuideSource.us2
+        let loader = SuspendedGuideLoader(
+            channel: channel, guide: guide(channelID: channel.id, title: "Late", method: .nativeID, now: now),
+            started: started
+        )
+        let imports = LiveTVPrototypeImportModel(sources: [source], loader: loader)
+        let model = LiveTVPrototypeModel(now: now, channels: [])
+        let task = Task { await imports.reload(into: model) }
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertEqual(imports.gapState(for: channel), .loading)
+        try imports.setSourceEnabled(source.id, enabled: false, into: model)
+        await loader.finish()
+        await task.value
+        XCTAssertEqual(imports.gapState(for: channel), .disabled)
+        XCTAssertEqual(imports.programCount, 0)
+        XCTAssertNil(model.currentProgram(for: channel.id))
+        XCTAssertFalse(imports.isLoading)
+    }
+
+    func testCancelledGuideDoesNotPublishOrPretendItFailedToParse() async {
+        let channel = LiveTVPrototypeCatalog.channels[0]
+        let started = expectation(description: "Guide suspended")
+        let loader = SuspendedGuideLoader(
+            channel: channel,
+            guide: guide(channelID: channel.id, title: "Cancelled", method: .nativeID, now: Date()),
+            started: started
+        )
+        let imports = LiveTVPrototypeImportModel(sources: [.us2], loader: loader)
+        let model = LiveTVPrototypeModel(channels: [])
+        let task = Task { await imports.reload(into: model) }
+        await fulfillment(of: [started], timeout: 2)
+        task.cancel()
+        await loader.finish()
+        await task.value
+        XCTAssertFalse(imports.isLoading)
+        XCTAssertEqual(imports.guidePhase, .idle)
+        XCTAssertEqual(imports.failedSourceCount, 0)
+        XCTAssertNil(imports.guideFailure)
+        XCTAssertEqual(imports.programCount, 0)
+        XCTAssertEqual(model.channels, [channel])
+    }
+
+    func testFailureOfUnrelatedProviderDoesNotLabelUnmatchedBroadcastGuideAsFailed() async throws {
+        let channel = try XCTUnwrap(LiveTVPlaylistParser().parse("""
+            #EXTM3U
+            #EXTINF:-1 tvg-id="Example.us",Example
+            https://example.com/live.m3u8
+            """).channels.first)
+        let pluto = try XCTUnwrap(LiveTVGuideSource.defaults.first { $0.provider == .pluto })
+        let empty = LiveTVGuideImport(
+            programs: [], matchedChannelCount: 0, guideChannelCount: 0,
+            programCount: 0, coverageStart: nil, coverageEnd: nil
+        )
+        let loader = MultiGuideLoader(
+            channels: [channel], guides: [LiveTVGuideSource.us2.url: empty], failures: [pluto.url]
+        )
+        let imports = LiveTVPrototypeImportModel(sources: [pluto, .us2], loader: loader)
+        let model = LiveTVPrototypeModel(channels: [])
+        await imports.reload(into: model)
+        XCTAssertEqual(imports.failedSourceCount, 1)
+        XCTAssertEqual(imports.gapState(for: channel), .unmatched)
+        XCTAssertEqual(imports.guidePhase, .loaded)
+    }
+
+    private func testSources() -> [LiveTVGuideSource] {
+        (1...3).map {
+            LiveTVGuideSource(id: "source-\($0)", name: "Guide \($0)", url: URL(string: "https://example.com/\($0).xml")!)
+        }
+    }
+
+    private func guide(
+        channelID: String, title: String, method: LiveTVGuideMatchMethod, now: Date
+    ) -> LiveTVGuideImport {
+        let program = LiveTVPrototypeProgram(
+            id: title, channelID: channelID, title: title, subtitle: "",
+            start: now.addingTimeInterval(-60), end: now.addingTimeInterval(3_600)
+        )
+        return LiveTVGuideImport(
+            programs: [program], matchedChannelCount: 1, guideChannelCount: 1, programCount: 1,
+            coverageStart: program.start, coverageEnd: program.end,
+            matches: [channelID: LiveTVGuideMatch(guideChannelID: "station", method: method)]
+        )
+    }
+}
+
+private actor MultiGuideLoader: LiveTVSourceLoading {
+    let channels: [LiveTVPrototypeChannel]
+    let guides: [URL: LiveTVGuideImport]
+    var failures: Set<URL>
+    let beforeGuide: @Sendable (URL) async -> Void
+
+    init(
+        channels: [LiveTVPrototypeChannel], guides: [URL: LiveTVGuideImport], failures: Set<URL> = [],
+        beforeGuide: @escaping @Sendable (URL) async -> Void = { _ in }
+    ) {
+        self.channels = channels
+        self.guides = guides
+        self.failures = failures
+        self.beforeGuide = beforeGuide
+    }
+
+    func setFailure(_ url: URL) { failures.insert(url) }
+
+    func loadPlaylist(from url: URL) async throws -> LiveTVPlaylistImport {
+        LiveTVPlaylistImport(channels: channels, entryCount: channels.count, skippedEntryCount: 0)
+    }
+
+    func loadGuide(from url: URL, channels: [LiveTVPrototypeChannel], now: Date) async throws -> LiveTVGuideImport {
+        await beforeGuide(url)
+        guard !failures.contains(url), let guide = guides[url] else { throw LiveTVSourceImportError.downloadFailed }
+        return guide
+    }
+}
+
+private actor SuspendedGuideLoader: LiveTVSourceLoading {
+    let channel: LiveTVPrototypeChannel
+    let guide: LiveTVGuideImport
+    let started: XCTestExpectation
+    var continuation: CheckedContinuation<Void, Never>?
+
+    init(channel: LiveTVPrototypeChannel, guide: LiveTVGuideImport, started: XCTestExpectation) {
+        self.channel = channel
+        self.guide = guide
+        self.started = started
+    }
+
+    func loadPlaylist(from url: URL) async throws -> LiveTVPlaylistImport {
+        LiveTVPlaylistImport(channels: [channel], entryCount: 1, skippedEntryCount: 0)
+    }
+
+    func loadGuide(from url: URL, channels: [LiveTVPrototypeChannel], now: Date) async throws -> LiveTVGuideImport {
+        await withCheckedContinuation {
+            continuation = $0
+            started.fulfill()
+        }
+        return guide
+    }
+
+    func finish() {
+        continuation?.resume()
+        continuation = nil
     }
 }
 

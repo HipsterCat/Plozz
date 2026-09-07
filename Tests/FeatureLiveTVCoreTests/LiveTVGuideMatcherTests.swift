@@ -86,10 +86,74 @@ final class LiveTVGuideMatcherTests: XCTestCase {
         ).isEmpty)
     }
 
+    func testPlutoNativeIDBeatsNamesAndDoesNotGuessWhenIDIsMissing() {
+        let id = "62ba60f059624e000781c436"
+        let channels = [
+            channel(id: "exact", name: "Renamed stream", guideID: "Replay.us@SD",
+                    streamURL: "https://jmp2.uk/plu-\(id).m3u8"),
+            channel(id: "different-region", name: "Replay", guideID: "Replay.us@HD",
+                    streamURL: "https://jmp2.uk/plu-000000000000000000000000.m3u8"),
+            channel(id: "lookalike-host", name: "Replay", guideID: "Replay.us@FHD",
+                    streamURL: "https://jmp2.uk.example.com/plu-\(id).m3u8")
+        ]
+        let result = LiveTVGuideMatcher(provider: .pluto).matching(
+            channels: channels, guideChannels: [id: ["Replay"]]
+        )
+        XCTAssertEqual(result.channelsByGuideID[id]?.map(\.id), ["exact"])
+        XCTAssertEqual(result.assignments["exact"]?.method, .nativeID)
+        XCTAssertEqual(result.assignments.count, 1)
+    }
+
+    func testProviderNamesDoNotCrossProvidersOrGuessUnknownStreamOrigins() {
+        let channels = [
+            channel(id: "plex", name: "Movies (720p) [Not 24/7]", guideID: "Movies.us@SD",
+                    streamURL: "https://example-movies-plex.amagi.tv/playlist.m3u8"),
+            channel(id: "samsung", name: "Movies", guideID: "Movies.us@HD",
+                    streamURL: "https://example-movies-samsungus.amagi.tv/playlist.m3u8"),
+            channel(id: "unknown", name: "Movies", guideID: "Movies.us@FHD")
+        ]
+        let guide = ["station": ["Movies"]]
+        let result = LiveTVGuideMatcher(provider: .plex).matching(channels: channels, guideChannels: guide)
+        XCTAssertEqual(result.channelsByGuideID["station"]?.map(\.id), ["plex"])
+        XCTAssertEqual(result.assignments["plex"]?.method, .providerName)
+        XCTAssertEqual(
+            LiveTVGuideMatcher(provider: .samsung).match(channels: channels, guideChannels: guide)["station"]?.map(\.id),
+            ["samsung"]
+        )
+        XCTAssertEqual(
+            LiveTVGuideMatcher().match(channels: channels, guideChannels: guide)["station"]?.map(\.id),
+            ["unknown"]
+        )
+    }
+
+    func testUSGuideRejectsExplicitForeignSamsungFeedsEvenWithUSPlaylistIDs() {
+        let hosts = [
+            "station-samsungau.amagi.tv", "station-samsunguk.amagi.tv",
+            "station-1-nl.samsung.wurl.tv", "station-samsung-ca.amagi.tv",
+            "station-samsungmx.amagi.tv"
+        ]
+        let channels = hosts.enumerated().map { index, host in
+            channel(id: "\(index)", name: "Station", guideID: "Station.us",
+                    streamURL: "https://\(host)/playlist.m3u8")
+        }
+        XCTAssertTrue(LiveTVGuideMatcher(provider: .samsung).match(
+            channels: channels, guideChannels: ["Station.us": ["Station"]]
+        ).isEmpty)
+    }
+
+    func testExplicitGuideIDCanIdentifyAStreamWithUnknownDistributor() {
+        let channels = [channel(id: "one", name: "Different name", guideID: "provider-native")]
+        let result = LiveTVGuideMatcher(provider: .plex).matching(
+            channels: channels, guideChannels: ["provider-native": ["Guide name"]]
+        )
+        XCTAssertEqual(result.assignments["one"]?.method, .exactID)
+    }
+
     private func channel(
         id: String,
         name: String,
-        guideID: String
+        guideID: String,
+        streamURL: String? = nil
     ) -> LiveTVPrototypeChannel {
         LiveTVPrototypeChannel(
             id: id,
@@ -100,7 +164,7 @@ final class LiveTVGuideMatcherTests: XCTestCase {
             accent: 0,
             source: .iptv,
             tagline: "Test",
-            streamURL: URL(string: "https://example.com/\(id).m3u8"),
+            streamURL: URL(string: streamURL ?? "https://example.com/\(id).m3u8"),
             guideID: guideID
         )
     }

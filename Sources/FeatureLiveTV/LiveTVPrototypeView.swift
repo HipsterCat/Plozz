@@ -60,7 +60,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         )
                         #endif
                         PrototypeBrowser(
-                            model: model, guide: tab == .guide,
+                            model: model, imports: imports, guide: tab == .guide,
                             selectedID: $selectedChannelID, railActive: $railActive,
                             topRequest: topRequest, guideOffset: $guideOffset,
                             tune: {
@@ -275,16 +275,28 @@ struct PrototypeImportStatus: View {
         } else if imports.playlistPhase == .failed {
             Label("Playlist update failed · Open Sources", systemImage: "wifi.exclamationmark")
         } else {
-            switch imports.guidePhase {
-            case .idle, .loading:
-                Label("Loading guide · Channels ready", systemImage: "arrow.down.circle")
-            case .failed:
-                Label("Guide update failed · Channels ready", systemImage: "wifi.exclamationmark")
-            case .loaded:
-                if let end = imports.coverageEnd, end < Date() {
-                    Label("Guide listings are out of date", systemImage: "clock.badge.exclamationmark")
+            VStack(alignment: .trailing, spacing: 4) {
+                if imports.enabledSourceIDs.isEmpty {
+                    Text("Guide sources off · Channels ready")
                 } else {
-                    Text("Guide listings for \(listedChannels) channels")
+                    switch imports.guidePhase {
+                    case .idle:
+                        Label("Guide not loaded · Open Sources", systemImage: "calendar")
+                    case .loading:
+                        Text("Loading guides · \(imports.completedSourceCount) of \(imports.enabledSourceIDs.count) sources")
+                        Text("\(listedChannels) channels with listings so far")
+                    case .failed:
+                        Label("Guide update failed · Channels ready", systemImage: "wifi.exclamationmark")
+                    case .loaded:
+                        if let end = imports.coverageEnd, end < Date() {
+                            Label("Guide listings are out of date", systemImage: "clock.badge.exclamationmark")
+                        } else {
+                            Text("Guide listings for \(listedChannels) channels")
+                        }
+                    }
+                    if imports.failedSourceCount > 0 {
+                        Text("\(imports.failedSourceCount) guide sources unavailable · Open Sources")
+                    }
                 }
             }
         }

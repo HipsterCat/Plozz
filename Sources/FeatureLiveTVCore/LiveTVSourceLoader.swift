@@ -50,7 +50,7 @@ public actor LiveTVSourceLoader {
         )
         try Task.checkCancellation()
         let task = Task.detached(priority: .userInitiated) {
-            let parser = LiveTVXMLTVParser()
+            let parser = LiveTVXMLTVParser(provider: LiveTVGuideSource.provider(for: url))
             if data.starts(with: [0x1f, 0x8b]) {
                 return try parser.parse(gzipData: data, channels: channels, now: now)
             }

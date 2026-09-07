@@ -2,12 +2,32 @@
 import Foundation
 
 public struct LiveTVGuideMatcher: Sendable {
-    public init() {}
+    private let provider: LiveTVGuideProvider?
+
+    public init(provider: LiveTVGuideProvider? = nil) {
+        self.provider = provider
+    }
 
     public func match(
         channels: [LiveTVPrototypeChannel],
         guideChannels: [String: [String]]
     ) -> [String: [LiveTVPrototypeChannel]] {
+        matching(channels: channels, guideChannels: guideChannels).channelsByGuideID
+    }
+
+    func matching(
+        channels: [LiveTVPrototypeChannel],
+        guideChannels: [String: [String]]
+    ) -> (channelsByGuideID: [String: [LiveTVPrototypeChannel]], assignments: [String: LiveTVGuideMatch]) {
+        let identities = channels.reduce(into: [String: LiveTVStreamIdentity]()) {
+            $0[$1.id] = LiveTVStreamIdentity(url: $1.streamURL)
+        }
+        let channels = channels.filter { channel in
+            let identity = identities[channel.id]
+            if let provider, let actual = identity?.provider, provider != actual { return false }
+            if provider != nil, let region = identity?.region, region != "us" { return false }
+            return true
+        }
         let playlistIDs = Dictionary(
             grouping: channels.compactMap { channel in
                 channel.guideID.map { ($0, channel) }
@@ -15,22 +35,44 @@ public struct LiveTVGuideMatcher: Sendable {
             by: \.0
         )
         var result: [String: [LiveTVPrototypeChannel]] = [:]
+        var assignments: [String: LiveTVGuideMatch] = [:]
+        for channel in channels {
+            let identity = identities[channel.id]
+            if let provider, identity?.provider == provider, let id = identity?.nativeID,
+               guideChannels[id] != nil {
+                result[id, default: []].append(channel)
+                assignments[channel.id] = LiveTVGuideMatch(guideChannelID: id, method: .nativeID)
+            }
+        }
 
         for guideID in guideChannels.keys {
             if let exact = playlistIDs[guideID] {
-                result[guideID] = exact.map(\.1)
+                let available = exact.map(\.1).filter { assignments[$0.id] == nil }
+                result[guideID, default: []].append(contentsOf: available)
+                for channel in available {
+                    assignments[channel.id] = LiveTVGuideMatch(guideChannelID: guideID, method: .exactID)
+                }
                 continue
             }
-            if let aliasID = verifiedAliases.first(where: {
+            if provider == nil, let aliasID = verifiedAliases.first(where: {
                 $0.value == guideID
             })?.key,
                let aliases = playlistIDs[aliasID] {
-                result[guideID] = aliases.map(\.1)
+                let available = aliases.map(\.1).filter {
+                    assignments[$0.id] == nil && identities[$0.id]?.provider == nil
+                }
+                result[guideID, default: []].append(contentsOf: available)
+                for channel in available {
+                    assignments[channel.id] = LiveTVGuideMatch(guideChannelID: guideID, method: .verifiedAlias)
+                }
             }
         }
 
         let matchedIDs = Set(result.values.flatMap { $0.map(\.id) })
-        let unmatched = channels.filter { !matchedIDs.contains($0.id) }
+        let unmatched = channels.filter {
+            let identity = identities[$0.id]
+            return !matchedIDs.contains($0.id) && identity?.nativeID == nil && identity?.provider == provider
+        }
         let playlistNames = Dictionary(
             grouping: unmatched,
             by: { normalizedDisplayName($0.guideName ?? $0.name) }
@@ -65,8 +107,13 @@ public struct LiveTVGuideMatcher: Sendable {
         }
         for (guideID, channels) in candidates where shareOneIdentity(channels) {
             result[guideID] = channels.sorted { $0.id < $1.id }
+            for channel in channels {
+                assignments[channel.id] = LiveTVGuideMatch(
+                    guideChannelID: guideID, method: provider == nil ? .displayName : .providerName
+                )
+            }
         }
-        return result
+        return (result.filter { !$0.value.isEmpty }, assignments)
     }
 
     private func shareOneIdentity(_ channels: [LiveTVPrototypeChannel]) -> Bool {
@@ -79,6 +126,10 @@ public struct LiveTVGuideMatcher: Sendable {
         let folded = input.precomposedStringWithCanonicalMapping
             .folding(options: [.caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
             .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(
+                of: #"\s*\[(?:not 24/7|geo-blocked|offline)\]\s*$"#,
+                with: "", options: .regularExpression
+            )
         let suffixPattern = #"\s*\((?:2160p|1080p|720p|576p|480p|360p|240p|UHD|FHD|HD|SD)\)\s*$"#
         let range = NSRange(folded.startIndex..., in: folded)
         let stripped: String

@@ -13,6 +13,7 @@ public struct LiveTVGuideImport: Sendable {
     public let programCount: Int
     public let coverageStart: Date?
     public let coverageEnd: Date?
+    public let matches: [String: LiveTVGuideMatch]
 
     public init(
         programs: [LiveTVPrototypeProgram],
@@ -20,7 +21,8 @@ public struct LiveTVGuideImport: Sendable {
         guideChannelCount: Int,
         programCount: Int,
         coverageStart: Date?,
-        coverageEnd: Date?
+        coverageEnd: Date?,
+        matches: [String: LiveTVGuideMatch] = [:]
     ) {
         self.programs = programs
         self.matchedChannelCount = matchedChannelCount
@@ -28,6 +30,7 @@ public struct LiveTVGuideImport: Sendable {
         self.programCount = programCount
         self.coverageStart = coverageStart
         self.coverageEnd = coverageEnd
+        self.matches = matches
     }
 }
 
@@ -41,9 +44,14 @@ public struct LiveTVXMLTVParser: Sendable {
     public static let maximumRetainedTextBytes = 32 * 1_024 * 1_024
 
     private let maximumExpandedBytes: Int
+    private let provider: LiveTVGuideProvider?
 
-    public init(maximumExpandedBytes: Int = Self.maximumExpandedBytes) {
+    public init(
+        maximumExpandedBytes: Int = Self.maximumExpandedBytes,
+        provider: LiveTVGuideProvider? = nil
+    ) {
         self.maximumExpandedBytes = maximumExpandedBytes
+        self.provider = provider
     }
 
     public func parse(
@@ -54,14 +62,16 @@ public struct LiveTVXMLTVParser: Sendable {
         guard gzipData.count <= Self.maximumCompressedBytes else {
             throw LiveTVSourceImportError.guideTooLarge
         }
-        let stream = InputStream(data: gzipData)
-        stream.open()
-        defer { stream.close() }
-        let inflated = try BoundedGzipInputStream(
-            compressedStream: stream,
-            maximumExpandedBytes: maximumExpandedBytes
+        return try parseXML(
+            makeStream: {
+                try BoundedGzipInputStream(
+                    compressedStream: InputStream(data: gzipData),
+                    maximumExpandedBytes: maximumExpandedBytes
+                )
+            },
+            channels: channels,
+            now: now
         )
-        return try parseXML(stream: inflated, channels: channels, now: now)
     }
 
     public func parseXML(
@@ -72,24 +82,52 @@ public struct LiveTVXMLTVParser: Sendable {
         guard data.count <= maximumExpandedBytes else {
             throw LiveTVSourceImportError.guideTooLarge
         }
-        let stream = InputStream(data: data)
-        stream.open()
-        defer { stream.close() }
-        return try parseXML(stream: stream, channels: channels, now: now)
+        return try parseXML(
+            makeStream: { InputStream(data: data) },
+            channels: channels,
+            now: now
+        )
     }
 
     private func parseXML(
-        stream: InputStream,
+        makeStream: () throws -> InputStream,
         channels: [LiveTVPrototypeChannel],
         now: Date
     ) throws -> LiveTVGuideImport {
-        let delegate = XMLTVDelegate(channels: channels, now: now)
-        let guardedStream = RejectingXMLInputStream(source: stream)
+        try checkCancellation()
+        let metadataDelegate = XMLTVDelegate()
+        try parseXML(stream: makeStream(), delegate: metadataDelegate)
+        try checkCancellation()
+        let matching = LiveTVGuideMatcher(provider: provider).matching(
+            channels: channels,
+            guideChannels: metadataDelegate.guideChannels
+        )
+        try checkCancellation()
+        let programmeDelegate = XMLTVDelegate(
+            channelsByGuideID: matching.channelsByGuideID,
+            initialRetainedTextBytes: metadataDelegate.retainedTextBytes,
+            now: now
+        )
+        try parseXML(stream: makeStream(), delegate: programmeDelegate)
+        try checkCancellation()
+        return try programmeDelegate.makeResult(
+            guideChannelCount: metadataDelegate.guideChannels.count,
+            assignments: matching.assignments
+        )
+    }
+
+    private func parseXML(stream: InputStream, delegate: XMLTVDelegate) throws {
+        stream.open()
+        defer { stream.close() }
+        let guardedStream = EntityRejectingXMLInputStream(source: stream)
+        delegate.didStartRoot = { guardedStream.inspectDeclarations = false }
+        defer { delegate.didStartRoot = nil }
         let parser = XMLParser(stream: guardedStream)
         parser.delegate = delegate
         parser.shouldProcessNamespaces = false
         parser.shouldReportNamespacePrefixes = false
         parser.shouldResolveExternalEntities = false
+        parser.externalEntityResolvingPolicy = .never
         let parsed = parser.parse()
         if let streamError = guardedStream.streamError as? LiveTVSourceImportError {
             throw streamError
@@ -97,79 +135,91 @@ public struct LiveTVXMLTVParser: Sendable {
         guard parsed, delegate.error == nil else {
             throw delegate.error ?? LiveTVSourceImportError.invalidGuide
         }
-        return try delegate.makeResult()
+    }
+
+    private func checkCancellation() throws {
+        if Task.isCancelled {
+            throw LiveTVSourceImportError.cancelled
+        }
     }
 }
 
 private final class XMLTVDelegate: NSObject, XMLParserDelegate {
-    private let channels: [LiveTVPrototypeChannel]
-    private let lowerBound: Date
-    private let upperBound: Date
-    private var guideChannels: [String: [String]] = [:]
-    private var matches: [String: [LiveTVPrototypeChannel]]?
-    private var retainedTextBytes = 0
-    private var pendingPrograms: [PendingProgram] = []
+    var didStartRoot: (() -> Void)?
+    private enum Pass {
+        case metadata
+        case programmes
+    }
+
+    private let pass: Pass
+    private let channelsByGuideID: [String: [LiveTVPrototypeChannel]]
+    private let lowerBound: Date?
+    private let upperBound: Date?
+    private(set) var guideChannels: [String: [String]] = [:]
+    private(set) var retainedTextBytes: Int
+    private var programs: [LiveTVPrototypeProgram] = []
+    private var seenProgramIDs = Set<String>()
     private var currentChannelID: String?
     private var currentChannelNames: [String] = []
+    private var currentChannelTextBytes = 0
+    private var insideProgramme = false
     private var currentProgram: PendingProgram?
     private var currentElement: String?
+    private var currentElementDepth: Int?
     private var text = ""
     private var sawTV = false
+    private var closedTV = false
+    private var depth = 0
+    private var channelDeclarationCount = 0
     private var sourceProgramCount = 0
     private(set) var error: LiveTVSourceImportError?
     private(set) var coverageStart: Date?
     private(set) var coverageEnd: Date?
 
-    init(channels: [LiveTVPrototypeChannel], now: Date) {
-        self.channels = channels
-        lowerBound = now.addingTimeInterval(-86_400)
-        upperBound = now.addingTimeInterval(7 * 86_400)
+    override init() {
+        pass = .metadata
+        channelsByGuideID = [:]
+        lowerBound = nil
+        upperBound = nil
+        retainedTextBytes = 0
+        super.init()
     }
 
-    func makeResult() throws -> LiveTVGuideImport {
-        let matches = matches ?? LiveTVGuideMatcher().match(
-            channels: channels,
-            guideChannels: guideChannels
-        )
-        var seenProgramIDs = Set<String>()
-        var programs: [LiveTVPrototypeProgram] = []
-        for pending in pendingPrograms {
-            try Task.checkCancellation()
-            for channel in matches[pending.guideChannelID] ?? [] {
-                let identifier = stableProgramID(
-                    channelID: channel.id,
-                    guideChannelID: pending.guideChannelID,
-                    title: pending.title,
-                    subtitle: pending.subtitle,
-                    start: pending.start,
-                    end: pending.end
-                )
-                guard seenProgramIDs.insert(identifier).inserted else { continue }
-                guard programs.count < LiveTVXMLTVParser.maximumRetainedPrograms else {
-                    throw LiveTVSourceImportError.guideTooLarge
-                }
-                programs.append(LiveTVPrototypeProgram(
-                    id: identifier,
-                    channelID: channel.id,
-                    title: pending.title,
-                    subtitle: pending.subtitle,
-                    start: pending.start,
-                    end: pending.end
-                ))
-            }
+    init(
+        channelsByGuideID: [String: [LiveTVPrototypeChannel]],
+        initialRetainedTextBytes: Int,
+        now: Date
+    ) {
+        pass = .programmes
+        self.channelsByGuideID = channelsByGuideID
+        lowerBound = now.addingTimeInterval(-86_400)
+        upperBound = now.addingTimeInterval(7 * 86_400)
+        retainedTextBytes = initialRetainedTextBytes
+        super.init()
+    }
+
+    func makeResult(
+        guideChannelCount: Int,
+        assignments: [String: LiveTVGuideMatch]
+    ) throws -> LiveTVGuideImport {
+        if Task.isCancelled {
+            throw LiveTVSourceImportError.cancelled
         }
         programs.sort {
             ($0.channelID, $0.start, $0.end, $0.title, $0.id)
                 < ($1.channelID, $1.start, $1.end, $1.title, $1.id)
         }
-        let matchedChannelIDs = Set(matches.values.flatMap { $0.map(\.id) })
+        if Task.isCancelled {
+            throw LiveTVSourceImportError.cancelled
+        }
         return LiveTVGuideImport(
             programs: programs,
-            matchedChannelCount: matchedChannelIDs.count,
-            guideChannelCount: guideChannels.count,
+            matchedChannelCount: assignments.count,
+            guideChannelCount: guideChannelCount,
             programCount: programs.count,
             coverageStart: coverageStart,
-            coverageEnd: coverageEnd
+            coverageEnd: coverageEnd,
+            matches: assignments
         )
     }
 
@@ -189,71 +239,107 @@ private final class XMLTVDelegate: NSObject, XMLParserDelegate {
             parser.abortParsing()
             return
         }
-        switch elementName {
-        case "tv":
-            sawTV = true
-        case "channel":
-            guard sourceProgramCount == 0 else {
+        let parentDepth = depth
+        depth += 1
+        if parentDepth == 0 {
+            guard elementName == "tv", !sawTV, !closedTV else {
                 error = .invalidGuide
                 parser.abortParsing()
                 return
             }
-            guard let identifier = bounded(attributeDict["id"], maximum: 4_096),
-                  guideChannels[identifier] != nil
-                    || guideChannels.count < LiveTVXMLTVParser.maximumGuideChannels
-            else {
-                error = .guideTooLarge
-                parser.abortParsing()
-                return
+            sawTV = true
+            didStartRoot?()
+            return
+        }
+        if elementName == "tv" {
+            error = .invalidGuide
+            parser.abortParsing()
+            return
+        }
+        if parentDepth == 1 {
+            switch elementName {
+            case "channel":
+                channelDeclarationCount += 1
+                guard channelDeclarationCount <= LiveTVXMLTVParser.maximumGuideChannels else {
+                    error = .guideTooLarge
+                    parser.abortParsing()
+                    return
+                }
+                guard case .metadata = pass else { return }
+                guard let rawIdentifier = attributeDict["id"], !rawIdentifier.isEmpty else {
+                    error = .invalidGuide
+                    parser.abortParsing()
+                    return
+                }
+                guard rawIdentifier.count <= 4_096 else {
+                    error = .guideTooLarge
+                    parser.abortParsing()
+                    return
+                }
+                currentChannelID = rawIdentifier
+                currentChannelNames = []
+                currentChannelTextBytes = 0
+            case "programme":
+                sourceProgramCount += 1
+                guard sourceProgramCount <= LiveTVXMLTVParser.maximumPrograms else {
+                    error = .guideTooLarge
+                    parser.abortParsing()
+                    return
+                }
+                guard case .programmes = pass else { return }
+                insideProgramme = true
+                guard let guideChannelID = bounded(attributeDict["channel"], maximum: 4_096),
+                      let startText = bounded(attributeDict["start"], maximum: 64),
+                      let endText = bounded(attributeDict["stop"], maximum: 64),
+                      let start = XMLTVDateParser.date(from: startText),
+                      let end = XMLTVDateParser.date(from: endText),
+                      end > start
+                else {
+                    currentProgram = nil
+                    return
+                }
+                coverageStart = min(coverageStart ?? start, start)
+                coverageEnd = max(coverageEnd ?? end, end)
+                guard let lowerBound, let upperBound,
+                      start < upperBound, end > lowerBound,
+                      channelsByGuideID[guideChannelID] != nil
+                else {
+                    currentProgram = nil
+                    return
+                }
+                currentProgram = PendingProgram(
+                    guideChannelID: guideChannelID,
+                    title: "",
+                    subtitle: "",
+                    start: start,
+                    end: end
+                )
+            default:
+                break
             }
-            currentChannelID = identifier
-            currentChannelNames = []
-        case "programme":
-            if matches == nil {
-                // XMLTV declares channels before programmes. Discard unmatched
-                // listings while parsing instead of retaining the entire feed.
-                matches = LiveTVGuideMatcher().match(channels: channels, guideChannels: guideChannels)
+            return
+        }
+        if parentDepth == 2 {
+            switch pass {
+            case .metadata where currentChannelID != nil && elementName == "display-name":
+                beginText(for: elementName)
+            case .programmes where insideProgramme
+                && (elementName == "title" || elementName == "sub-title"):
+                beginText(for: elementName)
+            default:
+                break
             }
-            sourceProgramCount += 1
-            guard sourceProgramCount <= LiveTVXMLTVParser.maximumPrograms else {
-                error = .guideTooLarge
-                parser.abortParsing()
-                return
-            }
-            guard let guideChannelID = bounded(attributeDict["channel"], maximum: 4_096),
-                  let startText = bounded(attributeDict["start"], maximum: 64),
-                  let endText = bounded(attributeDict["stop"], maximum: 64),
-                  let start = XMLTVDateParser.date(from: startText),
-                  let end = XMLTVDateParser.date(from: endText),
-                  end > start
-            else {
-                currentProgram = nil
-                return
-            }
-            coverageStart = min(coverageStart ?? start, start)
-            coverageEnd = max(coverageEnd ?? end, end)
-            guard start < upperBound, end > lowerBound, matches?[guideChannelID] != nil else {
-                currentProgram = nil
-                return
-            }
-            currentProgram = PendingProgram(
-                guideChannelID: guideChannelID,
-                title: "",
-                subtitle: "",
-                start: start,
-                end: end
-            )
-        case "display-name", "title", "sub-title":
-            currentElement = elementName
-            text = ""
-        default:
-            break
+            return
+        }
+        if elementName == "channel" || elementName == "programme" {
+            error = .invalidGuide
+            parser.abortParsing()
         }
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
         guard currentElement != nil else { return }
-        guard text.count + string.count <= LiveTVXMLTVParser.maximumTextLength else {
+        guard text.utf8.count + string.utf8.count <= LiveTVXMLTVParser.maximumTextLength else {
             error = .guideTooLarge
             parser.abortParsing()
             return
@@ -276,44 +362,67 @@ private final class XMLTVDelegate: NSObject, XMLParserDelegate {
         namespaceURI: String?,
         qualifiedName qName: String?
     ) {
-        switch elementName {
-        case "display-name":
-            if currentChannelID != nil, let value = normalizedText(text) {
-                retainedTextBytes += value.utf8.count
-                currentChannelNames.append(value)
-            }
-        case "channel":
-            if let identifier = currentChannelID {
-                guideChannels[identifier] = currentChannelNames
-            }
-            currentChannelID = nil
-            currentChannelNames = []
-        case "title":
-            if let value = normalizedText(text) {
-                currentProgram?.title = value
-            }
-        case "sub-title":
-            if let value = normalizedText(text) {
-                currentProgram?.subtitle = value
-            }
-        case "programme":
-            if let program = currentProgram, !program.title.isEmpty {
-                retainedTextBytes += program.title.utf8.count + program.subtitle.utf8.count
-                pendingPrograms.append(program)
-            }
-            currentProgram = nil
-        default:
-            break
+        guard depth > 0 else {
+            error = .invalidGuide
+            parser.abortParsing()
+            return
         }
-        if currentElement == elementName {
+        depth -= 1
+        let elementDepth = depth
+
+        if currentElement == elementName, currentElementDepth == elementDepth {
+            switch elementName {
+            case "display-name":
+                if let value = normalizedText(text) {
+                    let byteCount = value.utf8.count
+                    guard retainedTextBytes + currentChannelTextBytes + byteCount
+                        <= LiveTVXMLTVParser.maximumRetainedTextBytes
+                    else {
+                        error = .guideTooLarge
+                        parser.abortParsing()
+                        return
+                    }
+                    currentChannelNames.append(value)
+                    currentChannelTextBytes += byteCount
+                }
+            case "title":
+                if currentProgram != nil, let value = normalizedText(text) {
+                    currentProgram?.title = value
+                }
+            case "sub-title":
+                if currentProgram != nil, let value = normalizedText(text) {
+                    currentProgram?.subtitle = value
+                }
+            default:
+                break
+            }
             currentElement = nil
+            currentElementDepth = nil
             text = ""
         }
-        if retainedTextBytes > LiveTVXMLTVParser.maximumRetainedTextBytes
-            || pendingPrograms.count > LiveTVXMLTVParser.maximumRetainedPrograms {
-            error = .guideTooLarge
-            parser.abortParsing()
+
+        if elementDepth == 1 {
+            switch elementName {
+            case "channel":
+                finishChannel(parser)
+            case "programme":
+                finishProgramme(parser)
+            default:
+                break
+            }
+        } else if elementDepth == 0 {
+            guard elementName == "tv", sawTV, !closedTV else {
+                error = .invalidGuide
+                parser.abortParsing()
+                return
+            }
+            closedTV = true
         }
+    }
+
+    func parser(_ parser: XMLParser, foundSkippedEntityName name: String) {
+        error = .invalidGuide
+        parser.abortParsing()
     }
 
     func parser(
@@ -371,8 +480,84 @@ private final class XMLTVDelegate: NSObject, XMLParserDelegate {
     }
 
     func parserDidEndDocument(_ parser: XMLParser) {
-        if !sawTV, error == nil {
+        if (!sawTV || !closedTV || depth != 0), error == nil {
             error = .invalidGuide
+        }
+    }
+
+    private func beginText(for elementName: String) {
+        currentElement = elementName
+        currentElementDepth = depth - 1
+        text = ""
+    }
+
+    private func finishChannel(_ parser: XMLParser) {
+        defer {
+            currentChannelID = nil
+            currentChannelNames = []
+            currentChannelTextBytes = 0
+        }
+        guard case .metadata = pass, let identifier = currentChannelID else { return }
+        if let existing = guideChannels[identifier] {
+            guard existing == currentChannelNames else {
+                error = .invalidGuide
+                parser.abortParsing()
+                return
+            }
+        } else {
+            guard guideChannels.count < LiveTVXMLTVParser.maximumGuideChannels else {
+                error = .guideTooLarge
+                parser.abortParsing()
+                return
+            }
+            guideChannels[identifier] = currentChannelNames
+            retainedTextBytes += currentChannelTextBytes
+        }
+    }
+
+    private func finishProgramme(_ parser: XMLParser) {
+        defer {
+            insideProgramme = false
+            currentProgram = nil
+        }
+        guard case .programmes = pass,
+              let program = currentProgram,
+              !program.title.isEmpty
+        else { return }
+        retainedTextBytes += program.title.utf8.count + program.subtitle.utf8.count
+        guard retainedTextBytes <= LiveTVXMLTVParser.maximumRetainedTextBytes else {
+            error = .guideTooLarge
+            parser.abortParsing()
+            return
+        }
+        for channel in channelsByGuideID[program.guideChannelID] ?? [] {
+            if Task.isCancelled {
+                error = .cancelled
+                parser.abortParsing()
+                return
+            }
+            let identifier = stableProgramID(
+                channelID: channel.id,
+                guideChannelID: program.guideChannelID,
+                title: program.title,
+                subtitle: program.subtitle,
+                start: program.start,
+                end: program.end
+            )
+            guard seenProgramIDs.insert(identifier).inserted else { continue }
+            guard programs.count < LiveTVXMLTVParser.maximumRetainedPrograms else {
+                error = .guideTooLarge
+                parser.abortParsing()
+                return
+            }
+            programs.append(LiveTVPrototypeProgram(
+                id: identifier,
+                channelID: channel.id,
+                title: program.title,
+                subtitle: program.subtitle,
+                start: program.start,
+                end: program.end
+            ))
         }
     }
 
@@ -541,8 +726,13 @@ private final class BoundedGzipInputStream: InputStream {
         failure
     }
 
-    override func open() {}
-    override func close() {}
+    override func open() {
+        compressedStream.open()
+    }
+
+    override func close() {
+        compressedStream.close()
+    }
 
     override func read(
         _ buffer: UnsafeMutablePointer<UInt8>,
@@ -618,14 +808,11 @@ private final class BoundedGzipInputStream: InputStream {
     }
 }
 
-private final class RejectingXMLInputStream: InputStream {
-    private static let forbidden = [
-        Array("<!DOCTYPE".utf8),
-        Array("<!ENTITY".utf8),
-    ]
-
+private final class EntityRejectingXMLInputStream: InputStream {
+    var inspectDeclarations = true
+    private static let forbidden = Array("<!ENTITY".utf8)
     private let source: InputStream
-    private var carry: [UInt8] = []
+    private var matchedBytes = 0
     private var failure: LiveTVSourceImportError?
 
     init(source: InputStream) {
@@ -633,38 +820,33 @@ private final class RejectingXMLInputStream: InputStream {
         super.init(data: Data())
     }
 
-    override var hasBytesAvailable: Bool {
-        failure == nil && source.hasBytesAvailable
-    }
-
-    override var streamStatus: Stream.Status {
-        failure == nil ? source.streamStatus : .error
-    }
-
-    override var streamError: Error? {
-        failure ?? source.streamError
-    }
-
+    override var hasBytesAvailable: Bool { failure == nil && source.hasBytesAvailable }
+    override var streamStatus: Stream.Status { failure == nil ? source.streamStatus : .error }
+    override var streamError: Error? { failure ?? source.streamError }
     override func open() {}
     override func close() {}
 
-    override func read(
-        _ buffer: UnsafeMutablePointer<UInt8>,
-        maxLength len: Int
-    ) -> Int {
+    override func read(_ buffer: UnsafeMutablePointer<UInt8>, maxLength len: Int) -> Int {
         guard failure == nil else { return -1 }
-        let count = source.read(buffer, maxLength: len)
-        guard count > 0 else { return count }
-        var scanned = carry
-        scanned.append(contentsOf: UnsafeBufferPointer(start: buffer, count: count))
-        let uppercase = scanned.map { byte -> UInt8 in
-            byte >= 97 && byte <= 122 ? byte - 32 : byte
-        }
-        if Self.forbidden.contains(where: { contains(uppercase, sequence: $0) }) {
-            failure = .invalidGuide
+        if Task.isCancelled {
+            failure = .cancelled
             return -1
         }
-        carry = Array(scanned.suffix(8))
+        let count = source.read(buffer, maxLength: len)
+        guard count > 0 else { return count }
+        // Declarations are legal only in the prolog. Once XMLParser reports
+        // the real root, it rejects any later declaration as malformed XML.
+        guard inspectDeclarations else { return count }
+        // XMLParser can silently skip external declarations on tvOS. Reject
+        // them before parsing, including UTF-16/32's zero-padded ASCII tokens.
+        for byte in UnsafeBufferPointer(start: buffer, count: count) where byte != 0 {
+            if byte == Self.forbidden[matchedBytes] { matchedBytes += 1 }
+            else { matchedBytes = byte == Self.forbidden[0] ? 1 : 0 }
+            if matchedBytes == Self.forbidden.count {
+                failure = .invalidGuide
+                return -1
+            }
+        }
         return count
     }
 
@@ -673,16 +855,6 @@ private final class RejectingXMLInputStream: InputStream {
         length len: UnsafeMutablePointer<Int>
     ) -> Bool {
         false
-    }
-
-    private func contains(_ bytes: [UInt8], sequence: [UInt8]) -> Bool {
-        guard bytes.count >= sequence.count else { return false }
-        for start in 0...(bytes.count - sequence.count) {
-            if bytes[start..<(start + sequence.count)].elementsEqual(sequence) {
-                return true
-            }
-        }
-        return false
     }
 }
 #endif
