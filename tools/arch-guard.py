@@ -117,7 +117,8 @@ ALLOWED_FEATURE_EDGES = {
 # lines. The owner's `<Owner>Tests` target is implicitly allowed too.
 VENDOR_OWNERS = {
     "YouTubeKit": {"ProviderTrailers"},
-    "Sentry": {"CrashReporting"},          # package: sentry-cocoa
+    "Sentry": {"CrashReporting"},          # imported framework module
+    "Sentry-Static": {"CrashReporting"},   # sentry-apple-binaries product
     "SMBClient": {"ProviderShare", "MediaTransportSMB"},
     "NIOSSH": {"MediaTransportSFTP"},      # package: swift-nio-ssh
     "AetherEngine": {"EnginePlozzigen"},
@@ -945,6 +946,12 @@ def _self_test() -> int:
         "vendor-leak",
         {"targets": [_target("CoreModels"),
                      _target("FeatureHome", ["CoreModels"], ["Sentry"])]},
+        True,
+    ))
+    cases.append((
+        "vendor-product-leak",
+        {"targets": [_target("CoreModels"),
+                     _target("FeatureHome", ["CoreModels"], ["Sentry-Static"])]},
         True,
     ))
     # Rule 5: cycle.

@@ -28,7 +28,8 @@ embedded in the app bundle as frameworks (`Libavcodec.framework`,
 
 Plozz's own `Package.swift` declares **only** AetherEngine; FFmpegBuild and
 LibDovi are its transitive dependencies (AetherEngine owns their version
-alignment). The concrete pins live in
+alignment). The concrete pins live in the committed root `Package.resolved`.
+Generated Xcode projects also record their workspace resolution under
 `Plozz.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`.
 
 ## FFmpeg license facts
