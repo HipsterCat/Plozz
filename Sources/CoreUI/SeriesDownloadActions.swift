@@ -1,5 +1,23 @@
 import CoreModels
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
+
+public extension MediaDownloadDestination {
+    @MainActor
+    static var current: Self {
+        #if os(iOS)
+        switch UIDevice.current.userInterfaceIdiom {
+        case .phone: .iPhone
+        case .pad: .iPad
+        default: .device
+        }
+        #else
+        .device
+        #endif
+    }
+}
 
 /// The compact bulk-action group above the unified season list.
 public struct SeriesDownloadActions<Downloads: View>: View {
@@ -82,8 +100,8 @@ private struct SeasonRequestControls: View {
     var body: some View {
         if isSubmitting {
             SeriesDownloadActionLabel(
-                title: "Requesting…",
-                subtitle: "Request for your library",
+                title: "Submitting Library Request…",
+                subtitle: "Ask for missing seasons to be added to your library.",
                 systemImage: "clock.arrow.circlepath",
                 detail: actingName.map { "Requests as \($0)." }
             ) {}
@@ -93,7 +111,7 @@ private struct SeasonRequestControls: View {
             } label: {
                 SeriesDownloadActionLabel(
                     title: SeasonRequestPresentation(availability: availability).requestAllTitle,
-                    subtitle: "Request for your library",
+                    subtitle: "Ask for missing seasons to be added to your library.",
                     systemImage: "plus.circle",
                     detail: actingName.map { "Requests as \($0)." }
                 ) {}

@@ -65,11 +65,11 @@ final class SeasonEpisodePresentationTests: XCTestCase {
         }
     }
 
-    private func downloadButton() -> some View {
+    private func downloadButton(destination: MediaDownloadDestination = .iPhone) -> some View {
         Button {} label: {
             SeriesDownloadActionLabel(
-                title: SeriesDownloadAction.download.title,
-                subtitle: "From this season",
+                title: SeriesDownloadAction.download.title(for: destination),
+                subtitle: "All available episodes in this season, for offline viewing.",
                 systemImage: SeriesDownloadAction.download.systemImage
             ) {
                 Image(systemName: "arrow.down.circle")
@@ -108,27 +108,63 @@ final class SeasonEpisodePresentationTests: XCTestCase {
 
     #if os(iOS)
     func testFullDownloadLabelNeverTruncatesOnSmallPhoneOrLargestText() throws {
+        for (destination, deviceName) in [
+            (MediaDownloadDestination.iPhone, "iphone"), (.iPad, "ipad"),
+        ] {
+            for size in [DynamicTypeSize.large, .accessibility5] {
+                let content = downloadButton(destination: destination)
+                    .font(.body)
+                    .environment(\.dynamicTypeSize, size)
+                    .environment(\.colorScheme, .light)
+                    .frame(width: 280)
+                    .padding(16)
+                    .background(.white)
+                let renderer = ImageRenderer(content: content)
+                renderer.scale = 3
+                let image = try XCTUnwrap(renderer.uiImage)
+                let text = try recognizedText(in: image).lowercased()
+                for word in [
+                    "download", "to", "this", deviceName, "all", "available",
+                    "episodes", "season", "offline", "viewing",
+                ] {
+                    XCTAssertTrue(text.contains(word), "Missing \(word) at \(size): \(text)")
+                }
+                XCTAssertFalse(text.contains("…"), text)
+                let attachment = XCTAttachment(image: image)
+                attachment.name = "episode-download-label-\(deviceName)-\(size)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
+
+    func testRequestCopyExplainsLibraryDestinationWithoutTruncation() throws {
         for size in [DynamicTypeSize.large, .accessibility5] {
-            let content = downloadButton()
+            let content = VStack { requestControls(state(.unknown)) }
                 .font(.body)
                 .environment(\.dynamicTypeSize, size)
                 .environment(\.colorScheme, .light)
-                .frame(width: 280)
-                .padding(16)
-                .background(.white)
+                .frame(width: 280).padding(16).background(.white)
             let renderer = ImageRenderer(content: content)
             renderer.scale = 3
-            let image = try XCTUnwrap(renderer.uiImage)
-            let text = try recognizedText(in: image)
-            for word in ["Download", "All", "Available", "Episodes"] {
+            let text = try recognizedText(in: XCTUnwrap(renderer.uiImage)).lowercased()
+            for word in ["request", "season", "ask", "missing", "episodes", "added", "your", "library"] {
                 XCTAssertTrue(text.contains(word), "Missing \(word) at \(size): \(text)")
             }
+            XCTAssertFalse(text.contains("download"), text)
             XCTAssertFalse(text.contains("…"), text)
-            let attachment = XCTAttachment(image: image)
-            attachment.name = "episode-download-label-\(size)"
-            attachment.lifetime = .keepAlways
-            add(attachment)
         }
+    }
+
+    func testPendingRequestNamesTheLibraryRatherThanTheDevice() throws {
+        let content = VStack { requestControls(state(.pending)) }
+            .font(.body).frame(width: 320).padding(16).background(.white)
+            .environment(\.colorScheme, .light)
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 3
+        let text = try recognizedText(in: XCTUnwrap(renderer.uiImage)).lowercased()
+        XCTAssertTrue(text.contains("requested for your library"), text)
+        XCTAssertFalse(text.contains("downloading"), text)
     }
 
     func testManagedSeasonShowsManagementInsteadOfAnotherRequest() throws {
@@ -150,7 +186,8 @@ final class SeasonEpisodePresentationTests: XCTestCase {
             ("tablet", CGSize(width: 768, height: 1024)),
         ] {
             try await captureNativeSheet(
-                screen(), size: size, name: "episode-coverage-\(name)"
+                screen(destination: name == "tablet" ? .iPad : .iPhone),
+                size: size, name: "episode-coverage-\(name)"
             )
         }
         for style in [ColorScheme.light, .dark] {
@@ -171,6 +208,7 @@ final class SeasonEpisodePresentationTests: XCTestCase {
     }
 
     private func screen(
+        destination: MediaDownloadDestination = .iPhone,
         style: ColorScheme = .dark,
         metadataFailed: Bool = false,
         managed: Bool = false
@@ -201,7 +239,7 @@ final class SeasonEpisodePresentationTests: XCTestCase {
         return NavigationStack {
             List {
                 Section {
-                    downloadButton()
+                    downloadButton(destination: destination)
                     if metadataFailed {
                         Button {} label: {
                             SeriesDownloadActionLabel(

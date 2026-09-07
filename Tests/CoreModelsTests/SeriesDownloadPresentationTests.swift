@@ -96,4 +96,26 @@ final class SeriesDownloadPresentationTests: XCTestCase {
             XCTAssertEqual(action.isEnabled, enabled)
         }
     }
+
+    func testDownloadDestinationCopyNamesThePhysicalDevice() {
+        let cases: [(MediaDownloadDestination, String, String)] = [
+            (.iPhone, "Download to This iPhone", "Downloading to this iPhone"),
+            (.iPad, "Download to This iPad", "Downloading to this iPad"),
+            (.device, "Download to This Device", "Downloading to this device"),
+        ]
+        for (destination, title, progressTitle) in cases {
+            var resource = SeriesDownloadAction.download.title(for: destination)
+            resource.locale = Locale(identifier: "en")
+            XCTAssertEqual(String(localized: resource), title)
+            resource = destination.downloadingTitle
+            resource.locale = Locale(identifier: "en")
+            XCTAssertEqual(String(localized: resource), progressTitle)
+            for action in [SeriesDownloadAction.preparing, .pause, .resume] {
+                XCTAssertEqual(
+                    String(localized: action.title(for: destination)),
+                    String(localized: action.title)
+                )
+            }
+        }
+    }
 }

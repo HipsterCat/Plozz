@@ -1388,7 +1388,7 @@ private struct PlozziOSRequestAction: View {
                 Label("Requested — awaiting approval", systemImage: "clock")
                     .foregroundStyle(.orange)
             case .processing:
-                Label("Downloading", systemImage: "arrow.down.circle")
+                Label("Library Request Processing", systemImage: "arrow.down.circle")
                     .foregroundStyle(.blue)
             case .partiallyAvailable:
                 Label("Partially available", systemImage: "circle.lefthalf.filled")
@@ -1831,8 +1831,8 @@ private struct PlozziOSSeriesDownloadPicker: View {
                 ) {
                     Button(action: beginShowDownload) {
                         SeriesDownloadActionLabel(
-                            title: downloadAction.title,
-                            subtitle: "Save to this device",
+                            title: downloadAction.title(for: .current),
+                            subtitle: "All available episodes in this show, for offline viewing.",
                             systemImage: downloadAction.systemImage,
                             detail: completedEpisodeCount > 0 && downloadState == nil
                                 ? "Downloaded: \(completedEpisodeCount.formatted())"
@@ -2437,9 +2437,10 @@ private struct PlozziOSSeasonDownloadPicker: View {
         case .all:
             season.librarySeasons.count > 1
                 || (!season.librarySeasons.isEmpty && !season.looseEpisodes.isEmpty)
-                ? "All versions in this season" : "From this season"
-        case .library: "From this version"
-        case .loose: "From Other Episodes"
+                ? "All available episodes and versions in this season, for offline viewing."
+                : "All available episodes in this season, for offline viewing."
+        case .library: "All available episodes in this version, for offline viewing."
+        case .loose: "All available episodes in Other Episodes, for offline viewing."
         }
     }
 
@@ -2509,7 +2510,7 @@ private struct PlozziOSSeasonDownloadPicker: View {
                                 performSeasonAction(downloadable)
                             } label: {
                                 SeriesDownloadActionLabel(
-                                    title: downloadAction.title,
+                                    title: downloadAction.title(for: .current),
                                     subtitle: downloadScopeTitle,
                                     systemImage: downloadAction.systemImage
                                 ) {
@@ -2945,12 +2946,11 @@ private struct PlozziOSEpisodeDownloadRow: View {
         for record: DownloadedMediaRecord
     ) -> some View {
         if let fraction = record.fractionCompleted {
-            Text("Downloading ") + Text(
-                fraction,
-                format: .percent.precision(.fractionLength(0))
-            ) + transferMetricsText(for: record)
+            Text(
+                "\(Text(MediaDownloadDestination.current.downloadingTitle)) \(fraction, format: .percent.precision(.fractionLength(0)))\(transferMetricsText(for: record))"
+            )
         } else {
-            Text("Downloading") + transferMetricsText(for: record)
+            Text("\(Text(MediaDownloadDestination.current.downloadingTitle))\(transferMetricsText(for: record))")
         }
     }
 
@@ -3064,7 +3064,7 @@ private struct PlozziOSDownloadControl: View {
         case .inProgress(let fraction):
             if let fraction {
                 progressRing(fraction: fraction, color: .primary)
-                    .accessibilityLabel("Downloading")
+                    .accessibilityLabel(Text(MediaDownloadDestination.current.downloadingTitle))
                     .accessibilityValue(
                         Text(
                             fraction,
@@ -3075,7 +3075,7 @@ private struct PlozziOSDownloadControl: View {
                 ProgressView()
                     .controlSize(.small)
                     .tint(.primary)
-                    .accessibilityLabel("Downloading")
+                    .accessibilityLabel(Text(MediaDownloadDestination.current.downloadingTitle))
             }
         case .paused(let fraction):
             if let fraction {

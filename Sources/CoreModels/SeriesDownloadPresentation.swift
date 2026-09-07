@@ -40,6 +40,10 @@ public enum SeriesDownloadAction: Equatable, Sendable {
         }
     }
 
+    public func title(for destination: MediaDownloadDestination) -> LocalizedStringResource {
+        self == .download ? destination.downloadTitle : title
+    }
+
     public var systemImage: String {
         switch self {
         case .download: "arrow.down.circle"
@@ -50,4 +54,26 @@ public enum SeriesDownloadAction: Equatable, Sendable {
     }
 
     public var isEnabled: Bool { self != .preparing }
+}
+
+public enum MediaDownloadDestination: Equatable, Sendable {
+    case iPhone
+    case iPad
+    case device
+
+    public var downloadTitle: LocalizedStringResource {
+        switch self {
+        case .iPhone: "Download to This iPhone"
+        case .iPad: "Download to This iPad"
+        case .device: "Download to This Device"
+        }
+    }
+
+    public var downloadingTitle: LocalizedStringResource {
+        switch self {
+        case .iPhone: "Downloading to this iPhone"
+        case .iPad: "Downloading to this iPad"
+        case .device: "Downloading to this device"
+        }
+    }
 }

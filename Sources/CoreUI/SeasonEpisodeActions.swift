@@ -85,8 +85,8 @@ public struct SeasonEpisodeRequestControls: View {
     public var body: some View {
         if isSubmitting {
             SeriesDownloadActionLabel(
-                title: "Submitting Request…",
-                subtitle: "Request for your library",
+                title: "Submitting Library Request…",
+                subtitle: "Ask for missing episodes to be added to your library.",
                 systemImage: "clock.arrow.circlepath"
             ) {}
         } else if refreshFailed && (hasUnavailableEpisodes || hasRequestStatus) {
@@ -103,7 +103,7 @@ public struct SeasonEpisodeRequestControls: View {
             Button(action: onRequest) {
                 SeriesDownloadActionLabel(
                     title: "Request Season",
-                    subtitle: "Request for your library",
+                    subtitle: "Ask for missing episodes to be added to your library.",
                     systemImage: "plus.circle",
                     detail: actingName.map { "Requests as \($0)." }
                 ) {}
@@ -138,12 +138,12 @@ private struct SeasonEpisodeRequestStatusLabel: View {
     let opensSeerr: Bool
 
     private var title: LocalizedStringResource {
-        if state.status == .available { return "Available on Server" }
-        if state.requestFailed || state.requestStatus == .failed { return "Request Failed" }
-        if state.requestStatus == .declined { return "Request Declined" }
-        if state.requestStatus == .pending || state.status == .pending { return "Season Requested" }
-        if state.requestStatus == .processing || state.status == .processing { return "Request Processing" }
-        if state.requestStatus == .completed { return "Request Completed" }
+        if state.status == .available { return "Available in Your Library" }
+        if state.requestFailed || state.requestStatus == .failed { return "Library Request Failed" }
+        if state.requestStatus == .declined { return "Library Request Declined" }
+        if state.requestStatus == .pending || state.status == .pending { return "Requested for Your Library" }
+        if state.requestStatus == .processing || state.status == .processing { return "Library Request Processing" }
+        if state.requestStatus == .completed { return "Library Request Completed" }
         return "Season Already Managed"
     }
 

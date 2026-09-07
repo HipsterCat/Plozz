@@ -113,12 +113,15 @@
             XCTAssertEqual(image.size.height, 32, accuracy: 0.5)
         }
 
-        private func downloadButton(_ action: SeriesDownloadAction = .download) -> some View {
+        private func downloadButton(
+            _ action: SeriesDownloadAction = .download,
+            destination: MediaDownloadDestination = .iPhone
+        ) -> some View {
             Button {
             } label: {
                 SeriesDownloadActionLabel(
-                    title: action.title,
-                    subtitle: "Save to this device",
+                    title: action.title(for: destination),
+                    subtitle: "All available episodes in this show, for offline viewing.",
                     systemImage: action.systemImage
                 ) {}
             }
@@ -134,7 +137,7 @@
                     ("tablet", CGSize(width: 768, height: 1024)),
                 ] {
                     try await captureNativeSheet(
-                        nativeSheet(availability: mixed),
+                        nativeSheet(availability: mixed, destination: name == "tablet" ? .iPad : .iPhone),
                         size: size,
                         name: "season-sheet-\(name)"
                     )
@@ -162,6 +165,7 @@
 
             private func nativeSheet(
                 availability: MediaRequestAvailability?,
+                destination: MediaDownloadDestination = .iPhone,
                 hasDownloads: Bool = true,
                 isRefreshing: Bool = false,
                 refreshFailed: Bool = false,
@@ -187,7 +191,7 @@
                             onRefresh: {},
                             onRequest: { _ in }
                         ) {
-                            self.downloadButton()
+                            self.downloadButton(destination: destination)
                         }
                         if !seasons.rows.isEmpty {
                             Section {
