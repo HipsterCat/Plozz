@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import CoreModels
 
 /// The neutral stand-in for media artwork that is missing or failed to load.
 ///
@@ -17,24 +18,38 @@ import SwiftUI
 /// Marked decorative so VoiceOver reads the card's real label instead of
 /// announcing an image.
 public struct MediaArtworkPlaceholder: View {
+    public enum Symbol: String, Sendable {
+        case playback = "play.rectangle"
+        case media = "film"
+
+        public init(for item: MediaItem) {
+            self = item.scheduledAirDate != nil || TitleClassifier.isNotOwnedForBadge(item)
+                ? .media : .playback
+        }
+    }
+
     private let tint: Color
     private let glyphSize: CGFloat
+    private let symbol: Symbol
 
     /// - Parameters:
     ///   - tint: colour the wash and glyph derive from. Defaults to `.secondary`
     ///     so the placeholder tracks the theme; pass an explicit colour where the
     ///     backdrop isn't theme-controlled (e.g. over video).
-    ///   - glyphSize: point size of the play glyph, so a small episode thumbnail
+    ///   - glyphSize: point size of the glyph, so a small episode thumbnail
     ///     and a full poster stay visually proportionate.
-    public init(tint: Color = .secondary, glyphSize: CGFloat = 40) {
+    ///   - symbol: use `.media` when no playable content is represented. It
+    ///     identifies media without suggesting a playback action or an error.
+    public init(tint: Color = .secondary, glyphSize: CGFloat = 40, symbol: Symbol = .playback) {
         self.tint = tint
         self.glyphSize = glyphSize
+        self.symbol = symbol
     }
 
     public var body: some View {
         ZStack {
             tint.opacity(0.08)
-            Image(systemName: "play.rectangle")
+            Image(systemName: symbol.rawValue)
                 .font(.system(size: glyphSize))
                 .foregroundStyle(tint)
         }

@@ -1845,7 +1845,7 @@ private struct PlozziOSDetailHeroForeground: View {
             asyncFallbackURL: { await ArtworkRouter.shared.artworkURL(.thumbnail, for: item) },
             pinIdentity: item.stablePresentationID
         ) {
-            MediaArtworkPlaceholder()
+            MediaArtworkPlaceholder(symbol: .init(for: item))
         }
         .blur(radius: appModel.settings.spoilers.settings.shouldHideThumbnail(for: item) ? 24 : 0)
         .aspectRatio(16 / 9, contentMode: .fit)

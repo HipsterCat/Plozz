@@ -247,7 +247,7 @@ public struct EpisodeColumnCard: View, Equatable {
     }
 
     private var neutralPlaceholder: some View {
-        MediaArtworkPlaceholder()
+        MediaArtworkPlaceholder(symbol: .init(for: item))
     }
 
     private var asyncArtworkFallback: (@Sendable () async -> URL?)? {

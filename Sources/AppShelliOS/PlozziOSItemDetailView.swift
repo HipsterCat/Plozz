@@ -2276,7 +2276,7 @@ private struct PlozziOSSeasonDownloadRow: View {
                 )
             } else {
                 SeasonDownloadRowArtwork {
-                    MediaArtworkPlaceholder(glyphSize: 16)
+                    MediaArtworkPlaceholder(glyphSize: 16, symbol: .media)
                 }
             }
         } accessory: {
@@ -2731,7 +2731,7 @@ private struct PlozziOSSeasonEpisodeRow: View {
                 title: appModel.settings.spoilers.settings.isEnabled ? nil : row.metadata?.title
             ) {
                 SeasonEpisodeRowArtwork {
-                    MediaArtworkPlaceholder(glyphSize: 16)
+                    MediaArtworkPlaceholder(glyphSize: 16, symbol: .media)
                 }
             } status: {
                 if row.libraryEpisodes.isEmpty {
@@ -2768,7 +2768,7 @@ private struct PlozziOSUnavailableEpisodeRow: View {
             title: appModel.settings.spoilers.settings.shouldHideText(for: episode) ? nil : episode.title
         ) {
             SeasonEpisodeRowArtwork {
-                MediaArtworkPlaceholder(glyphSize: 16)
+                MediaArtworkPlaceholder(glyphSize: 16, symbol: .media)
             }
         } status: {
             SeasonEpisodeAvailabilityLabel(
@@ -3001,7 +3001,7 @@ private struct PlozziOSDownloadThumbnail: View {
                     },
                     pinIdentity: item.stablePresentationID
                 ) {
-                    MediaArtworkPlaceholder(glyphSize: 16)
+                    MediaArtworkPlaceholder(glyphSize: 16, symbol: .init(for: item))
                 }
             }
 
@@ -3009,7 +3009,7 @@ private struct PlozziOSDownloadThumbnail: View {
             let spoilers = appModel.settings.spoilers.settings
             SeasonEpisodeRowArtwork {
                 if spoilers.shouldHideThumbnail(for: item), spoilers.mode == .placeholder {
-                    MediaArtworkPlaceholder(glyphSize: 16)
+                    MediaArtworkPlaceholder(glyphSize: 16, symbol: .init(for: item))
                 } else {
                     FallbackAsyncImage(
                         references: item.artworkReferences(for: .episodeThumbnail),
@@ -3019,7 +3019,7 @@ private struct PlozziOSDownloadThumbnail: View {
                         },
                         pinIdentity: item.stablePresentationID
                     ) {
-                        MediaArtworkPlaceholder(glyphSize: 16)
+                        MediaArtworkPlaceholder(glyphSize: 16, symbol: .init(for: item))
                     }
                     .blur(radius: spoilers.shouldHideThumbnail(for: item) ? 10 : 0)
                 }
@@ -3606,7 +3606,7 @@ private struct PlozziOSInlineEpisodeEntry: View {
         ) {
             // Shared with the tvOS cards so a missing episode still looks the same
             // on every platform; this was a bare filled rectangle with no glyph.
-            MediaArtworkPlaceholder(glyphSize: 32)
+            MediaArtworkPlaceholder(glyphSize: 32, symbol: .init(for: episode))
         }
         .frame(width: cardWidth, height: cardWidth * 9 / 16)
         .overlay {

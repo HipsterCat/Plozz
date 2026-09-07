@@ -120,7 +120,7 @@ final class SeasonDownloadRowLabelTests: XCTestCase {
             showsRequestAction: row.canRequest
         ) {
             SeasonDownloadRowArtwork {
-                MediaArtworkPlaceholder(glyphSize: 16)
+                MediaArtworkPlaceholder(glyphSize: 16, symbol: row.hasLibraryContent ? .playback : .media)
             }
         } accessory: {
             if row.hasLibraryContent {

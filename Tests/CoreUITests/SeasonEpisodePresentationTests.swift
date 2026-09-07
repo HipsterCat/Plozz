@@ -10,6 +10,21 @@ import Vision
 
 @MainActor
 final class SeasonEpisodePresentationTests: XCTestCase {
+    func testNeutralMediaSymbolExistsAndPreservesArtworkDimensions() throws {
+        XCTAssertNotNil(UIImage(systemName: MediaArtworkPlaceholder.Symbol.media.rawValue))
+        for colorScheme in [ColorScheme.light, .dark] {
+            for symbol in [MediaArtworkPlaceholder.Symbol.playback, .media] {
+                let content = SeasonEpisodeRowArtwork {
+                    MediaArtworkPlaceholder(glyphSize: 16, symbol: symbol)
+                }
+                .environment(\.colorScheme, colorScheme)
+                let image = try XCTUnwrap(ImageRenderer(content: content).uiImage)
+                XCTAssertEqual(image.size.width, 80, accuracy: 0.5)
+                XCTAssertEqual(image.size.height, 45, accuracy: 0.5)
+            }
+        }
+    }
+
     private func requestControls(
         _ state: MediaSeasonRequestState?,
         unavailable: Bool = true,
@@ -86,7 +101,9 @@ final class SeasonEpisodePresentationTests: XCTestCase {
             title: number == 1 ? "The Beginning of a Very Long Adventure" : "Episode title"
         ) {
             SeasonEpisodeRowArtwork {
-                MediaArtworkPlaceholder(glyphSize: 16)
+                MediaArtworkPlaceholder(
+                    glyphSize: 16, symbol: availability == .inLibrary ? .playback : .media
+                )
             }
         } status: {
             SeasonEpisodeAvailabilityLabel(

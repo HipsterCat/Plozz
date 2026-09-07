@@ -901,7 +901,7 @@ public struct PosterCardView: View {
     /// `MediaArtworkPlaceholder` so every surface looks identical, tinted with
     /// the caption colour so it flips on focus and respects reduced-transparency.
     private var neutralPlaceholder: some View {
-        MediaArtworkPlaceholder(tint: subtitleColor)
+        MediaArtworkPlaceholder(tint: subtitleColor, symbol: .init(for: item))
     }
 
     // MARK: Series-identified artwork (Continue Watching)
