@@ -794,7 +794,7 @@ let package = Package(
         ),
         .testTarget(
             name: "AppRuntimeTests",
-            dependencies: ["AppRuntime", "CoreModels", "FeatureAuthCore"]
+            dependencies: ["AppRuntime", "CoreModels", "FeatureAuthCore", "CrashReporting"]
         ),
         .testTarget(
             name: "MediaDownloadsTests",
