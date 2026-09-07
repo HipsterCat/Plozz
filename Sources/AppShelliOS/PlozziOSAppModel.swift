@@ -763,6 +763,7 @@ final class PlozziOSAppModel {
         }
         prepareMediaAliasLedger()
         startCloudSyncIfEnabled()
+        observeApplicationScenes()
     }
 
     var accounts: [Account] {
@@ -794,7 +795,6 @@ final class PlozziOSAppModel {
         heroTrailerCache.removeAll()
         accountsProviders.reloadAccounts()
         applyCrashReportingPreference()
-        observeApplicationScenes()
     }
 
     func provider(for item: MediaItem) -> (any MediaProvider)? {
@@ -852,6 +852,7 @@ final class PlozziOSAppModel {
     }
 
     private func observeApplicationScenes() {
+        guard sceneNotificationTokens.isEmpty else { return }
         for name in [
             UIScene.didActivateNotification,
             UIScene.willDeactivateNotification,

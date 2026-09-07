@@ -288,7 +288,7 @@ public struct MediaRequestAvailability: Sendable, Equatable {
             lhs.effectiveRequestStatus,
             rhs.effectiveRequestStatus
         )
-        let title: String
+        let title: String // l10n:content - preferred server-supplied season name
         if lhs.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            !rhs.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             title = rhs.title

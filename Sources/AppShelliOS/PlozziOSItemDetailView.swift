@@ -1785,6 +1785,7 @@ private enum PlozziOSSeasonDownloadError: LocalizedError {
 
 private struct PlozziOSSeriesDownloadPicker: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
     @Environment(PlozziOSAppModel.self) private var appModel
     @State private var isBusy = false
     @State private var errorMessage: String?
@@ -1985,7 +1986,7 @@ private struct PlozziOSSeriesDownloadPicker: View {
 
     private var downloadConfirmationTitle: Text {
         if let prompt {
-            return Text(prompt.title)
+            return prompt.title
         }
         return Text("Download?")
     }
@@ -2075,7 +2076,7 @@ private struct PlozziOSSeriesDownloadPicker: View {
                 if let number = row.number { onRequestSeasons([number]) }
             },
             onDownloadSeason: {
-                beginSeasonDownload(container, title: String(localized: row.title), episodes: $0)
+                beginSeasonDownload(container, title: row.title, episodes: $0)
             },
             onDownloadEpisode: startEpisodeDownload
         )
@@ -2136,7 +2137,7 @@ private struct PlozziOSSeriesDownloadPicker: View {
 
     private func beginSeasonDownload(
         _ season: MediaItem,
-        title: String,
+        title: SeriesDownloadSeasonTitle,
         episodes: [MediaItem]
     ) {
         guard !episodes.isEmpty else { return }
@@ -2189,7 +2190,13 @@ private struct PlozziOSSeriesDownloadPicker: View {
             switch prompt.scope {
             case .season(let title):
                 batchKind = .season
-                batchTitle = title
+                switch title {
+                case .content(let value):
+                    batchTitle = value
+                case .localized(var resource):
+                    resource.locale = locale
+                    batchTitle = String(localized: resource) // l10n:content - persisted batch label, resolved only on confirmation
+                }
             case .show(let title):
                 batchKind = .show
                 batchTitle = title
@@ -2280,7 +2287,7 @@ private struct PlozziOSSeasonDownloadRow: View {
     var body: some View {
         let downloadState = self.downloadState
         SeasonDownloadRowContent(
-            title: row.title,
+            title: Text(row.title),
             status: row.statusTitle,
             statusSystemImage: row.statusSystemImage,
             showsRequestAction: row.canRequest,
@@ -2962,12 +2969,14 @@ private struct PlozziOSEpisodeDownloadRow: View {
     private func downloadingStatusText(
         for record: DownloadedMediaRecord
     ) -> some View {
+        // Metrics are formatted data, not another translatable status template.
         if let fraction = record.fractionCompleted {
-            Text(
-                "\(Text(MediaDownloadDestination.current.downloadingTitle)) \(fraction, format: .percent.precision(.fractionLength(0)))\(transferMetricsText(for: record))"
-            )
+            Text(MediaDownloadDestination.current.downloadingTitle)
+                + Text(verbatim: " ")
+                + Text(fraction, format: .percent.precision(.fractionLength(0)))
+                + transferMetricsText(for: record)
         } else {
-            Text("\(Text(MediaDownloadDestination.current.downloadingTitle))\(transferMetricsText(for: record))")
+            Text(MediaDownloadDestination.current.downloadingTitle) + transferMetricsText(for: record)
         }
     }
 
@@ -3231,7 +3240,7 @@ private struct PlozziOSSeasonDownloadPrompt: Identifiable {
     }
 
     enum Scope {
-        case season(String)
+        case season(SeriesDownloadSeasonTitle)
         case show(String)
     }
 
@@ -3241,12 +3250,12 @@ private struct PlozziOSSeasonDownloadPrompt: Identifiable {
     var id: String { batches.map(\.season.id).joined(separator: "|") }
     var count: Int { batches.reduce(0) { $0 + $1.episodes.count } }
 
-    var title: LocalizedStringResource {
+    var title: Text {
         switch scope {
         case .season(let title):
-            "Download \(title)?"
+            Text("Download \(Text(title))?")
         case .show(let title):
-            "Download all of \(title)?"
+            Text("Download all of \(title)?")
         }
     }
 

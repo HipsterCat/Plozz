@@ -1,15 +1,32 @@
 import CoreModels
 import SwiftUI
 
+public extension Text {
+    init(_ title: SeriesDownloadSeasonTitle) {
+        switch title {
+        case .content(let value): self.init(verbatim: value)
+        case .localized(let resource): self.init(resource)
+        }
+    }
+}
+
 public struct SeasonDownloadRowLabel: View {
     @ScaledMetric(relativeTo: .caption) private var statusIconWidth: CGFloat = 14
 
-    private let title: LocalizedStringResource
+    private let title: Text
     private let status: LocalizedStringResource
     private let statusSystemImage: String
 
     public init(
         title: LocalizedStringResource,
+        status: LocalizedStringResource,
+        statusSystemImage: String
+    ) {
+        self.init(title: Text(title), status: status, statusSystemImage: statusSystemImage)
+    }
+
+    public init(
+        title: Text,
         status: LocalizedStringResource,
         statusSystemImage: String
     ) {
@@ -20,7 +37,7 @@ public struct SeasonDownloadRowLabel: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title)
+            title
                 .foregroundStyle(Color.primary)
                 .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
@@ -70,7 +87,7 @@ public struct SeasonDownloadRowArtwork<Content: View>: View {
 public struct SeasonDownloadRowContent<Artwork: View, Accessory: View>: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    private let title: LocalizedStringResource
+    private let title: Text
     private let status: LocalizedStringResource
     private let statusSystemImage: String
     private let showsRequestAction: Bool
@@ -80,6 +97,22 @@ public struct SeasonDownloadRowContent<Artwork: View, Accessory: View>: View {
 
     public init(
         title: LocalizedStringResource,
+        status: LocalizedStringResource,
+        statusSystemImage: String,
+        showsRequestAction: Bool = false,
+        completedDownloadCount: Int = 0,
+        @ViewBuilder artwork: () -> Artwork,
+        @ViewBuilder accessory: () -> Accessory
+    ) {
+        self.init(
+            title: Text(title), status: status, statusSystemImage: statusSystemImage,
+            showsRequestAction: showsRequestAction, completedDownloadCount: completedDownloadCount,
+            artwork: artwork, accessory: accessory
+        )
+    }
+
+    public init(
+        title: Text,
         status: LocalizedStringResource,
         statusSystemImage: String,
         showsRequestAction: Bool = false,

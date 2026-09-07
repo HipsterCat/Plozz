@@ -22,7 +22,7 @@ public struct SeerUser: Identifiable, Equatable, Sendable {
     public init(
         id: Int,
         name: String,
-        subtitle: String? = nil,
+        subtitle: String? = nil, // l10n:content - server-supplied email or username
         avatarURL: URL? = nil,
         serverIdentity: SeerServerIdentity? = nil
     ) {  // l10n:content — see `subtitle` above

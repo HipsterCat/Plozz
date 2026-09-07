@@ -114,7 +114,7 @@ final class SeasonDownloadRowLabelTests: XCTestCase {
 
     private func rowContent(_ row: SeriesDownloadSeason) -> some View {
         SeasonDownloadRowContent(
-            title: row.title,
+            title: Text(row.title),
             status: row.statusTitle,
             statusSystemImage: row.statusSystemImage,
             showsRequestAction: row.canRequest

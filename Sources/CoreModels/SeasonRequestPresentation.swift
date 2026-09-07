@@ -65,15 +65,20 @@ public struct SeasonRequestPresentation: Equatable, Sendable {
                 declined: declined.count
             )
         } else if activeCount > 0 {
+            // One request identifies its season; multiple requests summarize their count.
             if processing.count == activeCount {
-                title = activeCount == 1
-                    ? "S\(processing[0].number) Processing"
-                    : "\(activeCount) Seasons Processing"
+                if activeCount == 1, let season = processing.first {
+                    title = "S\(season.number) Processing"
+                } else {
+                    title = "\(activeCount) Seasons Processing"
+                }
                 systemImage = "arrow.triangle.2.circlepath"
             } else {
-                title = activeCount == 1
-                    ? "S\(pending[0].number) Requested"
-                    : "\(activeCount) Seasons Requested"
+                if activeCount == 1, let season = pending.first {
+                    title = "S\(season.number) Requested"
+                } else {
+                    title = "\(activeCount) Seasons Requested"
+                }
                 systemImage = "clock"
             }
             detail = pending.isEmpty || processing.isEmpty

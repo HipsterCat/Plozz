@@ -1289,7 +1289,7 @@ struct DetailHeroView: View, Equatable {
                 requestActingName.map { Text("\(Text(presentation.title)) as \($0)") }
                     ?? Text(presentation.title)
             )
-            .accessibilityValue(Text(presentation.detail ?? ""))
+            .accessibilityValue(presentation.detail.map { Text($0) } ?? Text(verbatim: ""))
             .accessibilityHint("View season statuses or request missing seasons")
         } else if seasonRequestAvailabilityFailed {
             Button { onRetrySeasonRequestAvailability?() } label: {

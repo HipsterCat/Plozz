@@ -4,7 +4,7 @@ import SwiftUI
 public struct SeasonEpisodeRowContent<Artwork: View, Status: View, Accessory: View>: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private let number: Int?
-    private let title: String?
+    private let title: String? // l10n:content - provider-supplied episode title
     private let artwork: Artwork
     private let status: Status
     private let accessory: Accessory

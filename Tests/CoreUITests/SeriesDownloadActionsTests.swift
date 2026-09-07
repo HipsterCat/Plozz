@@ -242,7 +242,7 @@
 
             private func seasonRow(_ row: SeriesDownloadSeason) -> some View {
                 SeasonDownloadRowContent(
-                    title: row.title,
+                    title: Text(row.title),
                     status: row.statusTitle,
                     statusSystemImage: row.statusSystemImage,
                     showsRequestAction: row.canRequest

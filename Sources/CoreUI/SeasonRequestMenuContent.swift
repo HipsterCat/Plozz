@@ -51,7 +51,10 @@ public struct SeasonRequestMenuContent: View {
             } else {
                 Button {} label: {
                     Label {
-                        Text("\(season.title) — \(Text(season.statusTitle))")
+                        // Join content and complete localized copy with a nonlinguistic separator.
+                        Text(verbatim: season.title)
+                            + Text(verbatim: " — ")
+                            + Text(season.statusTitle)
                     } icon: {
                         Image(systemName: season.statusSystemImage)
                     }

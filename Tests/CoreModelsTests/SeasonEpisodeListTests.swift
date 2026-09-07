@@ -141,8 +141,10 @@ final class SeasonEpisodeListTests: XCTestCase {
     func testCombinedEpisodeRangeSurvivesCodableRoundTrip() throws {
         var episode = owned(1)
         episode.episodeNumberEnd = 2
+        episode.fileBrowserContainerID = "share:files:d:TV/Show/Season1"
         let restored = try JSONDecoder().decode(MediaItem.self, from: JSONEncoder().encode(episode))
         XCTAssertEqual(restored.episodeNumberEnd, 2)
+        XCTAssertEqual(restored.fileBrowserContainerID, episode.fileBrowserContainerID)
     }
 
     func testConflictingEpisodeIdentityDoesNotFallBackToANumberMatch() {

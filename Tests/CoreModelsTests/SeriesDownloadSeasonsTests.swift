@@ -24,6 +24,22 @@ final class SeriesDownloadSeasonsTests: XCTestCase {
         return String(localized: copy)
     }
 
+    private func english(_ title: SeriesDownloadSeasonTitle) -> String {
+        switch title {
+        case .content(let value): value
+        case .localized(let resource): english(resource)
+        }
+    }
+
+    func testProviderSeasonNamesRemainContentEvenWhenTheyMatchAppCopy() {
+        var season = librarySeason(1, id: "season")
+        season.title = "Specials"
+        let list = SeriesDownloadSeasons(
+            librarySeasons: [season], looseEpisodes: [], requestAvailability: nil
+        )
+        XCTAssertEqual(list.rows.first?.title, .content("Specials"))
+    }
+
     func testTwentySeasonsAppearOnceAcrossLibraryAndRequests() {
         let availability = MediaRequestAvailability(
             status: .partiallyAvailable,

@@ -1,5 +1,11 @@
 import Foundation
 
+/// Keeps provider names verbatim while localizing app-supplied fallbacks.
+public enum SeriesDownloadSeasonTitle: Equatable, Sendable {
+    case content(String)
+    case localized(LocalizedStringResource)
+}
+
 /// A single season identity, with independent library content and request state.
 public struct SeriesDownloadSeason: Identifiable, Equatable, Sendable {
     public let id: String
@@ -16,13 +22,13 @@ public struct SeriesDownloadSeason: Identifiable, Equatable, Sendable {
         !hasLibraryContent && requestState?.isRequestable == true
     }
 
-    public var title: LocalizedStringResource {
+    public var title: SeriesDownloadSeasonTitle {
         if let title = librarySeasons.first?.title ?? requestState?.title {
-            return "\(title)"
+            return .content(title)
         }
-        if number == 0 { return "Specials" }
-        if let number { return "Season \(number)" }
-        return "Season"
+        if number == 0 { return .localized("Specials") }
+        if let number { return .localized("Season \(number)") }
+        return .localized("Season")
     }
 
     public var statusTitle: LocalizedStringResource {

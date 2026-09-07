@@ -941,7 +941,7 @@ struct SeriesDetailView: View {
         .buttonStyle(PlozzSeasonTabStyle(isSelected: false))
         .focusEffectDisabled()
         .focused($requestSeasonsFocused)
-        .accessibilityValue(Text(presentation.detail ?? ""))
+        .accessibilityValue(presentation.detail.map { Text($0) } ?? Text(verbatim: ""))
         .accessibilityHint("View season statuses or request missing seasons")
         // Before the active season receives focus, remove this geometrically-near
         // trailing control so DOWN from the hero cannot skip the active season.
