@@ -295,7 +295,7 @@ struct SubtitleStylePanel: View {
     }
 
     /// A SwiftUI `Font` that renders a family's name in that family's own Regular
-    /// face — bundled faces via their PostScript name, SF via the system font, and
+    /// face — named faces via their PostScript name, SF via the system font, and
     /// SF Rounded via the rounded system design.
     private static func fontPreviewFont(for family: SubtitleFontFamily) -> Font {
         // OpenDyslexic's wide, heavy letterforms already read large, so it gets a
@@ -303,7 +303,7 @@ struct SubtitleStylePanel: View {
         // legible list.
         let size: CGFloat = family == .openDyslexic ? 30 : 40
         if family.usesRoundedDesign { return .system(size: size, design: .rounded) }
-        if let stem = family.postScriptStem { return .custom("\(stem)-Regular", size: size) }
+        if let name = family.postScriptNameCandidates().first { return .custom(name, size: size) }
         return .system(size: size)
     }
 

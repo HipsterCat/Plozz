@@ -17,7 +17,7 @@ import CoreModels
 /// Images are force-decoded off the main thread (`preparingForDisplay`) before
 /// being stored, so handing one to SwiftUI never triggers a main-thread decode.
 public final class ArtworkImageCache: NSObject, @unchecked Sendable {
-    public static let shared = ArtworkImageCache()
+    public static let shared = ArtworkImageCache(derivedCache: LocalArtworkDerivedCache())
 
     private enum Source: Hashable {
         case url(URL)
@@ -323,11 +323,20 @@ public final class ArtworkImageCache: NSObject, @unchecked Sendable {
     private var purgingAccountCounts: [String: Int] = [:]
     private var purgingRevisionCounts: [NetworkRevisionScope: Int] = [:]
     private var networkFileService: ArtworkNetworkFileService?
-    private let derivedCache = LocalArtworkDerivedCache()
+    private var lifecycleRevision: UInt64?
+    private var backgroundWorkAllowed = true
+    private var backgroundGeneration: UInt64 = 0
+    private let derivedCache: LocalArtworkDerivedCache
+    private let warmLimiter: ConcurrencyLimiter
     private static let networkForegroundLimiter = ConcurrencyLimiter(limit: 2)
     private static let networkBackgroundLimiter = ConcurrencyLimiter(limit: 2)
 
-    private override init() {
+    init(
+        derivedCache: LocalArtworkDerivedCache,
+        warmLimiter: ConcurrencyLimiter = ArtworkSession.warmLimiter
+    ) {
+        self.derivedCache = derivedCache
+        self.warmLimiter = warmLimiter
         super.init()
         cache.delegate = self
         // Decoded landscape/poster thumbnails are small; cap retained pixels so the
@@ -374,6 +383,19 @@ public final class ArtworkImageCache: NSObject, @unchecked Sendable {
 
     public func setPreferredNetworkArtworkAccounts(_ accounts: Set<String>, revision: UInt64) async {
         await derivedCache.setPreferredAccounts(accounts, revision: revision)
+    }
+
+    public func setBackgroundWorkAllowed(_ allowed: Bool, revision: UInt64) async {
+        let cancelledLoads = lock.withLock { () -> [(CacheKey, ImageLoad)]? in
+            if let lifecycleRevision, revision <= lifecycleRevision { return nil }
+            lifecycleRevision = revision
+            backgroundWorkAllowed = allowed
+            backgroundGeneration &+= 1
+            return allowed ? [] : removeBackgroundPrefetchesLocked()
+        }
+        guard let cancelledLoads else { return }
+        finishCancelledLoads(cancelledLoads)
+        await derivedCache.setBackgroundWorkAllowed(allowed, revision: revision)
     }
 
     /// Current size in bytes of the derived-artwork cache (Step 6 diagnostics).
@@ -449,7 +471,19 @@ public final class ArtworkImageCache: NSObject, @unchecked Sendable {
     public func image(for url: URL, variant: ArtworkImageVariant = .original, background: Bool = false) async -> UIImage? {
         if let cached = cachedImage(for: url, variant: variant) { return cached }
         let key = CacheKey(url: url, variant: variant)
-        guard let waiter = registerWaiter(for: key, background: background) else { return nil }
+        return await image(for: key, background: background)
+    }
+
+    private func image(
+        for key: CacheKey,
+        background: Bool,
+        expectedBackgroundGeneration: UInt64? = nil
+    ) async -> UIImage? {
+        guard let waiter = registerWaiter(
+            for: key,
+            background: background,
+            expectedBackgroundGeneration: expectedBackgroundGeneration
+        ) else { return nil }
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 install(continuation, for: waiter)
@@ -477,12 +511,7 @@ public final class ArtworkImageCache: NSObject, @unchecked Sendable {
                 return cached
             }
             let key = CacheKey(reference: network, variant: variant)
-            guard let waiter = registerWaiter(for: key, background: background) else { return nil }
-            return await withTaskCancellationHandler {
-                await withCheckedContinuation { continuation in install(continuation, for: waiter) }
-            } onCancel: {
-                unregisterWaiter(waiter)
-            }
+            return await image(for: key, background: background)
         }
     }
 
@@ -498,12 +527,7 @@ public final class ArtworkImageCache: NSObject, @unchecked Sendable {
         guard cachedImage(for: url, variant: variant) == nil else {
             return nil
         }
-        return Task.detached(priority: .utility) {
-            await ArtworkSession.warmLimiter.run {
-                guard !Task.isCancelled else { return }
-                _ = await ArtworkImageCache.shared.image(for: url, variant: variant, background: true)
-            }
-        }
+        return prefetch(key: CacheKey(url: url, variant: variant))
     }
 
     @discardableResult
@@ -514,21 +538,47 @@ public final class ArtworkImageCache: NSObject, @unchecked Sendable {
         guard cachedImage(for: reference, variant: variant) == nil else {
             return nil
         }
-        return Task.detached(priority: .utility) {
-            await ArtworkSession.warmLimiter.run {
+        switch reference {
+        case let .remote(url):
+            return prefetch(key: CacheKey(url: url, variant: variant))
+        case let .networkFile(network):
+            return prefetch(key: CacheKey(reference: network, variant: variant))
+        }
+    }
+
+    private func prefetch(key: CacheKey) -> Task<Void, Never>? {
+        guard let generation = lock.withLock({
+            backgroundWorkAllowed ? backgroundGeneration : nil
+        }) else { return nil }
+        return Task.detached(priority: .utility) { [self] in
+            await warmLimiter.run {
                 guard !Task.isCancelled else { return }
-                _ = await ArtworkImageCache.shared.image(for: reference, variant: variant, background: true)
+                _ = await image(for: key, background: true, expectedBackgroundGeneration: generation)
             }
         }
     }
 
     private func cancelBackgroundPrefetches() {
-        lock.withLock {
-            for load in inFlight.values where load.foregroundWaiterCount == 0 {
-                load.task.cancel()
-                load.decodeJob?.cancel()
-            }
-            inFlight = inFlight.filter { $0.value.foregroundWaiterCount > 0 }
+        let cancelled = lock.withLock {
+            backgroundGeneration &+= 1
+            return removeBackgroundPrefetchesLocked()
+        }
+        finishCancelledLoads(cancelled)
+    }
+
+    private func removeBackgroundPrefetchesLocked() -> [(CacheKey, ImageLoad)] {
+        let cancelled = inFlight.compactMap { key, load in
+            load.foregroundWaiterCount == 0 ? (key, load) : nil
+        }
+        for (key, _) in cancelled { inFlight[key] = nil }
+        return cancelled
+    }
+
+    private func finishCancelledLoads(_ loads: [(CacheKey, ImageLoad)]) {
+        for (key, load) in loads {
+            load.task.cancel()
+            load.decodeJob?.cancel()
+            finishLoad(load, for: key, with: nil)
         }
     }
 
@@ -649,9 +699,16 @@ public final class ArtworkImageCache: NSObject, @unchecked Sendable {
         return networkArtworkIsAdmittedLocked(reference)
     }
 
-    private func registerWaiter(for key: CacheKey, background: Bool) -> ImageWaiter? {
+    private func registerWaiter(
+        for key: CacheKey,
+        background: Bool,
+        expectedBackgroundGeneration: UInt64?
+    ) -> ImageWaiter? {
         lock.lock()
         defer { lock.unlock() }
+        guard !background || backgroundWorkAllowed else { return nil }
+        if let expectedBackgroundGeneration,
+           expectedBackgroundGeneration != backgroundGeneration { return nil }
         guard networkArtworkIsAdmittedLocked(for: key) else { return nil }
         let waiterID = UUID()
         if let existing = inFlight[key] {
@@ -843,6 +900,10 @@ public final class ArtworkImageCache: NSObject, @unchecked Sendable {
         let scale = image.scale
         let cost = max(Int(image.size.width * scale * image.size.height * scale * 4), 1)
         lock.lock()
+        guard !Task.isCancelled, case .pending = load.state, inFlight[key] === load else {
+            lock.unlock()
+            return false
+        }
         if case .network = key.source,
            (load.networkInvalidationToken != networkInvalidationToken(for: key)
                 || !networkArtworkIsAdmittedLocked(for: key)) {

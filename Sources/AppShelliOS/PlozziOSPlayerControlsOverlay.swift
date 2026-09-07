@@ -1638,8 +1638,8 @@ private func subtitlePreviewFont(
     if family.usesRoundedDesign {
         return .system(size: size, design: .rounded)
     }
-    if let stem = family.postScriptStem {
-        return .custom("\(stem)-Regular", size: size)
+    if let name = family.postScriptNameCandidates().first {
+        return .custom(name, size: size)
     }
     return .system(size: size)
 }

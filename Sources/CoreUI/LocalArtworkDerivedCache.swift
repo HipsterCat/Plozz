@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import Foundation
 import ImageIO
+import CoreNetworking
 import SQLite3
 import UIKit
 
@@ -23,6 +24,15 @@ public actor LocalArtworkDerivedCache {
     private var db: OpaquePointer?
     private var preferredAccounts = Set<String>()
     private var preferenceRevision: UInt64 = 0
+    private var lifecycleRevision: UInt64?
+    private var backgroundWorkAllowed = true
+    private struct PurgeScope: Hashable {
+        let accountID: String
+        let credentialRevision: String?
+    }
+    private var pendingPurges = Set<PurgeScope>()
+    private var pendingClear = false
+    private var pendingTrimCap: Int?
 
     public init(directory: URL? = nil) {
         let base = directory ?? FileManager.default.urls(
@@ -53,7 +63,7 @@ public actor LocalArtworkDerivedCache {
     }
 
     deinit {
-        if let db { sqlite3_close(db) }
+        if let db { sqlite3_close_v2(db) }
     }
 
     /// A stale profile update cannot reverse a newer eviction preference.
@@ -65,6 +75,37 @@ public actor LocalArtworkDerivedCache {
 
     func preferredAccountsForTesting() -> Set<String> {
         preferredAccounts
+    }
+
+    /// Closes the manifest database while inactive so an image decode finishing
+    /// late cannot leave SQLite holding a lock when the process is suspended.
+    public func setBackgroundWorkAllowed(_ allowed: Bool, revision: UInt64) {
+        if let lifecycleRevision, revision <= lifecycleRevision { return }
+        lifecycleRevision = revision
+        backgroundWorkAllowed = allowed
+        guard !allowed, let db else { return }
+        if sqlite3_get_autocommit(db) == 0 {
+            let result = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+            if result != SQLITE_OK {
+                PlozzLog.boot("artwork manifest suspension rollback failed: \(result)")
+            }
+        }
+        // Every statement is scoped to a synchronous actor operation. Never
+        // finalize a statement owned by another operation to make close succeed.
+        let closeResult = sqlite3_close(db)
+        if closeResult == SQLITE_OK {
+            self.db = nil
+        } else {
+            PlozzLog.boot("artwork manifest suspension close failed: \(closeResult)")
+        }
+    }
+
+    func backgroundWorkAllowedForTesting() -> Bool {
+        backgroundWorkAllowed
+    }
+
+    func manifestIsOpenForTesting() -> Bool {
+        db != nil
     }
 
     public func data(
@@ -127,20 +168,16 @@ public actor LocalArtworkDerivedCache {
     }
 
     public func purge(accountID: String) {
-        guard open() else { return }
-        purge(where: "account_id=?", bind: { sqlite3_bind_text($0, 1, accountID, -1, SQLITE_TRANSIENT) })
+        pendingPurges.insert(PurgeScope(accountID: accountID, credentialRevision: nil))
+        _ = open()
     }
 
     public func purge(accountID: String, credentialRevision: String) {
-        guard open() else { return }
-        purge(where: "account_id=? AND credential_revision=?", bind: {
-            sqlite3_bind_text($0, 1, accountID, -1, SQLITE_TRANSIENT)
-            sqlite3_bind_text($0, 2, credentialRevision, -1, SQLITE_TRANSIENT)
-        })
+        pendingPurges.insert(PurgeScope(accountID: accountID, credentialRevision: credentialRevision))
+        _ = open()
     }
 
     public func trimForMemoryWarning() {
-        guard open() else { return }
         trim(to: warningByteCap)
     }
 
@@ -158,19 +195,22 @@ public actor LocalArtworkDerivedCache {
     /// calls also trim to this value.
     public func setByteCap(_ bytes: Int) {
         byteCap = max(0, bytes)
-        guard open() else { return }
         trim(to: byteCap)
     }
 
     /// Removes every cached derivative and its file (Step 6 "Clear cache now").
     /// Distinct from a budget change: it drops all data regardless of size.
     public func clear() {
-        guard open() else { return }
-        for entry in entries(ordering: "last_use ASC") { delete(key: entry.key) }
+        pendingClear = true
+        pendingPurges.removeAll()
+        _ = open()
     }
 
     public func trim(to byteCap: Int) {
-        guard open() else { return }
+        guard open() else {
+            pendingTrimCap = min(pendingTrimCap ?? byteCap, byteCap)
+            return
+        }
         let expired = now().addingTimeInterval(-maximumEntryAge).timeIntervalSince1970
         delete(where: "last_use < ?", bind: { sqlite3_bind_double($0, 1, expired) })
         var total = usageBytes()
@@ -182,6 +222,34 @@ public actor LocalArtworkDerivedCache {
             delete(key: entry.key)
             total -= entry.byteCount
         }
+    }
+
+    private func applyPendingMaintenance() -> Bool {
+        if pendingClear {
+            guard purge(where: "1", bind: { _ in }) else { return false }
+            pendingClear = false
+        }
+        let purges = pendingPurges
+        for scope in purges {
+            let succeeded: Bool
+            if let revision = scope.credentialRevision {
+                succeeded = purge(where: "account_id=? AND credential_revision=?", bind: {
+                    sqlite3_bind_text($0, 1, scope.accountID, -1, SQLITE_TRANSIENT)
+                    sqlite3_bind_text($0, 2, revision, -1, SQLITE_TRANSIENT)
+                })
+            } else {
+                succeeded = purge(where: "account_id=?", bind: {
+                    sqlite3_bind_text($0, 1, scope.accountID, -1, SQLITE_TRANSIENT)
+                })
+            }
+            guard succeeded else { return false }
+            pendingPurges.remove(scope)
+        }
+        if let cap = pendingTrimCap {
+            pendingTrimCap = nil
+            trim(to: cap)
+        }
+        return true
     }
 
     private var preferredPlaceholders: String {
@@ -200,26 +268,37 @@ public actor LocalArtworkDerivedCache {
     }
 
     private func open() -> Bool {
-        if db != nil { return true }
+        guard backgroundWorkAllowed else { return false }
+        if db != nil { return applyPendingMaintenance() }
         do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
         catch { return false }
-        guard openManifest() || recreateManifest() else { return false }
+        let result = openManifest()
+        if result != SQLITE_OK {
+            // Suspension makes reopening routine. A busy/temporarily unavailable
+            // manifest is not corrupt and must never be deleted as recovery.
+            guard result == SQLITE_CORRUPT || result == SQLITE_NOTADB else {
+                PlozzLog.boot("artwork manifest open failed: \(result)")
+                return false
+            }
+            guard recreateManifest() else { return false }
+        }
         repairOrphans()
-        return true
+        return applyPendingMaintenance()
     }
 
-    private func openManifest() -> Bool {
+    private func openManifest() -> Int32 {
         var handle: OpaquePointer?
-        guard sqlite3_open_v2(
+        let openResult = sqlite3_open_v2(
             databaseURL.path,
             &handle,
             SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
             nil
-        ) == SQLITE_OK, let handle else {
+        )
+        guard openResult == SQLITE_OK, let handle else {
             if let handle { sqlite3_close(handle) }
-            return false
+            return openResult
         }
-        guard sqlite3_exec(handle, """
+        let schemaResult = sqlite3_exec(handle, """
         CREATE TABLE IF NOT EXISTS entries(
           cache_key TEXT PRIMARY KEY,
           filename TEXT NOT NULL,
@@ -231,12 +310,13 @@ public actor LocalArtworkDerivedCache {
           variant TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS entries_lru ON entries(last_use);
-        """, nil, nil, nil) == SQLITE_OK else {
+        """, nil, nil, nil)
+        guard schemaResult == SQLITE_OK else {
             sqlite3_close(handle)
-            return false
+            return schemaResult
         }
         db = handle
-        return true
+        return SQLITE_OK
     }
 
     private func recreateManifest() -> Bool {
@@ -249,7 +329,7 @@ public actor LocalArtworkDerivedCache {
                 at: URL(fileURLWithPath: databaseURL.path + suffix)
             )
         }
-        return openManifest()
+        return openManifest() == SQLITE_OK
     }
 
     private func entry(for key: String) -> Entry? {
@@ -304,12 +384,15 @@ public actor LocalArtworkDerivedCache {
         }
     }
 
-    private func purge(where clause: String, bind: (OpaquePointer?) -> Void) {
-        var keys: [String] = []
-        query("SELECT cache_key FROM entries WHERE \(clause);", bind: bind) {
-            if let value = sqlite3_column_text($0, 0) { keys.append(String(cString: value)) }
+    private func purge(where clause: String, bind: (OpaquePointer?) -> Void) -> Bool {
+        var filenames: [String] = []
+        guard query("SELECT filename FROM entries WHERE \(clause);", bind: bind, row: {
+            if let value = sqlite3_column_text($0, 0) { filenames.append(String(cString: value)) }
+        }), execute("DELETE FROM entries WHERE \(clause);", bind: bind) else { return false }
+        for filename in filenames {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(filename))
         }
-        keys.forEach(delete)
+        return true
     }
 
     private func delete(where clause: String, bind: (OpaquePointer?) -> Void) {
@@ -321,9 +404,15 @@ public actor LocalArtworkDerivedCache {
     }
 
     private func repairOrphans() {
-        let known = Set(entries(ordering: "last_use ASC").map(\.filename))
+        var known = Set<String>()
+        guard query("SELECT filename FROM entries;", bind: { _ in }, row: {
+            if let value = sqlite3_column_text($0, 0) { known.insert(String(cString: value)) }
+        }) else { return }
+        let manifestFiles = Set(["", "-wal", "-shm", "-journal"].map {
+            databaseURL.lastPathComponent + $0
+        })
         guard let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
-        for file in files where file.lastPathComponent != databaseURL.lastPathComponent && !known.contains(file.lastPathComponent) {
+        for file in files where !manifestFiles.contains(file.lastPathComponent) && !known.contains(file.lastPathComponent) {
             try? FileManager.default.removeItem(at: file)
         }
     }
@@ -334,22 +423,44 @@ public actor LocalArtworkDerivedCache {
         return value
     }
 
-    private func query(_ sql: String, bind: (OpaquePointer?) -> Void, row: (OpaquePointer?) -> Void) {
-        guard let db else { return }
+    @discardableResult
+    private func query(_ sql: String, bind: (OpaquePointer?) -> Void, row: (OpaquePointer?) -> Void) -> Bool {
+        guard let db else { return false }
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return }
+        let prepared = sqlite3_prepare_v2(db, sql, -1, &statement, nil)
+        guard prepared == SQLITE_OK else {
+            PlozzLog.boot("artwork manifest query prepare failed: \(prepared)")
+            return false
+        }
         defer { sqlite3_finalize(statement) }
         bind(statement)
-        while sqlite3_step(statement) == SQLITE_ROW { row(statement) }
+        var result = sqlite3_step(statement)
+        while result == SQLITE_ROW {
+            row(statement)
+            result = sqlite3_step(statement)
+        }
+        if result != SQLITE_DONE {
+            PlozzLog.boot("artwork manifest query failed: \(result)")
+        }
+        return result == SQLITE_DONE
     }
 
-    private func execute(_ sql: String, bind: (OpaquePointer?) -> Void) {
-        guard let db else { return }
+    @discardableResult
+    private func execute(_ sql: String, bind: (OpaquePointer?) -> Void) -> Bool {
+        guard let db else { return false }
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return }
+        let prepared = sqlite3_prepare_v2(db, sql, -1, &statement, nil)
+        guard prepared == SQLITE_OK else {
+            PlozzLog.boot("artwork manifest write prepare failed: \(prepared)")
+            return false
+        }
         defer { sqlite3_finalize(statement) }
         bind(statement)
-        _ = sqlite3_step(statement)
+        let result = sqlite3_step(statement)
+        if result != SQLITE_DONE {
+            PlozzLog.boot("artwork manifest write failed: \(result)")
+        }
+        return result == SQLITE_DONE
     }
 
     private static func entry(_ statement: OpaquePointer?) -> Entry {
