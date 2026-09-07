@@ -339,6 +339,90 @@ final class ShareCatalogBrowseProjectionTests: XCTestCase {
         XCTAssertEqual(projected.count, 1)
     }
 
+    func testMovieFolderPromotesWhenAnotherLibraryContainsTheSameMovie() async throws {
+        let store = ShareCatalogStore(accountKey: "movie-other-copy", directory: try catalogDirectory())
+        let root = "Movies/Arrival (2016)"
+        let paths = [
+            "\(root)/Arrival.2016.2160p.mkv",
+            "Other Library/Movies/Arrival.2016.1080p/Arrival.2016.1080p.mkv",
+        ]
+        await store.upsert(paths.map { movie($0, title: "Arrival", year: 2016) }, scanID: 1)
+        var metadata = EnrichmentRecord()
+        metadata.posterURL = URL(string: "https://example.com/arrival.jpg")
+        for path in paths {
+            let saved = await store.saveEnrichment(
+                itemID: ShareCatalogID.file(path), metadata, version: 18
+            )
+            XCTAssertTrue(saved)
+        }
+
+        let projected = await store.browseItems([folder(root).taggingSource("share-account")])
+        let item = try XCTUnwrap(projected.first)
+
+        XCTAssertEqual(projected.count, 1)
+        XCTAssertEqual(item.id, ShareCatalogID.movie("arrival-2016"))
+        XCTAssertEqual(item.kind, .movie)
+        XCTAssertEqual(item.posterURL, metadata.posterURL)
+        XCTAssertEqual(item.versions.count, 2)
+        XCTAssertEqual(item.sourceAccountID, "share-account")
+        XCTAssertEqual(item.fileBrowserContainerID, "share:files:d:\(root)")
+    }
+
+    func testNumericMovieFoldersUseTheirIndexedTitlesDespiteDifferentFolderYears() async throws {
+        let store = ShareCatalogStore(accountKey: "numeric-movie-folders", directory: try catalogDirectory())
+        for (title, folderYear, fileYear) in [("300", 2006, 2007), ("2050", 2019, 2019), ("1917", 2019, 2019)] {
+            let root = "Movies/\(title) (\(folderYear))"
+            let path = "\(root)/\(title).\(fileYear).mkv"
+            await store.upsert([movie(path, title: title, year: fileYear)], scanID: 1)
+            var metadata = EnrichmentRecord()
+            metadata.posterURL = URL(string: "https://example.com/\(title).jpg")
+            let saved = await store.saveEnrichment(
+                itemID: ShareCatalogID.file(path), metadata, version: 18
+            )
+            XCTAssertTrue(saved)
+
+            let projected = await store.browseItems([folder(root)])
+
+            XCTAssertEqual(projected.first?.id, ShareCatalogID.movie("\(title)-\(fileYear)"))
+            XCTAssertEqual(projected.first?.kind, .movie)
+            XCTAssertEqual(projected.first?.posterURL, metadata.posterURL)
+            XCTAssertEqual(projected.first?.fileBrowserContainerID, "share:files:d:\(root)")
+        }
+    }
+
+    func testYearBucketDoesNotPromoteWhenItsOnlyMovieHasANumericTitle() async throws {
+        let store = ShareCatalogStore(accountKey: "movie-year-bucket", directory: try catalogDirectory())
+        await store.upsert([
+            movie("Movies/2024/2024.2020.mkv", title: "2024", year: 2020)
+        ], scanID: 1)
+
+        let projected = await store.browseItems([folder("Movies/2024")])
+
+        XCTAssertEqual(projected.first?.id, "d:Movies/2024")
+        XCTAssertEqual(projected.first?.kind, .folder)
+    }
+
+    func testMovieTitlesContainingYearsStillMatchYearlessFolders() async throws {
+        let store = ShareCatalogStore(accountKey: "movie-year-in-title", directory: try catalogDirectory())
+        for (title, year) in [("2001 A Space Odyssey", 1968), ("Blade Runner 2049", 2017)] {
+            let root = "Movies/\(title)"
+            let name = "\(title).\(year).mkv"
+            let key = ShareCatalogID.movieKey(fromTitle: title, year: year)
+            await store.upsert([CatalogAsset(
+                relPath: "\(root)/\(name)", basename: name,
+                size: 1_000, modifiedAt: Date(), kind: .movie, library: .movies,
+                title: title, year: year, seriesTitle: nil, seriesKey: nil,
+                season: nil, episode: nil,
+                movieKey: key, movieTitleKey: ShareCatalogID.movieKey(fromTitle: title, year: nil)
+            )], scanID: 1)
+
+            let projected = await store.browseItems([folder(root)])
+
+            XCTAssertEqual(projected.first?.id, ShareCatalogID.movie(key))
+            XCTAssertEqual(projected.first?.kind, .movie)
+        }
+    }
+
     func testLooseSingleMovieDoesNotTurnLibraryContainerIntoMovie() async throws {
         let store = ShareCatalogStore(accountKey: "movie-library", directory: try catalogDirectory())
         await store.upsert([

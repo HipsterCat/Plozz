@@ -305,6 +305,58 @@ final class ShareProviderCapabilityTests: XCTestCase {
         XCTAssertTrue(filesPage.items.allSatisfy { $0.kind == .video && $0.id.hasPrefix("f:") })
     }
 
+    func testMediaAwareBrowserSortsFoldersAlongsideMoviesButRawBrowserKeepsFoldersFirst() async throws {
+        let fixture = ShareCatalogSQLiteFixture()
+        defer { fixture.cleanup() }
+        let store = fixture.makeStore()
+        let moviePath = "Movies/Arrival (2016)/Arrival.2016.mkv"
+        await store.upsert([CatalogAsset(
+            relPath: moviePath, basename: "Arrival.2016.mkv",
+            size: 1_000, modifiedAt: Date(), kind: .movie, library: .movies,
+            title: "Arrival", year: 2016, seriesTitle: nil, seriesKey: nil,
+            season: nil, episode: nil, movieKey: "arrival-2016", movieTitleKey: "arrival"
+        )], scanID: 1)
+        let fileSystem = CapabilityFakeFileSystem(entries: [], directories: [
+            "Movies": [
+                try RemoteFileEntry(relativePath: "Movies/Unsorted", kind: .directory),
+                try RemoteFileEntry(relativePath: "Movies/Beginning.mp4", kind: .file),
+                try RemoteFileEntry(relativePath: "Movies/Arrival (2016)", kind: .directory),
+            ]
+        ])
+        let provider = ShareProvider(
+            session: makeSession(),
+            sessionFactory: { role in
+                try CapabilityFakeSession(fileSystem: fileSystem, role: role)
+            },
+            catalogCoordinator: FakeCatalogCoordinator(reader: FakeCatalogReader()),
+            catalogStore: store
+        )
+
+        let mediaPage = try await provider.items(
+            in: "d:Movies", kind: .folder, page: PageRequest(limit: 20)
+        )
+        XCTAssertEqual(
+            mediaPage.items.map(\.id),
+            ["movie:arrival-2016", "f:Movies/Beginning.mp4", "d:Movies/Unsorted"]
+        )
+        let descendingPage = try await provider.items(
+            in: "d:Movies", kind: .folder,
+            page: PageRequest(limit: 20, sort: .init(field: .name, direction: .descending))
+        )
+        XCTAssertEqual(
+            descendingPage.items.map(\.id),
+            ["d:Movies/Unsorted", "f:Movies/Beginning.mp4", "movie:arrival-2016"]
+        )
+
+        let rawPage = try await provider.items(
+            in: "share:files:d:Movies", kind: .folder, page: PageRequest(limit: 20)
+        )
+        XCTAssertEqual(
+            rawPage.items.map(\.id),
+            ["share:files:d:Movies/Arrival (2016)", "share:files:d:Movies/Unsorted", "f:Movies/Beginning.mp4"]
+        )
+    }
+
     func testShareAdvertisesOnlySortsItsContainerCanHonor() {
         let personalProvider = ShareProvider(
             session: makeSession(
@@ -472,7 +524,7 @@ final class ShareProviderCapabilityTests: XCTestCase {
         XCTAssertEqual(reader.seriesSortRequests, [sort])
     }
 
-    func testRawBrowseProjectsWholeDirectoryBeforePaging() async throws {
+    func testMediaAwareBrowseProjectsWholeDirectoryBeforeSortingAndPaging() async throws {
         let reader = FakeCatalogReader()
         reader.browseResult = [
             MediaItem(id: "series:projected", title: "Projected", kind: .series),
@@ -504,7 +556,7 @@ final class ShareProviderCapabilityTests: XCTestCase {
             "f:A.mkv",
             "f:B.mkv",
         ]])
-        XCTAssertEqual(page.items.map(\.id), ["f:a.mkv"])
+        XCTAssertEqual(page.items.map(\.id), ["d:Folder"])
         XCTAssertEqual(page.totalCount, 3)
     }
 

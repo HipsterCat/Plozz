@@ -91,18 +91,6 @@ struct ShareCatalogBrowseProjection {
             }
         }
 
-        let completeMovieGroups = loadCompleteMovieGroups(
-            folderTargets.compactMap { folderPath, target in
-                ShareCatalogID.movieKey(forMovieID: target).map {
-                    (folderPath: folderPath, group: $0)
-                }
-            }
-        )
-        folderTargets = folderTargets.filter { folderPath, target in
-            guard let group = ShareCatalogID.movieKey(forMovieID: target) else { return true }
-            return completeMovieGroups["\(folderPath)\u{0}\(group)"] == true
-        }
-
         let completeSeasons = loadCompleteSeasonRoots(possibleSeasons)
         for candidate in possibleSeasons
         where completeSeasons[candidate] == true {
@@ -229,6 +217,8 @@ struct ShareCatalogBrowseProjection {
         evidence: FolderEvidence,
         associatedMovieNFOGroups: Set<String>
     ) -> String? {
+        // A title folder need only contain one movie, not every copy of that
+        // movie elsewhere on the share. Its explicit file route stays local.
         guard evidence.movieCount == evidence.assetCount,
               evidence.movieGroupCount == 1,
               evidence.nullMovieGroupCount == 0,
@@ -250,12 +240,19 @@ struct ShareCatalogBrowseProjection {
             && evidence.nullMovieKeyCount == 0
             && evidence.movieKey == folderKey
             && !folderName.isEmpty
+        // The indexed file owns the identity. Folder labels can use a different
+        // release year, including numeric titles such as "300 (2006)".
+        let parsedFolder = ShareMediaParser.parseMovie(stem: folderName, parentFolder: nil)
         let normalizedFolderTitle = ShareCatalogID.seriesKey(fromTitle: folderName)
+        let parsedFolderTitle = ShareCatalogID.seriesKey(fromTitle: parsedFolder.title)
+        let isYearBucket = parsedFolder.year.map { normalizedFolderTitle == String($0) } ?? false
         let matchesTitleFolder = !ShareMediaParser.isLibraryRootName(folderName)
+            && !isYearBucket
             && !normalizedFolderTitle.isEmpty
             && evidence.movieTitleKeyCount == 1
             && evidence.nullMovieTitleKeyCount == 0
-            && evidence.movieTitleKey == normalizedFolderTitle
+            && (evidence.movieTitleKey == normalizedFolderTitle
+                || evidence.movieTitleKey == parsedFolderTitle)
         let hasMatchingMovieNFO = associatedMovieNFOGroups.contains(group)
         guard matchesDedicatedFolder || matchesTitleFolder || hasMatchingMovieNFO else { return nil }
         return group
@@ -388,43 +385,6 @@ struct ShareCatalogBrowseProjection {
                 guard let path = CatalogConnection.columnText(stmt, 0),
                       let group = CatalogConnection.columnText(stmt, 1) else { return }
                 result[path, default: []].insert(group)
-            }
-        }
-        return result
-    }
-
-    /// Returns true only when every member of the logical movie group lives
-    /// directly in its candidate directory.
-    private func loadCompleteMovieGroups(
-        _ candidates: [(folderPath: String, group: String)]
-    ) -> [String: Bool] {
-        guard !candidates.isEmpty else { return [:] }
-        var result: [String: Bool] = [:]
-        for chunk in candidates.chunked(maxCount: Self.queryChunkSize) {
-            let values = Array(repeating: "(?,?)", count: chunk.count).joined(separator: ",")
-            connection.query("""
-            WITH requested(folder_path, group_key) AS (VALUES \(values))
-            SELECT r.folder_path, r.group_key, COUNT(a.rel_path),
-                   SUM(CASE WHEN
-                         substr(a.rel_path,1,length(a.rel_path)-length(a.basename)-1)=r.folder_path
-                       THEN 1 ELSE 0 END)
-            FROM requested r
-            JOIN assets a
-              ON a.kind='movie'
-             AND COALESCE(a.movie_group_key,a.movie_key)=r.group_key
-            GROUP BY r.folder_path, r.group_key;
-            """, bind: { stmt in
-                var index: Int32 = 1
-                for candidate in chunk {
-                    CatalogConnection.bindText(stmt, index, candidate.folderPath)
-                    CatalogConnection.bindText(stmt, index + 1, candidate.group)
-                    index += 2
-                }
-            }) { stmt in
-                guard let folderPath = CatalogConnection.columnText(stmt, 0),
-                      let group = CatalogConnection.columnText(stmt, 1) else { return }
-                result["\(folderPath)\u{0}\(group)"] =
-                    sqlite3_column_int64(stmt, 2) == sqlite3_column_int64(stmt, 3)
             }
         }
         return result

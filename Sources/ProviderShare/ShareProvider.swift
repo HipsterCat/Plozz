@@ -468,9 +468,14 @@ public struct ShareProvider: MediaProvider, MediaFileBrowsing, MediaSortFieldPro
         // RemoteFileEntry values, so it has already ordered Date Added above.
         // Every other field is applied after catalog projection so promoted
         // movie/series entries can contribute runtime, year, and ratings.
+        let containsCatalogTitles = all.contains {
+            ShareCatalogID.isMovie($0.id)
+                || ShareCatalogID.isSeries($0.id)
+                || ShareCatalogID.isSeason($0.id)
+        }
         let ordered = page.sort.field == .dateAdded
             ? all
-            : Self.sortedBrowseItems(all, by: page.sort)
+            : Self.sortedBrowseItems(all, by: page.sort, foldersFirst: !containsCatalogTitles)
         let start = min(page.startIndex, ordered.count)
         let end = min(start + page.limit, ordered.count)
         let slice = await watchState.stamp(Array(ordered[start..<end]))
@@ -479,12 +484,13 @@ public struct ShareProvider: MediaProvider, MediaFileBrowsing, MediaSortFieldPro
 
     private static func sortedBrowseItems(
         _ items: [MediaItem],
-        by sort: CoreModels.SortDescriptor
+        by sort: CoreModels.SortDescriptor,
+        foldersFirst: Bool = true
     ) -> [MediaItem] {
         items.sorted { lhs, rhs in
-            // File browsing keeps unresolved folders ahead of playable/catalog
-            // entries regardless of direction, matching Finder-style navigation.
-            if (lhs.kind == .folder) != (rhs.kind == .folder) {
+            // Pure file browsing keeps folders first. A media-aware library grid
+            // must not bury recognized titles behind all the unresolved folders.
+            if foldersFirst, (lhs.kind == .folder) != (rhs.kind == .folder) {
                 return lhs.kind == .folder
             }
 
