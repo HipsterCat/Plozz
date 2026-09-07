@@ -15,7 +15,9 @@ public struct SeriesDownloadPresentation: Equatable, Sendable {
     ) {
         hasLibraryDownloads = item.kind == .series
             && !isDiscoveryItem
-            && children.contains { $0.kind == .season || $0.kind == .episode }
+            && children.contains {
+                ($0.kind == .season || $0.kind == .episode) && $0.locallyValidatedPlayableSource
+            }
         canRequestSeasons = item.kind == .series
             && item.providerIDs["Tmdb"] != nil
             && seerConnected
@@ -31,7 +33,7 @@ public enum SeriesDownloadAction: Equatable, Sendable {
 
     public var title: LocalizedStringResource {
         switch self {
-        case .download: "Download Available"
+        case .download: "Download All Available Episodes"
         case .preparing: "Preparing Downloads…"
         case .pause: "Pause Downloads"
         case .resume: "Resume Downloads"

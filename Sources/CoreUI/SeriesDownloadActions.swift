@@ -43,7 +43,7 @@ public struct SeriesDownloadActions<Downloads: View>: View {
         guard let availability else { return true }
         return isSubmitting || refreshFailed
             || availability.canonicalNumberedSeasons.isEmpty
-            || !availability.requestableSeasonNumbers.isEmpty
+            || !availability.requestableMissingSeasonNumbers.isEmpty
             || SeasonRequestPresentation(availability: availability).hasFailures
     }
 
@@ -87,9 +87,9 @@ private struct SeasonRequestControls: View {
                 systemImage: "clock.arrow.circlepath",
                 detail: actingName.map { "Requests as \($0)." }
             ) {}
-        } else if let availability, !availability.requestableSeasonNumbers.isEmpty {
+        } else if let availability, !availability.requestableMissingSeasonNumbers.isEmpty {
             Button {
-                onRequest(availability.requestableSeasonNumbers)
+                onRequest(availability.requestableMissingSeasonNumbers)
             } label: {
                 SeriesDownloadActionLabel(
                     title: SeasonRequestPresentation(availability: availability).requestAllTitle,
@@ -181,7 +181,10 @@ public struct SeriesDownloadActionLabel<Accessory: View>: View {
         let contentLayout = dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
             : AnyLayout(HStackLayout(spacing: 12))
-        HStack(alignment: .top, spacing: 12) {
+        let rowLayout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
+        rowLayout {
             Image(systemName: systemImage)
                 .font(.system(size: iconSize, weight: .regular))
                 .foregroundStyle(.tint)
@@ -210,7 +213,7 @@ public struct SeriesDownloadActionLabel<Accessory: View>: View {
         .contentShape(Rectangle())
         #if os(iOS)
         .alignmentGuide(.listRowSeparatorLeading) {
-            $0[.leading] + iconSize + 12
+            $0[.leading] + (dynamicTypeSize.isAccessibilitySize ? 0 : iconSize + 12)
         }
         #endif
     }

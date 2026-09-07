@@ -31,7 +31,7 @@ public struct SeasonRequestMenuContent: View {
     }
 
     private var requestableSeasons: [MediaSeasonRequestState] {
-        seasons.filter(\.isRequestable)
+        seasons.filter(\.isMissingSeasonRequestable)
     }
 
     public var body: some View {
@@ -43,7 +43,7 @@ public struct SeasonRequestMenuContent: View {
             Divider()
         }
         ForEach(seasons) { season in
-            if season.isRequestable {
+            if season.isMissingSeasonRequestable {
                 Button("Request \(season.title)") {
                     onRequest([season.number])
                 }

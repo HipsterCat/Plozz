@@ -89,6 +89,33 @@ final class SeasonRequestStateTests: XCTestCase {
         XCTAssertNotEqual(state.availability?.seasons[6].status, .available)
     }
 
+    func testLocallyPartialUntrackedSeasonCanBeAcceptedAndReconciled() {
+        var state = SeasonRequestState()
+        state.apply(twentySeasons(), now: now, presentInLibrary: [7])
+        XCTAssertTrue(state.availability?.seasons[6].isRequestable == true)
+        XCTAssertFalse(state.availability?.requestableMissingSeasonNumbers.contains(7) == true)
+
+        state.accept([7], now: now)
+        state.apply(twentySeasons(), now: now.addingTimeInterval(10), presentInLibrary: [7])
+
+        XCTAssertEqual(state.availability?.seasons[6].requestStatus, .pending)
+        XCTAssertEqual(state.availability?.seasons[6].coverageStatus, .partiallyAvailable)
+        XCTAssertFalse(state.availability?.seasons[6].isRequestable == true)
+        XCTAssertTrue(state.availability?.seasons[6].isInFlight == true)
+    }
+
+    func testSeerrManagedPartialSeasonCannotBeAcceptedAsANewRequest() {
+        var fetched = twentySeasons()
+        fetched.seasons[6].status = .partiallyAvailable
+        var state = SeasonRequestState()
+        state.apply(fetched, now: now, presentInLibrary: [7])
+        state.accept([7], now: now)
+
+        XCTAssertEqual(state.availability?.seasons[6].status, .partiallyAvailable)
+        XCTAssertNil(state.availability?.seasons[6].requestStatus)
+        XCTAssertFalse(state.availability?.seasons[6].isInFlight == true)
+    }
+
     func testLookupKeysSeparateServersAndChangedMetadataIdentity() {
         var first = MediaItem(id: "123", title: "First", kind: .series)
         first.sourceAccountID = "server-a"

@@ -160,6 +160,8 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     public var parentTitle: String?
     public var seasonNumber: Int?
     public var episodeNumber: Int?
+    /// Inclusive final episode when the server explicitly identifies a combined file.
+    public var episodeNumberEnd: Int?
     public var productionYear: Int?
 
     /// The day the title was first released — a movie's premiere or an episode's
@@ -424,6 +426,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         parentTitle: String? = nil,
         seasonNumber: Int? = nil,
         episodeNumber: Int? = nil,
+        episodeNumberEnd: Int? = nil,
         productionYear: Int? = nil,
         releaseDate: Date? = nil,
         officialRating: String? = nil,
@@ -481,6 +484,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.parentTitle = parentTitle
         self.seasonNumber = seasonNumber
         self.episodeNumber = episodeNumber
+        self.episodeNumberEnd = episodeNumberEnd
         self.productionYear = productionYear
         self.releaseDate = releaseDate
         self.officialRating = officialRating
@@ -539,7 +543,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// about the title. Listing the keys explicitly keeps `Encodable` synthesis
     /// in sync with the custom `init(from:)` below.
     private enum CodingKeys: String, CodingKey {
-        case id, watchlistAliasID, title, kind, overview, parentTitle, seasonNumber, episodeNumber
+        case id, watchlistAliasID, title, kind, overview, parentTitle, seasonNumber, episodeNumber, episodeNumberEnd
         case originalTitle
         case productionYear, releaseDate, officialRating, genres, people, studios, tags, taglines
         case seriesID, seasonID, runtime, resumePosition, playedPercentage, isPlayed, hasBeenPlayed
@@ -571,6 +575,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         parentTitle = try container.decodeIfPresent(String.self, forKey: .parentTitle)
         seasonNumber = try container.decodeIfPresent(Int.self, forKey: .seasonNumber)
         episodeNumber = try container.decodeIfPresent(Int.self, forKey: .episodeNumber)
+        episodeNumberEnd = try container.decodeIfPresent(Int.self, forKey: .episodeNumberEnd)
         productionYear = try container.decodeIfPresent(Int.self, forKey: .productionYear)
         releaseDate = try container.decodeIfPresent(Date.self, forKey: .releaseDate)
         officialRating = try container.decodeIfPresent(String.self, forKey: .officialRating)

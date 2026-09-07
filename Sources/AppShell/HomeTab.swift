@@ -1041,6 +1041,7 @@ struct HomeTab: View {
             continueWatchingSnapshot: { runtime.continueWatchingForDetail },
             ratingsProvider: ratingsProvider,
             discoveryStatusRefresh: { await seer.availability(for: $0) },
+            loadSeasonEpisodeRoster: { await seer.seasonEpisodeRoster(for: $0, seasonNumber: $1) },
             makeRelatedTitlesLoader: {
                 makeRelatedTitlesLoader(
                     in: accounts,

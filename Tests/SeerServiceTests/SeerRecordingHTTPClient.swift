@@ -12,6 +12,7 @@ final class SeerRecordingHTTPClient: HTTPClient, @unchecked Sendable {
     struct Sent {
         let baseURL: URL
         let path: String
+        let queryItems: [URLQueryItem]
         let headers: [String: String]
         let body: Data?
         var json: [String: Any]? {
@@ -92,7 +93,15 @@ final class SeerRecordingHTTPClient: HTTPClient, @unchecked Sendable {
     /// createRequest can inspect the status code + error body.
     func sendRaw(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
         lock.lock()
-        sent.append(Sent(baseURL: baseURL, path: endpoint.path, headers: endpoint.headers, body: endpoint.body))
+        sent.append(
+            Sent(
+                baseURL: baseURL,
+                path: endpoint.path,
+                queryItems: endpoint.queryItems,
+                headers: endpoint.headers,
+                body: endpoint.body
+            )
+        )
         if let error { lock.unlock(); throw error }
         let matchingSuffix = responses.keys
             .filter { endpoint.path.hasSuffix($0) }

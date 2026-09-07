@@ -573,6 +573,469 @@ final class SeerServiceTests: XCTestCase {
         XCTAssertNil(result)
     }
 
+    // MARK: - Season episode roster
+
+    func testSeasonEpisodeRosterUsesAuthenticatedLocalizedReverseProxyEndpoint() async {
+        let baseURL = URL(string: "https://requests.example.com/seerr")!
+        let http = SeerRecordingHTTPClient()
+        http.stub(
+            pathSuffix: "/tv/1396/season/2",
+            json: """
+            {
+              "seasonNumber": 2,
+              "episodes": [
+                {
+                  "id": 62085,
+                  "name": "Seven Thirty-Seven",
+                  "airDate": "2009-03-08",
+                  "episodeNumber": 1,
+                  "seasonNumber": 2,
+                  "stillPath": "/episode.jpg"
+                },
+                {
+                  "id": 62086,
+                  "name": "Future Episode",
+                  "airDate": "2099-12-31",
+                  "episodeNumber": 2,
+                  "seasonNumber": 2,
+                  "stillPath": null
+                },
+                {
+                  "id": 62087,
+                  "episodeNumber": 3,
+                  "seasonNumber": 2
+                }
+              ]
+            }
+            """
+        )
+        let service = SeerService(
+            connectionStore: InMemorySeerConnectionStore(
+                connection: SeerConnection(baseURL: baseURL, apiKey: "KEY")
+            ),
+            http: http
+        )
+        let item = MediaItem(
+            id: "library:1396",
+            title: "Breaking Bad",
+            kind: .series,
+            providerIDs: ["Tmdb": "1396"]
+        )
+
+        let result = await service.seasonEpisodeRoster(for: item, seasonNumber: 2)
+
+        guard case let .loaded(roster) = result else {
+            return XCTFail("Expected complete roster, got \(result)")
+        }
+        XCTAssertEqual(roster.seriesTMDbID, 1396)
+        XCTAssertEqual(roster.seasonNumber, 2)
+        XCTAssertEqual(roster.episodes.map(\.id), [62085, 62086, 62087])
+        XCTAssertEqual(roster.episodes.map(\.episodeNumber), [1, 2, 3])
+        XCTAssertEqual(roster.episodes.map(\.title), ["Seven Thirty-Seven", "Future Episode", nil])
+        XCTAssertEqual(
+            roster.episodes[0].airDate,
+            MediaItem.calendarDayReleaseDate(from: "2009-03-08")
+        )
+        XCTAssertEqual(
+            roster.episodes[1].airDate,
+            MediaItem.calendarDayReleaseDate(from: "2099-12-31")
+        )
+        XCTAssertNil(roster.episodes[2].airDate)
+        XCTAssertEqual(
+            roster.episodes[0].stillURL?.absoluteString,
+            "https://image.tmdb.org/t/p/w500/episode.jpg"
+        )
+        XCTAssertNil(roster.episodes[1].stillURL)
+
+        let sent = http.lastSent(pathSuffix: "/tv/1396/season/2")
+        XCTAssertEqual(sent?.baseURL, baseURL, "Reverse-proxy base path stays on the base URL")
+        XCTAssertEqual(sent?.path, "/api/v1/tv/1396/season/2")
+        XCTAssertEqual(sent?.queryItems.count, 1)
+        XCTAssertEqual(sent?.queryItems.first?.name, "language")
+        XCTAssertEqual(sent?.queryItems.first?.value, "en")
+        XCTAssertEqual(sent?.headers["X-Api-Key"], "KEY")
+        XCTAssertNil(sent?.headers["X-API-User"], "Metadata reads run as admin")
+        XCTAssertNil(sent?.body, "GET season metadata has no request body")
+    }
+
+    func testSeasonEpisodeRosterAllowsExplicitEmptyEpisodeListAndSeasonZero() async {
+        let http = SeerRecordingHTTPClient()
+        http.stub(
+            pathSuffix: "/tv/1396/season/0",
+            json: #"{"seasonNumber":0,"episodes":[]}"#
+        )
+        let service = makeConnectedService(http)
+        let item = MediaItem(
+            id: "library:1396",
+            title: "Breaking Bad",
+            kind: .series,
+            providerIDs: ["Tmdb": "1396"]
+        )
+
+        let result = await service.seasonEpisodeRoster(for: item, seasonNumber: 0)
+
+        XCTAssertEqual(
+            result,
+            .loaded(
+                SeasonEpisodeRoster(
+                    seriesTMDbID: 1396,
+                    seasonNumber: 0,
+                    episodes: []
+                )
+            )
+        )
+    }
+
+    func testSeasonEpisodeRosterTreatsBlankAirDatesAsUnknown() async {
+        let http = SeerRecordingHTTPClient()
+        http.stub(
+            pathSuffix: "/tv/1396/season/1",
+            json: """
+            {"seasonNumber":1,"episodes":[
+                {"id":10,"episodeNumber":1,"seasonNumber":1,"airDate":""},
+                {"id":11,"episodeNumber":2,"seasonNumber":1,"airDate":"   "}
+            ]}
+            """
+        )
+        let service = makeConnectedService(http)
+        let item = MediaItem(
+            id: "series", title: "Series", kind: .series, providerIDs: ["Tmdb": "1396"]
+        )
+        let result = await service.seasonEpisodeRoster(for: item, seasonNumber: 1)
+        guard case .loaded(let roster) = result else {
+            return XCTFail("Blank optional dates must not discard the episode roster")
+        }
+        XCTAssertEqual(roster.episodes.count, 2)
+        XCTAssertTrue(roster.episodes.allSatisfy { $0.airDate == nil })
+    }
+
+    func testSeasonEpisodeRosterFailsWhenEpisodeListIsAbsentOrMalformed() async {
+        let http = SeerRecordingHTTPClient()
+        http.enqueueStub(
+            pathSuffix: "/tv/1396/season/1",
+            json: #"{"seasonNumber":1}"#
+        )
+        http.enqueueStub(
+            pathSuffix: "/tv/1396/season/1",
+            json: """
+            {
+              "seasonNumber": 1,
+              "episodes": [
+                {"id":10,"episodeNumber":"one","seasonNumber":1}
+              ]
+            }
+            """
+        )
+        let service = makeConnectedService(http)
+        let item = MediaItem(
+            id: "library:1396",
+            title: "Breaking Bad",
+            kind: .series,
+            providerIDs: ["Tmdb": "1396"]
+        )
+
+        let absent = await service.seasonEpisodeRoster(for: item, seasonNumber: 1)
+        let malformed = await service.seasonEpisodeRoster(for: item, seasonNumber: 1)
+
+        XCTAssertEqual(absent, .failed)
+        XCTAssertEqual(malformed, .failed)
+    }
+
+    func testSeasonEpisodeRosterFailsForInvalidOrConflictingEpisodeCoordinates() async {
+        let http = SeerRecordingHTTPClient()
+        http.enqueueStub(
+            pathSuffix: "/tv/1396/season/1",
+            json: """
+            {
+              "seasonNumber": 1,
+              "episodes": [
+                {"id":10,"episodeNumber":1,"seasonNumber":1},
+                {"id":11,"episodeNumber":1,"seasonNumber":1}
+              ]
+            }
+            """
+        )
+        http.enqueueStub(
+            pathSuffix: "/tv/1396/season/1",
+            json: """
+            {
+              "seasonNumber": 1,
+              "episodes": [
+                {"id":10,"episodeNumber":0,"seasonNumber":1}
+              ]
+            }
+            """
+        )
+        http.enqueueStub(
+            pathSuffix: "/tv/1396/season/1",
+            json: """
+            {
+              "seasonNumber": 1,
+              "episodes": [
+                {"id":10,"episodeNumber":1,"seasonNumber":2}
+              ]
+            }
+            """
+        )
+        http.enqueueStub(
+            pathSuffix: "/tv/1396/season/1",
+            json: """
+            {
+              "seasonNumber": 2,
+              "episodes": [
+                {"id":10,"episodeNumber":1,"seasonNumber":2}
+              ]
+            }
+            """
+        )
+        let service = makeConnectedService(http)
+        let item = MediaItem(
+            id: "library:1396",
+            title: "Breaking Bad",
+            kind: .series,
+            providerIDs: ["Tmdb": "1396"]
+        )
+
+        var results: [SeasonEpisodeRosterResult] = []
+        for _ in 0..<4 {
+            results.append(
+                await service.seasonEpisodeRoster(for: item, seasonNumber: 1)
+            )
+        }
+        XCTAssertEqual(results, [.failed, .failed, .failed, .failed])
+    }
+
+    func testSeasonEpisodeRosterUnavailableForDisconnectedInvalidOrUnsupportedInputs() async {
+        let http = SeerRecordingHTTPClient()
+        let disconnected = SeerService(
+            connectionStore: InMemorySeerConnectionStore(),
+            http: http
+        )
+        let connected = makeConnectedService(http)
+        let series = MediaItem(
+            id: "library:series",
+            title: "Series",
+            kind: .series,
+            providerIDs: ["Tmdb": "1396"]
+        )
+
+        let disconnectedResult = await disconnected.seasonEpisodeRoster(
+            for: series,
+            seasonNumber: 1
+        )
+        let unsupportedKind = await connected.seasonEpisodeRoster(
+            for: MediaItem(id: "movie", title: "Movie", kind: .movie, providerIDs: ["Tmdb": "550"]),
+            seasonNumber: 1
+        )
+        let missingIdentity = await connected.seasonEpisodeRoster(
+            for: MediaItem(id: "series", title: "Series", kind: .series),
+            seasonNumber: 1
+        )
+        let invalidIdentity = await connected.seasonEpisodeRoster(
+            for: MediaItem(id: "series", title: "Series", kind: .series, providerIDs: ["Tmdb": "0"]),
+            seasonNumber: 1
+        )
+        let invalidSeason = await connected.seasonEpisodeRoster(
+            for: series,
+            seasonNumber: -1
+        )
+
+        XCTAssertEqual(disconnectedResult, .unavailable)
+        XCTAssertEqual(unsupportedKind, .unavailable)
+        XCTAssertEqual(missingIdentity, .unavailable)
+        XCTAssertEqual(invalidIdentity, .unavailable)
+        XCTAssertEqual(invalidSeason, .unavailable)
+        XCTAssertTrue(http.sentPaths.isEmpty)
+    }
+
+    func testSeasonEpisodeRosterMapsNetworkAndDecodeFailuresToFailed() async {
+        let http = SeerRecordingHTTPClient()
+        http.error = .serverUnreachable
+        let service = makeConnectedService(http)
+        let item = MediaItem(
+            id: "library:1396",
+            title: "Breaking Bad",
+            kind: .series,
+            providerIDs: ["Tmdb": "1396"]
+        )
+
+        let result = await service.seasonEpisodeRoster(for: item, seasonNumber: 1)
+
+        XCTAssertEqual(result, .failed)
+    }
+
+    func testSeasonEpisodeRosterRejectsLateCompletionAfterReconnect() async throws {
+        let http = SeerRecordingHTTPClient()
+        http.stub(
+            pathSuffix: "/tv/1396/season/1",
+            json: #"{"seasonNumber":1,"episodes":[{"id":10,"episodeNumber":1,"seasonNumber":1}]}"#
+        )
+        http.stub(pathSuffix: "/status", json: #"{"version":"2.0"}"#)
+        http.suspend(pathSuffix: "/tv/1396/season/1")
+        let store = InMemorySeerConnectionStore(
+            connection: SeerConnection(baseURL: seerBaseURL, apiKey: "KEY")
+        )
+        let service = SeerService(connectionStore: store, http: http)
+        let item = MediaItem(
+            id: "library:1396",
+            title: "Breaking Bad",
+            kind: .series,
+            providerIDs: ["Tmdb": "1396"]
+        )
+
+        let fetch = Task {
+            await service.seasonEpisodeRoster(for: item, seasonNumber: 1)
+        }
+        await http.waitUntilSuspended(pathSuffix: "/tv/1396/season/1")
+        try store.save(
+            SeerConnection(baseURL: URL(string: "https://new.example.com")!, apiKey: "NEW")
+        )
+        await service.reloadConnection()
+        http.resume(pathSuffix: "/tv/1396/season/1")
+
+        let result = await fetch.value
+        XCTAssertEqual(result, .unavailable)
+    }
+
+    func testSeasonEpisodeRosterRejectsLateCompletionAfterDisconnect() async {
+        let http = SeerRecordingHTTPClient()
+        http.stub(
+            pathSuffix: "/tv/1396/season/1",
+            json: #"{"seasonNumber":1,"episodes":[{"id":10,"episodeNumber":1,"seasonNumber":1}]}"#
+        )
+        http.suspend(pathSuffix: "/tv/1396/season/1")
+        let service = makeConnectedService(http)
+        let item = MediaItem(
+            id: "library:1396",
+            title: "Breaking Bad",
+            kind: .series,
+            providerIDs: ["Tmdb": "1396"]
+        )
+
+        let fetch = Task {
+            await service.seasonEpisodeRoster(for: item, seasonNumber: 1)
+        }
+        await http.waitUntilSuspended(pathSuffix: "/tv/1396/season/1")
+        service.disconnect()
+        http.resume(pathSuffix: "/tv/1396/season/1")
+
+        let result = await fetch.value
+        XCTAssertEqual(result, .unavailable)
+    }
+
+    func testSeasonEpisodeRosterRejectsCompletionAfterCancellation() async {
+        let http = SeerRecordingHTTPClient()
+        http.stub(
+            pathSuffix: "/tv/1396/season/1",
+            json: #"{"seasonNumber":1,"episodes":[{"id":10,"episodeNumber":1,"seasonNumber":1}]}"#
+        )
+        http.suspend(pathSuffix: "/tv/1396/season/1")
+        let service = makeConnectedService(http)
+        let item = MediaItem(
+            id: "library:1396",
+            title: "Breaking Bad",
+            kind: .series,
+            providerIDs: ["Tmdb": "1396"]
+        )
+
+        let fetch = Task {
+            await service.seasonEpisodeRoster(for: item, seasonNumber: 1)
+        }
+        await http.waitUntilSuspended(pathSuffix: "/tv/1396/season/1")
+        fetch.cancel()
+        http.resume(pathSuffix: "/tv/1396/season/1")
+
+        let result = await fetch.value
+        XCTAssertEqual(result, .unavailable)
+    }
+
+    // MARK: - Management URL
+
+    func testMediaManagementURLUsesOfficialRoutesAndPreservesReverseProxyPath() {
+        let baseURL = URL(string: "https://requests.example.com/seerr")!
+        let service = SeerService(
+            connectionStore: InMemorySeerConnectionStore(
+                connection: SeerConnection(baseURL: baseURL, apiKey: "KEY")
+            ),
+            http: SeerRecordingHTTPClient()
+        )
+
+        XCTAssertEqual(
+            service.mediaManagementURL(
+                for: MediaItem(
+                    id: "series",
+                    title: "Series",
+                    kind: .series,
+                    providerIDs: ["Tmdb": "1396"]
+                )
+            )?.absoluteString,
+            "https://requests.example.com/seerr/tv/1396"
+        )
+        XCTAssertEqual(
+            service.mediaManagementURL(
+                for: MediaItem(
+                    id: "movie",
+                    title: "Movie",
+                    kind: .movie,
+                    providerIDs: ["Tmdb": "550"]
+                )
+            )?.absoluteString,
+            "https://requests.example.com/seerr/movie/550"
+        )
+    }
+
+    func testMediaManagementURLStripsCredentialsQueryAndFragment() {
+        let unsafeURL = URL(
+            string: "https://viewer:password@requests.example.com/seerr/?api_key=SECRET#user-9"
+        )!
+        let service = SeerService(
+            connectionStore: InMemorySeerConnectionStore(
+                connection: SeerConnection(baseURL: unsafeURL, apiKey: "KEY")
+            ),
+            http: SeerRecordingHTTPClient()
+        )
+        let item = MediaItem(
+            id: "series",
+            title: "Series",
+            kind: .series,
+            providerIDs: ["Tmdb": "1396"]
+        )
+
+        XCTAssertEqual(
+            service.mediaManagementURL(for: item)?.absoluteString,
+            "https://requests.example.com/seerr/tv/1396"
+        )
+    }
+
+    func testMediaManagementURLRejectsUnsupportedOrUnsafeInputs() {
+        let service = makeConnectedService(SeerRecordingHTTPClient())
+        let invalidSchemeService = SeerService(
+            connectionStore: InMemorySeerConnectionStore(
+                connection: SeerConnection(
+                    baseURL: URL(string: "ftp://requests.example.com/seerr")!,
+                    apiKey: "KEY"
+                )
+            ),
+            http: SeerRecordingHTTPClient()
+        )
+
+        XCTAssertNil(
+            service.mediaManagementURL(
+                for: MediaItem(id: "episode", title: "Episode", kind: .episode, providerIDs: ["Tmdb": "10"])
+            )
+        )
+        XCTAssertNil(
+            service.mediaManagementURL(
+                for: MediaItem(id: "series", title: "Series", kind: .series, providerIDs: ["Tmdb": "0"])
+            )
+        )
+        XCTAssertNil(
+            invalidSchemeService.mediaManagementURL(
+                for: MediaItem(id: "series", title: "Series", kind: .series, providerIDs: ["Tmdb": "1396"])
+            )
+        )
+    }
+
     func testAvailabilityIsUnknownForUntrackedTitle() async throws {
         let http = SeerRecordingHTTPClient()
         http.stub(pathSuffix: "/movie/777", json: #"{"id":777}"#)

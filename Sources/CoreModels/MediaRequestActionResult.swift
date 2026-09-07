@@ -18,25 +18,40 @@ public struct MediaSeasonRequestState: Identifiable, Sendable, Equatable {
     public var status: MediaAvailabilityStatus
     public var requestFailed: Bool
     public var requestStatus: MediaSeasonRequestStatus?
+    public var isPresentInLibrary: Bool
 
     public init(
         number: Int,
         title: String,  // l10n:content — season title from the media server
         status: MediaAvailabilityStatus,
         requestFailed: Bool = false,
-        requestStatus: MediaSeasonRequestStatus? = nil
+        requestStatus: MediaSeasonRequestStatus? = nil,
+        isPresentInLibrary: Bool = false
     ) {
         self.number = number
         self.title = title
         self.status = status
         self.requestFailed = requestFailed
         self.requestStatus = requestStatus
+        self.isPresentInLibrary = isPresentInLibrary
+    }
+
+    /// Request-service state stays authoritative for eligibility. Local episodes
+    /// add coverage evidence without turning an untracked season into a managed one.
+    public var coverageStatus: MediaAvailabilityStatus {
+        isPresentInLibrary && status != .available ? .partiallyAvailable : status
     }
 
     public var isRequestable: Bool {
         !hasRequestFailure
             && requestStatus == nil
             && (status == .unknown || status == .deleted)
+    }
+
+    /// Bulk missing-season actions must not guess that a locally present season
+    /// has gaps. Its episode roster can establish that inside the season screen.
+    public var isMissingSeasonRequestable: Bool {
+        isRequestable && !isPresentInLibrary
     }
 
     public var isInFlight: Bool {
@@ -48,18 +63,19 @@ public struct MediaSeasonRequestState: Identifiable, Sendable, Equatable {
     }
 
     public var statusTitle: LocalizedStringResource {
-        if status == .available { return "Available" }
+        let coverage = coverageStatus
+        if coverage == .available { return "Available" }
         if hasRequestFailure {
-            return status == .partiallyAvailable
+            return coverage == .partiallyAvailable
                 ? "Partially Available · Request Failed"
                 : "Request Failed"
         }
         if requestStatus == .declined {
-            return status == .partiallyAvailable
+            return coverage == .partiallyAvailable
                 ? "Partially Available · Request Declined"
                 : "Request Declined"
         }
-        if status == .partiallyAvailable {
+        if coverage == .partiallyAvailable {
             switch effectiveRequestStatus {
             case .pending: return "Partially Available · Requested"
             case .processing: return "Partially Available · Processing"
@@ -69,7 +85,7 @@ public struct MediaSeasonRequestState: Identifiable, Sendable, Equatable {
         if requestStatus == .completed { return "Request Completed" }
         if effectiveRequestStatus == .pending { return "Requested" }
         if effectiveRequestStatus == .processing { return "Processing" }
-        return switch status {
+        return switch coverage {
         case .pending: "Requested"
         case .processing: "Processing"
         case .available: "Available"
@@ -79,7 +95,7 @@ public struct MediaSeasonRequestState: Identifiable, Sendable, Equatable {
     }
 
     public var statusSystemImage: String {
-        if status == .available { return "checkmark.circle.fill" }
+        if coverageStatus == .available { return "checkmark.circle.fill" }
         if hasRequestFailure || requestStatus == .declined {
             return "exclamationmark.triangle.fill"
         }
@@ -90,7 +106,7 @@ public struct MediaSeasonRequestState: Identifiable, Sendable, Equatable {
         case .failed, .declined: return "exclamationmark.triangle.fill"
         case nil: break
         }
-        return switch status {
+        return switch coverageStatus {
         case .pending: "clock"
         case .processing: "arrow.triangle.2.circlepath"
         case .available: "checkmark.circle.fill"
@@ -102,7 +118,7 @@ public struct MediaSeasonRequestState: Identifiable, Sendable, Equatable {
     /// Only missing or in-flight seasons belong in request UI. Available and
     /// partially available seasons remain represented by the real library tabs.
     public var belongsInRequestPicker: Bool {
-        hasRequestFailure || requestStatus == .declined || isRequestable || isInFlight
+        hasRequestFailure || requestStatus == .declined || isMissingSeasonRequestable || isInFlight
     }
 
     var effectiveRequestStatus: MediaSeasonRequestStatus? {
@@ -145,6 +161,10 @@ public struct MediaRequestAvailability: Sendable, Equatable {
         canonicalNumberedSeasons.filter(\.isRequestable).map(\.number)
     }
 
+    public var requestableMissingSeasonNumbers: [Int] {
+        canonicalNumberedSeasons.filter(\.isMissingSeasonRequestable).map(\.number)
+    }
+
     public var hasSeasonRequestContent: Bool {
         !requestPickerSeasons.isEmpty
     }
@@ -185,14 +205,10 @@ public struct MediaRequestAvailability: Sendable, Equatable {
     /// partial season availability, not that the whole season is complete.
     public func markingPresentInLibrary(_ seasonNumbers: [Int]) -> Self {
         let present = Set(seasonNumbers.filter { $0 > 0 })
-        guard !present.isEmpty else { return self }
         var copy = self
         copy.seasons = seasons.map { season in
-            guard present.contains(season.number),
-                  season.status == .unknown || season.status == .deleted
-            else { return season }
             var updated = season
-            updated.status = .partiallyAvailable
+            updated.isPresentInLibrary = present.contains(season.number)
             return updated
         }
         return copy
@@ -258,7 +274,8 @@ public struct MediaRequestAvailability: Sendable, Equatable {
             number: number,
             title: preferred?.title ?? "Season \(number)",
             status: .pending,
-            requestStatus: .pending
+            requestStatus: .pending,
+            isPresentInLibrary: preferred?.isPresentInLibrary ?? false
         )
     }
 
@@ -284,7 +301,8 @@ public struct MediaRequestAvailability: Sendable, Equatable {
             title: title,
             status: coverage,
             requestFailed: effectiveWorkflow == .failed,
-            requestStatus: effectiveWorkflow
+            requestStatus: effectiveWorkflow,
+            isPresentInLibrary: lhs.isPresentInLibrary || rhs.isPresentInLibrary
         )
     }
 

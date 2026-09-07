@@ -83,7 +83,7 @@ final class SeriesDownloadPresentationTests: XCTestCase {
 
     func testBulkDownloadLabelsDescribeTheirActualActions() {
         let cases: [(SeriesDownloadAction, String, String, Bool)] = [
-            (.download, "Download Available", "arrow.down.circle", true),
+            (.download, "Download All Available Episodes", "arrow.down.circle", true),
             (.preparing, "Preparing Downloads…", "clock", false),
             (.pause, "Pause Downloads", "pause.circle", true),
             (.resume, "Resume Downloads", "play.circle", true)

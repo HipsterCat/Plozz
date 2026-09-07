@@ -71,15 +71,17 @@ final class SeriesDownloadSeasonsTests: XCTestCase {
         XCTAssertEqual(english(after.rows[0].statusTitle), "Partially in Library · Requested")
     }
 
-    func testLocalContentDoesNotBecomeFullyAvailableOrRequestable() {
+    func testLocalContentNeedsEpisodeCoverageBeforeOfferingMissingRequests() {
         let list = SeriesDownloadSeasons(
             librarySeasons: [librarySeason(1)],
             looseEpisodes: [episode("episode-2", season: 2)],
             requestAvailability: .init(status: .unknown, seasons: [state(1, .unknown), state(2, .deleted)])
         )
-        XCTAssertEqual(list.rows.map { $0.requestState?.status }, [.partiallyAvailable, .partiallyAvailable])
+        XCTAssertEqual(list.rows.map { $0.requestState?.coverageStatus }, [.partiallyAvailable, .partiallyAvailable])
+        XCTAssertEqual(list.rows.map { $0.requestState?.status }, [.unknown, .deleted])
         XCTAssertTrue(list.requestableSeasonNumbers.isEmpty)
-        XCTAssertTrue(list.requestAvailability?.requestableSeasonNumbers.isEmpty == true)
+        XCTAssertTrue(list.requestAvailability?.requestableMissingSeasonNumbers.isEmpty == true)
+        XCTAssertEqual(list.requestAvailability?.requestableSeasonNumbers, [1, 2])
     }
 
     func testPartialProcessingAndFailuresKeepTheirWorkflow() {

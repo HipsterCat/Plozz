@@ -1260,7 +1260,7 @@ struct DetailHeroView: View, Equatable {
     @ViewBuilder
     private func seriesRequestPill() -> some View {
         if let seasonRequestAvailability, !seasonRequestAvailability.seasons.isEmpty {
-            let hasRequestable = !seasonRequestAvailability.requestableSeasonNumbers.isEmpty
+            let hasRequestable = !seasonRequestAvailability.requestableMissingSeasonNumbers.isEmpty
             let presentation = SeasonRequestPresentation(
                 availability: seasonRequestAvailability,
                 isSubmitting: isRequestingSeasons

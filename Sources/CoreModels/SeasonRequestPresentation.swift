@@ -18,7 +18,7 @@ public struct SeasonRequestPresentation: Equatable, Sendable {
         let processing = seasons.filter { $0.effectiveRequestStatus == .processing }
         let failures = seasons.filter { $0.effectiveRequestStatus == .failed }
         let declined = seasons.filter { $0.effectiveRequestStatus == .declined }
-        let requestableCount = seasons.filter(\.isRequestable).count
+        let requestableCount = seasons.filter(\.isMissingSeasonRequestable).count
         let activeCount = pending.count + processing.count
 
         hasActiveRequests = activeCount > 0

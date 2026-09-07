@@ -28,10 +28,10 @@ public struct SeriesDownloadSeason: Identifiable, Equatable, Sendable {
     public var statusTitle: LocalizedStringResource {
         if canRequest { return "Missing" }
         guard let requestState else { return "In Library" }
-        if requestState.status == .available {
+        if requestState.coverageStatus == .available {
             return hasLibraryContent ? "In Library" : "Available on Server"
         }
-        if requestState.status == .partiallyAvailable {
+        if requestState.coverageStatus == .partiallyAvailable {
             switch requestState.effectiveRequestStatus {
             case .pending:
                 return hasLibraryContent
@@ -79,7 +79,7 @@ public struct SeriesDownloadSeasons: Equatable, Sendable {
     ) {
         var byID: [String: SeriesDownloadSeason] = [:]
         var seenLibraryIDs = Set<String>()
-        for season in librarySeasons where season.kind == .season {
+        for season in librarySeasons where season.kind == .season && season.locallyValidatedPlayableSource {
             guard seenLibraryIDs.insert(season.stablePresentationID).inserted else { continue }
             let number = season.seasonNumber.flatMap { $0 >= 0 ? $0 : nil }
             let id = number.map { "season:\($0)" } ?? "library:\(season.stablePresentationID)"
@@ -90,7 +90,7 @@ public struct SeriesDownloadSeasons: Equatable, Sendable {
 
         var unassigned: [MediaItem] = []
         var seenEpisodeIDs = Set<String>()
-        for episode in looseEpisodes where episode.kind == .episode {
+        for episode in looseEpisodes where episode.kind == .episode && episode.locallyValidatedPlayableSource {
             guard seenEpisodeIDs.insert(episode.stablePresentationID).inserted else { continue }
             guard let number = episode.seasonNumber, number >= 0 else {
                 unassigned.append(episode)
@@ -108,13 +108,7 @@ public struct SeriesDownloadSeasons: Equatable, Sendable {
         for state in normalized?.canonicalNumberedSeasons ?? [] {
             let id = "season:\(state.number)"
             var row = byID[id] ?? SeriesDownloadSeason(id: id, number: state.number)
-            var displayState = state
-            if row.hasLibraryContent,
-               state.status == .pending || state.status == .processing {
-                displayState.requestStatus = state.effectiveRequestStatus
-                displayState.status = .partiallyAvailable
-            }
-            row.requestState = displayState
+            row.requestState = state
             byID[id] = row
         }
 

@@ -200,7 +200,7 @@ final class SeasonRequestPresentationTests: XCTestCase {
         XCTAssertEqual(second.seasons.count, 20)
     }
 
-    func testLibraryPresenceMarksOnlyMissingStatesPartiallyAvailable() {
+    func testLibraryPresenceDoesNotOverwriteRequestServiceEligibility() {
         let initial = availability([
             season(1, .unknown),
             season(2, .deleted),
@@ -213,11 +213,12 @@ final class SeasonRequestPresentationTests: XCTestCase {
 
         let updated = initial.markingPresentInLibrary([1, 2, 3, 4, 5, 6, 7, 0, -1])
 
-        XCTAssertEqual(updated.seasons.map(\.status), [
+        XCTAssertEqual(updated.seasons.map(\.status), initial.seasons.map(\.status))
+        XCTAssertEqual(updated.seasons.map(\.coverageStatus), [
             .partiallyAvailable,
             .partiallyAvailable,
-            .pending,
-            .processing,
+            .partiallyAvailable,
+            .partiallyAvailable,
             .available,
             .partiallyAvailable,
             .partiallyAvailable
@@ -229,7 +230,27 @@ final class SeasonRequestPresentationTests: XCTestCase {
             english(updated.seasons[6].statusTitle),
             "Partially Available · Request Failed"
         )
-        XCTAssertEqual(updated.requestableSeasonNumbers, [])
+        XCTAssertEqual(updated.requestableSeasonNumbers, [1, 2])
+        XCTAssertEqual(updated.requestableMissingSeasonNumbers, [])
+        XCTAssertFalse(updated.seasons[5].isRequestable)
+    }
+
+    func testLibraryPresenceCanBeRemovedWithoutChangingServerState() {
+        let initial = availability([season(1, .unknown), season(2, .partiallyAvailable)])
+        let updated = initial.markingPresentInLibrary([1, 2]).markingPresentInLibrary([])
+
+        XCTAssertEqual(updated.seasons.map(\.coverageStatus), [.unknown, .partiallyAvailable])
+        XCTAssertEqual(updated.requestableMissingSeasonNumbers, [1])
+    }
+
+    func testCanonicalizationPreservesLocalEvidenceAndAuthoritativeBlocking() {
+        let local = season(1, .unknown)
+        let present = availability([local]).markingPresentInLibrary([1]).seasons[0]
+        let merged = availability([present, season(1, .partiallyAvailable)])
+
+        XCTAssertTrue(merged.canonicalNumberedSeasons[0].isPresentInLibrary)
+        XCTAssertFalse(merged.canonicalNumberedSeasons[0].isRequestable)
+        XCTAssertTrue(availability([present, local]).canonicalNumberedSeasons[0].isRequestable)
     }
 
     func testLibraryPresenceDoesNotEraseOptimisticAcceptedRequest() {

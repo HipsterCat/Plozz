@@ -98,6 +98,36 @@ public final class SeerService {
         return config.baseURL.flatMap(SeerServerIdentity.init(baseURL:))
     }
 
+    /// Browser URL for managing the title in Seerr. Uses Seerr's public
+    /// `/movie/{tmdbId}` and `/tv/{tmdbId}` routes, preserving any reverse-proxy
+    /// base path while removing URL credentials, query items, and fragments.
+    public func mediaManagementURL(for item: MediaItem) -> URL? {
+        _ = connectionRevision
+        guard config.isConfigured,
+              let mediaType = SeerMapper.requestMediaType(for: item),
+              let tmdbID = SeerMapper.tmdbID(for: item),
+              tmdbID > 0,
+              let baseURL = config.baseURL,
+              var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = components.host,
+              !host.isEmpty
+        else { return nil }
+
+        components.scheme = scheme
+        components.user = nil
+        components.password = nil
+        components.query = nil
+        components.fragment = nil
+        var basePath = components.percentEncodedPath
+        while basePath.hasSuffix("/") {
+            basePath.removeLast()
+        }
+        components.percentEncodedPath = "\(basePath)/\(mediaType)/\(tmdbID)"
+        return components.url
+    }
+
     private var client: SeerClient { SeerClient(config: config, http: http) }
 
     private static func loadConfig(from store: SeerConnectionStoring) -> SeerConfig {
@@ -324,6 +354,112 @@ public final class SeerService {
             tmdbID: tmdbID
         ), connectionRevision == activeRevision else { return nil }
         return SeerMapper.requestAvailability(from: details)
+    }
+
+    /// Complete metadata-only episode roster for one TV season. Unlike the
+    /// upcoming schedule, Seerr's season endpoint returns past and future
+    /// episodes together. Any malformed or internally inconsistent entry fails
+    /// the response rather than publishing a truncated authoritative roster.
+    public func seasonEpisodeRoster(
+        for item: MediaItem,
+        seasonNumber: Int
+    ) async -> SeasonEpisodeRosterResult {
+        let activeConfig = config
+        let activeRevision = connectionRevision
+        let activeConnectionAttempt = connectionAttemptGeneration
+        guard !Task.isCancelled,
+              Self.hasUsableEndpoint(activeConfig),
+              item.kind == .series,
+              seasonNumber >= 0,
+              let tmdbID = SeerMapper.tmdbID(for: item),
+              tmdbID > 0
+        else { return .unavailable }
+
+        let activeClient = SeerClient(config: activeConfig, http: http)
+        do {
+            let season = try await activeClient.tvSeason(
+                tmdbID: tmdbID,
+                seasonNumber: seasonNumber
+            )
+            guard !Task.isCancelled,
+                  connectionRevision == activeRevision,
+                  connectionAttemptGeneration == activeConnectionAttempt
+            else {
+                return .unavailable
+            }
+            guard season.seasonNumber == seasonNumber else { return .failed }
+
+            var seenCoordinates: Set<EpisodeCoordinate> = []
+            var seenIDs: Set<Int> = []
+            var episodes: [SeasonEpisodeMetadata] = []
+            episodes.reserveCapacity(season.episodes.count)
+
+            for episode in season.episodes {
+                guard episode.id > 0,
+                      episode.seasonNumber == seasonNumber,
+                      episode.episodeNumber > 0,
+                      seenIDs.insert(episode.id).inserted,
+                      seenCoordinates.insert(
+                        EpisodeCoordinate(
+                            seasonNumber: episode.seasonNumber,
+                            episodeNumber: episode.episodeNumber
+                        )
+                      ).inserted
+                else { return .failed }
+
+                let airDate: Date?
+                if let rawAirDate = episode.airDate?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !rawAirDate.isEmpty {
+                    guard let parsed = MediaItem.calendarDayReleaseDate(from: rawAirDate) else {
+                        return .failed
+                    }
+                    airDate = parsed
+                } else {
+                    airDate = nil
+                }
+
+                let trimmedTitle = episode.name?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let title = trimmedTitle?.isEmpty == false ? trimmedTitle : nil
+                episodes.append(
+                    SeasonEpisodeMetadata(
+                        id: episode.id,
+                        seasonNumber: episode.seasonNumber,
+                        episodeNumber: episode.episodeNumber,
+                        title: title,
+                        airDate: airDate,
+                        stillURL: SeerMapper.imageURL(path: episode.stillPath, size: "w500")
+                    )
+                )
+            }
+
+            guard !Task.isCancelled,
+                  connectionRevision == activeRevision,
+                  connectionAttemptGeneration == activeConnectionAttempt
+            else {
+                return .unavailable
+            }
+            return .loaded(
+                SeasonEpisodeRoster(
+                    seriesTMDbID: tmdbID,
+                    seasonNumber: seasonNumber,
+                    episodes: episodes
+                )
+            )
+        } catch {
+            if Task.isCancelled
+                || connectionRevision != activeRevision
+                || connectionAttemptGeneration != activeConnectionAttempt
+            {
+                return .unavailable
+            }
+            return .failed
+        }
+    }
+
+    private struct EpisodeCoordinate: Hashable {
+        let seasonNumber: Int
+        let episodeNumber: Int
     }
 
     // MARK: - Users
