@@ -62,12 +62,63 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
         )
         XCTAssertEqual(layout.bounds, CGRect(x: -90, y: -60, width: 1_920, height: 1_080))
         XCTAssertEqual(layout.videoFrame.maxX, layout.bounds.maxX, accuracy: 0.5)
+        XCTAssertEqual(layout.videoFrame.minX, layout.bounds.minX, accuracy: 0.5)
+        XCTAssertEqual(layout.videoFrame.minY, layout.bounds.minY, accuracy: 0.5)
         XCTAssertEqual(layout.videoFrame.width / layout.videoFrame.height, 16.0 / 9.0, accuracy: 0.001)
         #if os(tvOS)
         XCTAssertEqual(layout.contentFrame.minX - layout.bounds.minX, 32, accuracy: 0.5)
         XCTAssertEqual(layout.bounds.maxX - layout.contentFrame.maxX, 32, accuracy: 0.5)
         XCTAssertEqual(layout.bounds.maxY - layout.contentFrame.maxY, 20, accuracy: 0.5)
         #endif
+    }
+
+    func testPreviewFadeFinishesBeforeThePictureAndScreenEdges() {
+        for size in [
+            CGSize(width: 1_920, height: 1_080),
+            CGSize(width: 1_024, height: 768),
+            CGSize(width: 390, height: 844),
+            CGSize(width: 844, height: 390)
+        ] {
+            let layout = PrototypePreviewLayout(size: size)
+            let end = layout.bounds.minY + layout.fadeEnd
+            XCTAssertGreaterThan(layout.fadeEnd, 0)
+            XCTAssertLessThan(end, layout.videoFrame.maxY - 16)
+            XCTAssertLessThan(end, layout.bounds.maxY - 16)
+        }
+    }
+
+    func testTVPreviewRemainsVisibleBehindTheUpperGuide() {
+        let layout = PrototypePreviewLayout(size: CGSize(width: 1_920, height: 1_080))
+        let guideTop = layout.contentFrame.minY + layout.heroHeight + PrototypeLayout.sectionGap * 2
+            + PrototypeLayout.controlHeight + PrototypeLayout.controlInset * 2
+        XCTAssertGreaterThan(
+            layout.bounds.minY + layout.fadeEnd,
+            guideTop + PrototypeLayout.rowHeight * 2
+        )
+    }
+
+    func testScrollFadesRampOnlyWhereContentExtendsPastTheViewport() {
+        let atStart = PrototypeScrollFade(before: 0, after: 2_000)
+        XCTAssertEqual(atStart.leading, 0)
+        XCTAssertEqual(atStart.trailing, 1)
+        let halfway = PrototypeScrollFade(before: 12, after: 12, distance: 24)
+        XCTAssertEqual(halfway.leading, 0.5)
+        XCTAssertEqual(halfway.trailing, 0.5)
+        let atEnd = PrototypeScrollFade(before: 2_000, after: 0)
+        XCTAssertEqual(atEnd.leading, 1)
+        XCTAssertEqual(atEnd.trailing, 0)
+        let fitting = PrototypeScrollFade(before: -10, after: -40)
+        XCTAssertEqual(fitting.leading, 0)
+        XCTAssertEqual(fitting.trailing, 0)
+    }
+
+    func testProgrammeSurfacesHaveVerticalClearanceInsideEveryRowSize() {
+        for rowHeight in [PrototypeLayout.rowHeight, PrototypeLayout.rowHeight * 2] {
+            let cellHeight = PrototypeLayout.programHeight(in: rowHeight)
+            XCTAssertGreaterThanOrEqual(rowHeight - cellHeight, 16)
+            XCTAssertEqual(cellHeight + PrototypeLayout.programInset * 2, rowHeight)
+        }
+        XCTAssertEqual(PrototypeLayout.programRadius + PrototypeLayout.programInset, PrototypeLayout.rowRadius)
     }
 
     func testNavigationRailInsetsContentWithoutShrinkingVideo() {

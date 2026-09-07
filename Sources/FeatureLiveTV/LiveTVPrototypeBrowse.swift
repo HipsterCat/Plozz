@@ -29,6 +29,7 @@ struct PrototypeBrowser: View {
     @State private var scrollID: String?
     @State private var pendingFocus: PrototypeBrowseFocus?
     @State private var restorationFallback: PrototypeBrowseFocus?
+    @State private var verticalFade = PrototypeScrollFade()
     @State private var lastFocused: PrototypeBrowseFocus?
     @State private var timelineOffset: CGFloat = 0
     @State private var timeAnchor = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970 / 1_800) * 1_800)
@@ -133,6 +134,20 @@ struct PrototypeBrowser: View {
                                 .accessibilityHidden(true)
                             }
                         }
+                        .verticalEdgeFadeMask(
+                            fadeHeight: PrototypeLayout.verticalFade,
+                            topStrength: verticalFade.leading,
+                            bottomStrength: verticalFade.trailing
+                        )
+                        .onScrollGeometryChange(for: PrototypeScrollFade.self) { geometry in
+                            PrototypeScrollFade(
+                                before: geometry.contentOffset.y + geometry.contentInsets.top,
+                                after: geometry.contentSize.height
+                                    - (geometry.contentOffset.y + geometry.containerSize.height)
+                            )
+                        } action: { _, fade in
+                            verticalFade = fade
+                        }
                         .scrollPosition(id: $scrollID, anchor: .top)
                         .onChange(of: topRequest) { _, _ in goToTop(proxy) }
                         .task(id: isPresented && isRestoringFocus ? restoreFocusRequest : -1) {
@@ -191,7 +206,7 @@ struct PrototypeBrowser: View {
             }
         }
         .padding(PrototypeLayout.guideInset)
-        .plozzSurface(.raised, cornerRadius: PrototypeLayout.guideRadius)
+        .background { PrototypeGuideSurface() }
         .clipShape(RoundedRectangle(cornerRadius: PrototypeLayout.guideRadius, style: .continuous))
         #if os(tvOS)
         .onExitCommand {
@@ -356,10 +371,22 @@ private struct PrototypeTimeRuler: View {
                 .offset(x: -timelineOffset)
             }
             .frame(height: height)
-            .clipped()
+            .horizontalEdgeFadeMask(
+                fadeWidth: PrototypeLayout.horizontalFade,
+                leadingStrength: horizontalFade.leading,
+                trailingStrength: horizontalFade.trailing
+            )
         }
         .font(.caption.monospacedDigit())
-        .foregroundStyle(palette.secondaryText)
+        .foregroundStyle(palette.primaryText)
+    }
+
+    private var horizontalFade: PrototypeScrollFade {
+        let viewport = PrototypeLayout.timelineWidth(for: width)
+        return PrototypeScrollFade(
+            before: timelineOffset, after: viewport * 2 - timelineOffset,
+            distance: PrototypeLayout.horizontalFade
+        )
     }
 }
 
@@ -406,6 +433,7 @@ struct PrototypeGuideRow: View {
     let goToNow: () -> Void
     @Environment(\.themePalette) private var palette
     @ScaledMetric(relativeTo: .subheadline) private var rowHeight: CGFloat = PrototypeLayout.rowHeight
+    @State private var compactFade = PrototypeScrollFade()
 
     var body: some View {
         if width < 650 {
@@ -424,13 +452,29 @@ struct PrototypeGuideRow: View {
                                     PrototypeProgramLabel(program: program, now: now)
                                         .frame(width: 230, alignment: .leading)
                                 }
-                                .buttonStyle(PrototypeButtonStyle())
+                                .buttonStyle(PrototypeButtonStyle(surface: .program))
+                                .focusEffectDisabled()
                                 .focused(focus, equals: .program(channelID: channel.id, programID: program.id))
                                 .disabled(railActive && returnTarget != .program(channelID: channel.id, programID: program.id))
                             }
                         }
                     }
                     .scrollIndicators(.hidden)
+                    .horizontalEdgeFadeMask(
+                        fadeWidth: PrototypeLayout.horizontalFade,
+                        leadingStrength: compactFade.leading,
+                        trailingStrength: compactFade.trailing
+                    )
+                    .onScrollGeometryChange(for: PrototypeScrollFade.self) { geometry in
+                        PrototypeScrollFade(
+                            before: geometry.contentOffset.x + geometry.contentInsets.leading,
+                            after: geometry.contentSize.width
+                                - (geometry.contentOffset.x + geometry.containerSize.width),
+                            distance: PrototypeLayout.horizontalFade
+                        )
+                    } action: { _, fade in
+                        compactFade = fade
+                    }
                 }
             }
             .padding(.bottom, PrototypeLayout.gap)
@@ -463,11 +507,16 @@ struct PrototypeGuideRow: View {
                                             availableWidth: max(0, cellWidth(slot) - PrototypeLayout.rowInset * 2)
                                         )
                                         .padding(.horizontal, min(PrototypeLayout.rowInset, slotWidth(slot) / 4))
-                                        .frame(width: cellWidth(slot), height: rowHeight, alignment: .leading)
+                                        .frame(
+                                            width: cellWidth(slot),
+                                            height: PrototypeLayout.programHeight(in: rowHeight),
+                                            alignment: .leading
+                                        )
                                         .clipped()
                                     }
-                                    .buttonStyle(PrototypeButtonStyle(padded: false, surface: .guide))
+                                    .buttonStyle(PrototypeButtonStyle(padded: false, surface: .program))
                                     .focusEffectDisabled()
+                                    .padding(.vertical, PrototypeLayout.programInset)
                                     .padding(.trailing, min(PrototypeLayout.cellGap, slotWidth(slot) / 4))
                                     .frame(width: slotWidth(slot), height: rowHeight)
                                     .clipped()
@@ -613,7 +662,7 @@ private struct PrototypeGuideGap: View {
     @Environment(\.themePalette) private var palette
     var body: some View {
         Text(category)
-            .font(.subheadline).foregroundStyle(palette.secondaryText).lineLimit(2)
+            .font(.subheadline).foregroundStyle(palette.primaryText.opacity(0.8)).lineLimit(2)
             .padding(.horizontal, PrototypeLayout.rowInset)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: height)
@@ -638,6 +687,11 @@ private struct PrototypeSynchronizedTimeline<Content: View>: View {
             content()
         }
         .scrollIndicators(.hidden)
+        .horizontalEdgeFadeMask(
+            fadeWidth: PrototypeLayout.horizontalFade,
+            leadingStrength: edgeFade.leading,
+            trailingStrength: edgeFade.trailing
+        )
         .scrollPosition($position)
         .onScrollPhaseChange { _, phase in
             isDragging = phase == .tracking || phase == .interacting || phase == .decelerating
@@ -665,6 +719,13 @@ private struct PrototypeSynchronizedTimeline<Content: View>: View {
         guard abs(currentOffset - value) >= 1 else { return }
         synchronizationTarget = value
         position.scrollTo(x: value)
+    }
+
+    private var edgeFade: PrototypeScrollFade {
+        PrototypeScrollFade(
+            before: currentOffset, after: viewportWidth * 2 - currentOffset,
+            distance: PrototypeLayout.horizontalFade
+        )
     }
 }
 #endif

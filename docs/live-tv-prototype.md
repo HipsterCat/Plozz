@@ -71,7 +71,7 @@ reset them.
   Back to top works without resetting the selected time.
 - Category, source and sorting choices use explicit navigation lists with
   checkmarked selections, not nested system Picker presentations inside a sheet.
-- The guide sits in one rounded, opaque tray with roomier channel rows and
+- The guide sits in one rounded tray with roomier channel rows and
   quieter programme tiles. Logo plates, row surfaces and the outer tray use
   concentric radii derived from their insets. The default TV layout shows about
   four full rows rather than squeezing in six or seven.
@@ -81,6 +81,15 @@ reset them.
   fallbacks. Guide focus uses a crisp rounded outline and tonal fill, with a
   solid high-contrast treatment under increased contrast or Reduce Transparency.
   Focus and selection never swap the button's structural identity.
+- The preview spans the screen width behind the upper guide. One continuous
+  fade reaches the page colour before the video's lower edge; the date/time
+  header no longer starts an opaque panel. The tray grows more opaque lower
+  down, with a solid fallback for Reduce Transparency or increased contrast.
+  Shared smooth edge masks dissolve rows underneath the fixed time header and
+  programme cells at the horizontal viewport edges. Each fade ramps in only
+  when content extends beyond that edge, keeping reached endpoints readable.
+  Programme surfaces sit eight points inside the row at top and bottom, with
+  correspondingly smaller concentric corners; their time widths are unchanged.
 - **Sources** reports playlist entries, skipped entries, guide matches, listings,
   coverage dates and per-feed failures. Its toggles enable or disable the five
   preset guides; disabling one immediately removes its contribution. Results
@@ -132,7 +141,8 @@ is opened to fake an instant crossfade. Search, controls, sheets and inactive
 scenes cancel pending focus-driven tunes.
 
 Live video fills the upper backdrop rather than a boxed preview. A leading scrim
-protects programme details and a bottom fade blends into the opaque guide.
+protects programme details and a continuous bottom fade blends through the
+translucent upper guide into the solid page background.
 The picture remains anchored while either guide axis scrolls. The backdrop
 extends through the safe-area margins; only text and controls receive the
 navigation rail's leading inset. Selecting a ready preview slides/fades the guide

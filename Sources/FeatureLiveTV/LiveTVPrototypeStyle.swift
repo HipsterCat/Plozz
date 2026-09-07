@@ -15,6 +15,10 @@ enum PrototypeLayout {
     static let rowInset = PlozzTheme.Spacing.medium
     static let logoRadius = PlozzTheme.Metrics.Radius.content
     static let rowRadius = logoRadius + rowInset
+    static let programInset = PlozzTheme.Spacing.xSmall
+    static let programRadius = rowRadius - programInset
+    static let horizontalFade = PlozzTheme.Spacing.large
+    static let verticalFade = PlozzTheme.Spacing.xLarge
     static let guideInset = PlozzTheme.Metrics.Radius.inset
     static let guideRadius = rowRadius + guideInset
     static let controlRadius = PlozzTheme.Metrics.Radius.control
@@ -37,6 +41,20 @@ enum PrototypeLayout {
 
     static func timelineWidth(for width: CGFloat) -> CGFloat {
         max(1, width - stationWidth(for: width) - columnGap)
+    }
+
+    static func programHeight(in rowHeight: CGFloat) -> CGFloat {
+        max(1, rowHeight - programInset * 2)
+    }
+}
+
+struct PrototypeScrollFade: Equatable {
+    let leading: CGFloat
+    let trailing: CGFloat
+
+    init(before: CGFloat = 0, after: CGFloat = 0, distance: CGFloat = PrototypeLayout.verticalFade) {
+        leading = min(1, max(0, before) / max(1, distance))
+        trailing = min(1, max(0, after) / max(1, distance))
     }
 }
 
@@ -126,7 +144,7 @@ struct PrototypeButtonStyle: ButtonStyle {
 }
 
 enum PrototypeButtonSurface: Equatable {
-    case standard, guide, control
+    case standard, guide, program, control
 }
 
 private struct PrototypeButtonBody: View {
@@ -140,13 +158,14 @@ private struct PrototypeButtonBody: View {
     @Environment(\.colorSchemeContrast) private var contrast
 
     private var solidFocus: Bool {
-        focused && (surface != .guide || reduceTransparency || contrast == .increased)
+        focused && ((surface != .guide && surface != .program) || reduceTransparency || contrast == .increased)
     }
 
     private var cornerRadius: CGFloat {
         switch surface {
         case .standard: PrototypeLayout.radius
         case .guide: PrototypeLayout.rowRadius
+        case .program: PrototypeLayout.programRadius
         case .control: PrototypeLayout.controlRadius
         }
     }
@@ -156,7 +175,7 @@ private struct PrototypeButtonBody: View {
         if focused || selected { return palette.fill }
         switch surface {
         case .standard: return palette.cardSurface
-        case .guide: return palette.fillSubtle
+        case .guide, .program: return palette.fillSubtle
         case .control: return .clear
         }
     }
@@ -179,6 +198,33 @@ private struct PrototypeButtonBody: View {
             .opacity(configuration.isPressed ? 0.75 : 1)
             // Directional entry gates remove candidates without dimming the rail.
             .transaction { $0.animation = nil }
+    }
+}
+
+struct PrototypeGuideSurface: View {
+    @Environment(\.plozzReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.themePalette) private var palette
+
+    var body: some View {
+        Group {
+            if reduceTransparency || contrast == .increased {
+                Color.clear.plozzSurface(.raised, cornerRadius: PrototypeLayout.guideRadius)
+            } else {
+                RoundedRectangle(cornerRadius: PrototypeLayout.guideRadius, style: .continuous)
+                    .fill(LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: palette.backgroundBase.opacity(0.12), location: 0.2),
+                            .init(color: palette.backgroundBase.opacity(0.4), location: 0.55),
+                            .init(color: palette.backgroundBase.opacity(0.75), location: 1)
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    ))
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 

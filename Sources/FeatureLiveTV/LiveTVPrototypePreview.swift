@@ -8,6 +8,7 @@ struct PrototypePreviewLayout {
     let contentFrame: CGRect
     let heroHeight: CGFloat
     let videoFrame: CGRect
+    let fadeEnd: CGFloat
     let metadataWidth: CGFloat
     let compact: Bool
 
@@ -40,13 +41,14 @@ struct PrototypePreviewLayout {
             largeText ? 440 : (compact ? 220 : 300)
         )
         metadataWidth = compact || largeText ? contentFrame.width : contentFrame.width * 0.56
-        let videoWidth = compact ? bounds.width : bounds.width * 0.72
+        let videoWidth = bounds.width
         let videoHeight = videoWidth * 9 / 16
         videoFrame = CGRect(
             x: bounds.maxX - videoWidth,
-            y: compact ? contentFrame.minY : contentFrame.minY + heroHeight * 0.58 - videoHeight * 0.5,
+            y: bounds.minY,
             width: videoWidth, height: videoHeight
         )
+        fadeEnd = min(bounds.height * 0.82, videoHeight * 0.88)
     }
 }
 
@@ -62,18 +64,15 @@ struct PrototypePreviewScrim: View {
                 tone: palette.backgroundBase, edgePeak: 0.96, wash: 0.08,
                 edges: [.leading], bottomFadeTop: 0.3
             )
-            LinearGradient(
-                stops: [
-                    .init(color: .clear, location: 0),
-                    .init(color: palette.backgroundBase.opacity(0.12), location: 0.35),
-                    .init(color: palette.backgroundBase.opacity(0.7), location: 0.68),
-                    .init(color: palette.backgroundBase, location: 1)
-                ],
-                startPoint: .top, endPoint: .bottom
-            )
-            .frame(height: layout.contentFrame.minY - layout.bounds.minY + layout.heroHeight + 20)
             VStack(spacing: 0) {
-                Color.clear.frame(height: layout.contentFrame.minY - layout.bounds.minY + layout.heroHeight)
+                LinearGradient(
+                    stops: (0 ... 24).map { step in
+                        let t = Double(step) / 24
+                        return .init(color: palette.backgroundBase.opacity(t * t * (3 - 2 * t)), location: t)
+                    },
+                    startPoint: .top, endPoint: .bottom
+                )
+                .frame(height: layout.fadeEnd)
                 palette.backgroundBase
             }
             if reduceTransparency {
