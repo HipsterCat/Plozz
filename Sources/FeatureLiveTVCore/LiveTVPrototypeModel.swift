@@ -1,4 +1,5 @@
 #if DEBUG
+import CoreModels
 import Foundation
 import Observation
 
@@ -32,6 +33,11 @@ public enum LiveTVPrototypeSort: String, CaseIterable, Identifiable, Sendable {
 public enum LiveTVPrototypeDataError: Error {
     case duplicateChannelID
     case invalidProgram
+}
+
+public enum LiveTVPreferencesIssue: Equatable, Sendable {
+    case loadFailed
+    case saveFailed
 }
 
 public struct LiveTVPrototypeChannel: Identifiable, Equatable, Sendable {
@@ -178,6 +184,7 @@ public final class LiveTVPrototypeModel {
     public private(set) var recentChannelIDs: [String] = []
     public private(set) var channels: [LiveTVPrototypeChannel] = []
     public private(set) var favoriteIDs: Set<String>
+    public private(set) var preferencesIssue: LiveTVPreferencesIssue?
     public private(set) var now: Date
     public private(set) var categories: [String] = []
 
@@ -192,6 +199,9 @@ public final class LiveTVPrototypeModel {
     @ObservationIgnored private var channelOrdinalsByID: [String: Int] = [:]
     @ObservationIgnored private var isBatchingFilterChanges = false
     @ObservationIgnored private var suppliedChannels: [LiveTVPrototypeChannel]?
+    @ObservationIgnored private let preferencesStore: (any LiveTVPreferencesStoring)?
+    @ObservationIgnored private var preferencesLoaded = false
+    @ObservationIgnored private var pendingPreferences: LiveTVPreferences?
     private var importedPrograms: [String: [LiveTVPrototypeProgram]] = [:]
 
     public var usesPublicStreams: Bool { suppliedChannels != nil }
@@ -201,13 +211,16 @@ public final class LiveTVPrototypeModel {
         now: Date = Date(timeIntervalSince1970: 1_788_719_400),
         scenario: LiveTVPrototypeScenario = .mixedGuide,
         isLargeCatalog: Bool = false,
-        channels: [LiveTVPrototypeChannel]? = nil
+        channels: [LiveTVPrototypeChannel]? = nil,
+        preferencesStore: (any LiveTVPreferencesStoring)? = nil
     ) {
         self.now = now
         self.scenario = scenario
         self.isLargeCatalog = isLargeCatalog
+        self.preferencesStore = preferencesStore
         suppliedChannels = channels
-        favoriteIDs = channels == nil ? Set((1...5).map(Self.channelID)) : []
+        favoriteIDs = channels == nil && preferencesStore == nil ? Set((1...5).map(Self.channelID)) : []
+        if preferencesStore != nil { loadPreferences() }
         rebuildCatalog()
     }
 
@@ -248,12 +261,23 @@ public final class LiveTVPrototypeModel {
         channelsByID[id]
     }
 
-    public func toggleFavorite(_ id: String) {
-        if favoriteIDs.contains(id) {
-            favoriteIDs.remove(id)
-        } else {
-            favoriteIDs.insert(id)
+    public func guideRow(for channelID: String, preferring section: LiveTVGuideSection? = nil) -> LiveTVGuideRowID? {
+        if let section,
+           let row = guideChannels.first(where: { $0.channel.id == channelID && $0.section == section }) {
+            return row.id
         }
+        return guideChannels.first { $0.channel.id == channelID && $0.section == .channels }?.id
+            ?? guideChannels.first { $0.channel.id == channelID }?.id
+    }
+
+    public func toggleFavorite(_ id: String) {
+        var favorites = favoriteIDs
+        if favorites.contains(id) {
+            favorites.remove(id)
+        } else {
+            favorites.insert(id)
+        }
+        guard persistPreferences(LiveTVPreferences(favoriteIDs: favorites, recentChannelIDs: recentChannelIDs)) else { return }
         if favoritesOnly {
             refreshVisibleChannels()
         } else {
@@ -267,8 +291,56 @@ public final class LiveTVPrototypeModel {
     public func recordWatched(_ id: String) -> Bool {
         guard id == playingChannelID, channelsByID[id] != nil else { return false }
         guard recentChannelIDs.first != id else { return true }
-        recentChannelIDs = [id] + recentChannelIDs.filter { $0 != id }.prefix(2)
+        let recent = [id] + recentChannelIDs.filter { $0 != id }.prefix(2)
+        guard persistPreferences(LiveTVPreferences(favoriteIDs: favoriteIDs, recentChannelIDs: recent)) else { return false }
         refreshGuideChannels()
+        return true
+    }
+
+    public func dismissPreferencesIssue() {
+        preferencesIssue = nil
+    }
+
+    public func retryPreferences() {
+        if !preferencesLoaded {
+            loadPreferences()
+        } else if let pendingPreferences {
+            _ = persistPreferences(pendingPreferences)
+        }
+        refreshVisibleChannels()
+    }
+
+    private func loadPreferences() {
+        guard let preferencesStore else { return }
+        do {
+            let preferences = try preferencesStore.load()
+            favoriteIDs = preferences.favoriteIDs
+            recentChannelIDs = preferences.recentChannelIDs
+            preferencesLoaded = true
+            preferencesIssue = nil
+        } catch {
+            preferencesIssue = .loadFailed
+        }
+    }
+
+    private func persistPreferences(_ preferences: LiveTVPreferences) -> Bool {
+        if let preferencesStore {
+            guard preferencesLoaded else {
+                preferencesIssue = .loadFailed
+                return false
+            }
+            pendingPreferences = preferences
+            do {
+                try preferencesStore.save(preferences)
+            } catch {
+                preferencesIssue = .saveFailed
+                return false
+            }
+        }
+        favoriteIDs = preferences.favoriteIDs
+        recentChannelIDs = preferences.recentChannelIDs
+        preferencesIssue = nil
+        pendingPreferences = nil
         return true
     }
 
@@ -403,7 +475,6 @@ public final class LiveTVPrototypeModel {
             channels = (1...count).map(Self.makeChannel)
         }
         channelsByID = Dictionary(uniqueKeysWithValues: channels.map { ($0.id, $0) })
-        recentChannelIDs.removeAll { channelsByID[$0] == nil }
         channelOrdinalsByID = Dictionary(
             uniqueKeysWithValues: channels.enumerated().map { ($0.element.id, $0.offset + 1) }
         )
@@ -462,15 +533,9 @@ public final class LiveTVPrototypeModel {
     private func refreshGuideChannels() {
         let visibleByID = Dictionary(uniqueKeysWithValues: visibleChannels.map { ($0.id, $0) })
         let recent = recentChannelIDs.compactMap { visibleByID[$0] }
-        let recentIDs = Set(recent.map(\.id))
-        let favorites = visibleChannels.filter {
-            favoriteIDs.contains($0.id) && !recentIDs.contains($0.id)
-        }
-        let remainder = visibleChannels.filter {
-            !favoriteIDs.contains($0.id) && !recentIDs.contains($0.id)
-        }
+        let favorites = visibleChannels.filter { favoriteIDs.contains($0.id) }
         let groups: [(LiveTVGuideSection, [LiveTVPrototypeChannel])] = [
-            (.recent, recent), (.favorites, favorites), (.channels, remainder)
+            (.recent, recent), (.favorites, favorites), (.channels, visibleChannels)
         ]
         guideChannels = groups.flatMap { section, channels in
             channels.enumerated().map { index, channel in

@@ -20,6 +20,8 @@ public final class LiveTVPreviewController {
     public private(set) var pendingRequest: LiveTVPreviewRequest?
     public private(set) var focusRestoreRequest = 0
     public private(set) var isRestoringGuideFocus = false
+    public private(set) var watchOrigin: LiveTVGuideRowID?
+    public private(set) var restoresPlaybackFocus = true
     private let model: LiveTVPrototypeModel
     private var focusedChannelID: String?
     private var browsingActive = true
@@ -57,10 +59,13 @@ public final class LiveTVPreviewController {
         return !model.tuneFailed
     }
 
-    public func watch(_ channelID: String) {
+    public func watch(_ channelID: String, origin: LiveTVGuideRowID? = nil) {
         cancelPendingPreview()
         model.tune(channelID)
         guard !model.tuneFailed else { return }
+        let preferredSection = origin?.channelID == channelID ? origin?.section
+            : (isExpanded ? watchOrigin?.section : nil)
+        watchOrigin = model.guideRow(for: channelID, preferring: preferredSection)
         followsFocus = false
         isRestoringGuideFocus = false
         isExpanded = true
@@ -68,8 +73,17 @@ public final class LiveTVPreviewController {
 
     public func returnToGuide(restoresFocus: Bool = true) {
         guard isExpanded else { return }
+        restoresPlaybackFocus = true
         isRestoringGuideFocus = restoresFocus
         isExpanded = false
+        focusRestoreRequest &+= 1
+    }
+
+    public func requestBrowsingFocus() {
+        guard !isExpanded else { return }
+        cancelPendingPreview()
+        restoresPlaybackFocus = false
+        isRestoringGuideFocus = true
         focusRestoreRequest &+= 1
     }
 
@@ -81,6 +95,7 @@ public final class LiveTVPreviewController {
     public func playbackEnded() {
         isExpanded = false
         isRestoringGuideFocus = false
+        watchOrigin = nil
         cancelPendingPreview()
     }
 
@@ -89,6 +104,7 @@ public final class LiveTVPreviewController {
         focusedChannelID = nil
         isExpanded = false
         isRestoringGuideFocus = false
+        watchOrigin = nil
         model.stop()
     }
 

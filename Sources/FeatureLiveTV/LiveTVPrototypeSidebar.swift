@@ -7,25 +7,27 @@ struct PrototypeBrowseSidebar: View {
     @Bindable var model: LiveTVPrototypeModel
     @Binding var active: Bool
     let focusRequest: Int
+    var isSearching = false
     let search: () -> Void
-    let more: () -> Void
+    let enterGuide: () -> Void
     @FocusState private var focused: Control?
     @State private var categoryFade = PrototypeScrollFade()
     @ScaledMetric(relativeTo: .subheadline) private var fontSize = PrototypeLayout.guideFontSize
+    @Environment(\.layoutDirection) private var layoutDirection
 
     private enum Control: Hashable {
-        case search, more
+        case search
         case category(String?)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: PrototypeLayout.gap) {
             Button(action: search) {
-                Label("Search", systemImage: "magnifyingglass")
+                Label(isSearching ? "Back to guide" : "Search", systemImage: isSearching ? "chevron.backward" : "magnifyingglass")
                     .frame(maxWidth: .infinity, minHeight: PrototypeLayout.controlHeight, alignment: .leading)
                     .padding(.horizontal, PrototypeLayout.gap)
             }
-            .buttonStyle(PrototypeButtonStyle(selected: !model.query.isEmpty, padded: false, surface: .control))
+            .buttonStyle(PrototypeButtonStyle(padded: false, surface: .control))
             .focused($focused, equals: .search)
             .accessibilityValue(model.query)
             .accessibilityIdentifier("live-tv-search")
@@ -76,23 +78,18 @@ struct PrototypeBrowseSidebar: View {
             }
             .accessibilityIdentifier("live-tv-category-list")
 
-            Button(action: more) {
-                Label("More", systemImage: "ellipsis")
-                    .frame(maxWidth: .infinity, minHeight: PrototypeLayout.controlHeight, alignment: .leading)
-                    .padding(.horizontal, PrototypeLayout.gap)
-            }
-            .buttonStyle(PrototypeButtonStyle(
-                selected: model.source != nil || model.guideOnly || model.favoritesOnly,
-                padded: false, surface: .control
-            ))
-            .focused($focused, equals: .more)
-            .accessibilityIdentifier("live-tv-options")
         }
         .font(.system(size: fontSize, weight: .regular))
         .lineLimit(1)
         .focusEffectDisabled()
         #if os(tvOS)
         .focusSection()
+        .onMoveCommand { direction in
+            guard focused != nil else { return }
+            if direction == (layoutDirection == .rightToLeft ? .left : .right) {
+                enterGuide()
+            }
+        }
         #endif
         .onChange(of: focused) { _, target in
             if target != nil { active = true }

@@ -8,25 +8,25 @@ struct PrototypeBrowseToolbar: View {
     @Binding var active: Bool
     let focusRequest: Int
     let compact: Bool
+    var isSearching = false
     let search: () -> Void
     let filters: () -> Void
-    let more: () -> Void
     @FocusState private var focused: Control?
     @Environment(\.themePalette) private var palette
 
-    private enum Control: Hashable { case search, filters, more }
+    private enum Control: Hashable { case search, filters }
 
     var body: some View {
         HStack(spacing: PrototypeLayout.gap) {
             HStack(spacing: PrototypeLayout.smallGap) {
                 Button(action: search) {
-                    Label("Search", systemImage: "magnifyingglass")
+                    Label(isSearching ? "Back to guide" : "Search", systemImage: isSearching ? "chevron.backward" : "magnifyingglass")
                         .labelStyle(PrototypeToolbarLabelStyle(compact: compact))
                         .padding(.horizontal, compact ? 12 : 20)
                         .frame(minWidth: 44, minHeight: PrototypeLayout.controlHeight)
                 }
                 .focused($focused, equals: .search)
-                .buttonStyle(PrototypeButtonStyle(selected: !model.query.isEmpty, padded: false, surface: .control))
+                .buttonStyle(PrototypeButtonStyle(padded: false, surface: .control))
                 .accessibilityValue(model.query)
                 .accessibilityIdentifier("live-tv-search")
                 Button(action: filters) {
@@ -45,14 +45,6 @@ struct PrototypeBrowseToolbar: View {
                     padded: false, surface: .control
                 ))
                 .accessibilityIdentifier("live-tv-category")
-                Button(action: more) {
-                    Label("More", systemImage: "ellipsis")
-                        .labelStyle(PrototypeToolbarLabelStyle(compact: compact))
-                        .padding(.horizontal, compact ? 12 : 20)
-                        .frame(minWidth: 44, minHeight: PrototypeLayout.controlHeight)
-                }
-                .focused($focused, equals: .more)
-                .accessibilityIdentifier("live-tv-options")
             }
             .padding(PrototypeLayout.controlInset)
             .background { PrototypeControlSurface() }
@@ -92,8 +84,6 @@ struct PrototypeSheetContent: View {
     let imports: LiveTVPrototypeImportModel
     let destination: PrototypeSheet
     let reload: () -> Void
-    let followsFocus: Bool
-    let togglePreview: () -> Void
     let showGuide: () -> Void
     @Binding var guideOffset: TimeInterval
     let goToNow: () -> Void
@@ -106,23 +96,12 @@ struct PrototypeSheetContent: View {
         NavigationStack {
             Group {
                 switch destination {
-                case .search:
-                    PrototypeSearchForm(model: model) { id in
-                        tune(id)
-                        dismiss()
-                    }
-                        .navigationTitle("Search channels")
                 case .filters:
                     PrototypeFilterForm(model: model)
-                        .navigationTitle("Filter channels")
-                case .options:
-                    PrototypeOptionsForm(
-                        model: model, imports: imports, reload: reload,
-                        followsFocus: followsFocus, togglePreview: togglePreview,
-                        showGuide: showGuide,
-                        guideOffset: $guideOffset, goToNow: goToNow, guideStart: guideStart, tune: tune
-                    )
-                    .navigationTitle("Live TV")
+                        .navigationTitle("Categories")
+                case .guideTime:
+                    PrototypeGuideTimeForm(guideOffset: $guideOffset, goToNow: goToNow, guideStart: guideStart)
+                        .navigationTitle("Guide time")
                 case .sources:
                     PrototypeSourcesForm(model: model, imports: imports, reload: reload) {
                         showGuide()
@@ -152,111 +131,30 @@ struct PrototypeSheetContent: View {
     }
 }
 
-private struct PrototypeOptionsForm: View {
-    @Bindable var model: LiveTVPrototypeModel
-    let imports: LiveTVPrototypeImportModel
-    let reload: () -> Void
-    let followsFocus: Bool
-    let togglePreview: () -> Void
-    let showGuide: () -> Void
+private struct PrototypeGuideTimeForm: View {
     @Binding var guideOffset: TimeInterval
     let goToNow: () -> Void
     let guideStart: Date
-    let tune: (String) -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         Form {
             Section {
-                NavigationLink {
-                    PrototypeSearchForm(model: model) { id in
-                        tune(id)
-                        dismiss()
-                    }
-                    .navigationTitle("Search channels")
-                } label: {
-                    Label("Search channels", systemImage: "magnifyingglass")
+                Text(guideStart, format: .dateTime.weekday(.wide).month(.abbreviated).day())
+                Button("Earlier", systemImage: "chevron.backward") {
+                    guideOffset = max(-86_400, guideOffset - 7_200)
+                    dismiss()
                 }
-                NavigationLink {
-                    PrototypeFilterForm(model: model).navigationTitle("Filter channels")
-                } label: {
-                    Label("Filter channels", systemImage: "line.3.horizontal.decrease")
+                .disabled(guideOffset <= -86_400)
+                Button("Now", systemImage: "clock") {
+                    goToNow()
+                    dismiss()
                 }
-                PrototypeSelectionLink(
-                    title: "Sort", selection: $model.sort, options: LiveTVPrototypeSort.allCases
-                ) { Text($0.title) }
-                Toggle("Auto preview", isOn: Binding(
-                    get: { followsFocus },
-                    set: { if $0 != followsFocus { togglePreview() } }
-                ))
-            } footer: {
-                Text("Auto preview follows channel focus. Turn it off to keep your current channel playing while you browse.")
-            }
-            if model.guideChannelCount > 0 {
-                Section("Guide time") {
-                    Text(guideStart, format: .dateTime.weekday(.wide).month(.abbreviated).day())
-                    Button("Earlier", systemImage: "chevron.backward") {
-                        guideOffset = max(-86_400, guideOffset - 7_200)
-                        dismiss()
-                    }
-                    .disabled(guideOffset <= -86_400)
-                    Button("Now", systemImage: "clock") {
-                        goToNow()
-                        dismiss()
-                    }
-                    Button("Later", systemImage: "chevron.forward") {
-                        guideOffset = min(604_800, guideOffset + 7_200)
-                        dismiss()
-                    }
-                    .disabled(guideOffset >= 604_800)
+                Button("Later", systemImage: "chevron.forward") {
+                    guideOffset = min(604_800, guideOffset + 7_200)
+                    dismiss()
                 }
-            }
-            Section {
-                NavigationLink {
-                    PrototypeSourcesForm(model: model, imports: imports, reload: reload) {
-                        showGuide()
-                        dismiss()
-                    }
-                    .navigationTitle("Live TV sources")
-                } label: {
-                    Label("Sources", systemImage: "antenna.radiowaves.left.and.right")
-                }
-                .accessibilityIdentifier("live-tv-sources")
-                Text("\(model.visibleChannels.count) of \(model.channels.count) channels")
-                PrototypeImportStatus(imports: imports, listedChannels: model.guideChannelCount)
-            }
-        }
-    }
-}
-
-private struct PrototypeSearchForm: View {
-    @Bindable var model: LiveTVPrototypeModel
-    let tune: (String) -> Void
-
-    var body: some View {
-        Form {
-            Section {
-                TextField("Name, number, category or source", text: $model.query)
-                    .autocorrectionDisabled()
-                    .accessibilityIdentifier("live-tv-search-field")
-                if !model.query.isEmpty {
-                    Button("Clear search") { model.query = "" }
-                }
-            } footer: {
-                Text("Channel search works even when there is no program guide.")
-            }
-            Section {
-                Text("\(model.visibleChannels.count) matching channels")
-                ForEach(model.visibleChannels.prefix(8)) { channel in
-                    Button { tune(channel.id) } label: {
-                        HStack {
-                            PrototypeStationMark(channel: channel, size: 48)
-                            Text(channel.name)
-                            Spacer()
-                            Text(channel.number, format: .number.grouping(.never)).monospacedDigit()
-                        }
-                    }
-                }
+                .disabled(guideOffset >= 604_800)
             }
         }
     }
@@ -268,7 +166,6 @@ private struct PrototypeFilterForm: View {
     var body: some View {
         Form {
             Section {
-                TextField("Search channels", text: $model.query).autocorrectionDisabled()
                 PrototypeSelectionLink(
                     title: "Category", selection: $model.category,
                     options: [nil] + model.categories.map(Optional.some)
@@ -276,23 +173,9 @@ private struct PrototypeFilterForm: View {
                     if let category { Text(category) }
                     else { Text("All categories") }
                 }
-                PrototypeSelectionLink(
-                    title: "Source", selection: $model.source,
-                    options: [nil] + LiveTVPrototypeSource.allCases.filter { source in
-                        model.channels.contains { $0.source == source }
-                    }.map(Optional.some)
-                ) { source in
-                    if let source { Text(source.title) }
-                    else { Text("All sources") }
-                }
-                Toggle("Favorites only", isOn: $model.favoritesOnly)
-                Toggle("With guide listings", isOn: $model.guideOnly)
-                PrototypeSelectionLink(
-                    title: "Sort", selection: $model.sort, options: LiveTVPrototypeSort.allCases
-                ) { Text($0.title) }
             }
             Section {
-                Button("Clear filters") { model.resetFilters() }
+                Button("All categories") { model.category = nil }
                 Text("\(model.visibleChannels.count) matching channels")
             }
         }
@@ -419,10 +302,10 @@ private struct PrototypeSourcesForm: View {
             } header: {
                 Text("Browse testing")
             } footer: {
-                Text("Repeats the imported channels into labeled copies; it does not add stations. Favorites, filters and guide source choices currently last until this preview closes.")
+                Text("Repeats the imported channels into labeled copies; it does not add stations. Favorites and recently watched channels are saved separately for each profile.")
             }
             Section {
-                Text("Playback uses AetherEngine without writing watched history. Plex, Jellyfin and Emby tuning are not connected yet.")
+                Text("Channel history is separate from movie and episode progress. Plex, Jellyfin and Emby tuning are not connected yet.")
             }
         }
         .alert("Guide selection could not be applied", isPresented: $selectionFailed) {

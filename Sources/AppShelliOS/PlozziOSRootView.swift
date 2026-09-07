@@ -766,7 +766,9 @@ private struct PlozziOSTabShell: View {
                 value: PlozziOSDestination.liveTV
             ) {
                 PlozziOSLiveTVDestination(
-                    isActive: selectedDestination == .liveTV
+                    isActive: selectedDestination == .liveTV,
+                    profileID: appModel.profiles.activeProfileID,
+                    preferencesNamespace: appModel.profiles.activeNamespace
                 )
             }
             #endif

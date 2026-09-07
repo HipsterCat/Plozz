@@ -174,9 +174,13 @@ struct PrototypeButtonStyle: ButtonStyle {
     var selected = false
     var padded = true
     var surface: PrototypeButtonSurface = .standard
+    var focusChanged: ((Bool) -> Void)?
 
     func makeBody(configuration: Configuration) -> some View {
-        PrototypeButtonBody(configuration: configuration, selected: selected, padded: padded, surface: surface)
+        PrototypeButtonBody(
+            configuration: configuration, selected: selected, padded: padded,
+            surface: surface, focusChanged: focusChanged
+        )
     }
 }
 
@@ -189,6 +193,7 @@ private struct PrototypeButtonBody: View {
     let selected: Bool
     let padded: Bool
     let surface: PrototypeButtonSurface
+    let focusChanged: ((Bool) -> Void)?
     @Environment(\.isFocused) private var focused
     @Environment(\.themePalette) private var palette
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
@@ -239,6 +244,7 @@ private struct PrototypeButtonBody: View {
             .opacity(configuration.isPressed ? 0.75 : 1)
             // Directional entry gates remove candidates without dimming the rail.
             .transaction { $0.animation = nil }
+            .onChange(of: focused, initial: true) { _, value in focusChanged?(value) }
     }
 }
 
@@ -292,15 +298,14 @@ struct PrototypeControlSurface: View {
 }
 
 enum PrototypeSheet: Identifiable {
-    case search, filters, sources, options
+    case filters, sources, guideTime
     case program(LiveTVPrototypeProgram)
 
     var id: String {
         switch self {
-        case .search: "search"
         case .filters: "filters"
         case .sources: "sources"
-        case .options: "options"
+        case .guideTime: "guide-time"
         case .program(let program): program.id
         }
     }

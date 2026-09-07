@@ -325,6 +325,9 @@ struct MainTabView: View {
     let activeAccountID: String?
     let profiles: [Profile]
     let activeProfile: Profile
+    /// Exact namespace owned by the active profile. `nil` is meaningful: it is
+    /// the recorded owner of legacy un-suffixed preference keys.
+    let liveTVPreferencesNamespace: String?
     /// Bumps when the effective Plex identity changes. Part of `homeScopeKey`,
     /// because switching "watching as" changes whose rows these are without
     /// changing the profile or the account list.
@@ -765,6 +768,7 @@ struct MainTabView: View {
                 activeAccountID: activeAccountID,
                 profiles: profiles,
                 activeProfile: activeProfile,
+                liveTVPreferencesNamespace: liveTVPreferencesNamespace,
                 askProfileOnStartup: askProfileOnStartup,
                 appVersion: AppInfo.version,
                 appBuild: AppInfo.build,
@@ -1005,7 +1009,11 @@ struct MainTabView: View {
 
             #if DEBUG
             Tab("Live TV", systemImage: "tv.fill", value: MainTab.liveTV) {
-                LiveTVShellDestination(isActive: isActiveTab(.liveTV))
+                LiveTVShellDestination(
+                    isActive: isActiveTab(.liveTV),
+                    profileID: activeProfile.id,
+                    preferencesNamespace: liveTVPreferencesNamespace
+                )
             }
             #endif
 
@@ -1068,7 +1076,9 @@ struct MainTabView: View {
             #if DEBUG
             Tab(value: NativeSidebarDestination.content(.liveTV)) {
                 AnyView(LiveTVShellDestination(
-                    isActive: activeLibraryNavigationDestination == .liveTV
+                    isActive: activeLibraryNavigationDestination == .liveTV,
+                    profileID: activeProfile.id,
+                    preferencesNamespace: liveTVPreferencesNamespace
                 ))
             } label: {
                 AnyView(liveTVTabLabel)
@@ -1140,6 +1150,8 @@ struct MainTabView: View {
 
             LiveTVShellDestination(
                 isActive: showsLiveTV,
+                profileID: activeProfile.id,
+                preferencesNamespace: liveTVPreferencesNamespace,
                 onExpandedChange: updateLiveTVChrome
             )
             .opacity(showsLiveTV ? 1 : 0)

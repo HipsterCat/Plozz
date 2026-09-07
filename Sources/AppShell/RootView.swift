@@ -393,6 +393,7 @@ public struct RootView: View {
                         activeAccountID: appState.accountsProviders.primaryActiveAccount?.id,
                         profiles: appState.profilesModel.profilesByRecency,
                         activeProfile: appState.profilesModel.activeProfile,
+                        liveTVPreferencesNamespace: appState.profilesModel.activeNamespace,
                         plexIdentityGeneration: appState.plexHomeUsers.plexIdentityGeneration,
                         askProfileOnStartup: appState.profilesModel.askProfileOnStartup,
                         homeRuntime: HomeTabRuntime(

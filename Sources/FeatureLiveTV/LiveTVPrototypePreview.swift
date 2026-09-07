@@ -32,7 +32,7 @@ struct PrototypePreviewLayout {
 
     init(
         size: CGSize, safeAreaInsets: EdgeInsets = EdgeInsets(),
-        navigationInset: CGFloat = 0, largeText: Bool = false
+        navigationInset: CGFloat = 0, largeText: Bool = false, isSearching: Bool = false
     ) {
         bounds = CGRect(
             x: -safeAreaInsets.leading, y: -safeAreaInsets.top,
@@ -54,10 +54,13 @@ struct PrototypePreviewLayout {
             width: max(1, bounds.width - side * 2 - navigationInset),
             height: max(1, bounds.height - top - bottom)
         )
-        heroHeight = min(
+        let browsingHeroHeight = min(
             contentFrame.height * (largeText ? 0.48 : 0.30),
             largeText ? 440 : (compact ? 220 : 300)
         )
+        heroHeight = isSearching
+            ? min(browsingHeroHeight, largeText ? 230 : (compact ? 140 : 180))
+            : browsingHeroHeight
         metadataWidth = compact || largeText ? contentFrame.width : contentFrame.width * 0.56
         let videoWidth = bounds.width
         let videoHeight = videoWidth * 9 / 16
@@ -148,6 +151,22 @@ struct PrototypePreviewHero: View {
         .frame(width: layout.metadataWidth, alignment: .leading)
         .frame(width: layout.contentFrame.width, height: layout.heroHeight, alignment: .bottomLeading)
         .clipped()
+    }
+}
+
+struct PrototypeSearchSummary: View {
+    let channelCount: Int
+    let category: String?
+    @Environment(\.themePalette) private var palette
+
+    var body: some View {
+        HStack(spacing: PrototypeLayout.smallGap) {
+            Text("\(channelCount) channels")
+            if let category { Text("in \(category)") }
+        }
+        .font(.subheadline)
+        .foregroundStyle(palette.secondaryText)
+        .lineLimit(1)
     }
 }
 

@@ -127,6 +127,7 @@ public struct SettingsView: View {
     private let activeAccountID: String?
     private let profiles: [Profile]
     private let activeProfile: Profile
+    private let liveTVPreferencesNamespace: String?
     private let askProfileOnStartup: Bool
     private let appVersion: String
     private let appBuild: String
@@ -232,6 +233,7 @@ public struct SettingsView: View {
         activeAccountID: String?,
         profiles: [Profile],
         activeProfile: Profile,
+        liveTVPreferencesNamespace: String?,
         askProfileOnStartup: Bool,
         appVersion: String,
         appBuild: String,
@@ -299,6 +301,7 @@ public struct SettingsView: View {
         self.activeAccountID = activeAccountID
         self.profiles = profiles
         self.activeProfile = activeProfile
+        self.liveTVPreferencesNamespace = liveTVPreferencesNamespace
         self.askProfileOnStartup = askProfileOnStartup
         self.appVersion = appVersion
         self.appBuild = appBuild
@@ -638,6 +641,11 @@ public struct SettingsView: View {
             navRow("Customize Home", icon: "house",
                    value: nil,
                    route: .customizeHome)
+            #if DEBUG
+            navRow("Live TV", icon: "tv",
+                   value: nil,
+                   route: .liveTV)
+            #endif
             navRow("Detail Page", icon: "rectangle.portrait.on.rectangle.portrait",
                    value: nil,
                    route: .detailPage)
@@ -1026,6 +1034,15 @@ public struct SettingsView: View {
                 homeVisibility: homeVisibility,
                 seerConfigured: seer.isConfigured
             )
+        #if DEBUG
+        case .liveTV:
+            LiveTVSettingsView(
+                store: LiveTVViewSettingsStore(
+                    namespace: liveTVPreferencesNamespace
+                )
+            )
+            .id(activeProfile.id)
+        #endif
         case .nightShift:
             NightShiftDetailView(model: nightShift)
         case .detailPage:

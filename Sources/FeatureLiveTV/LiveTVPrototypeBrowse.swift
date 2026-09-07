@@ -10,6 +10,7 @@ struct PrototypeBrowser: View {
     let model: LiveTVPrototypeModel
     let imports: LiveTVPrototypeImportModel
     @Binding var selectedID: String?
+    @Binding var selectedRowID: LiveTVGuideRowID?
     @Binding var railActive: Bool
     @Binding var focusedProgram: LiveTVPrototypeProgram?
     @Binding var hasFocus: Bool
@@ -17,23 +18,30 @@ struct PrototypeBrowser: View {
     let nowRequest: Int
     @Binding var guideOffset: TimeInterval
     @Binding var timeAnchor: Date
+    @Binding var timelineOffset: CGFloat
     let restoreFocusRequest: Int
     let isPresented: Bool
     let isRestoringFocus: Bool
+    let restoresPlaybackFocus: Bool
+    let watchOrigin: LiveTVGuideRowID?
     let focusRestored: (Int) -> Void
-    let tune: (String) -> Void
+    let tune: (LiveTVGuideRowID) -> Void
     let details: (LiveTVPrototypeProgram) -> Void
     let openControls: () -> Void
+    let openSources: () -> Void
+    let openGuideTime: () -> Void
     let openToolbar: () -> Void
     let isLoading: Bool
     let loadFailed: Bool
     let reload: () -> Void
-    @State private var scrollID: String?
+    @State private var scrollID: LiveTVGuideRowID?
     @State private var pendingFocus: PrototypeBrowseFocus?
     @State private var restorationFallback: PrototypeBrowseFocus?
     @State private var verticalFade = PrototypeScrollFade()
     @State private var lastFocused: PrototypeBrowseFocus?
-    @State private var timelineOffset: CGFloat = 0
+    @State private var confirmedFocus: PrototypeBrowseFocus?
+    @State private var mountedRows = Set<LiveTVGuideRowID>()
+    @State private var restrictDirectionalEntry = true
     @FocusState private var focused: PrototypeBrowseFocus?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -66,6 +74,7 @@ struct PrototypeBrowser: View {
                         Text("Check your connection and retry the source.")
                     } actions: {
                         Button("Retry", action: reload).buttonStyle(PrototypeButtonStyle())
+                        Button("Sources", action: openSources).buttonStyle(PrototypeButtonStyle())
                     }
                 } else if model.channels.isEmpty {
                     ContentUnavailableView {
@@ -74,6 +83,7 @@ struct PrototypeBrowser: View {
                         Text("The playlist has no supported HTTP or HTTPS streams. Sources shows how many entries were skipped.")
                     } actions: {
                         Button("Reload playlist", action: reload).buttonStyle(PrototypeButtonStyle())
+                        Button("Sources", action: openSources).buttonStyle(PrototypeButtonStyle())
                     }
                 } else if model.visibleChannels.isEmpty {
                     ContentUnavailableView {
@@ -105,26 +115,33 @@ struct PrototypeBrowser: View {
                                                 .padding(.top, PrototypeLayout.smallGap)
                                         }
                                         PrototypeGuideRow(
-                                            channel: channel,
+                                            channel: channel, section: entry.section,
                                             programs: model.programs(
                                                 for: channel.id, from: guideStart,
                                                 hours: geometry.size.width >= 650 ? 6 : 2
                                             ),
                                             start: guideStart, now: model.now,
                                             width: geometry.size.width, timelineOffset: $timelineOffset,
-                                            focus: $focused, railActive: railActive || isRestoringFocus,
+                                            focus: $focused,
+                                            railActive: (railActive && restrictDirectionalEntry) || isRestoringFocus,
                                             returnTarget: focusReturnTarget,
                                             favorite: model.favoriteIDs.contains(channel.id),
                                             playing: model.playingChannelID == channel.id,
                                             toggleFavorite: { model.toggleFavorite(channel.id) },
-                                            tune: { tune(channel.id) }, details: details,
+                                            tune: { tune(entry.id) }, details: details,
                                             controls: openControls,
                                             top: { goToTop(proxy) },
-                                            goToNow: goToNow
+                                            goToNow: goToNow,
+                                            focusChanged: confirmFocus,
+                                            sources: openSources, guideTime: openGuideTime
                                         )
                                     }
-                                    .id(channel.id)
-                                    .onAppear { completePendingFocus(channel.id) }
+                                    .id(entry.id)
+                                    .onAppear {
+                                        mountedRows.insert(entry.id)
+                                        completePendingFocus(entry.id)
+                                    }
+                                    .onDisappear { mountedRows.remove(entry.id) }
                                 }
                             }
                             .scrollTargetLayout()
@@ -158,48 +175,7 @@ struct PrototypeBrowser: View {
                         .scrollPosition(id: $scrollID, anchor: .top)
                         .onChange(of: topRequest) { _, _ in goToTop(proxy) }
                         .task(id: isPresented && isRestoringFocus ? restoreFocusRequest : -1) {
-                            guard isPresented, isRestoringFocus else { return }
-                            let request = restoreFocusRequest
-                            guard let target = playbackReturnTarget else {
-                                focusRestored(request)
-                                return
-                            }
-                            pendingFocus = nil
-                            restorationFallback = nil
-                            revealCurrentProgram(width: geometry.size.width)
-                            proxy.scrollTo(target.channelID, anchor: .center)
-                            if reduceMotion { await Task.yield() }
-                            else { try? await Task.sleep(for: .milliseconds(340)) }
-                            guard !Task.isCancelled else { return }
-                            guard let latestTarget = playbackReturnTarget else {
-                                focusRestored(request)
-                                return
-                            }
-                            revealCurrentProgram(width: geometry.size.width)
-                            if latestTarget.channelID != target.channelID {
-                                proxy.scrollTo(latestTarget.channelID, anchor: .center)
-                                await Task.yield()
-                            }
-                            focused = latestTarget
-                            pendingFocus = nil
-                            await Task.yield()
-                            guard !Task.isCancelled else { return }
-                            if focused == latestTarget {
-                                focusRestored(request)
-                                return
-                            }
-                            restorationFallback = .channel(latestTarget.channelID)
-                            proxy.scrollTo(latestTarget.channelID, anchor: .center)
-                            await Task.yield()
-                            guard !Task.isCancelled else { return }
-                            HandoffDiagnostics.emit("LIVE_TV event=guideFocusFallback kind=channel")
-                            focused = restorationFallback
-                            await Task.yield()
-                            guard !Task.isCancelled else { return }
-                            if focused != restorationFallback {
-                                HandoffDiagnostics.emit("LIVE_TV event=guideFocusRestore result=unconfirmed")
-                            }
-                            focusRestored(request)
+                            await restoreFocus(using: proxy, width: geometry.size.width)
                         }
                     }
                 }
@@ -219,41 +195,51 @@ struct PrototypeBrowser: View {
             if !isRestoringFocus { openToolbar() }
         }
         #endif
-        .onChange(of: focused, initial: true) { _, target in
+        .onChange(of: confirmedFocus, initial: true) { _, target in
             hasFocus = target != nil
             if let target {
                 switch target {
                 case .channel:
                     focusedProgram = nil
-                case .program(let channelID, let programID):
+                case .program(let channelID, let programID, _):
                     focusedProgram = model.programs(for: channelID, from: guideStart, hours: 6)
                         .first { $0.id == programID }
                 }
                 selectedID = target.channelID
+                selectedRowID = target.rowID
                 lastFocused = target
+                restrictDirectionalEntry = true
                 railActive = false
                 if isRestoringFocus, target == returnTarget {
                     focusRestored(restoreFocusRequest)
                 }
             }
         }
-        .onChange(of: guideOffset) { _, _ in timelineOffset = 0 }
+        #if os(iOS)
+        .onChange(of: selectedRowID) { _, row in scrollID = row }
+        #endif
         .onChange(of: nowRequest) { _, _ in goToNow() }
         .onChange(of: isRestoringFocus) { _, restoring in
             if !restoring { restorationFallback = nil }
-            if restoring, playbackReturnTarget == nil {
+            if restoring, restorationTarget == nil {
                 focusRestored(restoreFocusRequest)
             }
         }
-        .onChange(of: model.visibleChannels) { _, channels in
-            if channels.isEmpty, isRestoringFocus {
+        .onChange(of: model.guideChannels) { _, rows in
+            if rows.isEmpty, isRestoringFocus {
                 focusRestored(restoreFocusRequest)
             }
-            if !channels.contains(where: { $0.id == selectedID }) {
+            if !rows.contains(where: { $0.id == selectedRowID }) {
                 focusedProgram = nil
-                selectedID = model.guideChannels.first?.id
-                scrollID = selectedID
-                lastFocused = selectedID.map(PrototypeBrowseFocus.channel)
+                let replacement = selectedID.flatMap { model.guideRow(for: $0) } ?? rows.first?.id
+                selectedRowID = replacement
+                selectedID = replacement?.channelID
+                scrollID = replacement
+                lastFocused = replacement.map { .channel($0.channelID, section: $0.section) }
+                if hasFocus, !isRestoringFocus {
+                    pendingFocus = lastFocused
+                    focused = lastFocused
+                }
             }
         }
         .onDisappear { hasFocus = false }
@@ -269,28 +255,108 @@ struct PrototypeBrowser: View {
     }
 
     private var returnTarget: PrototypeBrowseFocus? {
-        if isRestoringFocus { return restorationFallback ?? playbackReturnTarget }
-        if case .program(let channelID, let programID) = lastFocused,
-           model.visibleChannels.contains(where: { $0.id == channelID }),
+        if isRestoringFocus { return restorationFallback ?? restorationTarget }
+        return browseReturnTarget
+    }
+
+    private var browseReturnTarget: PrototypeBrowseFocus? {
+        if case .program(let channelID, let programID, _) = lastFocused,
+           lastFocused?.rowID == selectedRowID,
+           model.guideChannels.contains(where: { $0.id == lastFocused?.rowID }),
            LiveTVGuideTimeline.slots(
                programs: model.programs(for: channelID, from: guideStart, hours: 6),
                from: guideStart, to: guideStart.addingTimeInterval(21_600)
            ).contains(where: { $0.program?.id == programID }) {
             return lastFocused
         }
-        let channelID = model.visibleChannels.first { $0.id == selectedID }?.id
-            ?? model.guideChannels.first?.id
-        return channelID.map(PrototypeBrowseFocus.channel)
+        let row = selectedID.flatMap {
+            model.guideRow(for: $0, preferring: selectedRowID?.section)
+        } ?? model.guideChannels.first?.id
+        return row.map { .channel($0.channelID, section: $0.section) }
+    }
+
+    private var restorationTarget: PrototypeBrowseFocus? {
+        restoresPlaybackFocus ? playbackReturnTarget : browseReturnTarget
     }
 
     private var playbackReturnTarget: PrototypeBrowseFocus? {
-        .returningToPlayback(in: model, selectedChannelID: selectedID)
+        .returningToPlayback(in: model, selectedChannelID: selectedID, originRow: watchOrigin)
     }
 
-    private func completePendingFocus(_ id: String) {
-        guard !isRestoringFocus, pendingFocus?.channelID == id else { return }
+    private func completePendingFocus(_ id: LiveTVGuideRowID) {
+        guard !isRestoringFocus, pendingFocus?.rowID == id else { return }
         focused = pendingFocus
         pendingFocus = nil
+    }
+
+    private func confirmFocus(_ target: PrototypeBrowseFocus, _ isFocused: Bool) {
+        if isFocused { confirmedFocus = target }
+        else if confirmedFocus == target { confirmedFocus = nil }
+    }
+
+    private func restoreFocus(using proxy: ScrollViewProxy, width: CGFloat) async {
+        guard isPresented, isRestoringFocus else { return }
+        let request = restoreFocusRequest
+        guard let target = restorationTarget else {
+            railActive = false
+            focusRestored(request)
+            return
+        }
+        pendingFocus = nil
+        restorationFallback = nil
+        if restoresPlaybackFocus { revealCurrentProgram(width: width) }
+        proxy.scrollTo(target.rowID, anchor: .center)
+        if reduceMotion { await Task.yield() }
+        else { try? await Task.sleep(for: .milliseconds(340)) }
+        guard !Task.isCancelled else { return }
+        guard let latestTarget = restorationTarget else {
+            railActive = false
+            focusRestored(request)
+            return
+        }
+        if restoresPlaybackFocus { revealCurrentProgram(width: width) }
+        if latestTarget.rowID != target.rowID {
+            proxy.scrollTo(latestTarget.rowID, anchor: .center)
+        }
+        await waitForRow(latestTarget.rowID)
+        guard !Task.isCancelled else { return }
+        focused = latestTarget
+        await waitForFocus(latestTarget)
+        guard !Task.isCancelled else { return }
+        if confirmedFocus == latestTarget {
+            focusRestored(request)
+            return
+        }
+        let fallback = PrototypeBrowseFocus.channel(latestTarget.channelID, section: latestTarget.rowID.section)
+        restorationFallback = fallback
+        proxy.scrollTo(latestTarget.rowID, anchor: .center)
+        await Task.yield()
+        guard !Task.isCancelled else { return }
+        HandoffDiagnostics.emit("LIVE_TV event=guideFocusFallback kind=channel")
+        focused = fallback
+        await waitForFocus(fallback)
+        guard !Task.isCancelled else { return }
+        if confirmedFocus != fallback {
+            HandoffDiagnostics.emit("LIVE_TV event=guideFocusRestore result=unconfirmed")
+            // A failed handoff must not strand directional focus on the sidebar.
+            restrictDirectionalEntry = false
+        }
+        railActive = false
+        focusRestored(request)
+    }
+
+    private func waitForRow(_ row: LiveTVGuideRowID) async {
+        for _ in 0..<10 {
+            guard !Task.isCancelled, !mountedRows.contains(row) else { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    private func waitForFocus(_ target: PrototypeBrowseFocus) async {
+        for _ in 0..<8 {
+            guard !Task.isCancelled, confirmedFocus != target else { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
     }
 
     private func revealCurrentProgram(width: CGFloat) {
@@ -318,11 +384,12 @@ struct PrototypeBrowser: View {
     private func goToTop(_ proxy: ScrollViewProxy) {
         guard let first = model.guideChannels.first else { return }
         railActive = false
-        selectedID = first.id
+        selectedID = first.channel.id
+        selectedRowID = first.id
         focusedProgram = nil
-        pendingFocus = .channel(first.id)
+        pendingFocus = .channel(first.channel.id, section: first.section)
         proxy.scrollTo(first.id, anchor: .top)
-        focused = .channel(first.id)
+        focused = pendingFocus
     }
 }
 
@@ -414,6 +481,7 @@ private struct PrototypeNowLine: View {
 
 struct PrototypeGuideRow: View {
     let channel: LiveTVPrototypeChannel
+    var section: LiveTVGuideSection = .channels
     let programs: [LiveTVPrototypeProgram]
     let start: Date
     let now: Date
@@ -430,6 +498,9 @@ struct PrototypeGuideRow: View {
     let controls: () -> Void
     let top: () -> Void
     let goToNow: () -> Void
+    var focusChanged: (PrototypeBrowseFocus, Bool) -> Void = { _, _ in }
+    var sources: () -> Void = {}
+    var guideTime: () -> Void = {}
     @ScaledMetric(relativeTo: .subheadline) private var rowHeight: CGFloat = PrototypeLayout.rowHeight
     @State private var compactFade = PrototypeScrollFade()
 
@@ -438,11 +509,14 @@ struct PrototypeGuideRow: View {
             VStack(alignment: .leading, spacing: PrototypeLayout.smallGap) {
                 HStack(spacing: PrototypeLayout.columnGap) {
                     PrototypeGuideStation(
-                        channel: channel, favorite: favorite, playing: playing, tune: tune, toggleFavorite: toggleFavorite,
-                        controls: controls, top: top, height: rowHeight
+                        channel: channel, section: section,
+                        favorite: favorite, playing: playing, tune: tune, toggleFavorite: toggleFavorite,
+                        controls: controls, top: top, height: rowHeight,
+                        focusChanged: { focusChanged(channelFocus, $0) },
+                        sources: sources, guideTime: programs.isEmpty ? nil : guideTime
                     )
-                    .focused(focus, equals: .channel(channel.id))
-                    .disabled(railActive && returnTarget != .channel(channel.id))
+                    .focused(focus, equals: channelFocus)
+                    .disabled(railActive && returnTarget != channelFocus)
                     if programs.isEmpty {
                         PrototypeGuideGap(channelName: channel.name, height: rowHeight)
                     }
@@ -455,10 +529,12 @@ struct PrototypeGuideRow: View {
                                     PrototypeProgramLabel(program: program, now: now)
                                         .frame(width: 230, alignment: .leading)
                                 }
-                                .buttonStyle(PrototypeButtonStyle(surface: .program))
+                                .buttonStyle(PrototypeButtonStyle(
+                                    surface: .program, focusChanged: { focusChanged(programFocus(program.id), $0) }
+                                ))
                                 .focusEffectDisabled()
-                                .focused(focus, equals: .program(channelID: channel.id, programID: program.id))
-                                .disabled(railActive && returnTarget != .program(channelID: channel.id, programID: program.id))
+                                .focused(focus, equals: programFocus(program.id))
+                                .disabled(railActive && returnTarget != programFocus(program.id))
                             }
                         }
                     }
@@ -484,19 +560,22 @@ struct PrototypeGuideRow: View {
         } else {
             HStack(spacing: PrototypeLayout.columnGap) {
                 PrototypeGuideStation(
-                    channel: channel, favorite: favorite, playing: playing, tune: tune, toggleFavorite: toggleFavorite,
-                    controls: controls, top: top, height: rowHeight
+                    channel: channel, section: section,
+                    favorite: favorite, playing: playing, tune: tune, toggleFavorite: toggleFavorite,
+                    controls: controls, top: top, height: rowHeight,
+                    focusChanged: { focusChanged(channelFocus, $0) },
+                    sources: sources, guideTime: programs.isEmpty ? nil : guideTime
                 )
                     .frame(width: PrototypeLayout.stationWidth(for: width))
-                    .focused(focus, equals: .channel(channel.id))
-                    .disabled(railActive && returnTarget != .channel(channel.id))
+                    .focused(focus, equals: channelFocus)
+                    .disabled(railActive && returnTarget != channelFocus)
                 if programs.isEmpty {
                     PrototypeGuideGap(channelName: channel.name, height: rowHeight)
                         .frame(maxWidth: .infinity)
                 } else {
                     PrototypeSynchronizedTimeline(
                         offset: $timelineOffset,
-                        isFocusedRow: focus.wrappedValue?.channelID == channel.id,
+                        isFocusedRow: focus.wrappedValue?.rowID == channelFocus.rowID,
                         viewportWidth: timelineWidth
                     ) {
                         HStack(spacing: 0) {
@@ -517,15 +596,18 @@ struct PrototypeGuideRow: View {
                                         )
                                         .clipped()
                                     }
-                                    .buttonStyle(PrototypeButtonStyle(padded: false, surface: .program))
+                                    .buttonStyle(PrototypeButtonStyle(
+                                        padded: false, surface: .program,
+                                        focusChanged: { focusChanged(programFocus(program.id), $0) }
+                                    ))
                                     .focusEffectDisabled()
                                     .padding(.vertical, PrototypeLayout.programInset)
                                     .padding(.trailing, min(PrototypeLayout.cellGap, slotWidth(slot) / 4))
                                     .frame(width: slotWidth(slot), height: rowHeight)
                                     .clipped()
-                                    .focused(focus, equals: .program(channelID: channel.id, programID: program.id))
+                                    .focused(focus, equals: programFocus(program.id))
                                     .disabled(
-                                        railActive && returnTarget != .program(channelID: channel.id, programID: program.id)
+                                        railActive && returnTarget != programFocus(program.id)
                                     )
                                     .contextMenu {
                                         Button("Program details", systemImage: "info.circle") { details(program) }
@@ -534,7 +616,9 @@ struct PrototypeGuideRow: View {
                                             favorite ? "Remove from Favorites" : "Add to Favorites",
                                             systemImage: "star", action: toggleFavorite
                                         )
-                                        Button("Search and options", systemImage: "magnifyingglass", action: controls)
+                                        Button("Search channels", systemImage: "magnifyingglass", action: controls)
+                                        Button("Sources", systemImage: "antenna.radiowaves.left.and.right", action: sources)
+                                        Button("Guide time", systemImage: "calendar", action: guideTime)
                                         Button("Back to top", systemImage: "arrow.up.to.line", action: top)
                                         Button("Now", systemImage: "clock", action: goToNow)
                                     }
@@ -551,6 +635,14 @@ struct PrototypeGuideRow: View {
             }
             .frame(height: rowHeight)
         }
+    }
+
+    private var channelFocus: PrototypeBrowseFocus {
+        .channel(channel.id, section: section)
+    }
+
+    private func programFocus(_ id: String) -> PrototypeBrowseFocus {
+        .program(channelID: channel.id, programID: id, section: section)
     }
 
     private func slotWidth(_ slot: LiveTVGuideSlot) -> CGFloat {
@@ -574,6 +666,7 @@ struct PrototypeGuideRow: View {
 
 private struct PrototypeGuideStation: View {
     let channel: LiveTVPrototypeChannel
+    let section: LiveTVGuideSection
     let favorite: Bool
     let playing: Bool
     let tune: () -> Void
@@ -581,6 +674,9 @@ private struct PrototypeGuideStation: View {
     let controls: () -> Void
     let top: () -> Void
     var height: CGFloat? = nil
+    var focusChanged: ((Bool) -> Void)?
+    var sources: () -> Void = {}
+    var guideTime: (() -> Void)?
 
     var body: some View {
         Button(action: tune) {
@@ -591,18 +687,22 @@ private struct PrototypeGuideStation: View {
             )
                 .clipped()
         }
-        .buttonStyle(PrototypeButtonStyle(padded: false, surface: .station))
+        .buttonStyle(PrototypeButtonStyle(padded: false, surface: .station, focusChanged: focusChanged))
         .focusEffectDisabled()
         .accessibilityLabel(Text(channel.name))
         .accessibilityValue(Text("Channel \(channel.number)"))
         .accessibilityAddTraits(playing ? .isSelected : [])
-        .accessibilityIdentifier("live-tv-channel-\(channel.number)")
+        .accessibilityIdentifier("live-tv-channel-\(section.rawValue)-\(channel.number)")
         .contextMenu {
             Button(
                 favorite ? "Remove from Favorites" : "Add to Favorites",
                 systemImage: "star", action: toggleFavorite
             )
-            Button("Search and options", systemImage: "magnifyingglass", action: controls)
+            Button("Search channels", systemImage: "magnifyingglass", action: controls)
+            Button("Sources", systemImage: "antenna.radiowaves.left.and.right", action: sources)
+            if let guideTime {
+                Button("Guide time", systemImage: "calendar", action: guideTime)
+            }
             Button("Back to top", systemImage: "arrow.up.to.line", action: top)
         }
     }

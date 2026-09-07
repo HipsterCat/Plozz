@@ -53,35 +53,50 @@ Release builds.
 The preview loads the complete supplied US playlist, then the enabled XMLTV guides.
 Channels become available before guide loading finishes. There is one unified
 channel guide, not separate Channels and Guide tabs. It groups up to three
-**Recently watched** channels first, then **Favorites**, then the remaining
-channels. Empty groups are omitted and a channel appears only once.
-Search, categories, source and guide filters apply across every group.
+**Recently watched** channels first, then **Favorites**, then the full filtered
+channel list. Empty groups are omitted. Recent and Favorite entries are
+independent shortcuts: a channel can appear in both and always remains in the
+main list. Each section/channel occurrence has its own stable row and focus ID.
+Search, categories and view filters apply across every group.
 Search, categories, sorting and Favorites survive opening the player,
 returning to the guide and refreshing sources.
-Favorites, recent channels, filters and guide-source selections are still in-memory. Switching
-destinations retains them within the signed-in shell, including under the
-custom rail; profile/root rebuilds, memory eviction or process restart may
-reset them.
+Favorites and recent channels are saved per Plozz profile and restored across
+sessions. Initially empty or temporarily unavailable source catalogs do not
+erase saved IDs. Unreadable preferences are not overwritten, and failed writes
+offer a retry rather than displaying an unsaved change as successful.
+Search/category state and guide-source selections remain session-scoped.
+View preferences live in the app's **Settings > Live TV** page.
+Earlier prototype builds did not store Favorites or Recents on disk, so there
+is no prior in-memory history to migrate on the first updated launch.
 
 - Browse, search names/numbers/categories/sources, filter and sort.
 - Favorite channels through their context menu.
-- Wide screens pin Search, an independently scrolling category list
-  and More to the left of the guide. Search and More never scroll away
+- Search transforms the current screen rather than opening a second results
+  dialog. Apple TV uses the native inline search keyboard above the familiar
+  channel/programme rows; iPhone/iPad replace the hero with an inline search field.
+  Both use the same query and filtered catalog, not an extra eight-result list.
+  The current category remains identified. Leaving Search restores the
+  original guide occurrence and time position; the video stays in the same player.
+- Wide screens pin Search and an independently scrolling category list
+  to the left of the guide. Search never scrolls away
   with either list. Select a category directly; Right returns to the remembered
   guide channel/program. Compact or short windows keep pinned horizontal controls.
   The selected category uses a checkmark rather than a second focused-looking
-  box. Favorites are grouped in the guide, not a separate sidebar button;
-  Favorites-only filtering remains available through More > Filter channels.
+  box. Favorites are grouped in the guide, not a separate sidebar button.
+  The More menu is gone: sorting, Auto preview, Favorites-only and guide-only
+  preferences are in Settings > Live TV. Sources and Guide time remain
+  directly available through channel/programme context menus; failed or empty
+  imports also expose Sources beside Retry.
   On Apple TV, Back from a guide row focuses Search without scrolling the list.
   Back from the controls goes to the
   surrounding app navigation. Holding Select on a channel/program also opens
-  its context menu with Search and options and Back to top.
-  **More** contains source management, sorting, Auto preview and Guide time.
-  Its Back to top entry and the sidebar's bottom clock are removed.
+  its context menu with Search channels, Sources, Guide time when available,
+  and Back to top. The sidebar's bottom clock remains removed.
   The channel/program context-menu Back to top action remains and does not
   reset the selected time.
-- Category, source and sorting choices use explicit navigation lists with
-  checkmarked selections, not nested system Picker presentations inside a sheet.
+- Compact category choices use an explicit navigation list with checkmarked
+  selections, not nested system Picker presentations inside a sheet. Sorting
+  uses the app's standard Settings controls.
 - The guide sits in one rounded tray with roomier channel rows and
   quieter programme tiles. Logo plates, channel tiles and the outer tray use
   concentric radii derived from their insets. TV rows are 128 points tall,
@@ -137,7 +152,7 @@ reset them.
   horizontally through a shared six-hour window. The time ruler stays above the
   vertical list and follows the same horizontal offset. Its leading label
   identifies the visible channel group instead of showing a date and buttons.
-  More > Guide time retains the date and Earlier/Now/Later controls.
+  Guide time in the context menu retains the date and Earlier/Now/Later controls.
   Earlier/Later shifts the
   window from one day back through seven days ahead, subject to source coverage.
   The time anchor does not jump at the half hour while browsing; **Now** recenters
@@ -163,7 +178,7 @@ reset them.
   Recently watched records only deliberate fullscreen viewing after the matching
   source is playing and has presented video. Automatic previews, failed startup
   and stale callbacks do not count. Revisiting moves a channel to the front.
-  Next/Previous snapshots the filtered guide order when watching starts, so
+  Next/Previous snapshots the filtered guide order, deduplicated by channel, when watching starts, so
   promoting a channel into Recents cannot make transport bounce between stations.
   This channel history never writes movie/episode progress or watched status.
 
@@ -207,12 +222,21 @@ away and expands the existing surface to unobscured, aspect-fit playback.
 Back restores the guide's row, program, filters and time position; it does not
 stop, reload or replace the engine. Reduced Motion removes the spatial animation.
 On Apple TV, Search and surrounding navigation remain unavailable during the
-focus handoff. The playing channel's currently airing programme receives focus;
+focus handoff. The playing channel's currently airing programme receives focus
+in the same Recent, Favorite or main-list occurrence used to start watching;
 programme rollover selects the new programme, and missing listings fall back to
-the channel. A changed channel or offscreen programme is brought into view.
+the channel. If a shortcut no longer exists, the same channel's main-list entry
+is used instead. A changed channel or offscreen programme is brought into view.
+Focus restoration waits for the row to mount and for native focus confirmation,
+not merely an assigned focus binding. A bounded station fallback releases the
+entry gates if it fails, so the guide cannot remain unreachable from Search.
+Moving from the sidebar toward the guide reveals its remembered occurrence even
+when that row was scrolled offscreen.
 Returning from fullscreen keeps the chosen channel playing rather than retuning
-on the first navigation press. **Auto preview** in More re-enables
-following channel focus. The remote's Play/Pause also works during browsing.
+on the first navigation press. **Auto preview** in Settings controls whether
+focus-following resumes when Live TV is reopened; deliberate watching keeps
+the current channel playing during that visit. The remote's Play/Pause also
+works during browsing.
 The normal tvOS player header has no Close button; Back returns to the guide.
 Transport focus selects an available playback action instead of a removed
 header target. Startup and interruption escape/retry controls remain available,

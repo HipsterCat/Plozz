@@ -270,6 +270,18 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
         }
     }
 
+    func testSearchTransformationKeepsVideoAnchoredAndGivesTheGuideMoreRoom() {
+        for size in [CGSize(width: 1_920, height: 1_080), CGSize(width: 1_024, height: 768), CGSize(width: 390, height: 844)] {
+            let browsing = PrototypePreviewLayout(size: size)
+            let searching = PrototypePreviewLayout(size: size, isSearching: true)
+            XCTAssertEqual(searching.videoFrame, browsing.videoFrame)
+            XCTAssertEqual(searching.contentFrame, browsing.contentFrame)
+            XCTAssertEqual(searching.fadeEnd, browsing.fadeEnd)
+            XCTAssertLessThanOrEqual(searching.heroHeight, browsing.heroHeight)
+            XCTAssertGreaterThan(searching.heroHeight, 0)
+        }
+    }
+
     func testSidebarFitsWithLongAndScrollableCategoryLists() {
         let widths: [CGFloat] = [224, 272]
         for width in widths {
@@ -413,7 +425,7 @@ private struct ToolbarFixture: View {
     var body: some View {
         PrototypeBrowseToolbar(
             model: model, active: $active, focusRequest: 0, compact: compact,
-            search: {}, filters: {}, more: {}
+            search: {}, filters: {}
         )
     }
 }
@@ -432,7 +444,7 @@ private struct SidebarFixture: View {
     )
 
     var body: some View {
-        PrototypeBrowseSidebar(model: model, active: $active, focusRequest: 0, search: {}, more: {})
+        PrototypeBrowseSidebar(model: model, active: $active, focusRequest: 0, search: {}, enterGuide: {})
     }
 }
 #endif

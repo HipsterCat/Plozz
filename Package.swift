@@ -394,7 +394,10 @@ let package = Package(
             name: "FeatureSearch",
             dependencies: ["CoreModels", "CoreUI", "FeatureSearchCore"]
         ),
-        .target(name: "FeatureLiveTVCore"),
+        .target(
+            name: "FeatureLiveTVCore",
+            dependencies: ["CoreModels"]
+        ),
         .target(
             name: "FeatureLiveTV",
             dependencies: ["CoreModels", "CoreUI", "FeatureLiveTVCore"]
@@ -890,7 +893,7 @@ let package = Package(
         ),
         .testTarget(
             name: "FeatureLiveTVCoreTests",
-            dependencies: ["FeatureLiveTVCore"]
+            dependencies: ["CoreModels", "FeatureLiveTVCore"]
         ),
         .testTarget(
             name: "FeatureLiveTVTests",
