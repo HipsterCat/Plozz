@@ -1127,7 +1127,9 @@ struct DetailHeroView: View, Equatable {
             asyncFallbackURL: episodeStillFallback,
             pinIdentity: item.stablePresentationID
         ) {
-            MediaArtworkPlaceholder(symbol: .init(for: item))
+            MediaArtworkPlaceholder(
+                symbol: .init(for: item), cornerRadius: PlozzMetrics.standard.landscapeCardCornerRadius
+            )
         }
         .blur(radius: spoilerSettings.shouldHideThumbnail(for: item) ? 28 : 0)
         .frame(width: width, height: width * 9 / 16)

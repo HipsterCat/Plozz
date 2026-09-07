@@ -47,9 +47,11 @@ private enum SeasonDownloadRowMetrics {
 
 public struct SeasonDownloadRowArtwork<Content: View>: View {
     private let content: Content
+    private let showsMediaEdge: Bool
 
-    public init(@ViewBuilder content: () -> Content) {
+    public init(showsMediaEdge: Bool = true, @ViewBuilder content: () -> Content) {
         self.content = content()
+        self.showsMediaEdge = showsMediaEdge
     }
 
     public var body: some View {
@@ -60,7 +62,7 @@ public struct SeasonDownloadRowArtwork<Content: View>: View {
             )
             .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .plozzMediaEdge(cornerRadius: 6)
+            .plozzMediaEdge(cornerRadius: 6, isEnabled: showsMediaEdge)
             .accessibilityHidden(true)
     }
 }

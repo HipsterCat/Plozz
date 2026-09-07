@@ -100,7 +100,10 @@ public struct EpisodeColumnCard: View, Equatable {
                     cornerRadius: metrics.landscapeCardCornerRadius,
                     style: .continuous
                 ))
-                .plozzMediaEdge(cornerRadius: metrics.landscapeCardCornerRadius)
+                .plozzMediaEdge(
+                    cornerRadius: metrics.landscapeCardCornerRadius,
+                    isEnabled: MediaArtworkPlaceholder.Symbol(for: item) == .playback
+                )
                 .plozzFocusHalo(
                     cornerRadius: metrics.landscapeCardCornerRadius,
                     focusScale: reduceMotion ? 1 : PlozzTheme.Metrics.mediumFocusedCardScale,
@@ -247,7 +250,7 @@ public struct EpisodeColumnCard: View, Equatable {
     }
 
     private var neutralPlaceholder: some View {
-        MediaArtworkPlaceholder(symbol: .init(for: item))
+        MediaArtworkPlaceholder(symbol: .init(for: item), cornerRadius: metrics.landscapeCardCornerRadius)
     }
 
     private var asyncArtworkFallback: (@Sendable () async -> URL?)? {

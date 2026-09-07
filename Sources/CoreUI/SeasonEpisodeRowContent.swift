@@ -60,9 +60,11 @@ public struct SeasonEpisodeRowContent<Artwork: View, Status: View, Accessory: Vi
 
 public struct SeasonEpisodeRowArtwork<Content: View>: View {
     private let content: Content
+    private let showsMediaEdge: Bool
 
-    public init(@ViewBuilder content: () -> Content) {
+    public init(showsMediaEdge: Bool = true, @ViewBuilder content: () -> Content) {
         self.content = content()
+        self.showsMediaEdge = showsMediaEdge
     }
 
     public var body: some View {
@@ -70,7 +72,7 @@ public struct SeasonEpisodeRowArtwork<Content: View>: View {
             .frame(width: 80, height: 45)
             .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .plozzMediaEdge(cornerRadius: 6)
+            .plozzMediaEdge(cornerRadius: 6, isEnabled: showsMediaEdge)
             .accessibilityHidden(true)
     }
 }

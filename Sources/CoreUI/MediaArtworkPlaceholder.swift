@@ -9,7 +9,7 @@ import CoreModels
 /// a glyph *and* repeated the title, while the iOS episode rows drew a bare
 /// filled rectangle with no glyph at all.
 ///
-/// Deliberately glyph-only. Every surface that uses this already prints the
+/// Deliberately text-free. Every surface that uses this already prints the
 /// item's title as a caption directly beneath the artwork, and that caption is
 /// the better copy — it truncates to the card's width, follows Dynamic Type, and
 /// carries the subtitle line. Repeating the title inside the artwork said the
@@ -31,6 +31,7 @@ public struct MediaArtworkPlaceholder: View {
     private let tint: Color
     private let glyphSize: CGFloat
     private let symbol: Symbol
+    private let cornerRadius: CGFloat
 
     /// - Parameters:
     ///   - tint: colour the wash and glyph derive from. Defaults to `.secondary`
@@ -39,19 +40,34 @@ public struct MediaArtworkPlaceholder: View {
     ///   - glyphSize: point size of the glyph, so a small episode thumbnail
     ///     and a full poster stay visually proportionate.
     ///   - symbol: use `.media` when no playable content is represented. It
-    ///     shows a faint empty frame without suggesting an action or an error.
-    public init(tint: Color = .secondary, glyphSize: CGFloat = 40, symbol: Symbol = .playback) {
+    ///     draws an empty dashed box, without a fill or center glyph.
+    ///   - cornerRadius: matches the enclosing artwork's clipping radius.
+    public init(
+        tint: Color = .secondary,
+        glyphSize: CGFloat = 40,
+        symbol: Symbol = .playback,
+        cornerRadius: CGFloat = 6
+    ) {
         self.tint = tint
         self.glyphSize = glyphSize
         self.symbol = symbol
+        self.cornerRadius = cornerRadius
     }
 
     public var body: some View {
         ZStack {
-            tint.opacity(0.08)
-            Image(systemName: symbol.rawValue)
-                .font(.system(size: glyphSize))
-                .foregroundStyle(tint.opacity(symbol == .media ? 0.55 : 1))
+            if symbol == .media {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(
+                        tint.opacity(0.55),
+                        style: StrokeStyle(lineWidth: 1, lineCap: .round, dash: [4, 3])
+                    )
+            } else {
+                tint.opacity(0.08)
+                Image(systemName: symbol.rawValue)
+                    .font(.system(size: glyphSize))
+                    .foregroundStyle(tint)
+            }
         }
         .accessibilityHidden(true)
     }
