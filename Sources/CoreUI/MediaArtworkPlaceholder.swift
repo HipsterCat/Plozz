@@ -20,7 +20,7 @@ import CoreModels
 public struct MediaArtworkPlaceholder: View {
     public enum Symbol: String, Sendable {
         case playback = "play.rectangle"
-        case media = "film"
+        case media = "rectangle.dashed"
 
         public init(for item: MediaItem) {
             self = item.scheduledAirDate != nil || TitleClassifier.isNotOwnedForBadge(item)
@@ -39,7 +39,7 @@ public struct MediaArtworkPlaceholder: View {
     ///   - glyphSize: point size of the glyph, so a small episode thumbnail
     ///     and a full poster stay visually proportionate.
     ///   - symbol: use `.media` when no playable content is represented. It
-    ///     identifies media without suggesting a playback action or an error.
+    ///     shows a faint empty frame without suggesting an action or an error.
     public init(tint: Color = .secondary, glyphSize: CGFloat = 40, symbol: Symbol = .playback) {
         self.tint = tint
         self.glyphSize = glyphSize
@@ -51,7 +51,7 @@ public struct MediaArtworkPlaceholder: View {
             tint.opacity(0.08)
             Image(systemName: symbol.rawValue)
                 .font(.system(size: glyphSize))
-                .foregroundStyle(tint)
+                .foregroundStyle(tint.opacity(symbol == .media ? 0.55 : 1))
         }
         .accessibilityHidden(true)
     }

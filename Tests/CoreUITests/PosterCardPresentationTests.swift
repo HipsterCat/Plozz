@@ -15,7 +15,7 @@ final class PosterCardPresentationTests: XCTestCase {
             )
             XCTAssertEqual(MediaArtworkPlaceholder.Symbol(for: item), .media)
         }
-        XCTAssertEqual(MediaArtworkPlaceholder.Symbol.media.rawValue, "film")
+        XCTAssertEqual(MediaArtworkPlaceholder.Symbol.media.rawValue, "rectangle.dashed")
     }
 
     func testLibraryItemsWithMissingArtworkKeepTheirPlaybackSymbol() {
