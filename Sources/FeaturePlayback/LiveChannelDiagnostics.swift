@@ -4,10 +4,13 @@ import CoreNetworking
 import Foundation
 
 struct LiveChannelDiagnostics {
+    static let maximumElapsedMilliseconds = 86_400_000
+
     enum Event: String {
         case load, retry, pause, resume, seek, seekCompleted, suspend, foreground
         case failure, startupTimeout, stallTimeout, ended, stop
         case initializationFailure, sourceReset, retune, retuneExhausted
+        case tuneToFirstFrame
     }
 
     struct Cadence {
@@ -40,6 +43,28 @@ struct LiveChannelDiagnostics {
         guard HandoffDiagnostics.isEnabled else { return }
         let code = error.map(HandoffDiagnostics.errorCode) ?? "none"
         emit("attempt=\(attempt) event=\(event.rawValue) error=\(code)")
+    }
+
+    func tuneToFirstFrame(
+        attempt: Int,
+        startedAt: TimeInterval,
+        firstFrameAt: TimeInterval
+    ) {
+        guard HandoffDiagnostics.isEnabled else { return }
+        let elapsed = Self.elapsedMilliseconds(
+            startedAt: startedAt,
+            firstFrameAt: firstFrameAt
+        )
+        emit("attempt=\(attempt) event=\(Event.tuneToFirstFrame.rawValue) elapsedMs=\(elapsed)")
+    }
+
+    static func elapsedMilliseconds(
+        startedAt: TimeInterval,
+        firstFrameAt: TimeInterval
+    ) -> Int {
+        guard startedAt.isFinite, firstFrameAt.isFinite else { return 0 }
+        let elapsed = max(0, firstFrameAt - startedAt) * 1_000
+        return Int(min(elapsed.rounded(), Double(maximumElapsedMilliseconds)))
     }
 
     private func emit(_ detail: String) {

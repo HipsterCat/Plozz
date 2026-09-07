@@ -1,5 +1,6 @@
 #if DEBUG && canImport(UIKit)
 import CoreModels
+import CoreNetworking
 import SwiftUI
 import UIKit
 import XCTest
@@ -78,6 +79,270 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         await model.requestRetune()?.value
         XCTAssertEqual(engine.loadedHeaders, Array(repeating: headers, count: engine.liveLoads))
         XCTAssertEqual(engine.liveLoads, 3)
+    }
+
+    func testChannelChangeReusesEngineWithNewURLAndHeaders() async {
+        let engine = LiveEngineSpy()
+        let firstURL = URL(string: "https://example.invalid/one.m3u8")!
+        let secondURL = URL(string: "https://example.invalid/two.m3u8")!
+        let firstHeaders = ["User-Agent": "First"]
+        let secondHeaders = ["User-Agent": "Second", "Referer": "https://example.invalid/"]
+        let model = LiveChannelPlayerModel(
+            engine: engine,
+            channelID: "one",
+            streamURL: firstURL,
+            httpHeaders: firstHeaders
+        )
+        defer { model.stop() }
+
+        await model.start()
+        await model.changeSource(
+            channelID: "two",
+            streamURL: secondURL,
+            httpHeaders: secondHeaders
+        )
+
+        XCTAssertEqual(engine.loadedURLs, [firstURL, secondURL])
+        XCTAssertEqual(engine.loadedHeaders, [firstHeaders, secondHeaders])
+        XCTAssertEqual(engine.liveLoads, 2)
+        XCTAssertEqual(model.phase, .playing)
+    }
+
+    func testChannelChangeResetsPerChannelStateAndCoversPreviousFrame() async {
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+        await model.start()
+        engine.onFailure?(.serverUnreachable)
+        await model.retry()
+        XCTAssertEqual(model.manualRetryCount, 1)
+        XCTAssertTrue(model.hasPresentedFrame)
+
+        engine.suspendsLoads = true
+        let change = Task {
+            await model.changeSource(
+                channelID: "replacement",
+                streamURL: URL(string: "https://example.invalid/replacement.m3u8")!,
+                httpHeaders: ["Authorization": "fixture"]
+            )
+        }
+        await waitForLiveLoads(3, engine: engine)
+
+        XCTAssertEqual(model.manualRetryCount, 0)
+        XCTAssertEqual(model.phase, .loading)
+        XCTAssertFalse(model.hasPresentedFrame)
+        XCTAssertNil(model.seekableWindow)
+        engine.resumeLoad(3)
+        await change.value
+        XCTAssertEqual(model.phase, .playing)
+    }
+
+    func testStaleChannelFailureCannotReplaceNewestPlaybackState() async {
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+        await model.start()
+        let staleFailure = engine.capturedFailureHandlers[0]
+
+        await model.changeSource(
+            channelID: "newest",
+            streamURL: URL(string: "https://example.invalid/newest.m3u8")!,
+            httpHeaders: [:]
+        )
+        staleFailure(.unauthorized)
+
+        XCTAssertEqual(model.phase, .playing)
+        XCTAssertTrue(model.hasPresentedFrame)
+        XCTAssertEqual(engine.stopCount, 0)
+    }
+
+    func testStaleLoadCompletionCannotPresentOldChannelFrame() async {
+        let engine = LiveEngineSpy()
+        engine.suspendsLoads = true
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+
+        let firstLoad = Task { await model.start() }
+        await waitForLiveLoads(1, engine: engine)
+        let replacementLoad = Task {
+            await model.changeSource(
+                channelID: "replacement",
+                streamURL: URL(string: "https://example.invalid/replacement.m3u8")!,
+                httpHeaders: [:]
+            )
+        }
+        await waitForLiveLoads(2, engine: engine)
+
+        engine.resumeLoad(1)
+        await firstLoad.value
+        XCTAssertEqual(model.phase, .loading)
+        XCTAssertFalse(model.hasPresentedFrame)
+
+        engine.resumeLoad(2)
+        await replacementLoad.value
+        XCTAssertEqual(model.phase, .playing)
+        XCTAssertTrue(model.hasPresentedFrame)
+    }
+
+    func testUnchangedSourceDoesNotReload() async {
+        let engine = LiveEngineSpy()
+        let url = URL(string: "https://example.invalid/channel.m3u8")!
+        let headers = ["User-Agent": "IPTV test"]
+        let model = LiveChannelPlayerModel(
+            engine: engine,
+            channelID: "same",
+            streamURL: url,
+            httpHeaders: headers
+        )
+        defer { model.stop() }
+        await model.start()
+
+        await model.changeSource(
+            channelID: "same",
+            streamURL: url,
+            httpHeaders: headers
+        )
+
+        XCTAssertEqual(engine.liveLoads, 1)
+    }
+
+    func testSameChannelIDReloadsWhenURLOrHeadersChange() async {
+        let engine = LiveEngineSpy()
+        let firstURL = URL(string: "https://example.invalid/original.m3u8")!
+        let replacementURL = URL(string: "https://example.invalid/replacement.m3u8")!
+        let firstHeaders = ["User-Agent": "Original"]
+        let replacementHeaders = ["User-Agent": "Replacement"]
+        let model = LiveChannelPlayerModel(
+            engine: engine,
+            channelID: "stable-id",
+            streamURL: firstURL,
+            httpHeaders: firstHeaders
+        )
+        defer { model.stop() }
+        await model.start()
+
+        await model.changeSource(
+            channelID: "stable-id",
+            streamURL: replacementURL,
+            httpHeaders: firstHeaders
+        )
+        await model.changeSource(
+            channelID: "stable-id",
+            streamURL: replacementURL,
+            httpHeaders: replacementHeaders
+        )
+
+        XCTAssertEqual(
+            engine.loadedURLs,
+            [firstURL, replacementURL, replacementURL]
+        )
+        XCTAssertEqual(
+            engine.loadedHeaders,
+            [firstHeaders, firstHeaders, replacementHeaders]
+        )
+    }
+
+    func testChannelChangeResetsAutomaticRetuneBudget() async {
+        let clock = LiveTestClock()
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine, clock: clock)
+        defer { model.stop() }
+        await model.start()
+        for tick in 0..<3 {
+            clock.now = Double(tick) * 20
+            engine.onLiveSourceReset?()
+            await model.requestRetune()?.value
+        }
+        engine.onLiveSourceReset?()
+        XCTAssertEqual(model.phase, .failed(.recoveryExhausted))
+
+        await model.changeSource(
+            channelID: "new-budget",
+            streamURL: URL(string: "https://example.invalid/new-budget.m3u8")!,
+            httpHeaders: [:]
+        )
+        engine.onLiveSourceReset?()
+        await model.requestRetune()?.value
+
+        XCTAssertEqual(engine.liveLoads, 6)
+        XCTAssertEqual(model.phase, .playing)
+    }
+
+    func testChannelChangePreservesUserPauseIntent() async {
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+        await model.start()
+        model.togglePlayPause()
+
+        await model.changeSource(
+            channelID: "paused-replacement",
+            streamURL: URL(string: "https://example.invalid/paused.m3u8")!,
+            httpHeaders: [:]
+        )
+
+        XCTAssertEqual(model.phase, .paused)
+        XCTAssertTrue(engine.isPaused)
+        model.togglePlayPause()
+        XCTAssertEqual(model.phase, .playing)
+        XCTAssertEqual(engine.playCount, 1)
+    }
+
+    func testPausedReplacementCanResumeBeforeItsFirstFrameAndLiveWindow() async {
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+        await model.start()
+        model.togglePlayPause()
+        engine.liveSnapshot.firstFrameReady = false
+        engine.liveSnapshot.seekableRange = nil
+        engine.liveSnapshot.behindLiveSeconds = 10
+
+        await model.changeSource(
+            channelID: "paused-no-frame",
+            streamURL: URL(string: "https://example.invalid/paused-no-frame.m3u8")!
+        )
+
+        XCTAssertEqual(model.phase, .paused)
+        XCTAssertFalse(model.hasPresentedFrame)
+        XCTAssertTrue(model.canPause)
+        XCTAssertFalse(model.canGoLive)
+        model.togglePlayPause()
+        XCTAssertFalse(engine.isPaused)
+        XCTAssertEqual(engine.playCount, 1)
+    }
+
+    func testFirstFrameTimingIsOncePerAttemptAndIncludesPauseBeforeFirstFrame() async {
+        let wasEnabled = HandoffDiagnostics.isEnabled
+        HandoffDiagnostics.setEnabled(true)
+        defer { HandoffDiagnostics.setEnabled(wasEnabled) }
+        let clock = LiveTestClock()
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine, clock: clock)
+        defer { model.stop() }
+        await model.start()
+        model.togglePlayPause()
+        engine.liveSnapshot.firstFrameReady = false
+        clock.now = 100
+        await model.changeSource(
+            channelID: "timed-replacement",
+            streamURL: URL(string: "https://example.invalid/timed.m3u8")!
+        )
+        clock.now = 110
+        model.togglePlayPause()
+        clock.now = 112
+        engine.liveSnapshot.firstFrameReady = true
+        model.refreshFromEngine()
+
+        let lines = PlozzLog.recentEntries(limit: 50).map(\.message)
+        let timing = lines.last { $0.contains("event=tuneToFirstFrame") }
+        XCTAssertTrue(timing?.contains("elapsedMs=12000") == true)
+        let occurrences = lines.filter { $0 == timing }.count
+        model.refreshFromEngine()
+        XCTAssertEqual(
+            PlozzLog.recentEntries(limit: 50).map(\.message).filter { $0 == timing }.count,
+            occurrences
+        )
     }
 
     func testEnginePhaseOwnsStatusEvenWhileClockAdvances() async {
@@ -376,6 +641,17 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         XCTAssertEqual(engine.stopCount, 0)
         XCTAssertEqual(model.phase, .playing)
     }
+
+    private func waitForLiveLoads(
+        _ expected: Int,
+        engine: LiveEngineSpy
+    ) async {
+        for _ in 0..<100 {
+            if engine.liveLoads >= expected { break }
+            await Task.yield()
+        }
+        XCTAssertEqual(engine.liveLoads, expected)
+    }
 }
 
 private final class LiveTestClock {
@@ -407,7 +683,11 @@ private final class LiveEngineSpy: LiveChannelEngine {
     var onLoad: (@MainActor () async -> Void)?
     var onGoLive: (@MainActor () -> Void)?
     var liveLoads = 0
+    var loadedURLs: [URL] = []
     var loadedHeaders: [[String: String]] = []
+    var capturedFailureHandlers: [(@MainActor (AppError) -> Void)] = []
+    var suspendsLoads = false
+    private var loadContinuations: [Int: CheckedContinuation<Void, Never>] = [:]
     var vodLoads = 0
     var playCount = 0
     var pauseCount = 0
@@ -417,10 +697,23 @@ private final class LiveEngineSpy: LiveChannelEngine {
 
     func loadLive(url: URL, httpHeaders: [String: String]) async {
         liveLoads += 1
+        let loadNumber = liveLoads
+        loadedURLs.append(url)
         loadedHeaders.append(httpHeaders)
+        if let onFailure {
+            capturedFailureHandlers.append(onFailure)
+        }
         status = .ready
         isPaused = false
+        if suspendsLoads {
+            await withCheckedContinuation { continuation in
+                loadContinuations[loadNumber] = continuation
+            }
+        }
         await onLoad?()
+    }
+    func resumeLoad(_ loadNumber: Int) {
+        loadContinuations.removeValue(forKey: loadNumber)?.resume()
     }
     func load(request: PlaybackRequest, startPosition: TimeInterval) async { vodLoads += 1 }
     func play() { playCount += 1; isPaused = false }

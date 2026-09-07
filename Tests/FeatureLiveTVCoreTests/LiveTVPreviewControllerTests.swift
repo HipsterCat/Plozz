@@ -1,0 +1,147 @@
+import XCTest
+@testable import FeatureLiveTVCore
+
+@MainActor
+final class LiveTVPreviewControllerTests: XCTestCase {
+    func testPreviewWaitsForCommitAndOnlyLatestChannelWins() throws {
+        let model = LiveTVPrototypeModel(scenario: .noGuide)
+        let preview = LiveTVPreviewController(model: model)
+        let first = model.channels[0].id
+        let second = model.channels[1].id
+
+        preview.focus(first)
+        let stale = try XCTUnwrap(preview.pendingRequest)
+        XCTAssertNil(model.playingChannelID)
+        XCTAssertEqual(LiveTVPreviewController.settlingDelay, .milliseconds(600))
+        preview.focus(second)
+        XCTAssertFalse(preview.commitPreview(stale))
+        XCTAssertNil(model.playingChannelID)
+        XCTAssertTrue(preview.commitPreview(try XCTUnwrap(preview.pendingRequest)))
+        XCTAssertEqual(model.playingChannelID, second)
+        XCTAssertFalse(preview.isExpanded)
+    }
+
+    func testReturningToSameChannelDoesNotAcceptItsOldRequest() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        preview.focus(model.channels[0].id)
+        let stale = try XCTUnwrap(preview.pendingRequest)
+        preview.focus(model.channels[1].id)
+        preview.focus(model.channels[0].id)
+        XCTAssertNotEqual(stale, preview.pendingRequest)
+        preview.commitPreview(stale)
+        XCTAssertNil(model.playingChannelID)
+    }
+
+    func testHorizontalProgramFocusDoesNotRestartDebounceOrTune() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        let id = model.channels[0].id
+        preview.focus(id)
+        let request = try XCTUnwrap(preview.pendingRequest)
+        preview.focus(id)
+        XCTAssertEqual(preview.pendingRequest, request)
+        preview.commitPreview(request)
+        preview.focus(id)
+        XCTAssertNil(preview.pendingRequest)
+        XCTAssertNil(model.previousChannelID)
+    }
+
+    func testWatchAndReturnKeepChannelAndIgnoreBrowsingFocus() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        let id = model.channels[0].id
+        preview.focus(id)
+        preview.commitPreview(try XCTUnwrap(preview.pendingRequest))
+        preview.watch(id)
+        XCTAssertTrue(preview.isExpanded)
+        XCTAssertNil(model.previousChannelID)
+        preview.focus(model.channels[1].id)
+        XCTAssertNil(preview.pendingRequest)
+        preview.returnToGuide()
+        XCTAssertFalse(preview.isExpanded)
+        XCTAssertEqual(model.playingChannelID, id)
+        XCTAssertEqual(preview.focusRestoreRequest, 1)
+        XCTAssertFalse(preview.followsFocus)
+        preview.setFollowsFocus(true)
+        preview.commitPreview(try XCTUnwrap(preview.pendingRequest))
+        XCTAssertEqual(model.playingChannelID, model.channels[1].id)
+    }
+
+    func testSelectingAnotherChannelCancelsPendingPreview() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        preview.focus(model.channels[0].id)
+        let stale = try XCTUnwrap(preview.pendingRequest)
+        preview.watch(model.channels[1].id)
+        preview.commitPreview(stale)
+        XCTAssertTrue(preview.isExpanded)
+        XCTAssertEqual(model.playingChannelID, model.channels[1].id)
+    }
+
+    func testControlsSheetsAndInactiveSceneInvalidatePendingPreview() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        preview.focus(model.channels[0].id)
+        let stale = try XCTUnwrap(preview.pendingRequest)
+        preview.setBrowsingActive(false)
+        preview.commitPreview(stale)
+        XCTAssertNil(model.playingChannelID)
+        preview.focus(model.channels[1].id)
+        XCTAssertNil(preview.pendingRequest)
+        preview.setBrowsingActive(true)
+        preview.commitPreview(try XCTUnwrap(preview.pendingRequest))
+        XCTAssertEqual(model.playingChannelID, model.channels[1].id)
+    }
+
+    func testFilteringOutPendingChannelPreventsTune() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        preview.focus(model.channels[0].id)
+        let request = try XCTUnwrap(preview.pendingRequest)
+        model.query = "no-matching-channel"
+        preview.commitPreview(request)
+        XCTAssertNil(model.playingChannelID)
+        XCTAssertFalse(model.tuneFailed)
+    }
+
+    func testNoGuideStillPreviewsAndStoppingInvalidatesRequests() throws {
+        let model = LiveTVPrototypeModel(scenario: .noGuide)
+        let preview = LiveTVPreviewController(model: model)
+        let channel = model.channels[0]
+        XCTAssertNil(model.currentProgram(for: channel.id))
+        XCTAssertFalse(channel.category.isEmpty)
+        preview.focus(channel.id)
+        preview.commitPreview(try XCTUnwrap(preview.pendingRequest))
+        XCTAssertEqual(model.playingChannelID, channel.id)
+        preview.focus(model.channels[1].id)
+        let stale = try XCTUnwrap(preview.pendingRequest)
+        preview.stop()
+        preview.commitPreview(stale)
+        XCTAssertNil(model.playingChannelID)
+        XCTAssertFalse(preview.isExpanded)
+    }
+
+    func testTouchBrowsingCanKeepAutoplayOffUntilExplicitSelection() {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model, followsFocus: false)
+        preview.focus(model.channels[0].id)
+        XCTAssertNil(preview.pendingRequest)
+        XCTAssertNil(model.playingChannelID)
+        preview.watch(model.channels[0].id)
+        XCTAssertTrue(preview.isExpanded)
+        XCTAssertEqual(model.playingChannelID, model.channels[0].id)
+    }
+
+    func testFailedSelectionKeepsCurrentPreviewWithoutExpanding() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        preview.focus(model.channels[0].id)
+        preview.commitPreview(try XCTUnwrap(preview.pendingRequest))
+        model.simulateTunerBusy = true
+        preview.watch(model.channels[1].id)
+        XCTAssertTrue(model.tuneFailed)
+        XCTAssertFalse(preview.isExpanded)
+        XCTAssertEqual(model.playingChannelID, model.channels[0].id)
+    }
+}

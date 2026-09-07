@@ -62,7 +62,10 @@ struct PlozziOSApp: App {
                             httpHeaders: playback.channel.httpHeaders,
                             makeEngine: { try PlozzigenVideoEngine() },
                             onPreviousChannel: playback.previousChannel,
-                            onNextChannel: playback.nextChannel
+                            onNextChannel: playback.nextChannel,
+                            isExpanded: playback.isExpanded,
+                            onReturnToGuide: playback.returnToGuide,
+                            playPauseRequest: playback.playPauseRequest
                         )
                     }
                 } else {

@@ -11,10 +11,12 @@ struct PrototypeTVControls: View {
     let filters: () -> Void
     let sources: () -> Void
     let top: () -> Void
+    let followsFocus: Bool
+    let togglePreview: () -> Void
     @FocusState private var focused: Control?
     @Environment(\.themePalette) private var palette
 
-    private enum Control: Hashable { case search, filters, sort, sources, top }
+    private enum Control: Hashable { case search, filters, sort, sources, top, preview }
 
     var body: some View {
         VStack(alignment: .leading, spacing: PrototypeLayout.gap) {
@@ -54,6 +56,17 @@ struct PrototypeTVControls: View {
             }
             .focused($focused, equals: .top)
             .disabled(!active)
+            Button(action: togglePreview) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Auto preview", systemImage: followsFocus ? "play.rectangle.fill" : "play.rectangle")
+                    Text(followsFocus ? "Follows channel focus" : "Keeps current channel")
+                        .font(.caption).opacity(0.7)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .focused($focused, equals: .preview)
+            .disabled(!active)
+            .accessibilityValue(followsFocus ? "On" : "Off")
             Text("Press Right for controls.\nLeft returns to your channel.")
                 .font(.caption).foregroundStyle(palette.secondaryText)
                 .padding(.top, PrototypeLayout.gap)

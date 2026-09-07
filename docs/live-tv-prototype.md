@@ -36,9 +36,11 @@ again from the TV home screen returns to Live TV. Launch with
 
 Additional launch arguments:
 
-- `--live-tv-guide`: start on Guide.
 - `--live-tv-5000`: repeat the real catalog into 5,000 clearly labeled rows for
   scrolling tests. These are copies, not 5,000 distinct stations.
+
+The former `--live-tv-guide` flag is no longer needed: channels and their guide
+are one screen, including when no listings exist.
 
 The entry route, live host, UI and public test catalog are compiled out of
 Release builds.
@@ -46,39 +48,76 @@ Release builds.
 ## Try
 
 The preview loads the complete supplied US playlist, then the enabled XMLTV guides.
-Channels become available before guide loading finishes. **Channels / Guide**
-switches presentation of the same catalog; **Favorites** is an independent filter.
-Search, categories, sorting and Favorites carry across both views and refreshes.
+Channels become available before guide loading finishes. There is one unified
+channel guide, not separate Channels and Guide tabs. **Favorites** is an
+independent filter. Search, categories, sorting and Favorites survive opening
+the player, returning to the guide and refreshing sources.
 Favorites, filters and guide-source selections are still in-memory; restarting
 the process resets them.
 
 - Browse, search names/numbers/categories/sources, filter and sort.
-- Favorite channels through the context menu or iPad channel inspector.
+- Favorite channels through their context menu.
 - On Apple TV, move Right from a channel (or past its guide programs) to Search.
   Sources lives in that same persistent controls rail, below Sort, rather than
   in an unreachable header corner. Left returns to the channel/program.
-  Back to top works in both presentations.
+  Back to top works without resetting the selected time.
 - **Sources** reports playlist entries, skipped entries, guide matches, listings,
   coverage dates and per-feed failures. Its toggles enable or disable the five
   preset guides; disabling one immediately removes its contribution. Results
   appear incrementally, and a failed feed does not block the remaining feeds.
-  **Show channels with guide listings** opens Guide
-  with the corresponding filter, making the populated rows easy to find.
+  **Show channels with guide listings** applies the corresponding filter,
+  making the populated rows easy to find.
 - Guide retains all channels, even if none has a schedule. Unknown intervals
   remain honest gaps; they do not hide channels or shift later programs under
   the wrong time. Channel buttons still tune live without guide data.
-  Empty cells distinguish loading, disabled sources, a failed relevant source,
-  an unmatched station and an identified station with no listings for that time.
-  Program details identify the selected guide source.
-- Guide dates and now-playing labels advance with the wall clock. Earlier/Later
-  pages from one day back through seven days ahead, subject to source coverage.
-- iPhone and narrow iPad windows use compact channel lists. At wider widths,
-  iPad adds channel artwork, details, Favorite and Watch controls.
-- Select a channel to watch real video. The live host exposes real buffering,
+  Missing listings show the channel's genre/category in place of a program,
+  without inventing its title, start time or duration. Entirely unlisted rows
+  keep that label stationary rather than drawing an empty six-hour program.
+  Loading, disabled, failed and unmatched-source diagnostics remain in Sources,
+  not repeated on every channel. Program details identify the selected guide source.
+- On wide screens, the station/logo column stays fixed while program rows scroll
+  horizontally through a shared six-hour window. The time ruler stays above the
+  vertical list and follows the same horizontal offset. Earlier/Later shifts the
+  window from one day back through seven days ahead, subject to source coverage.
+  The time anchor does not jump at the half hour while browsing; **Now** recenters
+  it on the current wall clock. Program progress and current-title labels still
+  update with the clock.
+- iPhone and narrow iPad windows use compact rows with horizontally browsable
+  program cards; no-guide rows put genre directly under the channel name.
+  Video stays above the scrolling list. Touch browsing does not automatically
+  open streams; selecting a channel starts playback, and returning leaves its
+  preview visible. Tap the preview's expand action to reopen the same player.
+- Select a channel or its currently airing program to watch real video.
+  Past/future programs open details, not a pretend future broadcast.
+  The live host exposes real buffering,
   failure/retry and live transport state rather than a fabricated VOD timeline.
   Next/Previous follows the currently filtered channel list.
-- Back closes playback and releases its engine. Browsing does not leave a hidden
-  stream decoding in the background.
+
+### Audible previews and seamless viewing
+
+On Apple TV, resting on a different channel for **600 ms** requests its preview.
+Rapid scrolling cancels pending requests; moving between programs on the same
+channel does not restart the delay or retune. The delay is **not** a stream
+startup guarantee: network, source, keyframe and decoder startup follow it.
+There is only one active player, with sound on while browsing. No second stream
+is opened to fake an instant crossfade. Search, controls, sheets and inactive
+scenes cancel pending focus-driven tunes.
+
+The upper-right 16:9 picture stays anchored while the guide scrolls. Video is
+aspect-fit, not cropped under hero text or a ticker-obscuring fade. Selecting a
+ready preview slides/fades the guide away and expands the existing surface.
+Back restores the guide's row, program, filters and time position; it does not
+stop, reload or replace the engine. Reduced Motion removes the spatial animation.
+Returning from fullscreen keeps the chosen channel playing rather than retuning
+on the first navigation press. **Auto preview** in the TV controls rail re-enables
+following channel focus. The remote's Play/Pause also works during browsing.
+
+Tuning another channel reuses the engine with a new, fenced source attempt.
+Loading/failure states remain local and nonfocusable in the preview, with an
+opaque placeholder until the new source actually produces a first frame.
+Opening a failed preview exposes the existing full retry/close UI.
+Leaving the Live TV screen releases playback; app backgrounding retains the
+existing foreground-only teardown/reload policy.
 
 ## Real inputs and artwork
 
@@ -230,6 +269,11 @@ Lifecycle and classified failure events are also recorded. Correlation uses a
 random session ID, not a channel name, locator or credential. Error text and
 raw URLs are never included in these new events.
 
+Committed focus previews record monotonic `settleMs` separately from the
+player's tune-to-first-frame timing. A canceled focus request emits no tune
+event. Startup timings describe actual first-frame readiness, not merely a
+manifest response or successful `load` return.
+
 The journal is `Library/Caches/Plozz/playback-trace.log` (64 KiB limit).
 Use existing in-app diagnostics export when available. Do not copy the active
 tvOS app container, attach a debugger, or relaunch with `--console` during
@@ -248,6 +292,5 @@ regex-parsed for classification, and raw locators are not added to those fields.
 Run the focused model tests through the existing simulator runner:
 
 ```sh
-tools/run-tests.sh FeatureLiveTVCoreTests
-tools/run-tests.sh FeaturePlaybackTests EnginePlozzigenTests
+tools/run-tests.sh FeatureLiveTVCoreTests FeaturePlaybackTests EnginePlozzigenTests
 ```

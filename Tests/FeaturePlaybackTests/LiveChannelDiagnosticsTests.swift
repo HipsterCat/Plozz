@@ -59,6 +59,55 @@ final class LiveChannelDiagnosticsTests: XCTestCase {
         XCTAssertTrue(line.contains("behindLive=8.000"))
     }
 
+    func testTuneToFirstFrameUsesBoundedMonotonicMilliseconds() {
+        XCTAssertEqual(
+            LiveChannelDiagnostics.elapsedMilliseconds(
+                startedAt: 10,
+                firstFrameAt: 10.1246
+            ),
+            125
+        )
+        XCTAssertEqual(
+            LiveChannelDiagnostics.elapsedMilliseconds(
+                startedAt: 10,
+                firstFrameAt: 9
+            ),
+            0
+        )
+        XCTAssertEqual(
+            LiveChannelDiagnostics.elapsedMilliseconds(
+                startedAt: 0,
+                firstFrameAt: .greatestFiniteMagnitude
+            ),
+            LiveChannelDiagnostics.maximumElapsedMilliseconds
+        )
+        XCTAssertEqual(
+            LiveChannelDiagnostics.elapsedMilliseconds(
+                startedAt: .nan,
+                firstFrameAt: 10
+            ),
+            0
+        )
+    }
+
+    func testTuneToFirstFrameEventContainsOnlyAttemptAndElapsedTime() {
+        let wasEnabled = HandoffDiagnostics.isEnabled
+        HandoffDiagnostics.setEnabled(true)
+        defer { HandoffDiagnostics.setEnabled(wasEnabled) }
+        LiveChannelDiagnostics().tuneToFirstFrame(
+            attempt: 2,
+            startedAt: 100,
+            firstFrameAt: 101.25
+        )
+        let line = PlozzLog.recentEntries(limit: 1).first?.message ?? ""
+        XCTAssertTrue(line.contains("event=tuneToFirstFrame"))
+        XCTAssertTrue(line.contains("attempt=2"))
+        XCTAssertTrue(line.contains("elapsedMs=1250"))
+        XCTAssertFalse(line.contains("http"))
+        XCTAssertFalse(line.contains("header"))
+        XCTAssertFalse(line.contains("token"))
+    }
+
     func testRetuneBudgetIsBoundedAndSpaced() {
         var budget = LiveChannelRetuneBudget()
         XCTAssertEqual(budget.delayBeforeNextAttempt(uptime: 100), 0)

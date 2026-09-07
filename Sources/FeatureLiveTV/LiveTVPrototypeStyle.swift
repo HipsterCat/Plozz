@@ -117,17 +117,6 @@ private struct PrototypeButtonBody: View {
     }
 }
 
-enum PrototypeTab: String, CaseIterable, Identifiable {
-    case channels, guide
-    var id: Self { self }
-    var title: LocalizedStringResource {
-        switch self {
-        case .channels: "Channels"
-        case .guide: "Guide"
-        }
-    }
-}
-
 enum PrototypeSheet: Identifiable {
     case search, filters, sources
     case program(LiveTVPrototypeProgram)
