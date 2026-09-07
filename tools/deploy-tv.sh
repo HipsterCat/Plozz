@@ -98,6 +98,28 @@ done
 # git resolve fails with "cannot use bare repository". This is EXPECTED.
 export GIT_CONFIG_PARAMETERS="${GIT_CONFIG_PARAMETERS-'safe.bareRepository=all'}"
 
+source tools/lib/apple-build-lease.sh
+acquire_apple_build_shared_lease "plozz/deploy-tv"
+APPLE_BUILD_LEASE_SIGNALLED=0
+RESTORE_CANONICAL=0
+cleanup_deploy_tv() {
+  local status=$?
+  trap - EXIT HUP INT TERM
+  if [[ "$RESTORE_CANONICAL" == "1" ]]; then
+    restore_canonical
+  fi
+  if [[ "$APPLE_BUILD_LEASE_SIGNALLED" == "1" || "$status" -ne 0 ]]; then
+    abandon_apple_build_lease
+  elif ! release_apple_build_lease; then
+    status=75
+  fi
+  exit "$status"
+}
+trap 'apple_build_lease_signal_exit 129' HUP
+trap 'apple_build_lease_signal_exit 130' INT
+trap 'apple_build_lease_signal_exit 143' TERM
+trap cleanup_deploy_tv EXIT
+
 # --- Opt-in per-branch app (--branded) ---------------------------------------
 # Installs a SEPARATE app `com.thatcube.Plozz.<slug>` named "Plozz <slug>" so this
 # branch can live side-by-side with the canonical app (and other branches') on the
@@ -123,7 +145,7 @@ if [[ "$BRANDED" == "1" ]]; then
     git checkout -- App/Resources/Info.plist App/PlozziOS/Info.plist 2>/dev/null || true
     ( unset PLOZZ_ID_SUFFIX PLOZZ_NAME_SUFFIX PLOZZ_TV_APP_ENTITLEMENTS PLOZZ_TV_TOPSHELF_ENTITLEMENTS; tools/generate-project.sh >/dev/null 2>&1 ) || true
   }
-  trap restore_canonical EXIT
+  RESTORE_CANONICAL=1
 fi
 
 if [[ "$CLEAN" == "1" ]]; then

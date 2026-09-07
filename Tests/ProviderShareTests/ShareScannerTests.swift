@@ -329,6 +329,39 @@ final class ShareScannerTests: XCTestCase {
         XCTAssertTrue(secondCompleted.isSet)
     }
 
+    func testRetiredResourceCannotCloseReplacementScanInSameLifecycleRevision() async throws {
+        let directory = tempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ShareCatalogStore(accountKey: "generation-close", directory: directory)
+        let gate = BlockingListGate()
+        let closes = ShutdownCounter()
+        let scanner = ShareScanner(store: store, concurrency: 1) {
+            ShareScanner.ScanLister(
+                list: { _ in await gate.wait(); return [] },
+                close: { closes.increment(); gate.open() }
+            )
+        }
+        let retired = ShareScannerResource(
+            scanner: scanner, store: store, lifecycleRevision: 0, scanGeneration: UUID()
+        )
+        let replacementGeneration = UUID()
+        let replacement = Task { await scanner.scan(scanGeneration: replacementGeneration) }
+        await gate.waitUntilStarted()
+
+        await retired.cancel()
+        try await retired.forceClose()
+        XCTAssertEqual(closes.count, 0)
+        let replacementStillOwnsStore = await store.setMeta(
+            "replacement_probe", "1", scanGeneration: replacementGeneration
+        )
+        XCTAssertTrue(replacementStillOwnsStore)
+
+        replacement.cancel()
+        await scanner.forceCloseActiveListers(scanGeneration: replacementGeneration)
+        _ = await replacement.value
+        XCTAssertEqual(closes.count, 1)
+    }
+
     func testScanBuildsIndexedLibraries() async {
         let store = ShareCatalogStore(accountKey: "a", directory: tempDir())
         let fake = FakeShare(standardTree())

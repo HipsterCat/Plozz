@@ -52,6 +52,10 @@ cd "$(dirname "$0")/.."
 # Keep the git config workaround that the rest of the build chain expects.
 export GIT_CONFIG_PARAMETERS="${GIT_CONFIG_PARAMETERS-'safe.bareRepository=all'}"
 
+source tools/lib/apple-build-lease.sh
+acquire_apple_build_shared_lease "plozz/run-tests"
+install_apple_build_lease_traps
+
 PARALLEL="${PLOZZ_PARALLEL:-NO}"
 
 # --- Lean build settings for the test build (P3) ------------------------------
@@ -264,14 +268,31 @@ all_are_test_targets() {
 # Raw xcodebuild logs. Ephemeral by default; set PLOZZ_LOG_DIR to keep them (the
 # per-test `Test Case ... passed (N seconds)` lines only exist in the raw log, so
 # this is how you profile which individual tests are slow).
+REMOVE_LOG_DIR=0
 if [[ -n "${PLOZZ_LOG_DIR:-}" ]]; then
   LOG_DIR="$PLOZZ_LOG_DIR"
   mkdir -p "$LOG_DIR"
-  trap 'restore_project; cleanup_scoped_schemes' EXIT
 else
   LOG_DIR="$(mktemp -d)"
-  trap 'restore_project; cleanup_scoped_schemes; rm -rf "$LOG_DIR"' EXIT
+  REMOVE_LOG_DIR=1
 fi
+
+cleanup_run_tests() {
+  local status=$?
+  trap - EXIT HUP INT TERM
+  restore_project
+  cleanup_scoped_schemes
+  if [[ "$REMOVE_LOG_DIR" == "1" ]]; then
+    rm -rf "$LOG_DIR"
+  fi
+  if [[ "${APPLE_BUILD_LEASE_SIGNALLED:-0}" == "1" || "$status" -ne 0 ]]; then
+    abandon_apple_build_lease
+  elif ! release_apple_build_lease; then
+    status=75
+  fi
+  exit "$status"
+}
+trap cleanup_run_tests EXIT
 
 AVAILABLE_SCHEMES="$(list_schemes)"
 scheme_exists() { grep -qxF -- "$1" <<<"$AVAILABLE_SCHEMES"; }

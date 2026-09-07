@@ -99,9 +99,8 @@ public protocol ShareCatalogReading: Sendable {
     func browseItems(_ items: [MediaItem]) async -> [MediaItem]
 }
 
-/// The concrete SQLite-backed store is the production witness. Its methods are
-/// synchronous actor-isolated reads, which satisfy the `async` requirements when
-/// the store is used through `any ShareCatalogReading`.
+/// The concrete SQLite-backed store is the production witness. Its async reads
+/// can wait for lifecycle admission without touching SQLite while suspended.
 extension ShareCatalogStore: ShareCatalogReading {}
 
 public extension ShareCatalogReading {

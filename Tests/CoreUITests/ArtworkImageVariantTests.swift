@@ -236,6 +236,94 @@ final class ArtworkImageVariantTests: XCTestCase {
         return try XCTUnwrap(image.pngData())
     }
 
+    func testSuspensionBlocksNewPrefetchesAndRejectsStalePhaseChanges() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = ArtworkImageCache(derivedCache: LocalArtworkDerivedCache(directory: directory))
+        let loader = CountingArtworkLoader(data: try jpegFixture())
+        cache.configure(networkFileService: ArtworkNetworkFileService(loader: loader))
+        let reference = try networkReference(accountID: UUID().uuidString)
+
+        await cache.setBackgroundWorkAllowed(false, revision: 1)
+        let blocked = await cache.image(for: .networkFile(reference), background: true)
+        XCTAssertNil(blocked)
+        let blockedCount = await loader.loadCount
+        XCTAssertEqual(blockedCount, 0)
+
+        await cache.setBackgroundWorkAllowed(true, revision: 2)
+        await cache.setBackgroundWorkAllowed(false, revision: 1)
+        await cache.setBackgroundWorkAllowed(false, revision: 2)
+        let loaded = await cache.image(for: .networkFile(reference), background: true)
+        XCTAssertNotNil(loaded)
+        let resumedCount = await loader.loadCount
+        XCTAssertEqual(resumedCount, 1)
+    }
+
+    func testStaleSuspensionDoesNotCancelResumedInFlightPrefetch() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = ArtworkImageCache(derivedCache: LocalArtworkDerivedCache(directory: directory))
+        let loader = BlockingArtworkLoader(data: try jpegFixture())
+        cache.configure(networkFileService: ArtworkNetworkFileService(loader: loader))
+        let reference = try networkReference(accountID: UUID().uuidString)
+        await cache.setBackgroundWorkAllowed(false, revision: 1)
+        await cache.setBackgroundWorkAllowed(true, revision: 2)
+        let load = Task { await cache.image(for: .networkFile(reference), background: true) }
+        await loader.waitUntilStarted()
+        await cache.setBackgroundWorkAllowed(false, revision: 1)
+        await loader.release()
+        let image = await load.value
+        XCTAssertNotNil(image)
+    }
+
+    func testSuspensionFinishesBackgroundCallerBeforeUncooperativeLoaderReturns() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = ArtworkImageCache(derivedCache: LocalArtworkDerivedCache(directory: directory))
+        let loader = BlockingArtworkLoader(data: try jpegFixture())
+        cache.configure(networkFileService: ArtworkNetworkFileService(loader: loader))
+        let reference = try networkReference(accountID: UUID().uuidString)
+        let returned = expectation(description: "background caller released without waiting for I/O")
+        let load = Task {
+            let image = await cache.image(for: .networkFile(reference), background: true)
+            returned.fulfill()
+            return image
+        }
+        await loader.waitUntilStarted()
+        await cache.setBackgroundWorkAllowed(false, revision: 1)
+        await fulfillment(of: [returned], timeout: 2)
+        await loader.release()
+        let result = await load.value
+        XCTAssertNil(result)
+        XCTAssertNil(cache.cachedImage(for: .networkFile(reference)))
+    }
+
+    func testQueuedPrefetchCannotCrossSuspensionGeneration() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let limiter = ConcurrencyLimiter(limit: 1)
+        let cache = ArtworkImageCache(
+            derivedCache: LocalArtworkDerivedCache(directory: directory),
+            warmLimiter: limiter
+        )
+        let reference = try networkReference(accountID: UUID().uuidString)
+        let blocker = BlockingArtworkLoader(data: try jpegFixture())
+        let loader = CountingArtworkLoader(data: try jpegFixture())
+        cache.configure(networkFileService: ArtworkNetworkFileService(loader: loader))
+        let occupied = Task {
+            await limiter.run { try? await blocker.loadArtwork(reference, maximumBytes: 1_024) }
+        }
+        await blocker.waitUntilStarted()
+        let pending = try XCTUnwrap(cache.prefetch(.networkFile(reference)))
+        await cache.setBackgroundWorkAllowed(false, revision: 1)
+        await cache.setBackgroundWorkAllowed(true, revision: 2)
+        await blocker.release()
+        _ = await occupied.value
+        await pending.value
+        let count = await loader.loadCount
+        XCTAssertEqual(count, 0)
+    }
+
     func testSharedDownsamplerBoundsLongestEdge() throws {
         let source = UIGraphicsImageRenderer(size: CGSize(width: 1_600, height: 900)).image {
             UIColor.red.setFill()

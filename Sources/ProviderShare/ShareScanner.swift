@@ -93,6 +93,20 @@ actor ShareScanner {
         }
     }
 
+    struct SuspensionHandoff: Sendable {
+        let listers: [ScanLister]
+        let checkpoint: ShareScanResumeCheckpoint?
+    }
+
+    private struct ActiveResumeState {
+        let scanGeneration: UUID
+        let scanID: Int64
+        let frontier: [FrontierEntry]
+        let deep: Bool
+        let startedAt: TimeInterval
+        let hasFailures: Bool
+    }
+
     private actor ScanListerCloser {
         private let closeAction: @Sendable () async -> Void
         private var closeTask: Task<Void, Never>?
@@ -128,6 +142,10 @@ actor ShareScanner {
     private var isRunning = false
     private var isInvalidated = false
     private var activeListers: [ScanLister] = []
+    private var activeListerGeneration: UUID?
+    private var activeResumeState: ActiveResumeState?
+    private var backgroundWorkAllowed = true
+    private var backgroundWorkRevision: UInt64 = 0
 
     /// Non-media folder names whose subtree is skipped wholesale. Extras use their
     /// own bounded traversal and never enter the normal asset walk.
@@ -186,8 +204,11 @@ actor ShareScanner {
         isInvalidated = true
     }
 
-    func forceCloseActiveListers() async {
+    func forceCloseActiveListers(scanGeneration: UUID) async {
+        guard activeListerGeneration == scanGeneration else { return }
         let listers = activeListers
+        activeListers = []
+        activeListerGeneration = nil
         await withTaskGroup(of: Void.self) { group in
             for lister in listers {
                 group.addTask {
@@ -197,14 +218,55 @@ actor ShareScanner {
         }
     }
 
+    /// Applies lifecycle admission and, when suspending, snapshots a conservative
+    /// whole-level frontier before detaching the exact listers owned by the current
+    /// scan. Rewalking part of that level is safe; omitting in-flight directories is
+    /// not. Revision fencing keeps stale callbacks out of newer generations.
+    func setBackgroundWorkAllowed(
+        _ allowed: Bool,
+        revision: UInt64
+    ) -> SuspensionHandoff {
+        guard revision > backgroundWorkRevision
+                || (revision == backgroundWorkRevision
+                    && allowed == backgroundWorkAllowed) else {
+            return SuspensionHandoff(
+                listers: [],
+                checkpoint: nil
+            )
+        }
+        if revision > backgroundWorkRevision {
+            backgroundWorkRevision = revision
+        }
+        backgroundWorkAllowed = allowed
+        guard !allowed else {
+            return SuspensionHandoff(
+                listers: [],
+                checkpoint: nil
+            )
+        }
+        let listers = activeListers
+        activeListers = []
+        activeListerGeneration = nil
+        return SuspensionHandoff(
+            listers: listers,
+            checkpoint: activeResumeState.flatMap { Self.resumeCheckpoint($0) }
+        )
+    }
+
     /// Run a scan unless one already ran within `minInterval` (or is running).
     /// Called fire-and-forget from the Home hot path, so it must be cheap to no-op.
     @discardableResult
     /// Default interval kept in step with the coordinator's spawn coalesce, so a
     /// spawn is only allowed once a walk would actually run.
-    func scanIfStale(minInterval requestedInterval: TimeInterval = 180) async -> ShareScanOutcome {
+    func scanIfStale(
+        minInterval requestedInterval: TimeInterval = 180,
+        scanGeneration: UUID = UUID()
+    ) async -> ShareScanOutcome {
         if isRunning { return .freshNoOp }
         if isInvalidated { return .invalidated }
+        if Task.isCancelled || !backgroundWorkAllowed {
+            return .cancelled(scanGeneration: nil)
+        }
         // Developer override so back-to-back measurement passes are possible on a
         // device; `nil` in every normal build. See `ShareScanDebug`.
         let minInterval = ShareScanDebug.scanInterval ?? requestedInterval
@@ -249,7 +311,7 @@ actor ShareScanner {
         let dueForDeep = lastDeep.map {
             Date().timeIntervalSince1970 - $0 >= Self.deepScanInterval
         } ?? true
-        return await scan(deep: ShareScanDebug.forceDeep ?? dueForDeep)
+        return await scan(deep: ShareScanDebug.forceDeep ?? dueForDeep, scanGeneration: scanGeneration)
     }
 
     /// How often all directory contents are re-verified without trusting mtimes.
@@ -299,12 +361,14 @@ actor ShareScanner {
     /// Full breadth-first walk from the share root, using a pool of independent
     /// connections to list `concurrency` directories at once. Idempotent.
     @discardableResult
-    func scan(deep: Bool = true) async -> ShareScanOutcome {
+    func scan(deep: Bool = true, scanGeneration: UUID = UUID()) async -> ShareScanOutcome {
         if isRunning { return .freshNoOp }
         if isInvalidated { return .invalidated }
-        if Task.isCancelled { return .cancelled(scanGeneration: nil) }
+        if Task.isCancelled || !backgroundWorkAllowed {
+            return .cancelled(scanGeneration: nil)
+        }
         isRunning = true
-        let scanGeneration = UUID()
+        activeResumeState = nil
         await store.activateScanGeneration(scanGeneration)
         let storedParserVersion = await store.meta("parser_version")
         let storedInventoryVersion = await store.meta("local_inventory_version")
@@ -315,10 +379,12 @@ actor ShareScanner {
         let rulesChanged = storedParserVersion != String(ShareMediaParser.classifierVersion)
             || storedInventoryVersion != String(ShareMediaParser.localInventoryVersion)
             || configurationChanged
+        // An interrupted pass can leave newly discovered rows unreconciled even
+        // when its checkpoint is unusable and the next walk finds the same count.
+        let completedScan = await store.meta(ShareCatalogStore.completedDirectoryStateScanKey)
+        let hasCompletedBaseline = Int64(completedScan ?? "") != nil
         // Snapshot the previous clean pass's incremental state before invalidating
-        // its promotion proof. The in-memory values remain safe for this walk,
-        // while readers immediately stop replacing folders until this pass also
-        // completes cleanly.
+        // the completion proof used by the next scanner.
         let storedDirectoryMTimes = rulesChanged ? [:] : await store.directoryModifiedSeconds()
         let recordedDirectoryPaths = await store.recordedDirectoryPaths()
         let directoriesWithRecordedFiles = await store.directoriesWithRecordedFiles()
@@ -332,7 +398,7 @@ actor ShareScanner {
         let started = Date()
         reporter.scanStarted(shareID, name)
 
-        guard !Task.isCancelled, !isInvalidated else {
+        guard !Task.isCancelled, backgroundWorkAllowed, !isInvalidated else {
             await finishScan(listers: [])
             return isInvalidated ? .invalidated : .cancelled(scanGeneration: scanGeneration)
         }
@@ -388,6 +454,7 @@ actor ShareScanner {
         // runs in its own task so one hung teardown can't block the others.
         var pool = (0..<concurrency).map { _ in makeLister() }
         activeListers = pool
+        activeListerGeneration = scanGeneration
         // The live free-list of healthy connections, carried ACROSS BFS levels. Every
         // dispatched lister returns here exactly once per level (healthy back as-is; a
         // failed one replaced by a fresh connection), so at each level boundary it
@@ -413,17 +480,42 @@ actor ShareScanner {
                 "share.scan resume scanID=\(scanID) pending=\(frontier.count) concurrency=\(concurrency)"
             )
         } else {
-            guard let fresh = await store.nextScanID(for: scanGeneration), !isInvalidated else {
+            guard let fresh = await store.nextScanID(for: scanGeneration),
+                  !Task.isCancelled,
+                  backgroundWorkAllowed,
+                  !isInvalidated else {
                 await finishScan(listers: pool)
-                return isInvalidated ? .invalidated : .failedToStart
+                if isInvalidated { return .invalidated }
+                return Task.isCancelled || !backgroundWorkAllowed
+                    ? .cancelled(scanGeneration: scanGeneration)
+                    : .failedToStart
             }
             scanID = fresh
             frontier = [FrontierEntry(relPath: "")] // "" == share root
             PlozzLog.boot("share.scan begin scanID=\(scanID) concurrency=\(concurrency)")
         }
-        guard !isInvalidated else {
+        activeResumeState = ActiveResumeState(
+            scanGeneration: scanGeneration,
+            scanID: scanID,
+            frontier: frontier,
+            deep: deep,
+            startedAt: snapshotStartedAt,
+            hasFailures: false
+        )
+        guard !Task.isCancelled, backgroundWorkAllowed, !isInvalidated else {
+            await Self.saveResumeState(
+                store: store,
+                scanID: scanID,
+                frontier: frontier,
+                scanGeneration: scanGeneration,
+                deep: deep,
+                startedAt: snapshotStartedAt,
+                hasFailures: false
+            )
             await finishScan(listers: pool)
-            return .invalidated
+            return isInvalidated
+                ? .invalidated
+                : .cancelled(scanGeneration: scanGeneration)
         }
         // Directories known to CONTAIN a subdirectory, derived from the recorded
         // paths rather than queried per-child.
@@ -462,7 +554,7 @@ actor ShareScanner {
         var listWaitNanos: UInt64 = 0
         var unchangedPass = false
         // Skipped paths are stamped together before each level's checkpoint.
-        var skippedDirectories: [String] = []
+        var skippedDirectories: [FrontierEntry] = []
         // Catalog size before the walk, so an unchanged pass can be recognised
         // and skip the clean-scan reconciliation entirely.
         let priorAssetCount = await store.assetDiscoveryStats(newerThan: 0).total
@@ -482,7 +574,15 @@ actor ShareScanner {
         // the pool; a plain free-list of listers (managed here on the actor) bounds
         // concurrency to the pool size with no locks/continuations.
         while !frontier.isEmpty {
-            if Task.isCancelled {
+            activeResumeState = ActiveResumeState(
+                scanGeneration: scanGeneration,
+                scanID: scanID,
+                frontier: frontier,
+                deep: deep,
+                startedAt: snapshotStartedAt,
+                hasFailures: anyListingFailed
+            )
+            if Task.isCancelled || !backgroundWorkAllowed {
                 await Self.saveResumeState(
                     store: store, scanID: scanID, frontier: frontier,
                     scanGeneration: scanGeneration, deep: deep,
@@ -496,6 +596,7 @@ actor ShareScanner {
                 return .cancelled(scanGeneration: scanGeneration)
             }
             var nextFrontier: [FrontierEntry] = []
+            var completedDirectories: Set<String> = []
             var index = 0                         // next directory in `frontier` to dispatch
 
             await withTaskGroup(of: DirResult.self) { group in
@@ -518,7 +619,9 @@ actor ShareScanner {
                 var waitStart = DispatchTime.now().uptimeNanoseconds
                 while let result = await group.next() {
                     listWaitNanos += DispatchTime.now().uptimeNanoseconds - waitStart
-                    guard !isInvalidated else {
+                    guard !Task.isCancelled,
+                          backgroundWorkAllowed,
+                          !isInvalidated else {
                         group.cancelAll()
                         continue
                     }
@@ -584,7 +687,7 @@ actor ShareScanner {
                             // cost five statements each and dominated the whole
                             // scan; one batched pass at the end does the same work
                             // in four. See `touchDirectoryContents(relPaths:)`.
-                            skippedDirectories.append(childPath)
+                            skippedDirectories.append(child.frontier)
                             // No `recordedSubdirectories` lookup: the skip
                             // condition above requires this directory to have no
                             // recorded subdirectories, so that query is provably
@@ -654,7 +757,11 @@ actor ShareScanner {
                         )
                         lastProgressReport = now
                     }
-                    if Task.isCancelled { continue }   // stop dispatching; let in-flight drain
+                    guard !Task.isCancelled, backgroundWorkAllowed, !isInvalidated else {
+                        group.cancelAll()
+                        continue
+                    }
+                    completedDirectories.insert(result.dir)
                     // Never pause for browsing (which could starve a scan forever).
                     // Instead, admit replacement directory requests at a bounded
                     // slower rate while the user is actively navigating the share.
@@ -666,24 +773,30 @@ actor ShareScanner {
                 }
             }
 
-            // Flush before the cancellation checkpoint as well as the normal
-            // level checkpoint: skipped paths are absent from the saved frontier.
-            if !skippedDirectories.isEmpty {
+            // Never force a stamp transaction through cancellation. Unstamped
+            // leaves keep their traversal context and are queued for the resume.
+            if !skippedDirectories.isEmpty, !Task.isCancelled, backgroundWorkAllowed, !isInvalidated {
                 let flushStart = DispatchTime.now().uptimeNanoseconds
                 let stamped = await store.touchDirectoryContents(
-                    relPaths: skippedDirectories,
+                    relPaths: skippedDirectories.map(\.relPath),
                     scanID: scanID,
                     scanGeneration: scanGeneration
                 )
-                if !stamped { anyListingFailed = true }
+                if stamped {
+                    skippedDirectories.removeAll(keepingCapacity: true)
+                } else if !Task.isCancelled, backgroundWorkAllowed, !isInvalidated {
+                    anyListingFailed = true
+                    skippedDirectories.removeAll(keepingCapacity: true)
+                }
                 skipStoreNanos += DispatchTime.now().uptimeNanoseconds - flushStart
-                skippedDirectories.removeAll(keepingCapacity: true)
             }
-            if Task.isCancelled || isInvalidated {
-                // Everything still unwalked: this level's undispatched tail plus the
-                // children discovered so far. Directories already listed keep their
-                // rows stamped with `scanID`, so they simply aren't revisited.
-                let pending = Array(frontier[min(index, frontier.count)...]) + nextFrontier
+            if Task.isCancelled || !backgroundWorkAllowed || isInvalidated {
+                // Dispatch is not completion: cancelled in-flight results have not
+                // been applied. A retried parent will rediscover its own children.
+                let pending = frontier.filter { !completedDirectories.contains($0.relPath) }
+                    + (nextFrontier + skippedDirectories).filter {
+                        completedDirectories.contains(($0.relPath as NSString).deletingLastPathComponent)
+                    }
                 await Self.saveResumeState(
                     store: store, scanID: scanID, frontier: pending,
                     scanGeneration: scanGeneration, deep: deep,
@@ -697,6 +810,16 @@ actor ShareScanner {
                 return isInvalidated ? .invalidated : .cancelled(scanGeneration: scanGeneration)
             }
             frontier = nextFrontier
+            if !frontier.isEmpty {
+                activeResumeState = ActiveResumeState(
+                    scanGeneration: scanGeneration,
+                    scanID: scanID,
+                    frontier: frontier,
+                    deep: deep,
+                    startedAt: snapshotStartedAt,
+                    hasFailures: anyListingFailed
+                )
+            }
             // Checkpoint at every level boundary, not only on graceful
             // cancellation: an app that is force-quit, crashes, or is suspended and
             // reclaimed by iOS never runs the cancellation path at all — which is
@@ -734,9 +857,9 @@ actor ShareScanner {
             // only reproduce what is already stored, so skip it. Completion
             // markers are still committed below; the saving is the reconciliation,
             // never the bookkeeping that makes incremental scanning work.
-            if rulesChanged || resumeState != nil {
+            if rulesChanged || resumeState != nil || !hasCompletedBaseline {
                 // Resume-time counts include discoveries from the earlier half,
-                // which may not have been grouped or reconciled yet.
+                // which may not have been reconciled, even if its frontier expired.
                 unchangedPass = false
             } else {
                 unchangedPass = await store.isMateriallyUnchanged(
@@ -763,8 +886,7 @@ actor ShareScanner {
                 anyListingFailed = true
             } else {
                 // Commit playable coverage only after asset/extra reconciliation
-                // and owner resolution. Folder projection requires this marker and
-                // directory completion to name the same clean scan.
+                // and owner resolution, before publishing a clean scan baseline.
                 let inventoryFinalized = await store.finalizePlayableInventory(
                     inScan: scanID,
                     scanGeneration: scanGeneration
@@ -863,6 +985,7 @@ actor ShareScanner {
         PlozzLog.boot(
             "share.scan done scanID=\(scanID) deep=\(deep) dirs=\(dirsWalked) skipped=\(dirsSkipped) storeMs=\(storeNanos / 1_000_000) skipStoreMs=\(skipStoreNanos / 1_000_000) listWaitMs=\(listWaitNanos / 1_000_000) interior=\(directoriesWithSubdirectories.count) files=\(filesFound) extras=\(extrasFound) catalog=\(discovery.total) newLastHour=\(discovery.recent) unchanged=\(unchangedPass) pruned=\(!anyListingFailed) failed=\(listFailureCounts.values.reduce(0, +)) failures=[\(failureSummary)] elapsed=\(Int(Date().timeIntervalSince(started) * 1_000))ms"
         )
+        activeResumeState = nil
         await finishScan(listers: pool)
         // A completed pass earns a completion stamp. When some listing failed the pass
         // stayed unpruned (partial), but it is still a *completed* pass under the
@@ -880,6 +1003,8 @@ actor ShareScanner {
             }
         }
         activeListers = []
+        activeResumeState = nil
+        activeListerGeneration = nil
         isRunning = false
         reporter.scanFinished(shareID)
     }
@@ -1180,6 +1305,7 @@ actor ShareScanner {
         let frontier: [FrontierEntry]
         let deep: Bool
         let startedAt: TimeInterval
+        let hasFailures: Bool?
     }
 
     private static let resumeCheckpointKey = "resume_checkpoint"
@@ -1197,7 +1323,8 @@ actor ShareScanner {
               let data = json.data(using: .utf8),
               let state = try? JSONDecoder().decode(ResumeState.self, from: data),
               !state.frontier.isEmpty,
-              state.deep == deep
+              state.deep == deep,
+              state.hasFailures != true
         else { return nil }
         let age = Date().timeIntervalSince1970 - state.startedAt
         guard age >= 0, age < resumeMaxAge else { return nil }
@@ -1213,22 +1340,72 @@ actor ShareScanner {
         startedAt: TimeInterval,
         hasFailures: Bool
     ) async {
-        let state = ResumeState(scanID: scanID, frontier: frontier, deep: deep, startedAt: startedAt)
-        guard !hasFailures, !frontier.isEmpty,
-              let data = try? JSONEncoder().encode(state),
-              let json = String(data: data, encoding: .utf8)
+        guard let scanGeneration,
+              let checkpoint = resumeCheckpoint(
+                  scanID: scanID,
+                  frontier: frontier,
+                  scanGeneration: scanGeneration,
+                  deep: deep,
+                  startedAt: startedAt,
+                  hasFailures: hasFailures
+              )
         else {
-            // A failed subtree is absent from the remaining frontier. Restart
-            // from the root rather than resuming it as a falsely clean snapshot.
             await clearResumeState(store: store, scanGeneration: scanGeneration)
             return
         }
         // One atomic value prevents a process death from pairing a new scan id
-        // with an old frontier. Keep the original age across repeated resumes.
+        // with an old frontier. A failure-bearing checkpoint deliberately replaces
+        // any older clean checkpoint; `loadResumeState` rejects it and restarts at
+        // the root, so a failed subtree cannot disappear from coverage.
         await store.setMeta(
             resumeCheckpointKey,
-            json,
+            checkpoint.resumeStateJSON ?? "",
             scanGeneration: scanGeneration
+        )
+    }
+
+    private static func resumeCheckpoint(
+        _ state: ActiveResumeState
+    ) -> ShareScanResumeCheckpoint? {
+        resumeCheckpoint(
+            scanID: state.scanID,
+            frontier: state.frontier,
+            scanGeneration: state.scanGeneration,
+            deep: state.deep,
+            startedAt: state.startedAt,
+            hasFailures: state.hasFailures
+        )
+    }
+
+    private static func resumeCheckpoint(
+        scanID: Int64,
+        frontier: [FrontierEntry],
+        scanGeneration: UUID,
+        deep: Bool,
+        startedAt: TimeInterval,
+        hasFailures: Bool
+    ) -> ShareScanResumeCheckpoint? {
+        guard !frontier.isEmpty,
+              let frontierData = try? JSONEncoder().encode(frontier),
+              let frontierJSON = String(data: frontierData, encoding: .utf8),
+              let stateData = try? JSONEncoder().encode(
+                  ResumeState(
+                      scanID: scanID,
+                      frontier: frontier,
+                      deep: deep,
+                      startedAt: startedAt,
+                      hasFailures: hasFailures
+                  )
+              ),
+              let resumeStateJSON = String(data: stateData, encoding: .utf8) else {
+            return nil
+        }
+        return ShareScanResumeCheckpoint(
+            scanGeneration: scanGeneration,
+            scanID: scanID,
+            frontierJSON: frontierJSON,
+            savedAt: startedAt,
+            resumeStateJSON: resumeStateJSON
         )
     }
 

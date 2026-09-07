@@ -877,7 +877,8 @@ struct MainTabView: View {
 
     /// Extracted for the same reason as ``homeTabContent`` — see there.
     private var searchTabContent: some View {
-            SearchTab(
+            let runtime = homeRuntime
+            return SearchTab(
                 accounts: accounts,
                 detailSnapshotCache: detailSnapshotCache,
                 authenticatedHTTPResolver: authenticatedHTTPResolver,
@@ -900,6 +901,7 @@ struct MainTabView: View {
                 enqueueWatchMutation: enqueueWatchMutation,
                 watchBridge: watchBridge,
                 identitySources: identitySources,
+                continueWatchingSnapshot: { runtime.continueWatchingForDetail },
                 onSubtitleStyleChanged: { subtitleStyleModel.style = $0 },
                 playRequest: $playRequest,
                 resumePrompt: $resumePrompt,

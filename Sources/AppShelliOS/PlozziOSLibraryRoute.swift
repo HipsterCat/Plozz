@@ -60,10 +60,10 @@ struct PlozziOSLibraryDestinationView: View {
         return appModel.accountsProviders.primaryProvider
     }
 
-    private var title: String {
+    private var title: String { // l10n:content - provider name or locale-scoped resource bridged to the grid's String API
         guard var resource = route.synthesizedName?.title else { return route.title }
         resource.locale = locale
-        return String(localized: resource)
+        return String(localized: resource) // l10n:content - recomputed from the observed locale, never cached
     }
 
     var body: some View {

@@ -100,9 +100,18 @@ actor ShareMetadataWorkScheduler {
 
     private struct Running {
         var id: UUID
-        var work: Work
-        var registrationGeneration: UInt64
+        var queued: QueuedWork
         var task: Task<Outcome, Never>
+
+        var work: Work { queued.work }
+        var registrationGeneration: UInt64 {
+            queued.registrationGeneration
+        }
+    }
+
+    private struct Worker {
+        var id: UUID
+        var task: Task<Void, Never>
     }
 
     /// A queued unit of work tagged with the account registration generation that
@@ -135,8 +144,13 @@ actor ShareMetadataWorkScheduler {
     /// non-preferred admission. Updated only on a REAL admission so a blocked
     /// account cannot consume the burst quota.
     private var consecutivePreferredBacklogAdmissions = 0
-    private var worker: Task<Void, Never>?
+    private var worker: Worker?
     private var running: Running?
+    /// Cancellation-insensitive work remains owned until its task actually
+    /// returns. A replacement worker may serve other accounts, but never starts
+    /// overlapping work for an account still draining an older admission.
+    private var draining: [UUID: Running] = [:]
+    private var pauseTasks: [UUID: Task<Void, Never>] = [:]
     private var backgroundWorkAllowed = true
     private var backgroundWorkRevision: UInt64 = 0
 
@@ -273,11 +287,20 @@ actor ShareMetadataWorkScheduler {
     }
 
     func setBackgroundWorkAllowed(_ allowed: Bool, revision: UInt64) async {
-        guard revision > backgroundWorkRevision else { return }
-        backgroundWorkRevision = revision
-        guard backgroundWorkAllowed != allowed else { return }
+        guard revision > backgroundWorkRevision
+                || (revision == backgroundWorkRevision
+                    && allowed == backgroundWorkAllowed) else {
+            return
+        }
+        if revision > backgroundWorkRevision {
+            backgroundWorkRevision = revision
+        }
         backgroundWorkAllowed = allowed
         if allowed {
+            for task in pauseTasks.values {
+                task.cancel()
+            }
+            pauseTasks.removeAll()
             ensureWorker()
             return
         }
@@ -285,14 +308,16 @@ actor ShareMetadataWorkScheduler {
         for accountKey in jobs.keys {
             admissionGenerations[accountKey, default: 0] &+= 1
         }
-        let runningTask = running?.task
-        runningTask?.cancel()
-        worker?.cancel()
-        for job in Array(jobs.values) {
-            await job.pausePass()
+        worker?.task.cancel()
+        worker = nil
+        if let running {
+            running.task.cancel()
+            draining[running.id] = running
+            self.running = nil
+            requeue(running.queued, resetAge: true)
         }
-        if let runningTask {
-            _ = await runningTask.value
+        for job in Array(jobs.values) {
+            startPauseTask(job.pausePass, revision: revision)
         }
     }
 
@@ -320,13 +345,21 @@ actor ShareMetadataWorkScheduler {
                 queuedUrgentKeys.remove(urgentKey(urgent))
             }
         }
-        let runningTask = running?.work.accountKey == accountKey ? running?.task : nil
-        runningTask?.cancel()
+        var tasks: [Task<Outcome, Never>] = []
+        if let running, running.work.accountKey == accountKey {
+            running.task.cancel()
+            tasks.append(running.task)
+        }
+        for drainingRun in draining.values
+        where drainingRun.work.accountKey == accountKey {
+            drainingRun.task.cancel()
+            tasks.append(drainingRun.task)
+        }
         if let job {
             await job.finishPass()
         }
-        if let runningTask {
-            _ = await runningTask.value
+        for task in tasks {
+            _ = await task.value
         }
     }
 
@@ -338,22 +371,71 @@ actor ShareMetadataWorkScheduler {
         )
     }
 
-    private func ensureWorker() {
-        guard backgroundWorkAllowed, worker == nil, hasQueuedWork else { return }
-        worker = Task(priority: .utility) { [weak self] in
-            await self?.runLoop()
+    private func startPauseTask(
+        _ pause: @escaping PassAction,
+        revision: UInt64
+    ) {
+        let taskID = UUID()
+        let task = Task(priority: .utility) { [weak self] in
+            guard let self else { return }
+            await self.runPauseTask(
+                id: taskID,
+                revision: revision,
+                pause: pause
+            )
         }
+        pauseTasks[taskID] = task
     }
 
-    private func runLoop() async {
-        defer {
+    private func runPauseTask(
+        id: UUID,
+        revision: UInt64,
+        pause: PassAction
+    ) async {
+        guard revision == backgroundWorkRevision,
+              !backgroundWorkAllowed,
+              !Task.isCancelled else {
+            pauseTasks[id] = nil
+            return
+        }
+        await pause()
+        pauseTasks[id] = nil
+    }
+
+    private func workerFinished(_ workerID: UUID) {
+        if worker?.id == workerID {
             worker = nil
-            ensureWorker()
+        }
+        ensureWorker()
+    }
+
+    private func ensureWorker() {
+        guard backgroundWorkAllowed, worker == nil, hasQueuedWork else { return }
+        let workerID = UUID()
+        let task = Task(priority: .utility) { [weak self] in
+            guard let self else { return }
+            await self.runLoop(workerID: workerID)
+        }
+        worker = Worker(id: workerID, task: task)
+    }
+
+    private func runLoop(workerID: UUID) async {
+        defer {
+            workerFinished(workerID)
         }
 
-        while !Task.isCancelled, backgroundWorkAllowed, hasQueuedWork {
-            guard let (queued, job) = await dequeueRunnableWork() else {
+        while !Task.isCancelled,
+              worker?.id == workerID,
+              backgroundWorkAllowed,
+              hasQueuedWork {
+            guard let (queued, job) = await dequeueRunnableWork(
+                workerID: workerID
+            ) else {
                 await sleep(configuration.blockedPollDelay)
+                continue
+            }
+            guard worker?.id == workerID, backgroundWorkAllowed else {
+                requeue(queued, resetAge: false)
                 continue
             }
             let work = queued.work
@@ -382,14 +464,22 @@ actor ShareMetadataWorkScheduler {
             let runningID = UUID()
             running = Running(
                 id: runningID,
-                work: work,
-                registrationGeneration: queued.registrationGeneration,
+                queued: queued,
                 task: task
             )
             let outcome = await task.value
             let wasCancelled = task.isCancelled
+            let wasDraining = draining.removeValue(forKey: runningID) != nil
             if running?.id == runningID {
                 running = nil
+            }
+            if wasDraining {
+                ensureWorker()
+                continue
+            }
+            guard worker?.id == workerID, backgroundWorkAllowed else {
+                requeue(queued, resetAge: true)
+                continue
             }
             // The registration that owned this work may have been replaced while it
             // ran; if so, discard rather than requeue into the replacement (A3).
@@ -455,8 +545,10 @@ actor ShareMetadataWorkScheduler {
     /// Tries every currently queued item once so one playback-blocked share cannot
     /// starve runnable work from other accounts. Urgent opened-item work is globally
     /// first; backlog order comes from the pure fairness policy.
-    private func dequeueRunnableWork() async -> (QueuedWork, Job)? {
-        guard backgroundWorkAllowed else { return nil }
+    private func dequeueRunnableWork(
+        workerID: UUID
+    ) async -> (QueuedWork, Job)? {
+        guard backgroundWorkAllowed, worker?.id == workerID else { return nil }
         let now = clock.now
         let backlogByKey = Dictionary(
             backlogQueue.map { ($0.work.accountKey, $0) },
@@ -479,6 +571,12 @@ actor ShareMetadataWorkScheduler {
         for queued in candidates {
             let work = queued.work
             guard takeQueued(work), let job = jobs[work.accountKey] else { continue }
+            if draining.values.contains(where: {
+                $0.work.accountKey == work.accountKey
+            }) {
+                requeue(queued, resetAge: false)
+                continue
+            }
             if suspensionCounts[work.accountKey, default: 0] > 0 {
                 requeue(queued, resetAge: false)
                 continue
@@ -492,6 +590,7 @@ actor ShareMetadataWorkScheduler {
             let admissionGeneration = admissionGenerations[work.accountKey, default: 0]
             if await job.mayRun(),
                backgroundWorkAllowed,
+               worker?.id == workerID,
                jobs[work.accountKey] != nil,
                admissionGenerations[work.accountKey, default: 0] == admissionGeneration,
                registrationGenerations[work.accountKey, default: 0] == queued.registrationGeneration,

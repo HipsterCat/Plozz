@@ -1233,6 +1233,7 @@ struct HomeHeroView: View {
                     kind: .play,
                     resumeProgress: resume,
                     isResume: resume != nil,
+                    isStarting: item.startsWatching,
                     resumeRemainingText: item.resumeRemainingText,
                     seasonEpisodeText: HeroForegroundModelBuilder.seasonEpisodeButtonText(for: item)
                 )
@@ -1962,11 +1963,12 @@ struct HomeHeroView: View {
         case .play:
             heroPill(selected: selected) {
                 PlayResumeButtonLabel(
-                    title: item.resumeProgressFraction != nil ? "Resume" : "Play",
+                    title: item.resumeProgressFraction != nil ? "Resume" : item.playActionTitle,
                     progress: item.resumeProgressFraction,
                     remainingText: item.resumeRemainingText,
                     seasonEpisodeText: HeroForegroundModelBuilder.seasonEpisodeButtonText(for: item),
-                    onLight: selected || colorScheme == .light
+                    onLight: selected || colorScheme == .light,
+                    separatesEpisodeText: item.startsWatching
                 )
                 .font(.system(size: 28, weight: .semibold))
             }

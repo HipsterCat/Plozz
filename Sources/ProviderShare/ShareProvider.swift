@@ -457,7 +457,8 @@ public struct ShareProvider: MediaProvider, MediaFileBrowsing, MediaSortFieldPro
         let rawContainerID = ShareCatalogID.containerID(forFileBrowserID: containerID)
         let entries = try await store.entries(
             forContainerID: rawContainerID ?? containerID,
-            sort: page.sort
+            sort: page.sort,
+            foldersFirst: rawContainerID != nil || libraryConfiguration?.contentType == .personalVideos
         )
         let all = rawContainerID != nil
             ? entries.map(ShareCatalogID.fileBrowserEntry)

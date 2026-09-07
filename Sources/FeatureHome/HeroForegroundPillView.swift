@@ -165,7 +165,7 @@ final class HeroForegroundPillView: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(_ pill: HeroForegroundModel.Pill, selected: Bool) {
+    func configure(_ pill: HeroForegroundModel.Pill, selected: Bool, locale: Locale = .current) {
         let selectionChanged = self.selected != selected
         self.pill = pill
         self.selected = selected
@@ -185,7 +185,14 @@ final class HeroForegroundPillView: UIView {
             glyphView.image = nil
             glyphView.isHidden = true
         }
-        if let text = pill.text {
+        let displayText: String?
+        if var title = pill.localizedTitle {
+            title.locale = locale
+            displayText = String(localized: title) + (pill.text ?? "") // l10n:content — UIKit presentation boundary, refreshed on environment-locale changes
+        } else {
+            displayText = pill.text
+        }
+        if let text = displayText {
             textLabel.text = text
             textLabel.textColor = tint
             textLabel.isHidden = false

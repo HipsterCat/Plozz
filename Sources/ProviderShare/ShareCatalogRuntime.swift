@@ -55,6 +55,10 @@ final class ShareCatalogRuntime {
     var enricher: ShareEnricher?
     var localEnricher: ShareLocalMetadataEnricher?
     var artworkProbeWorker: ShareLocalArtworkProbeWorker?
+    /// Credential rotation may arrive while the catalog is suspended. The reset is
+    /// durable SQLite work, so the coordinator defers it until this store's exact
+    /// foreground-resume barrier has completed.
+    var needsCredentialMaintenance = false
 
     // MARK: Scan-task bookkeeping
 

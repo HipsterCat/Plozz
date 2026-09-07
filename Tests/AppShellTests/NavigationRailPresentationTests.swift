@@ -1,0 +1,101 @@
+#if os(tvOS)
+import XCTest
+import CoreModels
+@testable import AppShell
+
+final class NavigationRailPresentationTests: XCTestCase {
+    func testSearchHidesCollapsedRailWithoutReservingItsInset() {
+        let presentation = make(.search)
+        XCTAssertTrue(presentation.usesPageButton)
+        XCTAssertFalse(presentation.isRailVisible)
+        XCTAssertFalse(presentation.isRailEnabled)
+        XCTAssertEqual(presentation.contentInset, 0)
+        XCTAssertEqual(presentation.headerHeight, NavigationRailMetrics.searchHeaderHeight)
+        XCTAssertTrue(presentation.shouldEnterSearchContent)
+        XCTAssertFalse(presentation.opensExpanded)
+    }
+
+    func testOpeningSearchRevealsTheRailBeforeRequestingFocus() {
+        let opening = make(.search, opening: true)
+        XCTAssertTrue(opening.isRailEnabled)
+        XCTAssertTrue(opening.isRailVisible)
+        XCTAssertTrue(opening.opensExpanded)
+        XCTAssertFalse(opening.shouldEnterSearchContent)
+        let expanded = make(.search, expanded: true)
+        XCTAssertTrue(expanded.isRailEnabled)
+        XCTAssertTrue(expanded.isRailVisible)
+        XCTAssertEqual(expanded.contentInset, 0)
+        XCTAssertEqual(expanded.headerHeight, opening.headerHeight)
+        XCTAssertFalse(expanded.shouldEnterSearchContent)
+        XCTAssertFalse(expanded.opensExpanded)
+    }
+
+    func testSearchCapsuleCannotWinEntryOrNavigationDismissal() {
+        let search = make(.search)
+        XCTAssertFalse(search.isPageButtonEnabled(hasEnteredContent: false))
+        XCTAssertTrue(search.isPageButtonEnabled(hasEnteredContent: true))
+        XCTAssertFalse(make(.search, opening: true).isPageButtonEnabled(hasEnteredContent: true))
+        XCTAssertFalse(make(.search, expanded: true).isPageButtonEnabled(hasEnteredContent: true))
+        XCTAssertFalse(make(.search).isPageButtonEnabled(hasEnteredContent: false))
+    }
+
+    func testSearchPageKeepsLeftPressesAndSwipesForNativeNavigation() {
+        XCTAssertFalse(make(.search).isEdgeNavigationEnabled())
+        XCTAssertFalse(make(.search, opening: true).isEdgeNavigationEnabled())
+    }
+
+    func testExpandedSearchNavigationStillAllowsRightToReturnToThePage() {
+        XCTAssertTrue(make(.search, expanded: true).isEdgeNavigationEnabled())
+    }
+
+    func testSearchResultsAllowLeadingEdgeNavigationButNotWhileMenuIsOpening() {
+        XCTAssertTrue(make(.search).isEdgeNavigationEnabled(searchResultsHaveFocus: true))
+        XCTAssertFalse(make(.search, opening: true).isEdgeNavigationEnabled(searchResultsHaveFocus: true))
+    }
+
+    func testOtherRootDestinationsKeepPinnedNavigation() {
+        for destination: NavigationRailDestination in [.home, .watchlist, .settings, .music, .allLibraries] {
+            let presentation = make(destination)
+            XCTAssertFalse(presentation.usesPageButton)
+            XCTAssertTrue(presentation.isRailVisible)
+            XCTAssertTrue(presentation.isRailEnabled)
+            XCTAssertTrue(presentation.isEdgeNavigationEnabled())
+            XCTAssertEqual(presentation.contentInset, NavigationRailMetrics.contentInset)
+            XCTAssertEqual(presentation.headerHeight, 0)
+            XCTAssertFalse(presentation.shouldEnterSearchContent)
+            XCTAssertFalse(make(destination, opening: true).opensExpanded)
+        }
+    }
+
+    func testDetailsKeepNavigationHiddenEvenDuringAnOpenRequest() {
+        let presentation = NavigationRailPresentation(
+            destination: .search,
+            chromeHidden: true,
+            isExpanded: true,
+            isOpening: true
+        )
+        XCTAssertFalse(presentation.isRailVisible)
+        XCTAssertFalse(presentation.isRailEnabled)
+        XCTAssertFalse(presentation.isEdgeNavigationEnabled())
+        XCTAssertFalse(presentation.isEdgeNavigationEnabled(searchResultsHaveFocus: true))
+        XCTAssertEqual(presentation.contentInset, 0)
+        XCTAssertFalse(presentation.showsPageButton)
+        XCTAssertEqual(presentation.headerHeight, 0)
+        XCTAssertFalse(presentation.shouldEnterSearchContent)
+        XCTAssertFalse(presentation.opensExpanded)
+    }
+
+    private func make(
+        _ destination: NavigationRailDestination,
+        expanded: Bool = false,
+        opening: Bool = false
+    ) -> NavigationRailPresentation {
+        NavigationRailPresentation(
+            destination: destination,
+            chromeHidden: false,
+            isExpanded: expanded,
+            isOpening: opening
+        )
+    }
+}
+#endif

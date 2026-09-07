@@ -1,5 +1,6 @@
 import Foundation
 import CoreModels
+import CoreNetworking
 import MediaTransportCore
 import MetadataKit
 
@@ -65,6 +66,27 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
     private var backgroundWorkRevision: UInt64 = 0
     private var scansPendingForeground: [String: Bool] = [:]
     private var scanForcesByTaskID: [UUID: Bool] = [:]
+    private struct SuspensionDrainEntry: Sendable {
+        let accountKey: String
+        let store: ShareCatalogStore
+        let taskIDs: Set<UUID>
+        let tasks: [Task<Void, Never>]
+        let listers: [ShareScanner.ScanLister]
+        let checkpoint: ShareScanResumeCheckpoint?
+    }
+    private struct SuspensionDrain {
+        let accountKey: String
+        let store: ShareCatalogStore
+        let task: Task<Void, Never>
+    }
+    private struct PendingStoreResume {
+        let revision: UInt64
+        let store: ShareCatalogStore
+    }
+    private var suspensionDrains: [UUID: SuspensionDrain] = [:]
+    private var storesAwaitingForegroundResume: [String: PendingStoreResume] = [:]
+    private var storeResumeRetryRevisions: [String: UInt64] = [:]
+    private var reportedBlockedResumeRevisions: [String: UInt64] = [:]
 
     public init(
         arbiterFactory: @escaping ArbiterFactory = { MediaIOArbiter(accountID: $0) }
@@ -158,21 +180,73 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
     /// Revisioned composition-root entry point. Scene changes cross an unstructured
     /// task boundary, so an older delivery must never overwrite the latest phase.
     public func setBackgroundWorkAllowed(_ allowed: Bool, revision: UInt64) async {
-        guard revision > backgroundWorkRevision else { return }
-        backgroundWorkRevision = revision
-        guard backgroundWorkAllowed != allowed else { return }
+        guard revision > backgroundWorkRevision
+                || (revision == backgroundWorkRevision
+                    && allowed == backgroundWorkAllowed) else {
+            return
+        }
+        if revision > backgroundWorkRevision {
+            backgroundWorkRevision = revision
+        }
         backgroundWorkAllowed = allowed
 
         if allowed {
+            let runtimeEntries = Array(runtimes)
+            for (accountKey, runtime) in runtimeEntries {
+                storesAwaitingForegroundResume[accountKey] = PendingStoreResume(
+                    revision: revision,
+                    store: runtime.store
+                )
+                if let scanner = runtime.scanner {
+                    _ = await scanner.setBackgroundWorkAllowed(
+                        true,
+                        revision: revision
+                    )
+                    guard revision == backgroundWorkRevision,
+                          backgroundWorkAllowed else {
+                        return
+                    }
+                }
+            }
             await metadataScheduler.setBackgroundWorkAllowed(true, revision: revision)
-            await resumePendingForegroundScans()
+            guard revision == backgroundWorkRevision, backgroundWorkAllowed else {
+                return
+            }
+            await artworkCacheLifecycle.setBackgroundWorkAllowed(true, revision: revision)
+            guard revision == backgroundWorkRevision, backgroundWorkAllowed else {
+                return
+            }
+            for (accountKey, runtime) in runtimeEntries {
+                await resumeStoreForForeground(
+                    accountKey: accountKey,
+                    store: runtime.store,
+                    revision: revision
+                )
+                guard revision == backgroundWorkRevision, backgroundWorkAllowed else {
+                    return
+                }
+            }
             return
         }
 
-        var tasks: [Task<Void, Never>] = []
-        var scanners: [ShareScanner] = []
-        for (accountKey, runtime) in runtimes
-        where runtime.hasActiveScanTasks || runtime.hasDrainingScanTasks {
+        storesAwaitingForegroundResume.removeAll()
+        storeResumeRetryRevisions.removeAll()
+        reportedBlockedResumeRevisions.removeAll()
+
+        // Close metadata admission before any scanner actor hop. The scheduler
+        // retains cancellation-insensitive work as owned drains and returns
+        // without awaiting provider/network completion.
+        await metadataScheduler.setBackgroundWorkAllowed(
+            false,
+            revision: revision
+        )
+        guard revision == backgroundWorkRevision, !backgroundWorkAllowed else {
+            return
+        }
+
+        let runtimeEntries = Array(runtimes)
+        var drainEntries: [SuspensionDrainEntry] = []
+        for (accountKey, runtime) in runtimeEntries {
             let force = runtime.scanTasks.keys.contains {
                 scanForcesByTaskID[$0] == true
             }
@@ -189,32 +263,290 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
             )
             let accountTasks = Array(taskEntries.values)
             accountTasks.forEach { $0.cancel() }
-            tasks.append(contentsOf: accountTasks)
+            let handoff: ShareScanner.SuspensionHandoff
             if let scanner = runtime.scanner {
-                scanners.append(scanner)
+                handoff = await scanner.setBackgroundWorkAllowed(
+                    false,
+                    revision: revision
+                )
+            } else {
+                handoff = ShareScanner.SuspensionHandoff(
+                    listers: [],
+                    checkpoint: nil
+                )
+            }
+            guard !taskEntries.isEmpty || !handoff.listers.isEmpty else { continue }
+            drainEntries.append(SuspensionDrainEntry(
+                accountKey: accountKey,
+                store: runtime.store,
+                taskIDs: Set(taskEntries.keys),
+                tasks: accountTasks,
+                listers: handoff.listers,
+                checkpoint: handoff.checkpoint
+            ))
+        }
+
+        // Fence both local SQLite owners independently of transport teardown and
+        // of each other. Either close may need an actor turn, but neither waits for
+        // a cancellation-insensitive network drain.
+        async let artworkSuspension: Void =
+            artworkCacheLifecycle.setBackgroundWorkAllowed(
+                false,
+                revision: revision
+            )
+        var pendingStores: [ShareCatalogStore] = []
+        for (accountKey, runtime) in runtimeEntries {
+            let checkpoint = drainEntries.first {
+                $0.accountKey == accountKey && $0.store === runtime.store
+            }?.checkpoint
+            if !(await runtime.store.prepareForSuspension(
+                revision: revision,
+                checkpoint: checkpoint
+            )) {
+                pendingStores.append(runtime.store)
             }
         }
 
-        async let metadataPause: Void = metadataScheduler.setBackgroundWorkAllowed(
-            false,
+        // The scanner's actor snapshot captures a conservative whole-level frontier
+        // before local closure. Late old-generation writes remain fenced, so
+        // foreground local reads never wait for remote transport teardown.
+        await startSuspensionDrains(entries: drainEntries)
+        let storesPrepared = await finishPreparingStoresForSuspension(
+            pendingStores,
             revision: revision
         )
-        await withTaskGroup(of: Void.self) { group in
-            for scanner in scanners {
-                group.addTask {
-                    // Closing the transport listers releases directory reads that
-                    // ignore task cancellation. The scan generation stays valid so
-                    // the cancelled walk can still persist its resume frontier.
-                    await scanner.forceCloseActiveListers()
+        _ = await artworkSuspension
+        guard storesPrepared else {
+            return
+        }
+        guard revision == backgroundWorkRevision, !backgroundWorkAllowed else {
+            return
+        }
+    }
+
+    private func startSuspensionDrains(entries: [SuspensionDrainEntry]) async {
+        for entry in entries {
+            let drainID = UUID()
+            let startGate = ShareScanStartGate()
+            let drainTask = Task(priority: .utility) { [weak self] in
+                await startGate.wait()
+                await withTaskGroup(of: Void.self) { group in
+                    for lister in entry.listers {
+                        group.addTask {
+                            await lister.close()
+                        }
+                    }
+                }
+                for task in entry.tasks {
+                    await task.value
+                }
+                await self?.suspensionDrainFinished(
+                    id: drainID,
+                    accountKey: entry.accountKey,
+                    store: entry.store,
+                    taskIDs: entry.taskIDs
+                )
+            }
+            suspensionDrains[drainID] = SuspensionDrain(
+                accountKey: entry.accountKey,
+                store: entry.store,
+                task: drainTask
+            )
+            await startGate.open()
+        }
+    }
+
+    private func finishPreparingStoresForSuspension(
+        _ stores: [ShareCatalogStore],
+        revision: UInt64
+    ) async -> Bool {
+        var pending = stores
+        var reportedBlockedClose = false
+        while !pending.isEmpty {
+            guard revision == backgroundWorkRevision,
+                  !backgroundWorkAllowed,
+                  !Task.isCancelled else {
+                return false
+            }
+            var stillPending: [ShareCatalogStore] = []
+            for store in pending {
+                if !(await store.prepareForSuspension(revision: revision)) {
+                    stillPending.append(store)
+                }
+            }
+            pending = stillPending
+            if !pending.isEmpty {
+                if !reportedBlockedClose {
+                    reportedBlockedClose = true
+                    PlozzLog.boot(
+                        "share.catalog suspension waiting for \(pending.count) local handle(s)"
+                    )
+                }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+        }
+        return true
+    }
+
+    private func suspensionDrainFinished(
+        id: UUID,
+        accountKey: String,
+        store: ShareCatalogStore,
+        taskIDs: Set<UUID>
+    ) async {
+        suspensionDrains[id] = nil
+        if let runtime = runtimes[accountKey], runtime.store === store {
+            runtime.clearDrainingScanTasks(taskIDs)
+        }
+        guard backgroundWorkAllowed else { return }
+        if let pending = storesAwaitingForegroundResume[accountKey],
+           pending.store === store {
+            await resumeStoreForForeground(
+                accountKey: accountKey,
+                store: store,
+                revision: pending.revision
+            )
+        }
+        await resumePendingForegroundScan(accountKey)
+    }
+
+    private func hasSuspensionDrain(
+        accountKey: String,
+        store: ShareCatalogStore
+    ) -> Bool {
+        suspensionDrains.values.contains {
+            $0.accountKey == accountKey && $0.store === store
+        }
+    }
+
+    private func resumeStoreForForeground(
+        accountKey: String,
+        store: ShareCatalogStore,
+        revision: UInt64
+    ) async {
+        guard revision == backgroundWorkRevision,
+              backgroundWorkAllowed,
+              let pending = storesAwaitingForegroundResume[accountKey],
+              pending.revision == revision,
+              pending.store === store,
+              let runtime = runtimes[accountKey],
+              runtime.store === store else {
+            return
+        }
+
+        var resumed = await store.resumeAfterSuspension(revision: revision)
+        guard revision == backgroundWorkRevision, backgroundWorkAllowed else {
+            return
+        }
+        if !resumed {
+            let prepared = await store.prepareForSuspension(revision: revision)
+            guard revision == backgroundWorkRevision, backgroundWorkAllowed else {
+                return
+            }
+            if prepared {
+                resumed = await store.resumeAfterSuspension(revision: revision)
+                guard revision == backgroundWorkRevision, backgroundWorkAllowed else {
+                    return
                 }
             }
         }
-        await metadataPause
-        for task in tasks {
-            await task.value
+        guard resumed else {
+            if reportedBlockedResumeRevisions[accountKey] != revision {
+                reportedBlockedResumeRevisions[accountKey] = revision
+                PlozzLog.boot(
+                    "share.catalog foreground waiting for local handle"
+                )
+            }
+            scheduleStoreResumeRetry(
+                accountKey: accountKey,
+                store: store,
+                revision: revision
+            )
+            return
         }
-        if backgroundWorkAllowed {
-            await resumePendingForegroundScans()
+
+        if runtime.needsCredentialMaintenance {
+            await store.resetPendingLocalMetadataAttempts()
+            guard revision == backgroundWorkRevision, backgroundWorkAllowed else {
+                return
+            }
+            await store.resetArtworkProbeTransientFailures()
+            guard revision == backgroundWorkRevision,
+                  backgroundWorkAllowed,
+                  runtimes[accountKey] === runtime else {
+                return
+            }
+            runtime.needsCredentialMaintenance = false
+        }
+        if let credentialRevision = runtime.scannerRevision {
+            await store.configureArtworkReferenceContext(
+                accountID: accountKey,
+                credentialRevision: credentialRevision
+            )
+            guard revision == backgroundWorkRevision, backgroundWorkAllowed else {
+                return
+            }
+        }
+        guard let currentPending = storesAwaitingForegroundResume[accountKey],
+              currentPending.revision == revision,
+              currentPending.store === store else {
+            return
+        }
+        storesAwaitingForegroundResume[accountKey] = nil
+        storeResumeRetryRevisions[accountKey] = nil
+        reportedBlockedResumeRevisions[accountKey] = nil
+        await resumePendingForegroundScan(accountKey)
+    }
+
+    private func scheduleStoreResumeRetry(
+        accountKey: String,
+        store: ShareCatalogStore,
+        revision: UInt64
+    ) {
+        guard storeResumeRetryRevisions[accountKey] != revision else { return }
+        storeResumeRetryRevisions[accountKey] = revision
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(5))
+            await self?.runStoreResumeRetry(
+                accountKey: accountKey,
+                store: store,
+                revision: revision
+            )
+        }
+    }
+
+    private func runStoreResumeRetry(
+        accountKey: String,
+        store: ShareCatalogStore,
+        revision: UInt64
+    ) async {
+        guard storeResumeRetryRevisions[accountKey] == revision else { return }
+        storeResumeRetryRevisions[accountKey] = nil
+        await resumeStoreForForeground(
+            accountKey: accountKey,
+            store: store,
+            revision: revision
+        )
+    }
+
+    private func resumePendingForegroundScan(_ accountKey: String) async {
+        guard backgroundWorkAllowed,
+              storesAwaitingForegroundResume[accountKey] == nil,
+              let runtime = runtimes[accountKey],
+              !runtime.hasActiveScanTasks,
+              !runtime.hasDrainingScanTasks,
+              !hasSuspensionDrain(
+                  accountKey: accountKey,
+                  store: runtime.store
+              ),
+              let force = scansPendingForeground[accountKey] else {
+            return
+        }
+        scansPendingForeground[accountKey] = nil
+        if force {
+            await rescan(accountKey: accountKey)
+        } else {
+            await ensureScanning(accountKey)
         }
     }
 
@@ -289,6 +621,52 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
                 return created
             }()
             let store = runtime.store
+            let lifecycleRevision = backgroundWorkRevision
+            var storeReadyForForeground = false
+            if backgroundWorkAllowed {
+                if let pending = storesAwaitingForegroundResume[accountKey],
+                          pending.revision == lifecycleRevision,
+                          pending.store === store {
+                    // Foreground recovery already owns this store. Public reads may
+                    // queue on the suspended gate without blocking this coordinator.
+                } else {
+                    let resumed = await store.resumeAfterSuspension(
+                        revision: lifecycleRevision
+                    )
+                    guard backgroundWorkAllowed,
+                          lifecycleRevision == backgroundWorkRevision else {
+                        continue
+                    }
+                    if !resumed {
+                        storesAwaitingForegroundResume[accountKey] = PendingStoreResume(
+                            revision: lifecycleRevision,
+                            store: store
+                        )
+                        scheduleStoreResumeRetry(
+                            accountKey: accountKey,
+                            store: store,
+                            revision: lifecycleRevision
+                        )
+                    } else {
+                        storeReadyForForeground = true
+                    }
+                }
+            } else {
+                let prepared = await store.prepareForSuspension(
+                    revision: lifecycleRevision
+                )
+                guard !backgroundWorkAllowed,
+                      lifecycleRevision == backgroundWorkRevision else {
+                    continue
+                }
+                if !prepared {
+                    let eventuallyPrepared = await finishPreparingStoresForSuspension(
+                        [store],
+                        revision: lifecycleRevision
+                    )
+                    guard eventuallyPrepared else { continue }
+                }
+            }
             await store.configureArtworkReferenceContext(
                 accountID: accountKey,
                 credentialRevision: credentialRevision
@@ -330,8 +708,16 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
                 await metadataScheduler.remove(accountKey: accountKey)
                 await staleLocalEnricher?.close()
                 await staleArtworkProbeWorker?.close()
-                await store.resetPendingLocalMetadataAttempts()
-                await store.resetArtworkProbeTransientFailures()
+                runtime.needsCredentialMaintenance = true
+                if storeReadyForForeground {
+                    await store.resetPendingLocalMetadataAttempts()
+                    await store.resetArtworkProbeTransientFailures()
+                    guard backgroundWorkAllowed,
+                          lifecycleRevision == backgroundWorkRevision else {
+                        continue
+                    }
+                    runtime.needsCredentialMaintenance = false
+                }
                 await invalidateScanner(
                     accountKey: accountKey,
                     runtime: runtime,
@@ -367,6 +753,10 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
                 )
                 runtime.scannerID = UUID()
                 runtime.scannerRevision = credentialRevision
+                _ = await runtime.scanner?.setBackgroundWorkAllowed(
+                    backgroundWorkAllowed,
+                    revision: backgroundWorkRevision
+                )
             }
             if runtime.enricher == nil,
                libraryConfiguration?.contentType != .personalVideos {
@@ -479,6 +869,14 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
               let scannerID = runtime.scannerID else {
             return
         }
+        guard storesAwaitingForegroundResume[accountKey] == nil,
+              !hasSuspensionDrain(
+                accountKey: accountKey,
+                store: runtime.store
+              ) else {
+            markScanPendingForeground(accountKey, force: true)
+            return
+        }
         runtime.restarting = true
         let existingTaskEntries = runtime.moveActiveScanTasksToDraining()
         let existingTasks = Array(existingTaskEntries.values)
@@ -487,7 +885,9 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
             owner: .rescanSuperseded
         )
         existingTasks.forEach { $0.cancel() }
-        await runtime.store.invalidateScanGeneration()
+        _ = await runtime.store.invalidateScanGeneration(
+            revision: backgroundWorkRevision
+        )
         for task in existingTasks {
             await task.value
         }
@@ -572,6 +972,12 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
     /// stamped in the `recordScanOutcome`→`clearScanTask` window must not leak. Test-only.
     func pendingCancellationReasonCount(_ accountKey: String) -> Int {
         runtimes[accountKey]?.pendingCancellationReasonCount ?? 0
+    }
+
+    /// Test-only scan-drain visibility for deterministic lifecycle assertions.
+    func scanTaskCountForTesting(_ accountKey: String) -> Int {
+        guard let runtime = runtimes[accountKey] else { return 0 }
+        return runtime.scanTasks.count + runtime.drainingScanTasks.count
     }
 
     /// Test-only: stamp a cancellation reason for one task through the real
@@ -698,7 +1104,13 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
             markScanPendingForeground(accountKey, force: false)
             return
         }
-        guard let runtime = runtimes[accountKey],
+        guard let runtime = runtimes[accountKey] else { return }
+        guard storesAwaitingForegroundResume[accountKey] == nil,
+              !hasSuspensionDrain(accountKey: accountKey, store: runtime.store) else {
+            markScanPendingForeground(accountKey, force: false)
+            return
+        }
+        guard
               !runtime.hasActiveScanTasks,
               runtime.scanAdmission == nil,
               runtime.isActive,
@@ -717,7 +1129,13 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
     private func resumePendingForegroundScans() async {
         guard backgroundWorkAllowed else { return }
         for (accountKey, force) in Array(scansPendingForeground) {
-            guard let runtime = runtimes[accountKey], !runtime.hasActiveScanTasks else {
+            guard let runtime = runtimes[accountKey],
+                  storesAwaitingForegroundResume[accountKey] == nil,
+                  !hasSuspensionDrain(
+                    accountKey: accountKey,
+                    store: runtime.store
+                  ),
+                  !runtime.hasActiveScanTasks else {
                 continue
             }
             scansPendingForeground[accountKey] = nil
@@ -758,12 +1176,27 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         // walk returns (a superseded scanner/credential must not stamp its replacement).
         let scannerID = runtime.scannerID
         let credentialRevision = runtime.scannerRevision
+        let lifecycleRevision = backgroundWorkRevision
+        let scanGeneration = UUID()
         if shouldEnrich { await metadataScheduler.suspend(accountKey: accountKey) }
-        guard runtime.isActive, runtime.scannerID == scannerID else {
+        guard backgroundWorkAllowed,
+              lifecycleRevision == backgroundWorkRevision,
+              runtime.isActive,
+              runtime.scanner === scanner,
+              runtime.scannerID == scannerID,
+              runtime.scannerRevision == credentialRevision else {
             if shouldEnrich { await metadataScheduler.resume(accountKey: accountKey) }
+            if !backgroundWorkAllowed || lifecycleRevision != backgroundWorkRevision {
+                markScanPendingForeground(accountKey, force: force)
+            }
             return
         }
-        let resource = ShareScannerResource(scanner: scanner, store: store)
+        let resource = ShareScannerResource(
+            scanner: scanner,
+            store: store,
+            lifecycleRevision: lifecycleRevision,
+            scanGeneration: scanGeneration
+        )
         let scannerLease: MediaIOScannerLease
         do {
             scannerLease = try await runtime.arbiter.acquireScanner(resource: resource)
@@ -772,10 +1205,22 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
             return
         }
         if shouldEnrich { await metadataScheduler.resume(accountKey: accountKey) }
-        guard backgroundWorkAllowed, runtime.isActive, runtime.scannerID == scannerID else {
-            if !backgroundWorkAllowed { markScanPendingForeground(accountKey, force: force) }
+        guard backgroundWorkAllowed,
+              lifecycleRevision == backgroundWorkRevision,
+              runtime.isActive,
+              runtime.scanner === scanner,
+              runtime.scannerID == scannerID,
+              runtime.scannerRevision == credentialRevision else {
+            if !backgroundWorkAllowed || lifecycleRevision != backgroundWorkRevision {
+                markScanPendingForeground(accountKey, force: force)
+            }
             resource.markDrained()
             await scannerLease.finishAndWait()
+            if backgroundWorkAllowed {
+                Task { [weak self] in
+                    await self?.resumePendingForegroundScans()
+                }
+            }
             return
         }
         let taskID = UUID()
@@ -800,9 +1245,9 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
             BrowseDiagnostics.event("scan+ \(accountKey) force=\(force)")
             let outcome: ShareScanOutcome
             if force {
-                outcome = await scanner.scan()
+                outcome = await scanner.scan(scanGeneration: scanGeneration)
             } else {
-                outcome = await scanner.scanIfStale()
+                outcome = await scanner.scanIfStale(scanGeneration: scanGeneration)
             }
             ShareBackgroundActivity.scanFinished()
             BrowseDiagnostics.event("scan- \(accountKey)")
@@ -953,10 +1398,13 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         let tasks = Array(taskEntries.values)
         tasks.forEach { $0.cancel() }
         let store = runtime.store
+        let lifecycleRevision = backgroundWorkRevision
         let invalidationID = UUID()
         let invalidationTask = Task { [weak self] in
             await scanner?.invalidate()
-            await store.invalidateScanGeneration()
+            _ = await store.invalidateScanGeneration(
+                revision: lifecycleRevision
+            )
             for task in tasks {
                 await task.value
             }
@@ -989,7 +1437,9 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
             ).values)
             lateTasks.forEach { $0.cancel() }
             await lateScanner?.invalidate()
-            await runtime.store.invalidateScanGeneration()
+            _ = await runtime.store.invalidateScanGeneration(
+                revision: backgroundWorkRevision
+            )
             for task in lateTasks {
                 await task.value
             }
@@ -1014,6 +1464,9 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
                 runtimes[accountKey] = nil
             }
             scansPendingForeground[accountKey] = nil
+            storesAwaitingForegroundResume[accountKey] = nil
+            storeResumeRetryRevisions[accountKey] = nil
+            reportedBlockedResumeRevisions[accountKey] = nil
             return
         }
         // Credential rotation preserves the runtime; just clear the invalidation
@@ -1049,14 +1502,15 @@ actor ShareScanStartGate {
 /// blocked implementation cannot prevent force-close from reaching lister closure,
 /// and so tests can inject a blocking invalidator. `ShareCatalogStore` conforms.
 protocol ScanGenerationInvalidating: Sendable {
-    func invalidateScanGeneration() async
+    @discardableResult
+    func invalidateScanGeneration(revision: UInt64, scanGeneration: UUID?) async -> Bool
 }
 
 /// The force-close-side dependency a scanner resource drives to tear down active
 /// directory listers (each a live transport session) immediately, independent of
 /// the graceful-cancel path. `ShareScanner` conforms.
 protocol ScanListerForceClosing: Sendable {
-    func forceCloseActiveListers() async
+    func forceCloseActiveListers(scanGeneration: UUID) async
 }
 
 extension ShareCatalogStore: ScanGenerationInvalidating {}
@@ -1065,14 +1519,23 @@ extension ShareScanner: ScanListerForceClosing {}
 final class ShareScannerResource: MediaIOScannerResource, @unchecked Sendable {
     private let listerCloser: ScanListerForceClosing
     private let generationInvalidator: ScanGenerationInvalidating
+    private let lifecycleRevision: UInt64
+    private let scanGeneration: UUID
     private let lock = NSLock()
     private var task: Task<Void, Never>?
     private var cancelled = false
     private var drained = false
 
-    init(scanner: ScanListerForceClosing, store: ScanGenerationInvalidating) {
+    init(
+        scanner: ScanListerForceClosing,
+        store: ScanGenerationInvalidating,
+        lifecycleRevision: UInt64,
+        scanGeneration: UUID
+    ) {
         self.listerCloser = scanner
         self.generationInvalidator = store
+        self.lifecycleRevision = lifecycleRevision
+        self.scanGeneration = scanGeneration
     }
 
     var isDrained: Bool {
@@ -1110,7 +1573,10 @@ final class ShareScannerResource: MediaIOScannerResource, @unchecked Sendable {
 
     func cancel() async {
         cancelTaskSynchronously()
-        await generationInvalidator.invalidateScanGeneration()
+        _ = await generationInvalidator.invalidateScanGeneration(
+            revision: lifecycleRevision,
+            scanGeneration: scanGeneration
+        )
     }
 
     func forceClose() async throws {
@@ -1121,8 +1587,11 @@ final class ShareScannerResource: MediaIOScannerResource, @unchecked Sendable {
         // immediately (this is what actually stops in-flight transport I/O), mark
         // drained, then perform generation-invalidation bookkeeping last.
         cancelTaskSynchronously()
-        await listerCloser.forceCloseActiveListers()
+        await listerCloser.forceCloseActiveListers(scanGeneration: scanGeneration)
         lock.withLock { drained = true }
-        await generationInvalidator.invalidateScanGeneration()
+        _ = await generationInvalidator.invalidateScanGeneration(
+            revision: lifecycleRevision,
+            scanGeneration: scanGeneration
+        )
     }
 }

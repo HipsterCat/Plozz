@@ -91,7 +91,7 @@ public final class RelatedTitlesLoader {
     ///
     /// Safe to call on every open: a fresh record skips the provider chain
     /// entirely, and re-entering the same page is a no-op.
-    public func load(for item: MediaItem) async {
+    public func load(for item: MediaItem, displayMode override: DisplayMode? = nil) async {
         guard item.allowsTitleBasedMetadataMatching else {
             loadedSeedKey = nil
             entries = []
@@ -99,8 +99,10 @@ public final class RelatedTitlesLoader {
             hasResolved = true
             return
         }
+        let mode = override ?? displayMode
         let query = MetadataQuery(item).seriesScoped
-        let key = query.enrichmentCacheKey
+        let seedKey = query.enrichmentCacheKey
+        let key = "\(seedKey)#\(mode == .libraryOnly ? "library" : "external")"
         guard loadedSeedKey != key else { return }
         loadedSeedKey = key
         entries = []
@@ -117,10 +119,10 @@ public final class RelatedTitlesLoader {
             }
         }
 
-        let titles = await resolvedTitles(for: query, key: key)
+        let titles = await resolvedTitles(for: query, key: seedKey)
         guard !titles.isEmpty else { return }
         guard loadedSeedKey == key else { return }  // page changed while resolving
-        if displayMode == .includeExternal {
+        if mode == .includeExternal {
             // Resolve against the eager identity index before publishing. Destination
             // routing used to do this only after selection, so an owned title wore an
             // external/requestable mark until it was tapped. The synchronous index
@@ -140,7 +142,7 @@ public final class RelatedTitlesLoader {
                 }
             return
         }
-        await matchToLibrary(titles, seedKey: key)
+        await matchToLibrary(titles, seedKey: key, displayMode: mode)
     }
 
     /// Builds a validated library item from the shared identity index. Related
@@ -196,7 +198,11 @@ public final class RelatedTitlesLoader {
     ///
     /// Searches run concurrently but are **bounded**: a page opening shouldn't fire
     /// a dozen simultaneous queries at a server that is also streaming video.
-    private func matchToLibrary(_ titles: [RelatedTitle], seedKey: String) async {
+    private func matchToLibrary(
+        _ titles: [RelatedTitle],
+        seedKey: String,
+        displayMode: DisplayMode
+    ) async {
         let search = self.search
         let ordered = Array(titles.prefix(Self.maximumLookups))
         var matched: [Int: MediaItem] = [:]

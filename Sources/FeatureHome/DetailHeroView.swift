@@ -47,6 +47,7 @@ struct DetailHeroView: View, Equatable {
             && lhs.scheduleLine == rhs.scheduleLine
             && lhs.spoilerSettings == rhs.spoilerSettings
             && lhs.playTitle == rhs.playTitle
+            && lhs.showsPlayPlaceholder == rhs.showsPlayPlaceholder
             && lhs.playProgress == rhs.playProgress
             && lhs.playRemainingText == rhs.playRemainingText
             && lhs.playSeasonEpisodeText == rhs.playSeasonEpisodeText
@@ -130,10 +131,11 @@ struct DetailHeroView: View, Equatable {
     /// Fridays" or "New season Aug 5". `nil` when nothing is known.
     var scheduleLine: LocalizedStringResource? = nil
     let spoilerSettings: SpoilerSettings
-    /// Title for the Play/Resume button, or `nil` to omit the button entirely
-    /// (e.g. a season with no resolved episodes yet).
+    /// Title for the ready Play/Resume button. Pending library details can keep
+    /// its disabled placeholder visible before a target has resolved.
     let playTitle: LocalizedStringResource?
     let onPlay: (() -> Void)?
+    var showsPlayPlaceholder: Bool = false
     /// When provided (`0..<1`), a thin watched-progress bar is shown inside the
     /// Play button, between the play icon and the remaining-time line.
     var playProgress: Double? = nil
@@ -903,7 +905,7 @@ struct DetailHeroView: View, Equatable {
                 ? (showsRequestPill
                     || onPlayTrailer != nil
                     || heroWatchlistAction != nil)
-                : ((playTitle != nil && onPlay != nil) || onPlayTrailer != nil || hasHeroActionButtons) {
+                : ((playTitle != nil && onPlay != nil) || showsPlayPlaceholder || onPlayTrailer != nil || hasHeroActionButtons) {
                 HStack(spacing: 24) {
                     if isDiscoveryItem {
                         // Discovery keeps library-only actions suppressed but a
@@ -926,8 +928,8 @@ struct DetailHeroView: View, Equatable {
                             watchlistButton(action: heroWatchlistAction)
                         }
                     } else {
-                    if let playTitle, let onPlay {
-                        playButton(title: playTitle, action: onPlay)
+                    if (playTitle != nil && onPlay != nil) || showsPlayPlaceholder {
+                        playButton(title: playTitle ?? "Play", action: onPlay)
                     }
                     if let onPlayTrailer {
                         Button(action: onPlayTrailer) {
@@ -1191,20 +1193,21 @@ struct DetailHeroView: View, Equatable {
     /// label becomes `▶  [progress bar]  … left`, keeping the button's normal
     /// height; otherwise it's the plain `▶  Play/Resume`.
     @ViewBuilder
-    private func playButton(title: LocalizedStringResource, action: @escaping () -> Void) -> some View {
+    private func playButton(title: LocalizedStringResource, action: (() -> Void)?) -> some View {
         // The plain "▶ Play" form must occupy the SAME width as the wider resume
         // form ("▶ [bar] … left") so that flipping between them — e.g. when the
         // user marks the item Watched, which clears the live resume text — never
         // resizes Play or shifts the action row beside it. We size to a *latched*
         // resume text (`reservedResumeText`) that survives the watched transition,
-        // rather than a fixed over-wide frame. With no resume target ever (a plain
-        // unwatched title) there's nothing to reserve and Play takes its natural,
-        // tight default width.
+        // rather than shrinking after a watched transition. Placeholder dimensions
+        // never constrain the ready button.
         let liveResumeText = resumeText
         let sizingText = reservedResumeText ?? liveResumeText
         let button = Button {
-            heroTrailerController.stop()
-            action()
+            if let action {
+                heroTrailerController.stop()
+                action()
+            }
         } label: {
             ZStack {
                 if let sizingText {
@@ -1215,11 +1218,14 @@ struct DetailHeroView: View, Equatable {
                     progress: playProgress,
                     remainingText: playRemainingText,
                     seasonEpisodeText: playSeasonEpisodeText,
-                    onLight: playButtonHasFocus || colorScheme == .light
+                    onLight: playButtonHasFocus || colorScheme == .light,
+                    isPlaceholder: action == nil,
+                    separatesEpisodeText: (actionItem ?? item).startsWatching
                 )
             }
         }
         .modifier(HeroActionButtonStyle(prominent: true))
+        .disabled(action == nil)
         .focused($playButtonHasFocus)
         .focused($heroActionRowFocus, equals: .play)
         .onChange(of: liveResumeText) { _, new in
@@ -1232,10 +1238,10 @@ struct DetailHeroView: View, Equatable {
         if let playButtonFocus {
             button
                 .focused(playButtonFocus, equals: true)
-                .prefersDefaultFocus(true, in: heroActionsScope)
+                .prefersDefaultFocus(action != nil, in: heroActionsScope)
         } else {
             button
-                .prefersDefaultFocus(true, in: heroActionsScope)
+                .prefersDefaultFocus(action != nil, in: heroActionsScope)
         }
     }
 

@@ -360,6 +360,31 @@ final class ShareScannerIncrementalTests: XCTestCase {
                        "resume-time row counts already include new files, but they still need reconciliation")
     }
 
+    func testRestartWithoutCheckpointReconcilesInterruptedDiscoveries() async throws {
+        let fixture = ShareCatalogSQLiteFixture()
+        defer { fixture.cleanup() }
+        let store = fixture.makeStore()
+        var tree = try cancellationTree()
+        _ = await scanner(store, tree: tree).scan()
+        tree["A", default: []].append(try video("A/New (2002).mkv"))
+        let gate = MetadataAsyncTestGate()
+        let interrupted = scanner(store, tree: tree, gate: gate)
+        let task = Task { await interrupted.scan(deep: false) }
+        await gate.waitUntilEntered()
+        task.cancel()
+        gate.open()
+        _ = await task.value
+        XCTAssertEqual(try fixture.integer("SELECT COUNT(*) FROM assets;"), 3)
+        await store.setMeta("resume_checkpoint", "")
+
+        let outcome = await scanner(store, tree: tree).scan(deep: false)
+
+        XCTAssertEqual(outcome, .completedClean)
+        XCTAssertEqual(try fixture.integer("SELECT COUNT(*) FROM assets;"), 3)
+        XCTAssertEqual(try fixture.integer("SELECT COUNT(*) FROM assets WHERE movie_group_key IS NULL;"), 0,
+                       "unchanged counts do not prove an interrupted pass finished reconciliation")
+    }
+
     func testMissingOrFutureDirectoryTimesNeverHideNewMedia() async throws {
         for timestamp in [nil, Date().addingTimeInterval(600)] as [Date?] {
             let fixture = ShareCatalogSQLiteFixture()

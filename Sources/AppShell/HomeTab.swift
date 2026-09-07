@@ -479,28 +479,11 @@ struct HomeTab: View {
                 ItemDetailView(
                     viewModel: detailViewModels.value(
                         forKey: "episode:\(route.seriesID)#\(route.episode.id)"
-                    ) { ItemDetailViewModel(
-                        provider: resolveProvider(route.sourceAccountID, in: accounts),
-                        itemID: route.seriesID,
-                        // Seed the hero from the tapped episode so first paint is
-                        // INSTANT (its thumbnail + title) instead of a centered
-                        // spinner on blank gray while `item(id:)` resolves the
-                        // series. load() swaps in the full series page in place.
-                        initialItem: route.episode,
-                        ratingsProvider: ratingsProvider,
+                    ) { detailEnvironment.makeSeriesContextViewModel(
+                        seriesID: route.seriesID,
+                        seed: route.episode,
                         sourceAccountID: route.sourceAccountID,
-                        originSourceAccountID: route.originAccountID,
-                        // The fronted page IS the series, so it gets the same
-                        // cross-server "…" picker a directly-opened series does —
-                        // discovery matches the series by provider IDs and fills
-                        // the server list once the page settles.
-                        alternateProviderResolver: { resolveOptionalProvider($0, in: accounts) },
-                        crossServerSourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
-                        relatedTitlesLoader: makeRelatedTitlesLoader(
-                            in: accounts,
-                            identitySources: identitySources
-                        ),
-                        snapshotCache: detailSnapshotCache
+                        originAccountID: route.originAccountID
                     ) },
                     spoilerSettings: spoilerSettings,
                     onPlay: { requestPlay($0) },
@@ -527,25 +510,11 @@ struct HomeTab: View {
                 ItemDetailView(
                     viewModel: detailViewModels.value(
                         forKey: "season:\(route.seriesID)#\(route.season.id)"
-                    ) { ItemDetailViewModel(
-                        provider: resolveProvider(route.sourceAccountID, in: accounts),
-                        itemID: route.seriesID,
-                        // Seed the hero from the tapped season so first paint is
-                        // INSTANT (its poster + title) instead of a centered spinner
-                        // on blank gray while `item(id:)` resolves the series.
-                        initialItem: route.season,
-                        ratingsProvider: ratingsProvider,
+                    ) { detailEnvironment.makeSeriesContextViewModel(
+                        seriesID: route.seriesID,
+                        seed: route.season,
                         sourceAccountID: route.sourceAccountID,
-                        originSourceAccountID: route.originAccountID,
-                        // The fronted page IS the series, so it gets the same
-                        // cross-server "…" picker a directly-opened series does.
-                        alternateProviderResolver: { resolveOptionalProvider($0, in: accounts) },
-                        crossServerSourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
-                        relatedTitlesLoader: makeRelatedTitlesLoader(
-                            in: accounts,
-                            identitySources: identitySources
-                        ),
-                        snapshotCache: detailSnapshotCache
+                        originAccountID: route.originAccountID
                     ) },
                     spoilerSettings: spoilerSettings,
                     onPlay: { requestPlay($0) },
@@ -1024,11 +993,13 @@ struct HomeTab: View {
         let accounts = self.accounts
         let identitySources = self.identitySources
         let seer = self.seer
+        let runtime = self.runtime
         return DetailOpenEnvironment(
             resolveProvider: { resolveProvider($0, in: accounts) },
             resolveOptionalProvider: { resolveOptionalProvider($0, in: accounts) },
             identitySources: identitySources,
             crossServerSourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
+            continueWatchingSnapshot: { runtime.continueWatchingForDetail },
             ratingsProvider: ratingsProvider,
             discoveryStatusRefresh: { await seer.availability(for: $0) },
             makeRelatedTitlesLoader: {
@@ -1068,7 +1039,6 @@ struct HomeTab: View {
         // titles (available/partiallyAvailable) are NOT discovery: they resolve to
         // a real library copy via the identity index, so they keep the normal
         // playable detail page.
-        let isDiscovery = detailEnvironment.isDiscovery(item)
         return ItemDetailView(
             viewModel: detailViewModels.value(forKey: "item:\(item.id)#\(libraryOrigin ?? "")") {
                 detailEnvironment.makeViewModel(for: item, libraryOrigin: libraryOrigin)
@@ -1084,7 +1054,6 @@ struct HomeTab: View {
             heroTrailerResolver: makeHeroTrailerResolver(),
             preservesHeroTrailerOnDisappear: true,
             initialSeasonID: item.seasonID,
-            isDiscoveryItem: isDiscovery,
             seerConnected: seer.isConfigured,
             onRequest: { item in
                 let outcome = await seer.request(item, actingUserID: activeSeerrUserID)

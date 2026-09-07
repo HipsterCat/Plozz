@@ -692,6 +692,116 @@ final class ShareProviderCapabilityTests: XCTestCase {
         ])
     }
 
+    func testMediaAwareDateSortCombinesMovieFoldersAndLooseFilesBeforePaging() async throws {
+        let fixture = ShareCatalogSQLiteFixture()
+        defer { fixture.cleanup() }
+        let store = fixture.makeStore()
+        let paths = ["Movies/Older (2000)/Older.mkv", "Movies/Newer (2001).mkv", "Movies/Oldest (1999).mkv"]
+        await store.upsert(zip(paths, [("Older", 2000), ("Newer", 2001), ("Oldest", 1999)]).map { path, identity in
+            CatalogAsset(
+                relPath: path, basename: (path as NSString).lastPathComponent,
+                size: 1_000, modifiedAt: Date(), kind: .movie, library: .movies,
+                title: identity.0, year: identity.1, seriesTitle: nil, seriesKey: nil,
+                season: nil, episode: nil,
+                movieKey: ShareCatalogID.movieKey(fromTitle: identity.0, year: identity.1),
+                movieTitleKey: ShareCatalogID.movieKey(fromTitle: identity.0, year: nil)
+            )
+        }, scanID: 1)
+        let fileSystem = CapabilityFakeFileSystem(entries: [], directories: [
+            "Movies": [
+                try RemoteFileEntry(relativePath: "Movies/Undated.mp4", kind: .file),
+                try RemoteFileEntry(
+                    relativePath: "Movies/Older (2000)", kind: .directory,
+                    modifiedAt: Date(timeIntervalSince1970: 900),
+                    createdAt: Date(timeIntervalSince1970: 100)
+                ),
+                try RemoteFileEntry(
+                    relativePath: "Movies/Newer (2001).mkv", kind: .file,
+                    modifiedAt: Date(timeIntervalSince1970: 50),
+                    createdAt: Date(timeIntervalSince1970: 300)
+                ),
+                try RemoteFileEntry(
+                    relativePath: "Movies/Unsorted", kind: .directory,
+                    modifiedAt: Date(timeIntervalSince1970: 200)
+                ),
+                try RemoteFileEntry(
+                    relativePath: "Movies/Oldest (1999).mkv", kind: .file,
+                    modifiedAt: Date(timeIntervalSince1970: 50)
+                ),
+            ]
+        ])
+        let provider = ShareProvider(
+            session: makeSession(),
+            sessionFactory: { role in
+                try CapabilityFakeSession(fileSystem: fileSystem, role: role)
+            },
+            catalogCoordinator: FakeCatalogCoordinator(reader: FakeCatalogReader()),
+            catalogStore: store
+        )
+        for (direction, expected) in [
+            (SortDirection.ascending, ["movie:oldest-1999", "movie:older-2000", "d:Movies/Unsorted", "movie:newer-2001", "f:Movies/Undated.mp4"]),
+            (.descending, ["movie:newer-2001", "d:Movies/Unsorted", "movie:older-2000", "movie:oldest-1999", "f:Movies/Undated.mp4"]),
+        ] {
+            var pagedIDs: [String] = []
+            for offset in expected.indices {
+                let page = try await provider.items(
+                    in: "d:Movies", kind: .folder,
+                    page: PageRequest(
+                        startIndex: offset, limit: 1,
+                        sort: .init(field: .dateAdded, direction: direction)
+                    )
+                )
+                XCTAssertEqual(page.totalCount, expected.count)
+                pagedIDs.append(contentsOf: page.items.map(\.id))
+            }
+            XCTAssertEqual(pagedIDs, expected)
+        }
+    }
+
+    func testRawAndPersonalDateSortKeepFoldersBeforeFiles() async throws {
+        let fileSystem = CapabilityFakeFileSystem(entries: [
+            try RemoteFileEntry(
+                relativePath: "Older", kind: .directory,
+                modifiedAt: Date(timeIntervalSince1970: 100)
+            ),
+            try RemoteFileEntry(
+                relativePath: "Newest.mkv", kind: .file,
+                modifiedAt: Date(timeIntervalSince1970: 300)
+            ),
+            try RemoteFileEntry(
+                relativePath: "Newer", kind: .directory,
+                modifiedAt: Date(timeIntervalSince1970: 200)
+            ),
+            try RemoteFileEntry(relativePath: "Undated.mp4", kind: .file),
+        ])
+        for personal in [false, true] {
+            let provider = ShareProvider(
+                session: makeSession(configuration: personal
+                    ? MediaShareLibraryConfiguration(name: "Personal", contentType: .personalVideos)
+                    : nil),
+                sessionFactory: { role in
+                    try CapabilityFakeSession(fileSystem: fileSystem, role: role)
+                },
+                catalogCoordinator: FakeCatalogCoordinator(reader: FakeCatalogReader())
+            )
+            let folderPrefix = personal ? "d:" : "share:files:d:"
+            for (direction, folders) in [
+                (SortDirection.ascending, ["Older", "Newer"]),
+                (.descending, ["Newer", "Older"]),
+            ] {
+                let page = try await provider.items(
+                    in: personal ? ShareLibraryStore.rootLibraryID : "share:files:share:root",
+                    kind: .folder,
+                    page: PageRequest(limit: 10, sort: .init(field: .dateAdded, direction: direction))
+                )
+                XCTAssertEqual(
+                    page.items.map(\.id),
+                    folders.map { folderPrefix + $0 } + ["f:Newest.mkv", "f:Undated.mp4"]
+                )
+            }
+        }
+    }
+
     func testProjectedRawBrowseSortsByRuntimeBeforePaging() async throws {
         let reader = FakeCatalogReader()
         reader.browseResult = [

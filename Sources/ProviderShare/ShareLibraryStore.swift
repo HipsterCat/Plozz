@@ -105,14 +105,16 @@ actor ShareLibraryStore {
     /// by ShareProvider, when enriched runtime/rating metadata is available.
     func entries(
         forContainerID id: String,
-        sort: CoreModels.SortDescriptor
+        sort: CoreModels.SortDescriptor,
+        foldersFirst: Bool = true
     ) async throws -> [MediaItem] {
-        try await loadEntries(forContainerID: id, sort: sort)
+        try await loadEntries(forContainerID: id, sort: sort, foldersFirst: foldersFirst)
     }
 
     private func loadEntries(
         forContainerID id: String,
-        sort: CoreModels.SortDescriptor?
+        sort: CoreModels.SortDescriptor?,
+        foldersFirst: Bool = true
     ) async throws -> [MediaItem] {
         let relPath = Self.relativePath(forContainerID: id)
         guard let relPath else { return [] }
@@ -138,6 +140,11 @@ actor ShareLibraryStore {
             }
         }
         if sort?.field == .dateAdded, let sort {
+            if !foldersFirst {
+                return (folders + videos)
+                    .sorted { Self.dateOrder($0, $1, direction: sort.direction) }
+                    .map(\.item)
+            }
             folders.sort { Self.dateOrder($0, $1, direction: sort.direction) }
             videos.sort { Self.dateOrder($0, $1, direction: sort.direction) }
         } else {
@@ -162,7 +169,10 @@ actor ShareLibraryStore {
         case (.some, nil):
             return true
         default:
-            return lhs.item.title.localizedStandardCompare(rhs.item.title) == .orderedAscending
+            let order = lhs.item.title.localizedStandardCompare(rhs.item.title)
+            return order == .orderedSame
+                ? lhs.item.id < rhs.item.id
+                : order == .orderedAscending
         }
     }
 

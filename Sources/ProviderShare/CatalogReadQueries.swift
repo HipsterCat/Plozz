@@ -516,7 +516,7 @@ struct CatalogReadQueries {
     /// SQL order shared by movie and series grid queries. Unknown values always
     /// sink, independent of direction, and every order ends with deterministic
     /// name/id tie-breakers so LIMIT/OFFSET cannot duplicate or skip rows.
-    private func catalogOrderClause(sort: CoreModels.SortDescriptor) -> String {
+    private func catalogOrderClause(sort: CoreModels.SortDescriptor) -> String { // l10n:content - SQL syntax
         let direction = sort.direction == .ascending ? "ASC" : "DESC"
         switch sort.field {
         case .name:
@@ -536,7 +536,7 @@ struct CatalogReadQueries {
 
     /// Deterministic local shuffle key. SQLite's `random()` would reorder between
     /// page requests and make LIMIT/OFFSET skip or duplicate cards.
-    private func stableRandomOrderExpression(_ id: String) -> String {
+    private func stableRandomOrderExpression(_ id: String) -> String { // l10n:content - SQL syntax
         """
         printf(
           '%016x',
@@ -844,7 +844,7 @@ struct CatalogReadQueries {
 
     /// Resolve only when opening details, never once per card on the browse path.
     /// Lexical endpoints give the common physical directory of all versions.
-    private func fileBrowserContainerID(for id: String) -> String? {
+    private func fileBrowserContainerID(for id: String) -> String? { // l10n:content - SQL and share-relative navigation IDs
         let parent = "substr(rel_path,1,length(rel_path)-length(basename)-1)"
         let directory: String
         let predicate: String
@@ -1011,7 +1011,7 @@ struct CatalogReadQueries {
         var relPath: String
         var basename: String
         var size: Int64
-        var title: String
+        var title: String // l10n:content - indexed movie title
         var year: Int?
     }
 

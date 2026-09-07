@@ -376,27 +376,15 @@ final class SubtitleLineView: UIView {
 
     // MARK: - Font
 
-    /// The bundled-face PostScript name for the requested weight/slant, or `nil`
-    /// to use the system font. Picks the closest face a family actually bundles:
+    /// The named face for the requested weight/slant, or `nil`
+    /// to use the system font. Picks the closest face a family actually offers:
     /// italic is preserved first (families ship italics only at Regular/Bold, and
     /// italic is per-cue emphasis), then the weight degrades toward Regular rather
     /// than letting Core Text substitute an unrelated system font.
-    private func postScriptName(_ c: Config) -> String? {
-        guard let stem = c.family.postScriptStem else { return nil }
-        let weight = effectiveWeight(c)
-        let available = c.family.availableWeights
-        var candidates: [String] = []
-        // Keep the slant first when the cue is italic (only Regular/Bold italics
-        // are bundled), so emphasis survives even if the exact weight can't.
-        if c.isItalic {
-            if weight == .bold { candidates.append("\(stem)-BoldItalic") }
-            candidates.append("\(stem)-Italic")
-        }
-        // Upright faces from the effective weight down to Regular.
-        let downChain = available.filter { $0.value <= weight.value }.sorted { $0.value > $1.value }
-        for w in downChain { candidates.append("\(stem)-\(w.faceToken)") }
-        if !downChain.contains(.regular) { candidates.append("\(stem)-Regular") }
-        return candidates.first { UIFont(name: $0, size: 12) != nil } ?? "\(stem)-Regular"
+    func postScriptName(_ c: Config) -> String? {
+        let candidates = c.family.postScriptNameCandidates(weight: effectiveWeight(c), isItalic: c.isItalic)
+        return candidates.first { UIFont(name: $0, size: 12) != nil }
+            ?? c.family.postScriptNameCandidates().first
     }
 
     /// The weight to actually render for this cue: the global weight snapped to
