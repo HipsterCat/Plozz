@@ -71,6 +71,16 @@ reset them.
   Back to top works without resetting the selected time.
 - Category, source and sorting choices use explicit navigation lists with
   checkmarked selections, not nested system Picker presentations inside a sheet.
+- The guide sits in one rounded, opaque tray with roomier channel rows and
+  quieter programme tiles. Logo plates, row surfaces and the outer tray use
+  concentric radii derived from their insets. The default TV layout shows about
+  four full rows rather than squeezing in six or seven.
+  A single Liquid Glass underlay groups the Search/category/Favorites/More
+  controls; programme cells do not create individual glass surfaces. Glass
+  reduction preferences and Reduce Transparency use the existing shared
+  fallbacks. Guide focus uses a crisp rounded outline and tonal fill, with a
+  solid high-contrast treatment under increased contrast or Reduce Transparency.
+  Focus and selection never swap the button's structural identity.
 - **Sources** reports playlist entries, skipped entries, guide matches, listings,
   coverage dates and per-feed failures. Its toggles enable or disable the five
   preset guides; disabling one immediately removes its contribution. Results
@@ -172,9 +182,9 @@ in the [iptv-org catalog](https://github.com/iptv-org/iptv).
 Channel and hero marks reuse `HeroLogoArtwork`: cached off-main preparation,
 transparent/solid-margin trimming, ink-aware sizing, monochrome contrast and
 colour-logo halos. A bounded fit contains the whole mark inside a larger slot
-(112 x 64 points in channel rows); measured ink chooses a light or dark plate.
+(126 x 72 points in TV rows, 112 x 64 on iPhone/iPad); measured ink chooses a light or dark plate.
 Multicolour artwork is not recoloured. Failed/missing artwork keeps a readable
-fixed-size text fallback, and larger logos do not increase guide row height.
+fixed-size text fallback. Loading artwork never changes the reserved row height.
 
 The original nine-channel `LiveTVPrototypeCatalog` remains a small regression
 fixture, not the app's default catalog or a channel limit.

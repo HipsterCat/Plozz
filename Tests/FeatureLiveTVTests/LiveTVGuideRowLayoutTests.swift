@@ -81,17 +81,60 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
         XCTAssertEqual(rail.contentFrame.maxX, plain.contentFrame.maxX, accuracy: 0.5)
     }
 
-    func testTVLayoutLeavesRoomForAtLeastSixUniformRows() {
+    func testTVLayoutLeavesRoomForFourRoomyRows() {
         #if os(tvOS)
         let layout = PrototypePreviewLayout(
             size: CGSize(width: 1_740, height: 960),
             safeAreaInsets: EdgeInsets(top: 60, leading: 90, bottom: 60, trailing: 90)
         )
-        let toolbarAndRuler: CGFloat = 44 + 80
-        let spacing = PrototypeLayout.gap * 2 + PrototypeLayout.smallGap * 3
+        let toolbarAndRuler = PrototypeLayout.controlHeight + PrototypeLayout.controlInset * 2 + 44
+        let spacing = PrototypeLayout.sectionGap * 2 + PrototypeLayout.guideInset * 2
+            + PrototypeLayout.gap + PrototypeLayout.smallGap * 2
         let listHeight = layout.contentFrame.height - layout.heroHeight - toolbarAndRuler - spacing
-        XCTAssertGreaterThanOrEqual(listHeight / (PrototypeLayout.rowHeight + PrototypeLayout.smallGap), 6)
+        let visibleRows = listHeight / (PrototypeLayout.rowHeight + PrototypeLayout.rowGap)
+        XCTAssertGreaterThanOrEqual(visibleRows, 4)
+        XCTAssertLessThan(visibleRows, 5)
+        XCTAssertGreaterThanOrEqual(PrototypeLayout.rowHeight, 100)
         #endif
+    }
+
+    func testGuideAndLogoCornersStayConcentric() {
+        XCTAssertEqual(PrototypeLayout.guideRadius, PrototypeLayout.rowRadius + PrototypeLayout.guideInset)
+        XCTAssertEqual(PrototypeLayout.rowRadius, PrototypeLayout.logoRadius + PrototypeLayout.rowInset)
+        XCTAssertEqual(PrototypeLayout.rowHeight, PrototypeLayout.stationSize + PrototypeLayout.rowInset * 2)
+        XCTAssertEqual(
+            PrototypeLayout.controlGroupRadius,
+            PrototypeLayout.controlRadius + PrototypeLayout.controlInset
+        )
+    }
+
+    func testStationAndTimelineAlwaysShareTheSameAvailableWidth() {
+        let widths: [CGFloat] = [650, 700, 1_100, 1_400, 1_832]
+        for width in widths {
+            XCTAssertEqual(
+                PrototypeLayout.stationWidth(for: width)
+                    + PrototypeLayout.columnGap + PrototypeLayout.timelineWidth(for: width),
+                width, accuracy: 0.01
+            )
+        }
+    }
+
+    func testControlGroupFitsCompactAndWideLayoutsWithLongFilters() {
+        let widths: [CGFloat] = [320, 390, 700, 1_440]
+        for width in widths {
+            let fixture = ToolbarFixture(compact: width < 650)
+                .dynamicTypeSize(.large)
+            let size = UIHostingController(rootView: fixture)
+                .sizeThatFits(in: CGSize(width: width, height: 300))
+            #if os(tvOS)
+            if width < 650 || width >= 1_400 {
+                XCTAssertLessThanOrEqual(size.width, width + 0.5)
+            }
+            #else
+            XCTAssertLessThanOrEqual(size.width, width + 0.5)
+            #endif
+            XCTAssertGreaterThanOrEqual(size.height, PrototypeLayout.controlHeight)
+        }
     }
 
     func testCompactAndAccessibilityLayoutsKeepTheGuideInBounds() {
@@ -166,6 +209,23 @@ private struct GuideRowFixture: View {
             returnTarget: nil, favorite: false, playing: false,
             toggleFavorite: {}, tune: {}, details: { _ in },
             controls: {}, top: {}, goToNow: {}
+        )
+    }
+}
+
+private struct ToolbarFixture: View {
+    let compact: Bool
+    @State private var active = false
+    private let model: LiveTVPrototypeModel = {
+        let model = LiveTVPrototypeModel(now: Date(), scenario: .noGuide, channels: [])
+        model.category = "Documentaries and international entertainment"
+        return model
+    }()
+
+    var body: some View {
+        PrototypeBrowseToolbar(
+            model: model, active: $active, focusRequest: 0, compact: compact,
+            search: {}, filters: {}, more: {}
         )
     }
 }

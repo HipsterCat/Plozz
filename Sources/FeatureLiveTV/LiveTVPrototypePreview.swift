@@ -36,8 +36,8 @@ struct PrototypePreviewLayout {
             height: max(1, bounds.height - top - bottom)
         )
         heroHeight = min(
-            contentFrame.height * (largeText ? 0.48 : 0.28),
-            largeText ? 440 : (compact ? 200 : 260)
+            contentFrame.height * (largeText ? 0.48 : 0.30),
+            largeText ? 440 : (compact ? 220 : 300)
         )
         metadataWidth = compact || largeText ? contentFrame.width : contentFrame.width * 0.56
         let videoWidth = compact ? bounds.width : bounds.width * 0.72
@@ -97,11 +97,11 @@ struct PrototypePreviewHero: View {
     @Environment(\.themePalette) private var palette
 
     var body: some View {
-        VStack(alignment: .leading, spacing: PrototypeLayout.smallGap) {
+        VStack(alignment: .leading, spacing: layout.compact ? PrototypeLayout.smallGap : PrototypeLayout.rowGap) {
             if let channel {
-                HStack(spacing: PrototypeLayout.smallGap) {
-                    PrototypeStationMark(channel: channel, size: 72)
-                    Text(channel.name).lineLimit(1)
+                HStack(spacing: PrototypeLayout.gap) {
+                    PrototypeStationMark(channel: channel, size: layout.compact ? 48 : 72)
+                    if program != nil { Text(channel.name).lineLimit(1) }
                     if isPlaying {
                         Image(systemName: "speaker.wave.2.fill")
                             .accessibilityLabel("Current channel")
@@ -110,7 +110,7 @@ struct PrototypePreviewHero: View {
                 .font(.caption.weight(.medium))
                 .foregroundStyle(palette.secondaryText)
                 Text(program?.title ?? channel.name)
-                    .font(.title2.weight(.semibold))
+                    .font(.system(layout.compact ? .title2 : .title, design: .rounded).weight(.semibold))
                     .lineLimit(2)
                 HStack(spacing: PrototypeLayout.gap) {
                     Text(channel.category).lineLimit(1)
@@ -121,18 +121,14 @@ struct PrototypePreviewHero: View {
                 }
                 .font(.caption)
                 .foregroundStyle(palette.secondaryText)
-                if let program, !program.subtitle.isEmpty {
-                    Text(program.subtitle)
-                        .font(.subheadline).lineLimit(2)
-                        .foregroundStyle(palette.secondaryText)
-                }
                 #if os(iOS)
                 Button("Watch channel", systemImage: "arrow.up.left.and.arrow.down.right", action: watch)
                     .font(.subheadline)
-                    .buttonStyle(PrototypeButtonStyle())
+                    .plozzGlassPillButton()
                 #endif
             } else {
-                Text("Find your next channel").font(.title2.weight(.semibold))
+                Text("Find your next channel")
+                    .font(.system(.title, design: .rounded).weight(.semibold))
                 Text("Browse by channel, genre or what's on.")
                     .font(.subheadline).foregroundStyle(palette.secondaryText)
             }

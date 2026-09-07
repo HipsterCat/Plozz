@@ -7,57 +7,67 @@ struct PrototypeBrowseToolbar: View {
     @Bindable var model: LiveTVPrototypeModel
     @Binding var active: Bool
     let focusRequest: Int
+    let compact: Bool
     let search: () -> Void
     let filters: () -> Void
     let more: () -> Void
     @FocusState private var focused: Control?
-    @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.themePalette) private var palette
 
     private enum Control: Hashable { case search, filters, favorites, more }
 
     var body: some View {
-        HStack(spacing: PrototypeLayout.smallGap) {
-            Button(action: search) {
-                Label("Search", systemImage: "magnifyingglass")
-                    .labelStyle(PrototypeToolbarLabelStyle(compact: compact))
-                    .padding(.horizontal, 12).frame(minHeight: 44)
-            }
-            .focused($focused, equals: .search)
-            .buttonStyle(PrototypeButtonStyle(selected: !model.query.isEmpty, padded: false))
-            .accessibilityValue(model.query)
-            .accessibilityIdentifier("live-tv-search")
-            Button(action: filters) {
-                HStack(spacing: 8) {
-                    if let category = model.category { Text(category) }
-                    else { Text("All categories") }
-                    Image(systemName: "chevron.down").font(.caption2)
+        HStack(spacing: PrototypeLayout.gap) {
+            HStack(spacing: PrototypeLayout.smallGap) {
+                Button(action: search) {
+                    Label("Search", systemImage: "magnifyingglass")
+                        .labelStyle(PrototypeToolbarLabelStyle(compact: compact))
+                        .padding(.horizontal, compact ? 12 : 20)
+                        .frame(minWidth: 44, minHeight: PrototypeLayout.controlHeight)
                 }
-                .padding(.horizontal, 12).frame(minHeight: 44)
+                .focused($focused, equals: .search)
+                .buttonStyle(PrototypeButtonStyle(selected: !model.query.isEmpty, padded: false, surface: .control))
+                .accessibilityValue(model.query)
+                .accessibilityIdentifier("live-tv-search")
+                Button(action: filters) {
+                    HStack(spacing: 8) {
+                        if let category = model.category { Text(category) }
+                        else { Text("Categories") }
+                        Image(systemName: "chevron.down").font(.caption2)
+                    }
+                    .padding(.horizontal, compact ? 12 : 20)
+                    .frame(minHeight: PrototypeLayout.controlHeight)
+                    .frame(maxWidth: compact ? .infinity : 280)
+                }
+                .focused($focused, equals: .filters)
+                .buttonStyle(PrototypeButtonStyle(
+                    selected: model.category != nil || model.guideOnly || model.source != nil,
+                    padded: false, surface: .control
+                ))
+                .accessibilityIdentifier("live-tv-category")
+                Button {
+                    model.favoritesOnly.toggle()
+                } label: {
+                    Label("Favorites", systemImage: model.favoritesOnly ? "star.fill" : "star")
+                        .labelStyle(PrototypeToolbarLabelStyle(compact: compact))
+                        .padding(.horizontal, compact ? 12 : 20)
+                        .frame(minWidth: 44, minHeight: PrototypeLayout.controlHeight)
+                }
+                .buttonStyle(PrototypeButtonStyle(selected: model.favoritesOnly, padded: false, surface: .control))
+                .focused($focused, equals: .favorites)
+                .accessibilityAddTraits(model.favoritesOnly ? .isSelected : [])
+                .accessibilityIdentifier("live-tv-favorites-filter")
+                Button(action: more) {
+                    Label("More", systemImage: "ellipsis")
+                        .labelStyle(PrototypeToolbarLabelStyle(compact: compact))
+                        .padding(.horizontal, compact ? 12 : 20)
+                        .frame(minWidth: 44, minHeight: PrototypeLayout.controlHeight)
+                }
+                .focused($focused, equals: .more)
+                .accessibilityIdentifier("live-tv-options")
             }
-            .focused($focused, equals: .filters)
-            .buttonStyle(PrototypeButtonStyle(
-                selected: model.category != nil || model.guideOnly || model.source != nil, padded: false
-            ))
-            .accessibilityIdentifier("live-tv-category")
-            Button {
-                model.favoritesOnly.toggle()
-            } label: {
-                Label("Favorites", systemImage: model.favoritesOnly ? "star.fill" : "star")
-                    .labelStyle(PrototypeToolbarLabelStyle(compact: compact))
-                    .padding(.horizontal, 12).frame(minHeight: 44)
-            }
-            .buttonStyle(PrototypeButtonStyle(selected: model.favoritesOnly, padded: false))
-            .focused($focused, equals: .favorites)
-            .accessibilityAddTraits(model.favoritesOnly ? .isSelected : [])
-            .accessibilityIdentifier("live-tv-favorites-filter")
-            Button(action: more) {
-                Label("More", systemImage: "ellipsis")
-                    .labelStyle(PrototypeToolbarLabelStyle(compact: compact))
-                    .padding(.horizontal, 12).frame(minHeight: 44)
-            }
-            .focused($focused, equals: .more)
-            .accessibilityIdentifier("live-tv-options")
+            .padding(PrototypeLayout.controlInset)
+            .background { PrototypeControlSurface() }
             if !compact {
                 Spacer(minLength: 0)
                 Text(model.now, format: .dateTime.hour().minute())
@@ -65,9 +75,10 @@ struct PrototypeBrowseToolbar: View {
                     .foregroundStyle(palette.secondaryText)
             }
         }
-        .font(.subheadline)
+        .font(.subheadline.weight(.medium))
         .lineLimit(1)
-        .buttonStyle(PrototypeButtonStyle(padded: false))
+        .buttonStyle(PrototypeButtonStyle(padded: false, surface: .control))
+        .focusEffectDisabled()
         #if os(tvOS)
         .focusSection()
         #endif
@@ -75,14 +86,6 @@ struct PrototypeBrowseToolbar: View {
             if target != nil { active = true }
         }
         .onChange(of: focusRequest) { _, _ in focused = .search }
-    }
-
-    private var compact: Bool {
-        #if os(tvOS)
-        false
-        #else
-        sizeClass == .compact
-        #endif
     }
 }
 

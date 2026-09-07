@@ -38,7 +38,7 @@ struct PrototypeBrowser: View {
     var body: some View {
         GeometryReader { geometry in
             let focusReturnTarget = returnTarget
-            VStack(spacing: PrototypeLayout.smallGap) {
+            VStack(spacing: PrototypeLayout.gap) {
                 if model.guideChannelCount > 0 {
                     if geometry.size.width >= 650 {
                         PrototypeTimeRuler(
@@ -89,12 +89,13 @@ struct PrototypeBrowser: View {
                         }
                     } actions: {
                         Button("Clear filters") { model.resetFilters() }
-                            .buttonStyle(PrototypeButtonStyle())
+                            .buttonStyle(PrototypeButtonStyle(surface: .guide))
+                            .focusEffectDisabled()
                     }
                 } else {
                     ScrollViewReader { proxy in
                         ScrollView {
-                            LazyVStack(spacing: PrototypeLayout.smallGap) {
+                            LazyVStack(spacing: PrototypeLayout.rowGap) {
                                 ForEach(model.visibleChannels) { channel in
                                     PrototypeGuideRow(
                                         channel: channel,
@@ -122,9 +123,9 @@ struct PrototypeBrowser: View {
                             .padding(.vertical, PrototypeLayout.smallGap)
                         }
                         .scrollIndicators(.hidden)
-                        .overlay(alignment: .topLeading) {
+                        .background(alignment: .topLeading) {
                             if geometry.size.width >= 650, model.guideChannelCount > 0 {
-                                HStack(spacing: PrototypeLayout.smallGap) {
+                                HStack(spacing: PrototypeLayout.columnGap) {
                                     Color.clear.frame(width: PrototypeLayout.stationWidth(for: geometry.size.width))
                                     PrototypeNowLine(start: guideStart, now: model.now, timelineOffset: timelineOffset)
                                 }
@@ -184,11 +185,14 @@ struct PrototypeBrowser: View {
                 }
             }
             .onChange(of: geometry.size.width) { old, new in
-                let oldWidth = max(1, old - PrototypeLayout.stationWidth(for: old) - PrototypeLayout.smallGap)
-                let newWidth = max(1, new - PrototypeLayout.stationWidth(for: new) - PrototypeLayout.smallGap)
+                let oldWidth = PrototypeLayout.timelineWidth(for: old)
+                let newWidth = PrototypeLayout.timelineWidth(for: new)
                 timelineOffset = new < 650 ? 0 : min(newWidth * 2, timelineOffset / oldWidth * newWidth)
             }
         }
+        .padding(PrototypeLayout.guideInset)
+        .plozzSurface(.raised, cornerRadius: PrototypeLayout.guideRadius)
+        .clipShape(RoundedRectangle(cornerRadius: PrototypeLayout.guideRadius, style: .continuous))
         #if os(tvOS)
         .onExitCommand {
             if !isRestoringFocus { openToolbar() }
@@ -268,7 +272,7 @@ struct PrototypeBrowser: View {
         if model.now < guideStart || model.now >= guideStart.addingTimeInterval(21_600) {
             goToNow()
         }
-        let timelineWidth = max(1, width - PrototypeLayout.stationWidth(for: width) - PrototypeLayout.smallGap)
+        let timelineWidth = PrototypeLayout.timelineWidth(for: width)
         let visibleStart = guideStart.addingTimeInterval(Double(timelineOffset / timelineWidth) * 7_200)
         let visibleEnd = visibleStart.addingTimeInterval(7_200)
         if program.end <= visibleStart || program.start >= visibleEnd {
@@ -301,25 +305,25 @@ private struct PrototypeGuidePaging: View {
     let goToNow: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: PrototypeLayout.smallGap) {
             Text(start, format: .dateTime.month(.abbreviated).day())
                 .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            HStack(spacing: PrototypeLayout.smallGap) {
+                .padding(.leading, PrototypeLayout.rowInset)
             Button { offset = max(-86_400, offset - 7_200) } label: {
-                Image(systemName: "chevron.backward").frame(minWidth: 36, minHeight: 36)
+                Image(systemName: "chevron.backward").frame(minWidth: 44, minHeight: 44)
             }
             .accessibilityLabel("Earlier").disabled(offset <= -86_400)
             Button(action: goToNow) {
-                Text("Now").padding(.horizontal, 12).frame(minHeight: 36)
+                Text("Now").padding(.horizontal, 12).frame(minHeight: 44)
             }
             Button { offset = min(604_800, offset + 7_200) } label: {
-                Image(systemName: "chevron.forward").frame(minWidth: 36, minHeight: 36)
+                Image(systemName: "chevron.forward").frame(minWidth: 44, minHeight: 44)
             }
             .accessibilityLabel("Later").disabled(offset >= 604_800)
-            }
         }
         .font(.caption)
-        .buttonStyle(PrototypeButtonStyle(padded: false))
+        .buttonStyle(PrototypeButtonStyle(padded: false, surface: .control))
+        .focusEffectDisabled()
     }
 }
 
@@ -331,23 +335,27 @@ private struct PrototypeTimeRuler: View {
     @Binding var guideOffset: TimeInterval
     let goToNow: () -> Void
     @Environment(\.themePalette) private var palette
+    @ScaledMetric(relativeTo: .caption) private var height: CGFloat = 44
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: PrototypeLayout.smallGap) {
+        HStack(alignment: .center, spacing: PrototypeLayout.columnGap) {
             PrototypeGuidePaging(start: start, offset: $guideOffset, goToNow: goToNow)
                 .frame(width: PrototypeLayout.stationWidth(for: width), alignment: .leading)
             GeometryReader { geometry in
+                PrototypeNowLine(start: start, now: now, timelineOffset: timelineOffset)
                 HStack(spacing: 0) {
                     ForEach(0..<12, id: \.self) { tick in
                         Text(start.addingTimeInterval(TimeInterval(tick * 1_800)), format: .dateTime.hour().minute())
                             .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .padding(.leading, PrototypeLayout.rowInset)
                             .frame(width: geometry.size.width / 4, alignment: .leading)
                     }
                 }
+                .frame(height: height)
                 .offset(x: -timelineOffset)
-                PrototypeNowLine(start: start, now: now, timelineOffset: timelineOffset)
             }
-            .frame(height: 24)
+            .frame(height: height)
             .clipped()
         }
         .font(.caption.monospacedDigit())
@@ -427,7 +435,7 @@ struct PrototypeGuideRow: View {
             }
             .padding(.bottom, PrototypeLayout.gap)
         } else {
-            HStack(spacing: PrototypeLayout.smallGap) {
+            HStack(spacing: PrototypeLayout.columnGap) {
                 PrototypeGuideStation(
                     channel: channel, favorite: favorite, playing: playing, tune: tune, toggleFavorite: toggleFavorite,
                     controls: controls, top: top, height: rowHeight
@@ -452,14 +460,15 @@ struct PrototypeGuideRow: View {
                                     Button { open(program) } label: {
                                         PrototypeProgramLabel(
                                             program: program, now: now,
-                                            availableWidth: max(0, cellWidth(slot) - PrototypeLayout.smallGap * 2)
+                                            availableWidth: max(0, cellWidth(slot) - PrototypeLayout.rowInset * 2)
                                         )
-                                        .padding(.horizontal, min(PrototypeLayout.smallGap, slotWidth(slot) / 4))
+                                        .padding(.horizontal, min(PrototypeLayout.rowInset, slotWidth(slot) / 4))
                                         .frame(width: cellWidth(slot), height: rowHeight, alignment: .leading)
                                         .clipped()
                                     }
-                                    .buttonStyle(PrototypeButtonStyle(padded: false))
-                                    .padding(.trailing, min(4, slotWidth(slot) / 4))
+                                    .buttonStyle(PrototypeButtonStyle(padded: false, surface: .guide))
+                                    .focusEffectDisabled()
+                                    .padding(.trailing, min(PrototypeLayout.cellGap, slotWidth(slot) / 4))
                                     .frame(width: slotWidth(slot), height: rowHeight)
                                     .clipped()
                                     .focused(focus, equals: .program(channelID: channel.id, programID: program.id))
@@ -489,6 +498,9 @@ struct PrototypeGuideRow: View {
                 }
             }
             .frame(height: rowHeight)
+            .background(palette.fillSubtle, in: RoundedRectangle(
+                cornerRadius: PrototypeLayout.rowRadius, style: .continuous
+            ))
         }
     }
 
@@ -498,11 +510,11 @@ struct PrototypeGuideRow: View {
     }
 
     private func cellWidth(_ slot: LiveTVGuideSlot) -> CGFloat {
-        slotWidth(slot) - min(4, slotWidth(slot) / 4)
+        slotWidth(slot) - min(PrototypeLayout.cellGap, slotWidth(slot) / 4)
     }
 
     private var timelineWidth: CGFloat {
-        max(1, width - PrototypeLayout.stationWidth(for: width) - PrototypeLayout.smallGap)
+        PrototypeLayout.timelineWidth(for: width)
     }
 
     private func open(_ program: LiveTVPrototypeProgram) {
@@ -524,10 +536,10 @@ private struct PrototypeGuideStation: View {
 
     var body: some View {
         Button(action: tune) {
-            HStack(spacing: PrototypeLayout.smallGap) {
-                PrototypeStationMark(channel: channel, size: 64)
+            HStack(spacing: PrototypeLayout.gap) {
+                PrototypeStationMark(channel: channel)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(channel.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text(channel.name).font(.subheadline.weight(.medium)).lineLimit(1)
                     if let subtitle {
                         Text(subtitle).font(.subheadline).opacity(0.75).lineLimit(1)
                     }
@@ -543,11 +555,12 @@ private struct PrototypeGuideStation: View {
                 Spacer(minLength: 0)
             }
             .frame(minHeight: PrototypeLayout.rowHeight)
-            .padding(.horizontal, PrototypeLayout.smallGap)
+            .padding(.horizontal, PrototypeLayout.rowInset)
             .frame(height: height)
             .clipped()
         }
-        .buttonStyle(PrototypeButtonStyle(selected: playing, padded: false))
+        .buttonStyle(PrototypeButtonStyle(selected: playing, padded: false, surface: .guide))
+        .focusEffectDisabled()
         .accessibilityIdentifier("live-tv-channel-\(channel.number)")
         .contextMenu {
             Button(
@@ -571,7 +584,9 @@ struct PrototypeProgramLabel: View {
             if let availableWidth, availableWidth < minimumTitleWidth {
                 Image(systemName: "ellipsis").font(.caption)
             } else {
-                Text(program.title).font(.subheadline.weight(.semibold))
+                Text(program.title).font(.subheadline.weight(
+                    program.start <= now && now < program.end ? .medium : .regular
+                ))
                     .lineLimit(availableWidth == nil ? 2 : 1)
             }
             if availableWidth == nil {
@@ -599,10 +614,9 @@ private struct PrototypeGuideGap: View {
     var body: some View {
         Text(category)
             .font(.subheadline).foregroundStyle(palette.secondaryText).lineLimit(2)
-            .padding(.horizontal, PrototypeLayout.smallGap)
+            .padding(.horizontal, PrototypeLayout.rowInset)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: height)
-            .background(palette.fillSubtle, in: RoundedRectangle(cornerRadius: PrototypeLayout.radius))
             .accessibilityHint("Channel genre. No program listing for this time.")
     }
 }

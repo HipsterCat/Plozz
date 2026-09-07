@@ -122,7 +122,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                     .opacity(preview.isExpanded ? 0 : 1)
                     .animation(reduceMotion ? nil : .easeInOut(duration: 0.32), value: preview.isExpanded)
 
-                VStack(spacing: PrototypeLayout.gap) {
+                VStack(spacing: PrototypeLayout.sectionGap) {
                     PrototypePreviewHero(
                         channel: heroChannel,
                         program: heroProgram,
@@ -133,6 +133,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                     PrototypeBrowseToolbar(
                         model: model, active: $controlsActive,
                         focusRequest: toolbarFocusRequest,
+                        compact: layout.contentFrame.width < 650,
                         search: { sheet = .search },
                         filters: { sheet = .filters },
                         more: { sheet = .options }
@@ -161,7 +162,6 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         loadFailed: imports.playlistPhase == .failed,
                         reload: { reloadRequest += 1 }
                     )
-                    .background(palette.backgroundBase)
                 }
                 #if os(tvOS)
                 .focusSection()
