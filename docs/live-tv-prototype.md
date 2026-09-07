@@ -113,6 +113,14 @@ by AetherEngine's typed `playbackPhase`, gated on
 and reconnecting are distinct. The host no longer reconstructs engine state
 from AVPlayer transport hints or a second playback-clock classifier.
 
+TV controls keep one stable set of focus targets. Native glass supplies its own
+focus appearance: button styles must not switch in response to `FocusState`,
+which replaces the focused control and can stall focus/layout resolution.
+Close receives focus when controls mount, without waiting for the stream load.
+The connecting indicator does not intercept input. On-device regression checks
+must include video rendering and Back/Close while a channel is still connecting;
+the headless package test runner has no window scene to exercise TV focus.
+
 Live loads use `isLive: true`, the stable `.standard` join profile and native
 remote HLS with Aether's compatibility fallback. A native HLS route still uses
 AVPlayer internally; Aether owns route selection, engine state and recovery.

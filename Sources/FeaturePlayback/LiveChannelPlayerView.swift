@@ -81,6 +81,7 @@ public struct LiveChannelPlayerView: View {
                         onGoLive: goLive,
                         onNext: channelNext
                     )
+                    .onAppear { focusAfterPresentation(.close) }
                     .transition(.opacity)
                 }
 
@@ -94,6 +95,7 @@ public struct LiveChannelPlayerView: View {
                     )
                 } else if model.showsActivityIndicator {
                     LiveChannelActivityView(phase: model.phase)
+                        .allowsHitTesting(false)
                 }
             } else if engineInitializationFailed {
                 LiveChannelInterruptionView(
@@ -145,8 +147,6 @@ public struct LiveChannelPlayerView: View {
             model = playerModel
             playerModel.handleScenePhase(scenePhase)
             await playerModel.start()
-            guard !Task.isCancelled else { return }
-            focusAfterPresentation(.next)
         }
         .task(id: autoHideRevision) {
             guard controlsVisible, model?.phase == .playing else { return }
@@ -350,8 +350,9 @@ private struct LiveChannelHeader: View {
             #if os(iOS)
             .labelStyle(.iconOnly)
             #endif
+            .accessibilityIdentifier("live-channel-close")
             .focused($focus, equals: .close)
-            .playerGlassButton(prominent: focus == .close)
+            .playerGlassButton(prominent: false)
         }
         .foregroundStyle(.white)
     }
@@ -433,18 +434,21 @@ private struct LiveChannelTransport: View {
     let onNext: () -> Void
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 18) {
-                previousButton
-                if canPause || isPaused {
-                    playPauseButton
-                }
-                if canGoLive {
-                    goLiveButton
-                }
-                nextButton
-            }
+        transportButtons
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
+            .background(.black.opacity(0.58), in: Capsule())
+    }
 
+    @ViewBuilder
+    private var transportButtons: some View {
+        #if os(tvOS)
+        // Only one set of focus targets. Glass already highlights focus;
+        // changing its style on focus recreates the currently focused button.
+        fullWidthButtons
+        #else
+        ViewThatFits(in: .horizontal) {
+            fullWidthButtons
             HStack(spacing: 12) {
                 previousButton.labelStyle(.iconOnly)
                 if canPause || isPaused {
@@ -456,9 +460,16 @@ private struct LiveChannelTransport: View {
                 nextButton.labelStyle(.iconOnly)
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 18)
-        .background(.black.opacity(0.58), in: Capsule())
+        #endif
+    }
+
+    private var fullWidthButtons: some View {
+        HStack(spacing: 18) {
+            previousButton
+            if canPause || isPaused { playPauseButton }
+            if canGoLive { goLiveButton }
+            nextButton
+        }
     }
 
     private var previousButton: some View {
@@ -466,7 +477,7 @@ private struct LiveChannelTransport: View {
             Label("Previous Channel", systemImage: "backward.end.fill")
         }
         .focused($focus, equals: .previous)
-        .playerGlassButton(prominent: focus == .previous)
+        .playerGlassButton(prominent: false)
     }
 
     private var playPauseButton: some View {
@@ -478,7 +489,7 @@ private struct LiveChannelTransport: View {
             }
         }
         .focused($focus, equals: .playPause)
-        .playerGlassButton(prominent: focus == .playPause || isPaused)
+        .playerGlassButton(prominent: false)
     }
 
     private var goLiveButton: some View {
@@ -494,7 +505,7 @@ private struct LiveChannelTransport: View {
             Label("Next Channel", systemImage: "forward.end.fill")
         }
         .focused($focus, equals: .next)
-        .playerGlassButton(prominent: focus == .next)
+        .playerGlassButton(prominent: false)
     }
 }
 
@@ -545,7 +556,7 @@ private struct LiveChannelInterruptionView: View {
                 }
                 Button("Close", action: onClose)
                     .focused($focus, equals: .close)
-                    .playerGlassButton(prominent: focus == .close || !canRetry)
+                    .playerGlassButton(prominent: false)
             }
         }
         .foregroundStyle(.white)
