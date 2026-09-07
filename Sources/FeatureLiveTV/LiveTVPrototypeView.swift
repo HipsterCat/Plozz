@@ -16,6 +16,8 @@ public struct LiveTVPrototypePlayback {
 
 public struct LiveTVPrototypeView<PlayerContent: View>: View {
     @State private var model: LiveTVPrototypeModel
+    @State private var imports = LiveTVPrototypeImportModel()
+    @State private var reloadRequest = 0
     @State private var tab: PrototypeTab = .channels
     @State private var sheet: PrototypeSheet?
     @State private var showingPlayer = false
@@ -34,7 +36,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         _model = State(initialValue: LiveTVPrototypeModel(
             now: Date(), scenario: .noGuide,
             isLargeCatalog: arguments.contains("--live-tv-5000"),
-            channels: LiveTVPrototypeCatalog.channels
+            channels: []
         ))
         _tab = State(initialValue: arguments.contains("--live-tv-guide") ? .guide : .channels)
     }
@@ -43,9 +45,9 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         GeometryReader { geometry in
             let wide = usesInspector(width: geometry.size.width)
             VStack(spacing: PrototypeLayout.gap) {
-                PrototypeHeader(model: model) { sheet = .demo }
+                PrototypeHeader()
                 PrototypeNavigation(model: model, tab: $tab)
-                PrototypeStatus(model: model)
+                PrototypeStatus(model: model, imports: imports)
                 HStack(alignment: .top, spacing: PrototypeLayout.gap) {
                     VStack(spacing: PrototypeLayout.gap) {
                         #if os(iOS)
@@ -53,6 +55,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                             model: model,
                             search: { sheet = .search },
                             filters: { sheet = .filters },
+                            sources: { sheet = .sources },
                             top: { topRequest += 1 }
                         )
                         #endif
@@ -66,18 +69,20 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                             },
                             details: { sheet = .program($0) },
                             openControls: { sheet = .filters },
-                            browseChannels: { tab = .channels }
+                            isLoading: model.channels.isEmpty
+                                && (imports.playlistPhase == .idle || imports.playlistPhase == .loading),
+                            loadFailed: imports.playlistPhase == .failed,
+                            reload: { reloadRequest += 1 }
                         )
                     }
                     #if os(tvOS)
-                    if tab != .guide {
-                        PrototypeTVControls(
-                            model: model, active: $railActive,
-                            search: { sheet = .search }, filters: { sheet = .filters },
-                            top: { topRequest += 1 }
-                        )
-                        .frame(width: PrototypeLayout.controlsWidth)
-                    }
+                    PrototypeTVControls(
+                        model: model, active: $railActive,
+                        search: { sheet = .search }, filters: { sheet = .filters },
+                        sources: { sheet = .sources },
+                        top: { topRequest += 1 }
+                    )
+                    .frame(width: PrototypeLayout.controlsWidth)
                     #else
                     if wide {
                         PrototypeInspector(
@@ -106,9 +111,16 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                 tune(id)
             }
         }) { destination in
-            PrototypeSheetContent(model: model, destination: destination) { id in
-                pendingTuneID = id
-            }
+            PrototypeSheetContent(
+                model: model, imports: imports, destination: destination,
+                reload: { reloadRequest += 1 },
+                showGuide: {
+                    model.guideOnly = true
+                    tab = .guide
+                    topRequest += 1
+                },
+                tune: { pendingTuneID = $0 }
+            )
             .environment(\.themePalette, palette)
             .tint(palette.accent)
         }
@@ -132,12 +144,17 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         } message: {
             Text("Demo scenario: another viewer is using the tuner. Your current channel has not changed.")
         }
-        .onChange(of: tab) { _, value in
-            model.favoritesOnly = value == .favorites
-            railActive = false
+        .task(id: reloadRequest) {
+            await imports.reload(into: model)
         }
-        .onChange(of: model.favoritesOnly) { _, enabled in
-            if !enabled && tab == .favorites { tab = .channels }
+        .task {
+            while !Task.isCancelled {
+                model.synchronizeClock()
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
+        .onChange(of: model.playingChannelID) { _, id in
+            if id == nil { showingPlayer = false }
         }
     }
 
@@ -169,46 +186,48 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
 }
 
 private struct PrototypeHeader: View {
-    let model: LiveTVPrototypeModel
-    let demo: () -> Void
     @Environment(\.themePalette) private var palette
 
     var body: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: PrototypeLayout.smallGap) {
                 Text("Live TV").font(.largeTitle.bold())
-                Text("Public channels · Live streams")
+                Text("US public playlist · Live streams")
                     .font(.subheadline)
                     .foregroundStyle(palette.secondaryText)
             }
             Spacer(minLength: PrototypeLayout.smallGap)
-            Button(action: demo) {
-                Label("Preview options", systemImage: "slider.horizontal.3")
-                    .font(.subheadline.weight(.semibold))
-            }
-            .buttonStyle(PrototypeButtonStyle())
-            .accessibilityIdentifier("live-tv-demo")
         }
     }
 }
 
 private struct PrototypeNavigation: View {
-    let model: LiveTVPrototypeModel
+    @Bindable var model: LiveTVPrototypeModel
     @Binding var tab: PrototypeTab
 
     var body: some View {
         HStack(spacing: PrototypeLayout.smallGap) {
-            ForEach(PrototypeTab.allCases) { item in
-                Button { tab = item } label: {
-                    Text(item.title)
-                        #if os(iOS)
-                        .frame(maxWidth: .infinity)
-                        #endif
+            Picker("View", selection: $tab) {
+                ForEach(PrototypeTab.allCases) { item in
+                    Text(item.title).tag(item)
                 }
-                .buttonStyle(PlozzSeasonTabStyle(isSelected: tab == item))
-                .accessibilityAddTraits(tab == item ? .isSelected : [])
-                .accessibilityIdentifier("live-tv-tab-\(item.rawValue)")
             }
+            .pickerStyle(.segmented)
+            #if os(tvOS)
+            .frame(maxWidth: 460)
+            #endif
+            .accessibilityIdentifier("live-tv-view-mode")
+            Button {
+                model.favoritesOnly.toggle()
+            } label: {
+                Label("Favorites", systemImage: model.favoritesOnly ? "star.fill" : "star")
+                    #if os(iOS)
+                    .labelStyle(.iconOnly)
+                    #endif
+            }
+            .buttonStyle(PrototypeButtonStyle(selected: model.favoritesOnly))
+            .accessibilityAddTraits(model.favoritesOnly ? .isSelected : [])
+            .accessibilityIdentifier("live-tv-favorites-filter")
             #if os(tvOS)
             Spacer()
             TimelineView(.periodic(from: .now, by: 30)) { context in
@@ -222,25 +241,53 @@ private struct PrototypeNavigation: View {
 
 private struct PrototypeStatus: View {
     let model: LiveTVPrototypeModel
+    let imports: LiveTVPrototypeImportModel
     @Environment(\.themePalette) private var palette
 
     var body: some View {
         HStack(alignment: .top) {
-            Text("\(model.visibleChannels.count) channels").fontWeight(.medium)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(model.visibleChannels.count) of \(model.channels.count) channels").fontWeight(.medium)
+                if !model.query.isEmpty { Text("Search: \(model.query)").lineLimit(1) }
+                if let category = model.category { Text(category).lineLimit(1) }
+                if model.guideOnly { Text("With guide listings") }
+            }
             Spacer()
             if model.isLargeCatalog {
                 Text("Repeated channels · Scrolling test")
-            } else if model.scenario == .staleGuide {
-                Label("Guide may be out of date", systemImage: "clock.badge.exclamationmark")
-            } else if model.scenario == .failedGuide {
-                Label("Guide unavailable", systemImage: "wifi.exclamationmark")
             } else {
-                Text("No guide connected")
+                PrototypeImportStatus(imports: imports, listedChannels: model.guideChannelCount)
             }
         }
         .font(.caption)
         .foregroundStyle(palette.secondaryText)
         .accessibilityElement(children: .combine)
+    }
+}
+
+struct PrototypeImportStatus: View {
+    let imports: LiveTVPrototypeImportModel
+    let listedChannels: Int
+
+    var body: some View {
+        if imports.playlistPhase == .loading || imports.playlistPhase == .idle {
+            Label("Loading playlist", systemImage: "arrow.down.circle")
+        } else if imports.playlistPhase == .failed {
+            Label("Playlist update failed · Open Sources", systemImage: "wifi.exclamationmark")
+        } else {
+            switch imports.guidePhase {
+            case .idle, .loading:
+                Label("Loading guide · Channels ready", systemImage: "arrow.down.circle")
+            case .failed:
+                Label("Guide update failed · Channels ready", systemImage: "wifi.exclamationmark")
+            case .loaded:
+                if let end = imports.coverageEnd, end < Date() {
+                    Label("Guide listings are out of date", systemImage: "clock.badge.exclamationmark")
+                } else {
+                    Text("Guide listings for \(listedChannels) channels")
+                }
+            }
+        }
     }
 }
 #endif

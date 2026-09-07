@@ -44,6 +44,23 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         XCTAssertFalse(model.showsActivityIndicator)
     }
 
+    func testPlaylistHeadersSurviveLiveLoadRetryAndSourceReset() async {
+        let engine = LiveEngineSpy()
+        let headers = ["User-Agent": "IPTV test", "Referer": "https://example.invalid/"]
+        let model = LiveChannelPlayerModel(
+            engine: engine, streamURL: URL(string: "https://example.invalid/live.m3u8")!,
+            httpHeaders: headers
+        )
+        defer { model.stop() }
+        await model.start()
+        engine.onFailure?(.serverUnreachable)
+        await model.retry()
+        engine.onLiveSourceReset?()
+        await model.requestRetune()?.value
+        XCTAssertEqual(engine.loadedHeaders, Array(repeating: headers, count: engine.liveLoads))
+        XCTAssertEqual(engine.liveLoads, 3)
+    }
+
     func testEnginePhaseOwnsStatusEvenWhileClockAdvances() async {
         let engine = LiveEngineSpy()
         let model = makeModel(engine: engine)
@@ -371,6 +388,7 @@ private final class LiveEngineSpy: LiveChannelEngine {
     var onLoad: (@MainActor () async -> Void)?
     var onGoLive: (@MainActor () -> Void)?
     var liveLoads = 0
+    var loadedHeaders: [[String: String]] = []
     var vodLoads = 0
     var playCount = 0
     var pauseCount = 0
@@ -380,6 +398,7 @@ private final class LiveEngineSpy: LiveChannelEngine {
 
     func loadLive(url: URL, httpHeaders: [String: String]) async {
         liveLoads += 1
+        loadedHeaders.append(httpHeaders)
         status = .ready
         isPaused = false
         await onLoad?()

@@ -9,11 +9,12 @@ struct PrototypeTVControls: View {
     @Binding var active: Bool
     let search: () -> Void
     let filters: () -> Void
+    let sources: () -> Void
     let top: () -> Void
     @FocusState private var focused: Control?
     @Environment(\.themePalette) private var palette
 
-    private enum Control: Hashable { case search, filters, sort, top }
+    private enum Control: Hashable { case search, filters, sort, sources, top }
 
     var body: some View {
         VStack(alignment: .leading, spacing: PrototypeLayout.gap) {
@@ -40,6 +41,13 @@ struct PrototypeTVControls: View {
             }
             .focused($focused, equals: .sort)
             .disabled(!active)
+            Button(action: sources) {
+                Label("Sources", systemImage: "antenna.radiowaves.left.and.right")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .focused($focused, equals: .sources)
+            .disabled(!active)
+            .accessibilityIdentifier("live-tv-sources")
             Button(action: top) {
                 Label("Back to top", systemImage: "arrow.up.to.line")
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -65,6 +73,7 @@ struct PrototypeTouchToolbar: View {
     @Bindable var model: LiveTVPrototypeModel
     let search: () -> Void
     let filters: () -> Void
+    let sources: () -> Void
     let top: () -> Void
 
     var body: some View {
@@ -82,6 +91,9 @@ struct PrototypeTouchToolbar: View {
             }
             Button("Back to top", systemImage: "arrow.up.to.line", action: top)
                 .labelStyle(.iconOnly)
+            Button("Sources", systemImage: "antenna.radiowaves.left.and.right", action: sources)
+                .labelStyle(.iconOnly)
+                .accessibilityIdentifier("live-tv-sources")
         }
         .font(.subheadline)
         .buttonStyle(PrototypeButtonStyle())
@@ -91,7 +103,10 @@ struct PrototypeTouchToolbar: View {
 
 struct PrototypeSheetContent: View {
     @Bindable var model: LiveTVPrototypeModel
+    let imports: LiveTVPrototypeImportModel
     let destination: PrototypeSheet
+    let reload: () -> Void
+    let showGuide: () -> Void
     let tune: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.themePalette) private var palette
@@ -109,9 +124,12 @@ struct PrototypeSheetContent: View {
                 case .filters:
                     PrototypeFilterForm(model: model)
                         .navigationTitle("Browse controls")
-                case .demo:
-                    PrototypeDemoForm(model: model)
-                        .navigationTitle("Live TV preview")
+                case .sources:
+                    PrototypeSourcesForm(model: model, imports: imports, reload: reload) {
+                        showGuide()
+                        dismiss()
+                    }
+                    .navigationTitle("Live TV sources")
                 case .program(let program):
                     PrototypeProgramDetails(program: program, model: model) {
                         tune(program.channelID)
@@ -185,6 +203,7 @@ private struct PrototypeFilterForm: View {
                     }
                 }
                 Toggle("Favorites only", isOn: $model.favoritesOnly)
+                Toggle("With guide listings", isOn: $model.guideOnly)
                 Picker("Sort", selection: $model.sort) {
                     ForEach(LiveTVPrototypeSort.allCases) { sort in Text(sort.title).tag(sort) }
                 }
@@ -197,26 +216,64 @@ private struct PrototypeFilterForm: View {
     }
 }
 
-private struct PrototypeDemoForm: View {
+private struct PrototypeSourcesForm: View {
     @Bindable var model: LiveTVPrototypeModel
+    let imports: LiveTVPrototypeImportModel
+    let reload: () -> Void
+    let showGuide: () -> Void
 
     var body: some View {
         Form {
+            Section {
+                Text("iptv-org · United States").font(.headline)
+                Text(imports.playlistURL.absoluteString).font(.caption)
+                Text("\(imports.entryCount) playlist entries")
+                Text("\(imports.skippedEntryCount) unsupported or duplicate entries skipped")
+            } header: {
+                Text("Channels")
+            } footer: {
+                Text("Stream variants can share a station name. Availability varies by channel and region.")
+            }
+            Section {
+                Text("EPGShare · US2").font(.headline)
+                Text(imports.guideURL.absoluteString).font(.caption)
+                Text("\(imports.matchedChannelCount) channel matches")
+                Text("\(model.guideChannelCount) channels with listings · \(imports.programCount) programs")
+                if let start = imports.coverageStart, let end = imports.coverageEnd {
+                    Text(start..<end, format: .interval.day().month().hour().minute())
+                }
+                if let date = imports.lastGuideRefresh {
+                    Text("Last refreshed: \(date, format: .dateTime.month().day().hour().minute())")
+                }
+                Button("Show channels with guide listings", systemImage: "calendar", action: showGuide)
+                    .disabled(model.guideChannelCount == 0)
+            } header: {
+                Text("Program guide")
+            } footer: {
+                Text("Only identified channel matches receive schedules. Unmatched channels stay watchable and show no invented program information.")
+            }
+            Section {
+                PrototypeImportStatus(imports: imports, listedChannels: model.guideChannelCount)
+                if imports.playlistPhase == .failed {
+                    if let failure = imports.playlistFailure { Text(failure.userDescription) }
+                    Text("The playlist could not be loaded. Check your connection and retry. Any previously loaded channels remain available.")
+                }
+                if imports.guidePhase == .failed {
+                    if let failure = imports.guideFailure { Text(failure.userDescription) }
+                    Text("The guide could not be loaded or parsed. Retry later; this does not prevent watching channels.")
+                }
+                Button("Reload sources", systemImage: "arrow.clockwise", action: reload)
+                    .disabled(imports.isLoading)
+            }
             Section {
                 Toggle("5,000 rows for scrolling", isOn: $model.isLargeCatalog)
             } header: {
                 Text("Browse testing")
             } footer: {
-                Text("The large list repeats these same real channels; it does not add 5,000 unique stations. Favorites last until this preview closes.")
+                Text("Repeats the imported channels into labeled copies; it does not add stations. Favorites and filters currently last until this preview closes.")
             }
             Section {
-                Text("These public HLS channels use Plozz's existing playback engine. Channel availability can change or vary by region.")
-                Text("No guide is connected, so no program titles or schedules are invented. Plex, Jellyfin and Emby tuning are not connected yet.")
-            } header: {
-                Text("Real playback")
-            }
-            Section {
-                Text("This isolated preview does not sign into media servers or write watched history. Playlist import, XMLTV, Picture in Picture and AirPlay integration are still planned.")
+                Text("Playback uses AetherEngine without writing watched history. Plex, Jellyfin and Emby tuning are not connected yet.")
             }
         }
     }
@@ -237,7 +294,7 @@ private struct PrototypeProgramDetails: View {
                     Label(channel.name, systemImage: channel.symbol)
                 }
             } footer: {
-                Text("Demo schedule. Watching tunes the channel live, not this program from the beginning.")
+                Text("Watching tunes the channel live, not this program from the beginning.")
             }
             Section {
                 Button("Watch channel live", systemImage: "play.fill", action: tune)

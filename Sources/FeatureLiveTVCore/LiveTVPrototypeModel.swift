@@ -29,6 +29,11 @@ public enum LiveTVPrototypeSort: String, CaseIterable, Identifiable, Sendable {
     public var id: String { rawValue }
 }
 
+public enum LiveTVPrototypeDataError: Error {
+    case duplicateChannelID
+    case invalidProgram
+}
+
 public struct LiveTVPrototypeChannel: Identifiable, Equatable, Sendable {
     public let id: String
     public let number: Int
@@ -41,6 +46,9 @@ public struct LiveTVPrototypeChannel: Identifiable, Equatable, Sendable {
     public let logoURL: URL?
     public let streamURL: URL?
     public let logoNeedsDarkBackground: Bool
+    public let guideID: String?
+    public let guideName: String?
+    public let httpHeaders: [String: String]
 
     public init(
         id: String,
@@ -53,7 +61,10 @@ public struct LiveTVPrototypeChannel: Identifiable, Equatable, Sendable {
         tagline: String,
         logoURL: URL? = nil,
         streamURL: URL? = nil,
-        logoNeedsDarkBackground: Bool = false
+        logoNeedsDarkBackground: Bool = false,
+        guideID: String? = nil,
+        guideName: String? = nil,
+        httpHeaders: [String: String] = [:]
     ) {
         precondition((0...5).contains(accent), "Live TV fixture accent must be between 0 and 5.")
         self.id = id
@@ -67,6 +78,9 @@ public struct LiveTVPrototypeChannel: Identifiable, Equatable, Sendable {
         self.logoURL = logoURL
         self.streamURL = streamURL
         self.logoNeedsDarkBackground = logoNeedsDarkBackground
+        self.guideID = guideID
+        self.guideName = guideName
+        self.httpHeaders = httpHeaders
     }
 }
 
@@ -132,6 +146,13 @@ public final class LiveTVPrototypeModel {
         }
     }
 
+    public var guideOnly = false {
+        didSet {
+            guard guideOnly != oldValue else { return }
+            refreshVisibleChannels()
+        }
+    }
+
     public var sort: LiveTVPrototypeSort = .channelNumber {
         didSet {
             guard sort != oldValue else { return }
@@ -139,7 +160,11 @@ public final class LiveTVPrototypeModel {
         }
     }
 
-    public var scenario: LiveTVPrototypeScenario
+    public var scenario: LiveTVPrototypeScenario {
+        didSet {
+            if guideOnly && scenario != oldValue { refreshVisibleChannels() }
+        }
+    }
 
     public var isLargeCatalog: Bool {
         didSet {
@@ -164,9 +189,11 @@ public final class LiveTVPrototypeModel {
     @ObservationIgnored private var channelsByID: [String: LiveTVPrototypeChannel] = [:]
     @ObservationIgnored private var channelOrdinalsByID: [String: Int] = [:]
     @ObservationIgnored private var isBatchingFilterChanges = false
-    @ObservationIgnored private let suppliedChannels: [LiveTVPrototypeChannel]?
+    @ObservationIgnored private var suppliedChannels: [LiveTVPrototypeChannel]?
+    private var importedPrograms: [String: [LiveTVPrototypeProgram]] = [:]
 
     public var usesPublicStreams: Bool { suppliedChannels != nil }
+    public var guideChannelCount: Int { importedPrograms.count }
 
     public init(
         now: Date = Date(timeIntervalSince1970: 1_788_719_400),
@@ -178,9 +205,41 @@ public final class LiveTVPrototypeModel {
         self.scenario = scenario
         self.isLargeCatalog = isLargeCatalog
         suppliedChannels = channels
-        favoriteIDs = channels.map { Set($0.prefix(5).map(\.id)) }
-            ?? Set((1...5).map(Self.channelID))
+        favoriteIDs = channels == nil ? Set((1...5).map(Self.channelID)) : []
         rebuildCatalog()
+    }
+
+    public func replaceChannels(_ channels: [LiveTVPrototypeChannel]) throws {
+        guard Set(channels.map(\.id)).count == channels.count else {
+            throw LiveTVPrototypeDataError.duplicateChannelID
+        }
+        suppliedChannels = channels
+        let ids = Set(channels.map(\.id))
+        importedPrograms = importedPrograms.filter { ids.contains($0.key) }
+        rebuildCatalog()
+    }
+
+    public func replacePrograms(_ programs: [LiveTVPrototypeProgram]) throws {
+        guard Set(programs.map(\.id)).count == programs.count,
+              programs.allSatisfy({
+                  channelsByID[$0.channelID] != nil
+                      && $0.start.timeIntervalSince1970.isFinite
+                      && $0.end.timeIntervalSince1970.isFinite
+                      && $0.start < $0.end
+              }) else {
+            throw LiveTVPrototypeDataError.invalidProgram
+        }
+        importedPrograms = Dictionary(grouping: programs, by: \.channelID)
+            .mapValues { values in
+                values.sorted { lhs, rhs in
+                    lhs.start == rhs.start ? lhs.id < rhs.id : lhs.start < rhs.start
+                }
+            }
+        refreshVisibleChannels()
+    }
+
+    public func synchronizeClock(to date: Date = Date()) {
+        now = date
     }
 
     public func channel(id: String) -> LiveTVPrototypeChannel? {
@@ -204,6 +263,7 @@ public final class LiveTVPrototypeModel {
         category = nil
         source = nil
         favoritesOnly = false
+        guideOnly = false
         isBatchingFilterChanges = false
         refreshVisibleChannels()
     }
@@ -225,8 +285,13 @@ public final class LiveTVPrototypeModel {
         else { return [] }
 
         let boundedHours = min(hours, 24)
-        let duration = programDuration(for: channelID)
         let requestedEnd = date.addingTimeInterval(TimeInterval(boundedHours) * 3_600)
+        if usesPublicStreams {
+            return (importedPrograms[channelID] ?? []).filter {
+                $0.start < requestedEnd && $0.end > date
+            }
+        }
+        let duration = programDuration(for: channelID)
         var slotStartSeconds = floor(date.timeIntervalSince1970 / duration) * duration
         var result: [LiveTVPrototypeProgram] = []
         result.reserveCapacity(
@@ -313,7 +378,9 @@ public final class LiveTVPrototypeModel {
                     name: "\(channel.name) (copy \(copy + 1))", category: channel.category,
                     symbol: channel.symbol, accent: channel.accent, source: channel.source,
                     tagline: channel.tagline, logoURL: channel.logoURL, streamURL: channel.streamURL,
-                    logoNeedsDarkBackground: channel.logoNeedsDarkBackground
+                    logoNeedsDarkBackground: channel.logoNeedsDarkBackground,
+                    guideID: channel.guideID, guideName: channel.guideName,
+                    httpHeaders: channel.httpHeaders
                 )
             }
         } else {
@@ -343,7 +410,8 @@ public final class LiveTVPrototypeModel {
         visibleChannels = channels.compactMap { channel -> (LiveTVPrototypeChannel, Int)? in
             guard selectedCategory == nil || Self.normalized(channel.category) == selectedCategory,
                   source == nil || channel.source == source,
-                  !favoritesOnly || favoriteIDs.contains(channel.id)
+                  !favoritesOnly || favoriteIDs.contains(channel.id),
+                  !guideOnly || hasGuide(for: channel)
             else { return nil }
 
             guard !normalizedQuery.isEmpty else { return (channel, 0) }
@@ -394,8 +462,8 @@ public final class LiveTVPrototypeModel {
     }
 
     private func hasGuide(for channel: LiveTVPrototypeChannel) -> Bool {
-        // Real streams never inherit synthetic schedules from the layout fixtures.
-        guard !usesPublicStreams else { return false }
+        // Imported channels use only provider listings, never synthetic schedules.
+        if usesPublicStreams { return importedPrograms[channel.id]?.isEmpty == false }
         switch scenario {
         case .noGuide, .failedGuide:
             return false

@@ -165,6 +165,92 @@ final class LiveTVPrototypeModelTests: XCTestCase {
         XCTAssertEqual(model.visibleChannels.map(\.name), ["DW Español"])
     }
 
+    func testImportedListingsDriveGuideWithoutFillingRealGaps() throws {
+        let model = LiveTVPrototypeModel(channels: LiveTVPrototypeCatalog.channels)
+        let channel = model.channels[0]
+        let start = model.now.addingTimeInterval(600)
+        let program = LiveTVPrototypeProgram(
+            id: "real-program", channelID: channel.id, title: "Actual listing",
+            subtitle: "", start: start, end: start.addingTimeInterval(1_800)
+        )
+        try model.replacePrograms([program])
+        XCTAssertEqual(model.guideChannelCount, 1)
+        XCTAssertNil(model.currentProgram(for: channel.id))
+        XCTAssertEqual(model.programs(for: channel.id, from: model.now, hours: 2), [program])
+        XCTAssertTrue(model.programs(for: model.channels[1].id, from: model.now).isEmpty)
+        model.synchronizeClock(to: start)
+        XCTAssertEqual(model.currentProgram(for: channel.id), program)
+        model.synchronizeClock(to: program.end)
+        XCTAssertNil(model.currentProgram(for: channel.id))
+    }
+
+    func testCatalogAndGuideRefreshPreserveIndependentFiltersAndFavorites() throws {
+        let model = LiveTVPrototypeModel(channels: [])
+        try model.replaceChannels(LiveTVPrototypeCatalog.channels)
+        XCTAssertTrue(model.favoriteIDs.isEmpty)
+        let channel = model.channels[0]
+        model.query = channel.name
+        model.category = channel.category
+        model.sort = .name
+        model.toggleFavorite(channel.id)
+        model.favoritesOnly = true
+        model.guideOnly = true
+        XCTAssertTrue(model.visibleChannels.isEmpty)
+
+        let program = LiveTVPrototypeProgram(
+            id: "listing", channelID: channel.id, title: "Actual listing", subtitle: "",
+            start: model.now, end: model.now.addingTimeInterval(3_600)
+        )
+        try model.replacePrograms([program])
+        try model.replaceChannels(Array(LiveTVPrototypeCatalog.channels.reversed()))
+        XCTAssertEqual(model.visibleChannels, [channel])
+        XCTAssertEqual(model.currentProgram(for: channel.id), program)
+        XCTAssertEqual(model.query, channel.name)
+        XCTAssertEqual(model.category, channel.category)
+        XCTAssertEqual(model.sort, .name)
+        XCTAssertTrue(model.favoritesOnly)
+        XCTAssertTrue(model.guideOnly)
+        model.resetFilters()
+        XCTAssertFalse(model.guideOnly)
+        XCTAssertFalse(model.favoritesOnly)
+        XCTAssertTrue(model.favoriteIDs.contains(channel.id))
+    }
+
+    func testBadImportedDataDoesNotReplaceLastGoodData() throws {
+        let model = LiveTVPrototypeModel(channels: LiveTVPrototypeCatalog.channels)
+        let original = model.channels
+        XCTAssertThrowsError(try model.replaceChannels([original[0], original[0]]))
+        XCTAssertEqual(model.channels, original)
+        let program = LiveTVPrototypeProgram(
+            id: "listing", channelID: original[0].id, title: "Listing", subtitle: "",
+            start: model.now, end: model.now.addingTimeInterval(1_800)
+        )
+        try model.replacePrograms([program])
+        XCTAssertThrowsError(try model.replacePrograms([program, program]))
+        XCTAssertEqual(model.currentProgram(for: original[0].id), program)
+        let invalid = LiveTVPrototypeProgram(
+            id: "invalid", channelID: original[0].id, title: "Invalid", subtitle: "",
+            start: model.now, end: model.now
+        )
+        XCTAssertThrowsError(try model.replacePrograms([invalid]))
+        XCTAssertEqual(model.currentProgram(for: original[0].id), program)
+        try model.replaceChannels(Array(original.dropFirst()))
+        XCTAssertEqual(model.guideChannelCount, 0)
+    }
+
+    func testImportedGuideMetadataAndHeadersSurviveStressCopies() {
+        let channel = LiveTVPrototypeChannel(
+            id: "source-stream", number: 1, name: "Station", category: "News",
+            symbol: "tv", accent: 0, source: .iptv, tagline: "",
+            guideID: "provider.id", guideName: "Station HD",
+            httpHeaders: ["User-Agent": "Test"]
+        )
+        let model = LiveTVPrototypeModel(isLargeCatalog: true, channels: [channel])
+        XCTAssertEqual(model.channels[1].guideID, channel.guideID)
+        XCTAssertEqual(model.channels[1].guideName, channel.guideName)
+        XCTAssertEqual(model.channels[1].httpHeaders, channel.httpHeaders)
+    }
+
     func testPrototypeLaunchPersistenceIsExplicitAndReversible() throws {
         let suite = "LiveTVPrototypeLaunchTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

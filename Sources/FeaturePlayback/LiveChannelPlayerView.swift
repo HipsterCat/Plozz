@@ -16,6 +16,7 @@ public struct LiveChannelPlayerView: View {
     private let channelID: String
     private let title: String
     private let streamURL: URL
+    private let httpHeaders: [String: String]
     private let logoURL: URL?
     private let logoNeedsDarkBackground: Bool
     private let makeEngine: @MainActor () throws -> any LiveChannelEngine
@@ -36,6 +37,7 @@ public struct LiveChannelPlayerView: View {
         streamURL: URL,
         logoURL: URL?,
         logoNeedsDarkBackground: Bool = false,
+        httpHeaders: [String: String] = [:],
         makeEngine: @escaping @MainActor () throws -> any LiveChannelEngine,
         onPreviousChannel: @escaping () -> Void,
         onNextChannel: @escaping () -> Void
@@ -43,6 +45,7 @@ public struct LiveChannelPlayerView: View {
         self.channelID = channelID
         self.title = title
         self.streamURL = streamURL
+        self.httpHeaders = httpHeaders
         self.logoURL = logoURL
         self.logoNeedsDarkBackground = logoNeedsDarkBackground
         self.makeEngine = makeEngine
@@ -143,7 +146,9 @@ public struct LiveChannelPlayerView: View {
                 focusAfterPresentation(.close)
                 return
             }
-            let playerModel = LiveChannelPlayerModel(engine: engine, streamURL: streamURL)
+            let playerModel = LiveChannelPlayerModel(
+                engine: engine, streamURL: streamURL, httpHeaders: httpHeaders
+            )
             model = playerModel
             playerModel.handleScenePhase(scenePhase)
             await playerModel.start()
@@ -577,6 +582,7 @@ final class LiveChannelPlayerModel {
     private(set) var manualRetryCount = 0
 
     private let streamURL: URL
+    private let httpHeaders: [String: String]
     private let uptime: @MainActor () -> TimeInterval
     private let idleSleepGuard = IdleSleepGuard()
     private var monitorTask: Task<Void, Never>?
@@ -603,10 +609,12 @@ final class LiveChannelPlayerModel {
     init(
         engine: any LiveChannelEngine,
         streamURL: URL,
+        httpHeaders: [String: String] = [:],
         uptime: @escaping @MainActor () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.engine = engine
         self.streamURL = streamURL
+        self.httpHeaders = httpHeaders
         self.uptime = uptime
     }
 
@@ -770,7 +778,7 @@ final class LiveChannelPlayerModel {
         attemptStartedAt = uptime()
         bufferingStartedAt = nil
         needsForegroundLoad = false
-        await engine.loadLive(url: streamURL, httpHeaders: [:])
+        await engine.loadLive(url: streamURL, httpHeaders: httpHeaders)
         guard generation == attemptGeneration, !stopped, !phase.isInterrupted else { return }
         isLoading = false
         if isSuspended || userPaused {

@@ -118,26 +118,25 @@ private struct PrototypeButtonBody: View {
 }
 
 enum PrototypeTab: String, CaseIterable, Identifiable {
-    case channels, favorites, guide
+    case channels, guide
     var id: Self { self }
     var title: LocalizedStringResource {
         switch self {
         case .channels: "Channels"
-        case .favorites: "Favorites"
         case .guide: "Guide"
         }
     }
 }
 
 enum PrototypeSheet: Identifiable {
-    case search, filters, demo
+    case search, filters, sources
     case program(LiveTVPrototypeProgram)
 
     var id: String {
         switch self {
         case .search: "search"
         case .filters: "filters"
-        case .demo: "demo"
+        case .sources: "sources"
         case .program(let program): program.id
         }
     }

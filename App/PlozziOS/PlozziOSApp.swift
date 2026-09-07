@@ -59,6 +59,7 @@ struct PlozziOSApp: App {
                             channelID: playback.channel.id, title: playback.channel.name,
                             streamURL: playback.streamURL, logoURL: playback.channel.logoURL,
                             logoNeedsDarkBackground: playback.channel.logoNeedsDarkBackground,
+                            httpHeaders: playback.channel.httpHeaders,
                             makeEngine: { try PlozzigenVideoEngine() },
                             onPreviousChannel: playback.previousChannel,
                             onNextChannel: playback.nextChannel

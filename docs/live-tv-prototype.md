@@ -45,15 +45,26 @@ Release builds.
 
 ## Try
 
-**Preview options** switches between the real catalog and the 5,000-row scrolling
-test. Favorites and filters are in-memory; restarting the process resets them.
+The preview loads the complete supplied US playlist, then its XMLTV guide.
+Channels become available before guide loading finishes. **Channels / Guide**
+switches presentation of the same catalog; **Favorites** is an independent filter.
+Search, categories, sorting and Favorites carry across both views and refreshes.
+Favorites and filters are still in-memory; restarting the process resets them.
 
 - Browse, search names/numbers/categories/sources, filter and sort.
 - Favorite channels through the context menu or iPad channel inspector.
-- On Apple TV, move Right from a channel to Search; Left returns to that channel.
-  Back to top scrolls and requests focus on the first result.
-- Guide honestly shows that no guide is connected. Synthetic schedule scenarios
-  remain model-test fixtures only; real channels cannot acquire those programs.
+- On Apple TV, move Right from a channel (or past its guide programs) to Search.
+  Sources lives in that same persistent controls rail, below Sort, rather than
+  in an unreachable header corner. Left returns to the channel/program.
+  Back to top works in both presentations.
+- **Sources** reports playlist entries, skipped entries, guide matches, listings,
+  coverage dates and failures. **Show channels with guide listings** opens Guide
+  with the corresponding filter, making the populated rows easy to find.
+- Guide retains all channels, even if none has a schedule. Unknown intervals
+  remain honest gaps; they do not hide channels or shift later programs under
+  the wrong time. Channel buttons still tune live without guide data.
+- Guide dates and now-playing labels advance with the wall clock. Earlier/Later
+  pages from one day back through seven days ahead, subject to source coverage.
 - iPhone and narrow iPad windows use compact channel lists. At wider widths,
   iPad adds channel artwork, details, Favorite and Watch controls.
 - Select a channel to watch real video. The live host exposes real buffering,
@@ -64,31 +75,59 @@ test. Favorites and filters are in-memory; restarting the process resets them.
 
 ## Real inputs and artwork
 
-`LiveTVPrototypeCatalog` contains nine public HLS test inputs: DW English,
-Spanish and Arabic, NHK WORLD-JAPAN, TRT World, NBC News NOW, Scripps News,
-Red Bull TV and Tastemade. Channel logos come from their corresponding
-`tvg-logo` metadata in the [iptv-org catalog](https://github.com/iptv-org/iptv).
+The default inputs are:
+
+- Playlist: `https://iptv-org.github.io/iptv/countries/us.m3u`
+- Guide: `https://epgshare01.online/epgshare01/epg_ripper_US2.xml.gz`
+
+The September 6, 2026 source snapshot imports 1,468 stream entries across 28
+primary categories, with 1,443 logo URLs. The paired guide declares 765 stations;
+70 imported streams match conservatively and have 8,259 retained listings.
+These counts describe that snapshot, not guaranteed availability or coverage.
+Other streams remain available without program information.
+
+Playlist entries are not necessarily distinct stations: feeds can include
+alternate resolutions and stream providers. Stable stream identities preserve
+variants without duplicate row IDs. Channel logos come from `tvg-logo` metadata
+in the [iptv-org catalog](https://github.com/iptv-org/iptv).
 Artwork uses the existing decoded-image cache, logo-sized downsampling and
 aspect-fit rendering. Light/dark plates preserve the original wordmarks;
 failed/missing artwork retains a fixed-size text fallback.
 
-DW/TRT streams were located through official live pages; NHK uses its public
-broadcaster HLS host. Other locators were selected from the user-supplied
-[US playlist](https://iptv-org.github.io/iptv/countries/us.m3u). Availability and
-regional restrictions may change. These are developer test inputs, not a
+The original nine-channel `LiveTVPrototypeCatalog` remains a small regression
+fixture, not the app's default catalog or a channel limit.
+
+Availability and regional restrictions may change. These are developer test inputs, not a
 Plozz-provided channel service, broadcaster endorsement, or permission to
 rebroadcast, record or redistribute content. No third-party image binaries
 are committed.
 
-The supplied ABC News Live candidate returned 404 during the September 6, 2026
-probe and was excluded. A reachable master alone is not sufficient: inspect its
-media playlist and segments, then exercise actual device playback.
+Import does not certify that every stream plays. A reachable master alone is
+not sufficient: inspect its media playlist and segments, then exercise actual
+device playback. Playlist request headers pass through the live host to Aether,
+including retries and automatic source resets.
+
+Guide loading and parsing run outside the main actor. Listings are associated
+with imported channel identities, not synthetic layout scenarios. Unknown or
+ambiguous matches receive no schedule. Guide failure does not remove a working
+playlist; failed refreshes preserve the last successfully imported data that
+still belongs to current channels.
+
+Matching prefers exact guide IDs and a small set of verified provider aliases,
+then unique display names. Country, affiliate and time-shift conflicts prevent
+name-based matches. Streams sharing one exact guide identity can share listings.
+Compressed input, expanded XML, retained text and program counts are bounded;
+unmatched programs are discarded during parsing. XML entity declarations are
+rejected. Plain XML and gzip responses are both accepted. General source
+configuration and persistent guide caching are not exposed in this prototype.
 
 ## Boundaries
 
-Playlist import, XMLTV ingestion/mapping, Plex/Jellyfin/Emby tuner adapters,
-generated library channels, profile persistence/sync, PiP, AirPlay integration,
-parental policy and recording management remain planned.
+General source onboarding, manual guide mapping, Plex/Jellyfin/Emby tuner
+adapters, generated library channels, profile persistence/sync, PiP, AirPlay
+integration, parental policy and recording management remain planned. This
+iteration connects the supplied public source pair, not a finished multi-source
+account manager.
 
 The harness does not construct production account/profile models. The small
 `FeaturePlayback.LiveChannelPlayerView` hosts the existing real engine without
