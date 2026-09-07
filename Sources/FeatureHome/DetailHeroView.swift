@@ -470,6 +470,7 @@ struct DetailHeroView: View, Equatable {
     /// this page can't otherwise reach, and only when something can route it.
     private func offersHeroAction(_ action: MediaItemAction) -> Bool {
         guard action.isNavigation else { return true }
+        if action == .browseFiles { return navigator != nil }
         return offersParentNavigation && !action.navigatesToSelf && navigator != nil
     }
 
@@ -484,7 +485,7 @@ struct DetailHeroView: View, Equatable {
     private var heroParentNavigationAction: MediaItemAction? {
         guard offersParentNavigation, navigator != nil else { return nil }
         return (actionHandler?.actions(for: backdrop, context: actionContext) ?? [])
-            .first { $0.isNavigation && !$0.navigatesToSelf }
+            .first { $0 == .goToSeason }
     }
 
     /// The air-schedule badge above the title, e.g. "New episodes Fridays".
@@ -607,7 +608,9 @@ struct DetailHeroView: View, Equatable {
     /// whole series.
     private func performHeroAction(_ action: MediaItemAction) {
         if action.isNavigation {
-            if let navigator, let target = item.navigationTarget(for: action) {
+            let subject = action == .browseFiles && backdrop.fileBrowserContainerID != nil
+                ? backdrop : item
+            if let navigator, let target = subject.navigationTarget(for: action) {
                 navigator(target)
             }
             return
@@ -1388,6 +1391,7 @@ struct DetailHeroView: View, Equatable {
     private var showsMoreMenu: Bool {
         (serverChoices.count > 1 && onSelectSource != nil)
             || (versions.count > 1 && onSelectVersion != nil)
+            || heroMenuActions.contains(.browseFiles)
     }
 
     /// A single subtle trailing "…" menu that folds BOTH the cross-server picker
@@ -1416,12 +1420,20 @@ struct DetailHeroView: View, Equatable {
             offlineSourceAccountIDs: offlineSourceAccountIDs,
             versions: versions,
             selectedVersionID: selectedVersionID,
+            actions: heroMenuActions.filter { $0 == .browseFiles }.map {
+                PlaybackSourceMenuAction(id: $0.rawValue, title: $0.title, systemImage: $0.systemImage)
+            },
             onSelectSource: { accountID in
                 userInitiatedSourceSwitch = true
                 onSelectSource?(accountID)
             },
             onSelectVersion: { versionID in
                 onSelectVersion?(versionID)
+            },
+            onPerformAction: { id in
+                if id == MediaItemAction.browseFiles.rawValue {
+                    performHeroAction(.browseFiles)
+                }
             },
             onDismiss: {
                 heroActionRowFocus = .more

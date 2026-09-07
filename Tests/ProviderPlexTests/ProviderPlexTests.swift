@@ -125,14 +125,12 @@ final class PlexConnectionSelectorTests: XCTestCase {
 
 final class PlexServerReachabilityTests: XCTestCase {
     /// Probe double that answers only for hosts NOT containing `unreachableHostFragment`.
-    private final class HostAwareProbe: HTTPClient, @unchecked Sendable {
+    private final class HostAwareProbe: HTTPClient {
         let unreachableHostFragment: String
-        private(set) var probedHosts: [String] = []
         init(unreachableHostFragment: String) { self.unreachableHostFragment = unreachableHostFragment }
 
         func send(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
             let host = baseURL.host ?? ""
-            probedHosts.append(host)
             if host.contains(unreachableHostFragment) {
                 throw AppError.serverUnreachable
             }
@@ -152,6 +150,25 @@ final class PlexServerReachabilityTests: XCTestCase {
       }
     ]
     """
+
+    func testProbeHandlesConcurrentRequestsWithoutSharedMutableState() async throws {
+        let probe = HostAwareProbe(unreachableHostFragment: "unreachable")
+        let url = try XCTUnwrap(URL(string: "https://remote.plex.direct"))
+        try await withThrowingTaskGroup(of: Int.self) { group in
+            for _ in 0..<256 {
+                group.addTask {
+                    let (_, response) = try await probe.send(Endpoint(path: "/identity"), baseURL: url)
+                    return response.statusCode
+                }
+            }
+            var completed = 0
+            for try await status in group {
+                XCTAssertEqual(status, 200)
+                completed += 1
+            }
+            XCTAssertEqual(completed, 256)
+        }
+    }
 
     func testSkipsUnreachableLocalDockerConnection() async throws {
         let http = StubHTTPClient()

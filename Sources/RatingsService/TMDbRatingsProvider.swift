@@ -116,6 +116,7 @@ public struct TMDbRatingsProvider: ExternalRatingsProviding {
             return .id(id, kind)
         }
 
+        guard item.allowsTitleBasedMetadataMatching else { return nil }
         let trimmed = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         // Year only corroborates a film. A series' `productionYear` is often the

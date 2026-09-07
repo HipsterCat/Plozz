@@ -120,18 +120,21 @@ struct PlozziOSBackgroundHTTPDownloadEngine:
         let resolution = try await resolveURL(
             source,
             { updatedSource in
+                guard !Task.isCancelled else { return }
                 try? await registry.setManagedHTTPSource(
                     identityKey: record.identityKey,
                     source: updatedSource
                 )
             },
             { fraction in
+                guard !Task.isCancelled else { return }
                 try? await registry.updatePreparationProgress(
                     identityKey: record.identityKey,
                     fraction: fraction
                 )
             }
         )
+        try Task.checkCancellation()
         let url = resolution.url
         if let expectedDuration = resolution.expectedDuration,
            expectedDuration > 0 {
@@ -1301,6 +1304,7 @@ private actor ForegroundManagedDownloadCoordinator {
         }
 
         let (stream, response) = try await URLSession.shared.bytes(for: request)
+        try Task.checkCancellation()
         guard let response = response as? HTTPURLResponse else {
             throw BackgroundDownloadError.missingTemporaryFile
         }
@@ -1345,6 +1349,7 @@ private actor ForegroundManagedDownloadCoordinator {
             buffer.append(byte)
             if buffer.count >= 64 * 1_024 {
                 try await limiter.waitToTransfer(byteCount: buffer.count)
+                try Task.checkCancellation()
                 try handle.write(contentsOf: buffer)
                 written += Int64(buffer.count)
                 buffer.removeAll(keepingCapacity: true)
@@ -1352,11 +1357,14 @@ private actor ForegroundManagedDownloadCoordinator {
             }
         }
         if !buffer.isEmpty {
+            try Task.checkCancellation()
             try await limiter.waitToTransfer(byteCount: buffer.count)
+            try Task.checkCancellation()
             try handle.write(contentsOf: buffer)
             written += Int64(buffer.count)
             await onProgress(written, expectedTotal ?? written)
         }
+        try Task.checkCancellation()
         try handle.synchronize()
         if let expectedTotal, written != expectedTotal {
             throw BackgroundDownloadError.incompleteTransfer(

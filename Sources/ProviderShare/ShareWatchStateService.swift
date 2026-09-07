@@ -14,14 +14,17 @@ struct ShareWatchStateService: Sendable {
     private let watchStore: ShareWatchStore
     private let catalog: @Sendable () async -> any ShareCatalogReading
     private let accountID: String
+    private let usesCatalogClassification: Bool
 
     init(
         watchStore: ShareWatchStore,
         accountID: String,
+        usesCatalogClassification: Bool = true,
         catalog: @escaping @Sendable () async -> any ShareCatalogReading
     ) {
         self.watchStore = watchStore
         self.accountID = accountID
+        self.usesCatalogClassification = usesCatalogClassification
         self.catalog = catalog
     }
 
@@ -52,7 +55,12 @@ struct ShareWatchStateService: Sendable {
             }
         }
         let records = await records(for: playableIDs)
-        let catalog = await self.catalog()
+        let catalog: (any ShareCatalogReading)?
+        if usesCatalogClassification {
+            catalog = await self.catalog()
+        } else {
+            catalog = nil
+        }
         var stamped: [MediaItem] = []
         stamped.reserveCapacity(items.count)
         for item in items {
@@ -60,7 +68,12 @@ struct ShareWatchStateService: Sendable {
             case .folder, .collection, .series, .season:
                 stamped.append(item)
             default:
-                let canonical = await watchItemID(for: item.id, catalog: catalog)
+                let canonical: String
+                if let catalog {
+                    canonical = await watchItemID(for: item.id, catalog: catalog)
+                } else {
+                    canonical = item.id
+                }
                 stamped.append(Self.stamped(item, with: records[canonical]))
             }
         }
@@ -158,10 +171,23 @@ struct ShareWatchStateService: Sendable {
         let catalog = await self.catalog()
         var result: [String: ShareWatchStore.Record] = [:]
         for (id, record) in snapshot {
-            if ShareExtraDiscoveryPolicy.isRecognizedExtraItemID(id) {
+            if usesCatalogClassification,
+               ShareExtraDiscoveryPolicy.isRecognizedExtraItemID(id) {
                 continue
             }
-            let canonical = await catalog.canonicalItemID(id)
+            let canonical: String
+            if usesCatalogClassification {
+                canonical = await catalog.canonicalItemID(id)
+            } else if let key = ShareCatalogID.movieKey(forMovieID: id),
+                      let relPath = await catalog.defaultMovieRelPath(forKey: key) {
+                // Reclassifying an existing indexed share as Personal Videos must
+                // not strand its movie-level progress. The retained catalog path
+                // alias carries that state onto the raw file identity; new writes
+                // then stay raw.
+                canonical = ShareCatalogID.file(relPath)
+            } else {
+                canonical = id
+            }
             if let existing = result[canonical], existing.updatedAt >= record.updatedAt {
                 continue
             }
@@ -174,6 +200,22 @@ struct ShareWatchStateService: Sendable {
     /// only aliases relevant to requested ids; the watch store then performs direct
     /// dictionary lookups for that small set.
     func records(for itemIDs: [String]) async -> [String: ShareWatchStore.Record] {
+        guard usesCatalogClassification else {
+            let catalog = await self.catalog()
+            let aliases = await catalog.watchStateAliases(for: itemIDs)
+            let stored = await watchStore.records(
+                for: Set(itemIDs).union(aliases.keys).union(aliases.values)
+            )
+            var result: [String: ShareWatchStore.Record] = [:]
+            for id in itemIDs {
+                let candidates = [stored[id], aliases[id].flatMap { stored[$0] }]
+                    .compactMap { $0 }
+                if let newest = candidates.max(by: { $0.updatedAt < $1.updatedAt }) {
+                    result[id] = newest
+                }
+            }
+            return result
+        }
         let catalog = await self.catalog()
         var aliases = await catalog.watchStateAliases(for: itemIDs)
         for id in itemIDs {
@@ -228,6 +270,7 @@ struct ShareWatchStateService: Sendable {
     }
 
     private func mayPersistWatchState(for itemID: String) async -> Bool {
+        guard usesCatalogClassification else { return true }
         let stored = await catalog().extraResumeBehavior(fileID: itemID)
         return stored
             ?? ShareExtraDiscoveryPolicy.resumeBehavior(forItemID: itemID)
@@ -235,6 +278,7 @@ struct ShareWatchStateService: Sendable {
     }
 
     private func watchItemID(for itemID: String) async -> String {
+        guard usesCatalogClassification else { return itemID }
         let catalog = await self.catalog()
         return await watchItemID(for: itemID, catalog: catalog)
     }

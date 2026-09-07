@@ -196,7 +196,8 @@ final class PlozziOSAppModel {
                 expected += 1
                 let server = MediaServer(id: desc.serverID, name: desc.serverName, baseURL: baseURL,
                                          provider: .mediaShare,
-                                         connectionURLs: desc.candidateBaseURLs.isEmpty ? nil : desc.candidateBaseURLs)
+                                         connectionURLs: desc.candidateBaseURLs.isEmpty ? nil : desc.candidateBaseURLs,
+                                         mediaShareLibraryConfiguration: desc.mediaShareLibraryConfiguration)
                 let account = Account(id: desc.id, server: server, userID: desc.userID, userName: desc.userName,
                                       avatarURL: desc.avatarURL, deviceID: accountStore.deviceID())
                 do {
@@ -280,11 +281,31 @@ final class PlozziOSAppModel {
     let crashReportingController: CrashReportingController
     let requiresLaunchProfileSelection: Bool
     private(set) var settings: PlozziOSSettingsModel
-    private var backgroundWorkRevision: UInt64 = 0
     @ObservationIgnored
     private var applicationIsActive = true
     @ObservationIgnored
     private var downloadProfileGeneration = 0
+    @ObservationIgnored
+    private var sceneSessionIDs: [String: UUID] = [:]
+    @ObservationIgnored
+    private var sceneNotificationTokens: [NSObjectProtocol] = []
+    @ObservationIgnored
+    private lazy var applicationLifecycle = ApplicationSceneLifecycle(
+        initiallyActive: applicationIsActive,
+        makeSuspensionLease: { expiration in
+            Self.makeSuspensionLease(expiration: expiration)
+        },
+        operation: { [weak self] transition in
+            await self?.applyApplicationActivity(transition)
+        },
+        expirationOperation: { [weak self] transition in
+            guard let self else { return }
+            PlozzLog.boot(
+                "ios.lifecycle suspension lease expired revision=\(transition.revision)"
+            )
+            await self.applyApplicationActivity(transition)
+        }
+    )
     private(set) var seriesTrackStore: SeriesTrackPreferenceStore
     private(set) var versionPreferences: VersionPreferenceStore
     private(set) var downloads: PlozziOSDownloadsModel
@@ -773,6 +794,7 @@ final class PlozziOSAppModel {
         heroTrailerCache.removeAll()
         accountsProviders.reloadAccounts()
         applyCrashReportingPreference()
+        observeApplicationScenes()
     }
 
     func provider(for item: MediaItem) -> (any MediaProvider)? {
@@ -829,13 +851,87 @@ final class PlozziOSAppModel {
         mediaShareRescanService.rescan(accountID: accountID)
     }
 
-    func setBackgroundWorkAllowed(_ allowed: Bool) {
-        applicationIsActive = allowed
-        backgroundWorkRevision &+= 1
-        let revision = backgroundWorkRevision
-        Task { [mediaShareRuntime] in
-            await mediaShareRuntime.setBackgroundWorkAllowed(allowed, revision: revision)
+    private func observeApplicationScenes() {
+        for name in [
+            UIScene.didActivateNotification,
+            UIScene.willDeactivateNotification,
+            UIScene.didEnterBackgroundNotification,
+            UIScene.didDisconnectNotification
+        ] {
+            sceneNotificationTokens.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] notification in
+                MainActor.assumeIsolated {
+                    self?.refreshApplicationScenes(notification: notification)
+                }
+            })
         }
+        refreshApplicationScenes(notification: nil)
+    }
+
+    private func refreshApplicationScenes(notification: Notification?) {
+        let changedScene = notification?.object as? UIScene
+        let changedID = changedScene?.session.persistentIdentifier
+        var scenes: [UUID: Bool] = [:]
+        var connected = Set<String>()
+        for scene in UIApplication.shared.connectedScenes {
+            let sessionID = scene.session.persistentIdentifier
+            if sessionID == changedID,
+               notification?.name == UIScene.didDisconnectNotification { continue }
+            connected.insert(sessionID)
+            let id = sceneSessionIDs[sessionID] ?? UUID()
+            sceneSessionIDs[sessionID] = id
+            if sessionID == changedID {
+                scenes[id] = notification?.name == UIScene.didActivateNotification
+            } else {
+                scenes[id] = scene.activationState == .foregroundActive
+            }
+        }
+        sceneSessionIDs = sceneSessionIDs.filter { connected.contains($0.key) }
+        if let transition = applicationLifecycle.replaceScenes(scenes) {
+            applicationIsActive = transition.isActive
+        }
+    }
+
+    private func applyApplicationActivity(
+        _ transition: ApplicationActivityTransition
+    ) async {
+        let downloads = downloads
+        async let mediaShareTransition: Void =
+            mediaShareRuntime.setBackgroundWorkAllowed(
+                transition.isActive,
+                revision: transition.revision
+            )
+        async let downloadTransition: Void =
+            downloads.setApplicationActive(
+                transition.isActive,
+                revision: transition.revision
+            )
+        _ = await (mediaShareTransition, downloadTransition)
+    }
+
+    private static func makeSuspensionLease(
+        expiration: @escaping @MainActor @Sendable () -> Void
+    ) -> ApplicationLifecycleLease? {
+        let lease = ApplicationLifecycleLease(expiration: expiration)
+        let identifier = UIApplication.shared.beginBackgroundTask(
+            withName: "Plozz suspension safety"
+        ) {
+            // UIKit documents background-task expiration handlers as main-thread
+            // callbacks. Run inline so the assertion is ended in that callback,
+            // rather than relying on another task that may not be scheduled.
+            MainActor.assumeIsolated {
+                lease.expire()
+            }
+        }
+        guard identifier != .invalid else {
+            lease.end()
+            return nil
+        }
+        lease.installEndAction {
+            UIApplication.shared.endBackgroundTask(identifier)
+        }
+        return lease
     }
 
     /// Media-share account ids signed in on this device. Scopes the Settings
@@ -2365,7 +2461,8 @@ final class PlozziOSAppModel {
         port: Int?,
         exportPath: String,
         subpath: String = "",
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveNFS(
@@ -2373,7 +2470,8 @@ final class PlozziOSAppModel {
                 port: port,
                 exportPath: exportPath,
                 subpath: subpath,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2394,7 +2492,8 @@ final class PlozziOSAppModel {
         username: String,
         password: String,
         displayName: String,
-        subpath: String = ""
+        subpath: String = "",
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveSMB(
@@ -2404,7 +2503,8 @@ final class PlozziOSAppModel {
                 username: username,
                 password: password,
                 displayName: displayName,
-                subpath: subpath
+                subpath: subpath,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2422,14 +2522,16 @@ final class PlozziOSAppModel {
         baseURL: URL,
         auth: MediaShareWebDAVAuth,
         trustPin: SHA256Fingerprint?,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveWebDAV(
                 baseURL: baseURL,
                 auth: auth,
                 trustPin: trustPin,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2450,7 +2552,8 @@ final class PlozziOSAppModel {
         username: String,
         password: String,
         hostKeyPin: SHA256Fingerprint,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveSFTP(
@@ -2460,7 +2563,8 @@ final class PlozziOSAppModel {
                 username: username,
                 password: password,
                 hostKeyPin: hostKeyPin,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2477,13 +2581,15 @@ final class PlozziOSAppModel {
     func addFTPShare(
         baseURL: URL,
         auth: MediaShareFTPAuth,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveFTP(
                 baseURL: baseURL,
                 auth: auth,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2605,6 +2711,13 @@ private struct PlozziOSMediaShareArtworkCacheLifecycle:
     func setPreferredAccountKeys(_ accountKeys: Set<String>, revision: UInt64) async {
         await ArtworkImageCache.shared.setPreferredNetworkArtworkAccounts(
             accountKeys,
+            revision: revision
+        )
+    }
+
+    func setBackgroundWorkAllowed(_ allowed: Bool, revision: UInt64) async {
+        await ArtworkImageCache.shared.setBackgroundWorkAllowed(
+            allowed,
             revision: revision
         )
     }

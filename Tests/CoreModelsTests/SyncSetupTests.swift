@@ -45,6 +45,81 @@ final class SyncSetupTests: XCTestCase {
         XCTAssertFalse(json.lowercased().contains("deviceid"))
     }
 
+    func testMediaShareConfigurationRoundTripsThroughDescriptor() throws {
+        let configuration = MediaShareLibraryConfiguration(
+            name: "Anime Films",
+            contentType: .movies,
+            isAnime: true
+        )
+        let server = MediaServer(
+            id: "share:smb://nas/media#guest",
+            name: configuration.name,
+            baseURL: url("smb://nas/media"),
+            provider: .mediaShare,
+            mediaShareLibraryConfiguration: configuration
+        )
+        let descriptor = SyncedAccountDescriptor(
+            account: Account(
+                id: server.id,
+                server: server,
+                userID: "guest",
+                userName: "",
+                deviceID: "device"
+            )
+        )
+
+        let data = try JSONEncoder().encode(descriptor)
+        let decoded = try JSONDecoder().decode(
+            SyncedAccountDescriptor.self,
+            from: data
+        )
+
+        XCTAssertEqual(decoded.mediaShareLibraryConfiguration, configuration)
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("password"))
+    }
+
+    func testLegacyMediaServerWithoutConfigurationDecodesAsAutomatic() throws {
+        let json = """
+        {
+          "id":"share:smb://nas/media#guest",
+          "name":"Media",
+          "baseURL":"smb://nas/media",
+          "provider":"mediaShare"
+        }
+        """
+
+        let server = try JSONDecoder().decode(
+            MediaServer.self,
+            from: Data(json.utf8)
+        )
+
+        XCTAssertNil(server.mediaShareLibraryConfiguration)
+    }
+
+    func testLibraryConfigurationChangeIsMeaningfulForSync() {
+        let base = SyncedAccountDescriptor(
+            id: "share:smb://nas/media#guest",
+            provider: .mediaShare,
+            serverID: "share:smb://nas/media#guest",
+            serverName: "Media",
+            userID: "guest",
+            userName: "",
+            candidateBaseURLs: [url("smb://nas/media")],
+            mediaShareLibraryConfiguration: MediaShareLibraryConfiguration(
+                name: "Media",
+                contentType: .automatic
+            )
+        )
+        var changed = base
+        changed.mediaShareLibraryConfiguration = MediaShareLibraryConfiguration(
+            name: "Family Movies",
+            contentType: .movies,
+            isAnime: true
+        )
+
+        XCTAssertFalse(base.semanticallyEqualForSync(to: changed))
+    }
+
     // MARK: Deterministic account ids (holistic cross-device duplicate prevention)
 
     func testStableIDIsDeterministicForTokenProviders() {

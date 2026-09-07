@@ -3,7 +3,7 @@ import CoreModels
 import CoreNetworking
 import MediaTransportCore
 
-/// Second-class local media-share provider (SMB). Conforms to `MediaProvider`
+/// Transport-neutral local media-share provider. Conforms to `MediaProvider`
 /// so Home / browse / search / playback treat a share like any other backend —
 /// but everything a real server would compute (libraries, detail, search) is
 /// synthesised from a local scan (`ShareLibraryStore`) instead of network calls.
@@ -17,7 +17,7 @@ import MediaTransportCore
 /// watch-state stamping/writes through `ShareWatchStateService`, and playback
 /// file access (locator, sidecar subtitles, stream probe) through
 /// `SharePlaybackSourceService`. It keeps only browse/playback orchestration.
-public struct ShareProvider: MediaProvider {
+public struct ShareProvider: MediaProvider, MediaFileBrowsing, MediaSortFieldProviding {
     public let kind: ProviderKind = .mediaShare
     public let session: UserSession
     public let localMediaContext: LocalMediaContext
@@ -34,6 +34,38 @@ public struct ShareProvider: MediaProvider {
     /// locator and transport resolver as playback.
     private let streamProber: NetworkFileStreamProbing?
     private let streamProbeCache = ShareStreamProbeCache()
+
+    private var libraryConfiguration: MediaShareLibraryConfiguration? {
+        session.server.mediaShareLibraryConfiguration
+    }
+
+    /// The main share browser stays media-aware. Only title-scoped file-browser
+    /// routes bypass catalog projection.
+    public var fileBrowserLibrary: MediaLibrary {
+        ShareLibraryStore.rootLibrary(
+            serverName: session.server.name,
+            configuration: libraryConfiguration
+        )
+    }
+
+    public func supportedSortFields(
+        in containerID: String,
+        kind: MediaItemKind
+    ) -> [SortField] {
+        if ShareCatalogID.catalogLibrary(forID: containerID) != nil {
+            return SortField.allCases
+        }
+        if ShareCatalogID.isSeries(containerID) || ShareCatalogID.isSeason(containerID) {
+            return [.name, .releaseDate, .communityRating, .runtime, .random]
+        }
+        if libraryConfiguration?.contentType == .personalVideos
+            || ShareCatalogID.containerID(forFileBrowserID: containerID) != nil {
+            // Raw personal files have filesystem dates, but intentionally carry
+            // no fabricated runtime, release, or ratings metadata.
+            return [.name, .dateAdded, .random]
+        }
+        return SortField.allCases
+    }
 
     public init(
         session: UserSession,
@@ -82,7 +114,12 @@ public struct ShareProvider: MediaProvider {
             role: .metadata,
             sessionFactory: sessionFactory
         )
-        let libraryStore = ShareLibraryStore(browser: browser, serverName: session.server.name)
+        let configuration = session.server.mediaShareLibraryConfiguration
+        let libraryStore = ShareLibraryStore(
+            browser: browser,
+            serverName: session.server.name,
+            configuration: configuration
+        )
         self.store = libraryStore
         // Watch state is device-local (a file share has no server), scoped by the
         // share's stable account id so two shares keep separate progress.
@@ -100,6 +137,7 @@ public struct ShareProvider: MediaProvider {
                 accountKey: accountID,
                 displayName: displayName,
                 credentialRevision: credentialRevision,
+                libraryConfiguration: configuration,
                 sessionFactory: sessionFactory
             )
         }
@@ -107,6 +145,7 @@ public struct ShareProvider: MediaProvider {
         self.watchState = ShareWatchStateService(
             watchStore: watchStore,
             accountID: accountID,
+            usesCatalogClassification: configuration?.contentType != .personalVideos,
             catalog: accessor
         )
         self.playbackSource = SharePlaybackSourceService(
@@ -138,26 +177,49 @@ public struct ShareProvider: MediaProvider {
     public func libraries() async throws -> [MediaLibrary] {
         // Home aggregation calls this at launch, so it must be instant — SQLite
         // reads only (no network) plus a fire-and-forget scan kick. Indexed
-        // Movies / TV Shows / Anime libraries appear ONLY once the scan has found
-        // content for them (no empty rows on a fresh share); the raw file-tree
-        // library (named after the share) is always present and browsed live.
+        // Legacy automatic categories appear once scanning finds content. An
+        // explicitly configured movie/TV root appears immediately under its
+        // stable synthetic id, while the distinct raw file-tree entry is always
+        // available for unmatched content and live navigation.
         let catalog = await self.catalog
         let counts = await catalog.libraryCounts()
         var result: [MediaLibrary] = []
-        if counts.movies > 0 {
-            result.append(MediaLibrary(id: ShareCatalogID.moviesLibrary, title: "Movies", kind: .movie,
-                                       synthesizedName: .movies))
+        switch libraryConfiguration?.contentType {
+        case .movies:
+            result.append(MediaLibrary(
+                id: ShareCatalogID.moviesLibrary,
+                title: libraryConfiguration?.name ?? session.server.name,
+                kind: .movie
+            ))
+        case .tvShows:
+            result.append(MediaLibrary(
+                id: libraryConfiguration?.isAnime == true
+                    ? ShareCatalogID.animeLibrary
+                    : ShareCatalogID.tvLibrary,
+                title: libraryConfiguration?.name ?? session.server.name,
+                kind: .series
+            ))
+        case .automatic, nil:
+            if counts.movies > 0 {
+                result.append(MediaLibrary(id: ShareCatalogID.moviesLibrary, title: "Movies", kind: .movie,
+                                           synthesizedName: .movies))
+            }
+            if counts.tvSeries > 0 {
+                result.append(MediaLibrary(id: ShareCatalogID.tvLibrary, title: "TV Shows", kind: .series,
+                                           synthesizedName: .tvShows))
+            }
+            if counts.animeSeries > 0 {
+                result.append(MediaLibrary(id: ShareCatalogID.animeLibrary, title: "Anime", kind: .series,
+                                           synthesizedName: .anime))
+            }
+            // Legacy/automatic shares historically exposed this stable root as a
+            // library. Keep it in the inventory so saved visibility remains valid.
+            result.append(contentsOf: await store.libraries())
+        case .personalVideos:
+            result.append(contentsOf: await store.libraries())
         }
-        if counts.tvSeries > 0 {
-            result.append(MediaLibrary(id: ShareCatalogID.tvLibrary, title: "TV Shows", kind: .series,
-                                       synthesizedName: .tvShows))
-        }
-        if counts.animeSeries > 0 {
-            result.append(MediaLibrary(id: ShareCatalogID.animeLibrary, title: "Anime", kind: .series,
-                                       synthesizedName: .anime))
-        }
-        // The raw browsable file tree, named after the share (not "Files").
-        result.append(contentsOf: await store.libraries())
+        // Explicit movie/TV roots expose raw navigation through
+        // `MediaFileBrowsing`, not as a second library tile.
         return result
     }
 
@@ -165,11 +227,13 @@ public struct ShareProvider: MediaProvider {
         // Canonicalize ALL stored state before filtering/limiting so several legacy
         // file-version records collapse to one movie without pushing distinct
         // titles off the row.
+        let isPersonalVideos = libraryConfiguration?.contentType == .personalVideos
         let byCanonical = await watchState.allCanonicalRecords()
         let resumable = byCanonical.filter {
             !$0.value.played
                 && $0.value.position > 1
-                && !ShareExtraDiscoveryPolicy.isRecognizedExtraItemID($0.key)
+                && (isPersonalVideos
+                    || !ShareExtraDiscoveryPolicy.isRecognizedExtraItemID($0.key))
                 // Taken off the row deliberately. The position is deliberately still
                 // here, so playing it again resumes rather than restarts.
                 && !$0.value.isDismissedFromContinueWatching
@@ -183,9 +247,15 @@ public struct ShareProvider: MediaProvider {
             // Resolve through the CATALOG first (indexed → carries series/season
             // linkage, including the `seasonID` the player's neighbour resolver
             // needs to offer Up Next / auto-advance), falling back to the raw
-            // file-tree build only for un-indexed items.
+            // file-tree build only for un-indexed items. Personal Videos never
+            // consult stale catalog rows from an earlier library classification.
             let base: MediaItem
-            if let indexed = await catalog.item(id: itemID) {
+            if isPersonalVideos,
+               let rawItem = await store.item(id: itemID) {
+                base = rawItem
+            } else if isPersonalVideos {
+                continue
+            } else if let indexed = await catalog.item(id: itemID) {
                 base = indexed
             } else if let rawItem = await store.item(id: itemID) {
                 base = rawItem
@@ -201,6 +271,7 @@ public struct ShareProvider: MediaProvider {
     }
 
     public func latest(limit: Int) async throws -> [MediaItem] {
+        guard libraryConfiguration?.contentType != .personalVideos else { return [] }
         // Recently Added, served from the catalog by first-discovery date — no
         // network, safe on the Home hot path. Empty until the first scan populates.
         let items = await catalog.latest(limit: limit)
@@ -225,14 +296,28 @@ public struct ShareProvider: MediaProvider {
     /// Jellyfin both define standalone `person` NFO files that DO carry an
     /// `<Overview>`, so this could one day answer; nothing writes them here yet.
     public func items(withPerson personID: String, limit: Int) async throws -> [MediaItem] {
-        await catalog.itemsWithPerson(id: personID, name: "", limit: limit)
+        guard libraryConfiguration?.contentType != .personalVideos else { return [] }
+        return await catalog.itemsWithPerson(id: personID, name: "", limit: limit)
     }
 
     public func items(withPersonNamed name: String, limit: Int) async throws -> [MediaItem] {
-        await catalog.itemsWithPerson(id: nil, name: name, limit: limit)
+        guard libraryConfiguration?.contentType != .personalVideos else { return [] }
+        return await catalog.itemsWithPerson(id: nil, name: name, limit: limit)
     }
 
     public func item(id: String) async throws -> MediaItem {
+        if let containerID = ShareCatalogID.containerID(forFileBrowserID: id) {
+            guard let folder = await store.item(id: containerID) else {
+                throw AppError.unknown("Folder not found on share: \(containerID)")
+            }
+            return ShareCatalogID.fileBrowserEntry(folder)
+        }
+        if libraryConfiguration?.contentType == .personalVideos {
+            guard let item = await store.item(id: id) else {
+                throw AppError.unknown("Item not found on share: \(id)")
+            }
+            return await watchState.stamp(item)
+        }
         // Indexed items (movies/series/seasons/episodes) resolve from the catalog;
         // raw file-tree ids (`share:root`, `d:`) fall back to the live browser.
         if let extra = await catalog.extra(fileID: id) {
@@ -260,12 +345,14 @@ public struct ShareProvider: MediaProvider {
     }
 
     public func trailers(for itemID: String) async throws -> [MediaItem] {
-        try await extras(for: itemID)
+        guard libraryConfiguration?.contentType != .personalVideos else { return [] }
+        return try await extras(for: itemID)
             .filter { $0.kind == .trailer }
             .map(\.playbackItem)
     }
 
     public func extras(for itemID: String) async throws -> [MediaExtra] {
+        guard libraryConfiguration?.contentType != .personalVideos else { return [] }
         let catalog = await self.catalog
         let ownerID = await catalog.canonicalItemID(itemID)
         let stored = await catalog.extras(ownerID: ownerID)
@@ -282,6 +369,10 @@ public struct ShareProvider: MediaProvider {
     }
 
     public func children(of itemID: String) async throws -> [MediaItem] {
+        if libraryConfiguration?.contentType == .personalVideos,
+           ShareCatalogID.isSeries(itemID) || ShareCatalogID.isSeason(itemID) {
+            return []
+        }
         // Series → seasons, season → episodes (from the catalog); a raw folder's
         // children are that directory's live listing.
         if ShareCatalogID.isSeries(itemID), let key = ShareCatalogID.seriesKey(forSeriesID: itemID) {
@@ -295,11 +386,26 @@ public struct ShareProvider: MediaProvider {
         if let (key, season) = ShareCatalogID.seasonComponents(forSeasonID: itemID) {
             return await watchState.stamp(await catalog.episodes(seriesKey: key, season: season))
         }
-        let entries = try await store.entries(forContainerID: itemID)
-        return await watchState.stamp(entries)
+        let rawContainerID = ShareCatalogID.containerID(forFileBrowserID: itemID)
+        let entries = try await store.entries(forContainerID: rawContainerID ?? itemID)
+        if rawContainerID != nil {
+            return await watchState.stamp(entries.map(ShareCatalogID.fileBrowserEntry))
+        }
+        let projected = libraryConfiguration?.contentType == .personalVideos
+            ? entries
+            : await catalog.browseItems(entries)
+        return await watchState.stamp(projected)
     }
 
     public func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
+        if libraryConfiguration?.contentType == .personalVideos,
+           ShareCatalogID.catalogLibrary(forID: containerID) != nil
+               || ShareCatalogID.isSeries(containerID)
+               || ShareCatalogID.isSeason(containerID) {
+            // An already-open route can outlive a library configuration change.
+            // Retained catalog rows exist only to recover file watch aliases.
+            return MediaPage(items: [], startIndex: 0, totalCount: 0)
+        }
         // Indexed library grids page from the catalog; series/season containers are
         // small (delegate to `children`); the raw file tree lists the directory.
         if let library = ShareCatalogID.catalogLibrary(forID: containerID) {
@@ -309,10 +415,19 @@ public struct ShareProvider: MediaProvider {
             let total: Int
             switch library {
             case .movies:
-                items = await catalog.movies(offset: page.startIndex, limit: page.limit)
+                items = await catalog.movies(
+                    offset: page.startIndex,
+                    limit: page.limit,
+                    sort: page.sort
+                )
                 total = await catalog.movieCount()
             case .tv, .anime:
-                items = await catalog.series(in: library, offset: page.startIndex, limit: page.limit)
+                items = await catalog.series(
+                    in: library,
+                    offset: page.startIndex,
+                    limit: page.limit,
+                    sort: page.sort
+                )
                 total = await catalog.seriesCount(in: library)
             }
             let stamped = await watchState.stamp(items)
@@ -329,21 +444,143 @@ public struct ShareProvider: MediaProvider {
         }
         if ShareCatalogID.isSeries(containerID) || ShareCatalogID.isSeason(containerID) {
             let all = try await children(of: containerID)
-            let start = min(page.startIndex, all.count)
-            let end = min(start + page.limit, all.count)
-            return MediaPage(items: Array(all[start..<end]), startIndex: start, totalCount: all.count)
+            let ordered = Self.sortedBrowseItems(all, by: page.sort)
+            let start = min(page.startIndex, ordered.count)
+            let end = min(start + page.limit, ordered.count)
+            return MediaPage(
+                items: Array(ordered[start..<end]),
+                startIndex: start,
+                totalCount: ordered.count
+            )
         }
         // Browsing the raw file tree lists exactly that directory.
-        let all = try await store.entries(forContainerID: containerID)
-        let start = min(page.startIndex, all.count)
-        let end = min(start + page.limit, all.count)
-        let slice = await watchState.stamp(Array(all[start..<end]))
-        return MediaPage(items: slice, startIndex: start, totalCount: all.count)
+        let rawContainerID = ShareCatalogID.containerID(forFileBrowserID: containerID)
+        let entries = try await store.entries(
+            forContainerID: rawContainerID ?? containerID,
+            sort: page.sort,
+            foldersFirst: rawContainerID != nil || libraryConfiguration?.contentType == .personalVideos
+        )
+        let all = rawContainerID != nil
+            ? entries.map(ShareCatalogID.fileBrowserEntry)
+            : libraryConfiguration?.contentType == .personalVideos
+            ? entries
+            : await catalog.browseItems(entries)
+        // Filesystem creation/modified time is available only while the store maps
+        // RemoteFileEntry values, so it has already ordered Date Added above.
+        // Every other field is applied after catalog projection so promoted
+        // movie/series entries can contribute runtime, year, and ratings.
+        let containsCatalogTitles = all.contains {
+            ShareCatalogID.isMovie($0.id)
+                || ShareCatalogID.isSeries($0.id)
+                || ShareCatalogID.isSeason($0.id)
+        }
+        let ordered = page.sort.field == .dateAdded
+            ? all
+            : Self.sortedBrowseItems(all, by: page.sort, foldersFirst: !containsCatalogTitles)
+        let start = min(page.startIndex, ordered.count)
+        let end = min(start + page.limit, ordered.count)
+        let slice = await watchState.stamp(Array(ordered[start..<end]))
+        return MediaPage(items: slice, startIndex: start, totalCount: ordered.count)
+    }
+
+    private static func sortedBrowseItems(
+        _ items: [MediaItem],
+        by sort: CoreModels.SortDescriptor,
+        foldersFirst: Bool = true
+    ) -> [MediaItem] {
+        items.sorted { lhs, rhs in
+            // Pure file browsing keeps folders first. A media-aware library grid
+            // must not bury recognized titles behind all the unresolved folders.
+            if foldersFirst, (lhs.kind == .folder) != (rhs.kind == .folder) {
+                return lhs.kind == .folder
+            }
+
+            let ordered: Bool?
+            switch sort.field {
+            case .name:
+                let lhsBefore = MediaItemSortOrder.isOrderedBefore(lhs, rhs, sort: sort)
+                let rhsBefore = MediaItemSortOrder.isOrderedBefore(rhs, lhs, sort: sort)
+                ordered = lhsBefore == rhsBefore ? nil : lhsBefore
+            case .releaseDate:
+                ordered = compare(
+                    releaseSortDate(lhs),
+                    releaseSortDate(rhs),
+                    direction: sort.direction
+                )
+            case .communityRating:
+                ordered = compare(
+                    communityScore(lhs),
+                    communityScore(rhs),
+                    direction: sort.direction
+                )
+            case .runtime:
+                ordered = compare(lhs.runtime, rhs.runtime, direction: sort.direction)
+            case .random:
+                ordered = compare(
+                    randomRank(lhs.id),
+                    randomRank(rhs.id),
+                    direction: sort.direction
+                )
+            case .dateAdded:
+                // The store applies filesystem timestamps before projection.
+                ordered = nil
+            }
+            if let ordered { return ordered }
+
+            let titleOrder = lhs.title.localizedStandardCompare(rhs.title)
+            if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
+            return lhs.id < rhs.id
+        }
+    }
+
+    private static func communityScore(_ item: MediaItem) -> Double? {
+        item.ratings.first {
+            $0.cohort == .community || $0.cohort == .audience
+        }?.normalized
+    }
+
+    private static func releaseSortDate(_ item: MediaItem) -> Date? {
+        if let date = item.releaseDate { return date }
+        guard let year = item.productionYear else { return nil }
+        return DateComponents(
+            calendar: Calendar(identifier: .gregorian),
+            timeZone: TimeZone(secondsFromGMT: 0),
+            year: year,
+            month: 1,
+            day: 1
+        ).date
+    }
+
+    private static func compare<Value: Comparable>(
+        _ lhs: Value?,
+        _ rhs: Value?,
+        direction: SortDirection
+    ) -> Bool? {
+        switch (lhs, rhs) {
+        case let (left?, right?) where left != right:
+            return direction == .ascending ? left < right : left > right
+        case (nil, .some):
+            return false
+        case (.some, nil):
+            return true
+        default:
+            return nil
+        }
+    }
+
+    /// Stable pseudo-random ordering keeps independently fetched pages coherent.
+    /// Swift's process-randomized `hashValue` cannot be persisted across reloads,
+    /// so use a small deterministic FNV-1a rank over the unchanged provider id.
+    private static func randomRank(_ id: String) -> UInt64 {
+        id.utf8.reduce(14_695_981_039_346_656_037) { value, byte in
+            (value ^ UInt64(byte)) &* 1_099_511_628_211
+        }
     }
 
     // MARK: Search
 
     public func search(query: String, limit: Int) async throws -> [MediaItem] {
+        guard libraryConfiguration?.contentType != .personalVideos else { return [] }
         // Indexed search over the catalog; empty until the first scan populates.
         return await watchState.stamp(await catalog.search(query: query, limit: limit))
     }
@@ -363,11 +600,29 @@ public struct ShareProvider: MediaProvider {
     /// `movie:<key>` with no chosen version plays its best default file; a bare
     /// `f:<rel>` (raw browser / episode) plays directly.
     public func playbackInfo(for itemID: String, mediaSourceID: String?, forceTranscode: Bool) async throws -> PlaybackRequest {
-        let catalog = await self.catalog
-        let storedExtra = await catalog.extra(fileID: itemID)
-        let isExtra = storedExtra != nil
-            || ShareExtraDiscoveryPolicy.isRecognizedExtraItemID(itemID)
-        let canonicalItemID = isExtra ? itemID : await catalog.canonicalItemID(itemID)
+        let isPersonalVideos = libraryConfiguration?.contentType == .personalVideos
+        let catalog: (any ShareCatalogReading)?
+        if isPersonalVideos {
+            catalog = nil
+        } else {
+            catalog = await self.catalog
+        }
+        let storedExtra = await catalog?.extra(fileID: itemID)
+        let isExtra = !isPersonalVideos && (
+            storedExtra != nil || ShareExtraDiscoveryPolicy.isRecognizedExtraItemID(itemID)
+        )
+        let canonicalItemID: String
+        if isExtra {
+            canonicalItemID = itemID
+        } else {
+            canonicalItemID = await catalog?.canonicalItemID(itemID) ?? itemID
+        }
+        let isLiveRawFile: Bool
+        if isPersonalVideos {
+            isLiveRawFile = true
+        } else {
+            isLiveRawFile = await catalog?.containsFileAsset(id: itemID) == true
+        }
         let relPath: String
         if let ms = mediaSourceID, !ms.isEmpty {
             relPath = ms
@@ -376,11 +631,12 @@ public struct ShareProvider: MediaProvider {
             // pre-migration movie alias exists for that path.
             relPath = path
         } else if ShareCatalogID.relPath(forFileID: itemID) != nil,
-                  await catalog.containsFileAsset(id: itemID),
+                  isLiveRawFile,
                   let path = await store.path(forItemID: itemID) {
             // A live raw-file id means the user selected that exact file in Files.
             relPath = path
-        } else if let key = ShareCatalogID.movieKey(forMovieID: canonicalItemID) {
+        } else if let key = ShareCatalogID.movieKey(forMovieID: canonicalItemID),
+                  let catalog {
             guard let def = await catalog.defaultMovieRelPath(forKey: key) else {
                 throw AppError.unknown("No playable version for \(canonicalItemID)")
             }
@@ -396,9 +652,11 @@ public struct ShareProvider: MediaProvider {
         // watched before version grouping still resumes after the upgrade.
         let records = await watchState.records(for: [canonicalItemID])
         let record = records[canonicalItemID]
-        let storedExtraResume = await catalog.extraResumeBehavior(fileID: canonicalItemID)
-        let extraResume = storedExtraResume
-            ?? ShareExtraDiscoveryPolicy.resumeBehavior(forItemID: canonicalItemID)
+        let storedExtraResume = await catalog?.extraResumeBehavior(fileID: canonicalItemID)
+        let extraResume = isPersonalVideos
+            ? nil
+            : storedExtraResume
+                ?? ShareExtraDiscoveryPolicy.resumeBehavior(forItemID: canonicalItemID)
         let startPosition = extraResume == false || record?.played == true
             ? 0
             : (record?.position ?? 0)
@@ -558,6 +816,13 @@ extension ShareProvider: SupplementalStreamFactsProviding {
     private func probeRelativePath(for item: MediaItem) async -> String? {
         if let selectedVersionID = item.selectedVersionID, !selectedVersionID.isEmpty {
             return selectedVersionID
+        }
+        if libraryConfiguration?.contentType == .personalVideos {
+            if let versionID = item.versions.first?.id,
+               !versionID.hasPrefix("synth:") {
+                return versionID
+            }
+            return await store.path(forItemID: item.id)
         }
         let catalog = await self.catalog
         let canonicalItemID = await catalog.canonicalItemID(item.id)

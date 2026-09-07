@@ -1053,7 +1053,26 @@ struct HomeTab: View {
         )
     }
 
+    @ViewBuilder
     private func itemDetail(for item: MediaItem, libraryOrigin: String?) -> some View {
+        let provider = resolveProvider(libraryOrigin ?? item.sourceAccountID, in: accounts)
+        if let library = MediaFolderNavigation.library(
+            for: item,
+            providerKind: provider.kind,
+            sourceAccountID: libraryOrigin ?? item.sourceAccountID ?? provider.session.server.id
+        ) {
+            MediaFolderBrowseView(
+                library: library,
+                provider: provider,
+                spoilerSettings: spoilerSettings,
+                onSelect: { navigate($0, libraryOrigin: library.sourceAccountID) }
+            )
+        } else {
+            titleDetail(for: item, libraryOrigin: libraryOrigin)
+        }
+    }
+
+    private func titleDetail(for item: MediaItem, libraryOrigin: String?) -> some View {
         // A discovery (Seerr) title that isn't in the library — e.g. a "More Info"
         // tap on a *not-owned* featured hero slide — routes to the request-focused
         // discovery detail page instead of a doomed library fetch. Owned featured

@@ -1,4 +1,5 @@
 import Foundation
+import CoreModels
 
 /// Value types + id scheme for the persistent share catalog (the SQLite-backed
 /// index a `ShareScanner` builds by walking the share once, so Home / Search can
@@ -136,6 +137,30 @@ enum ShareCatalogID {
     /// Playable leaf id — identical to the raw browser's `f:` scheme so playback
     /// and watch-state keys are shared.
     static func file(_ relPath: String) -> String { "f:\(relPath)" }
+    static func fileBrowserID(for containerID: String) -> String {
+        "share:files:\(containerID)"
+    }
+
+    static func containerID(forFileBrowserID id: String) -> String? {
+        let prefix = "share:files:"
+        guard id.hasPrefix(prefix) else { return nil }
+        let containerID = String(id.dropFirst(prefix.count))
+        guard containerID == "share:root" || containerID.hasPrefix("d:") else { return nil }
+        return containerID
+    }
+
+    static func fileBrowserEntry(_ item: MediaItem) -> MediaItem {
+        var entry = item
+        if item.kind == .folder {
+            entry.id = fileBrowserID(for: item.id)
+        } else if let path = relPath(forFileID: item.id) {
+            entry.title = (path as NSString).lastPathComponent
+            entry.kind = .video
+            entry.allowsTitleBasedMetadataMatching = false
+        }
+        return entry
+    }
+
     static func relPath(forFileID id: String) -> String? {
         id.hasPrefix("f:") ? String(id.dropFirst(2)) : nil
     }

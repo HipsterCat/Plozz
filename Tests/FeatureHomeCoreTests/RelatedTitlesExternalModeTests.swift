@@ -157,6 +157,26 @@ final class RelatedTitlesExternalModeTests: XCTestCase {
         XCTAssertTrue(loader.hasResolved)
     }
 
+    func testMetadataOptOutClearsExternalResultsEvenWithDisplayModeOverride() async {
+        let search = SearchCallFlag()
+        let loader = makeLoader(related: related(), search: search)
+        var item = MediaItem(
+            id: "personal",
+            title: "Seed",
+            kind: .movie
+        )
+        await loader.load(for: item, displayMode: .includeExternal)
+        XCTAssertEqual(loader.entries.count, 1)
+
+        item.allowsTitleBasedMetadataMatching = false
+        await loader.load(for: item, displayMode: .includeExternal)
+
+        XCTAssertTrue(loader.entries.isEmpty)
+        XCTAssertTrue(loader.hasResolved)
+        XCTAssertFalse(loader.isLoading)
+        XCTAssertFalse(search.value)
+    }
+
     func testExternalModePublishesWithoutSearchingEveryLibrary() async {
         let search = SearchCallFlag()
         let loader = makeLoader(

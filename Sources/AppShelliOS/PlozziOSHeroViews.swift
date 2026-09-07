@@ -1780,7 +1780,9 @@ private struct PlozziOSDetailHeroForeground: View {
         for target in [item, watchlistSubject, rootItem] {
             for action in actionHandler.actions(for: target, context: .none)
                 where offersAction(action) && seen.insert(action).inserted {
-                entries.append(ActionEntry(action: action, target: target))
+                let subject = action == .browseFiles && rootItem.fileBrowserContainerID != nil
+                    ? rootItem : target
+                entries.append(ActionEntry(action: action, target: subject))
             }
         }
         return entries
@@ -1802,6 +1804,7 @@ private struct PlozziOSDetailHeroForeground: View {
     /// this page can't otherwise reach, and only when something can route it.
     private func offersAction(_ action: MediaItemAction) -> Bool {
         guard action.isNavigation else { return true }
+        if action == .browseFiles { return navigator != nil }
         return offersParentNavigation && !action.navigatesToSelf && navigator != nil
     }
 
@@ -1829,11 +1832,15 @@ private struct PlozziOSDetailHeroForeground: View {
     /// episode page has a *visible* way back to its show rather than one buried
     /// in a long-press menu.
     private var parentNavigationEntry: ActionEntry? {
-        actions.first { $0.action.isNavigation && !$0.action.navigatesToSelf }
+        actions.first { $0.action == .goToSeason }
     }
 
     private var hasSourceVersionOptions: Bool {
         sources.count > 1 || versions.count > 1
+    }
+
+    private var fileBrowserAction: ActionEntry? {
+        actions.first { $0.action == .browseFiles }
     }
 
     /// The episode's own 16:9 still, shown above its details on an episode page.
@@ -2119,7 +2126,7 @@ private struct PlozziOSDetailHeroForeground: View {
             ForEach(inline) { extra in
                 inlineExtraButton(extra, labelled: labelledTrailer)
             }
-            if hasSourceVersionOptions || !menu.isEmpty {
+            if hasSourceVersionOptions || !menu.isEmpty || fileBrowserAction != nil {
                 sourceVersionMenuButton(actions: menu)
             }
         }
@@ -2259,7 +2266,13 @@ private struct PlozziOSDetailHeroForeground: View {
             selectedSourceID: selectedSourceAccountID,
             versions: versions,
             selectedVersionID: selectedVersionID,
-            actions: actions,
+            actions: actions + (fileBrowserAction.map { entry in
+                [PlaybackSourceMenuAction(
+                    id: "media.\(entry.action.rawValue)",
+                    title: entry.action.title,
+                    systemImage: entry.action.systemImage
+                )]
+            } ?? []),
             onSelectSource: onSelectSource,
             onSelectVersion: onSelectVersion,
             onPerformAction: performCompactPanelAction
@@ -2303,6 +2316,10 @@ private struct PlozziOSDetailHeroForeground: View {
     }
 
     private func performCompactPanelAction(_ id: String) {
+        if id == "media.browseFiles", let fileBrowserAction {
+            perform(fileBrowserAction)
+            return
+        }
         if id == "download" {
             Task { await performDownloadAction() }
             return

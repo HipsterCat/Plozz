@@ -56,7 +56,8 @@ struct PlozziOSUnifiedAddShareView: View {
                         username: draft.username,
                         password: draft.password,
                         displayName: draft.displayName,
-                        subpath: draft.subpath
+                        subpath: draft.subpath,
+                        libraryConfiguration: draft.libraryConfiguration
                     ) {
                         dismiss()
                     } else {
@@ -70,7 +71,8 @@ struct PlozziOSUnifiedAddShareView: View {
                         baseURL: config.baseURL,
                         auth: config.auth,
                         trustPin: config.trustPin,
-                        displayName: config.displayName
+                        displayName: config.displayName,
+                        libraryConfiguration: config.libraryConfiguration
                     ) {
                         dismiss()
                     } else {
@@ -88,7 +90,8 @@ struct PlozziOSUnifiedAddShareView: View {
                             port: c.port,
                             exportPath: c.exportPath,
                             subpath: c.subpath,
-                            displayName: c.displayName
+                            displayName: c.displayName,
+                            libraryConfiguration: c.libraryConfiguration
                         )
                     case let .sftp(c):
                         saved = appModel.addSFTPShare(
@@ -98,13 +101,15 @@ struct PlozziOSUnifiedAddShareView: View {
                             username: c.username,
                             password: c.password,
                             hostKeyPin: c.hostKeyPin,
-                            displayName: c.displayName
+                            displayName: c.displayName,
+                            libraryConfiguration: c.libraryConfiguration
                         )
                     case let .ftp(c):
                         saved = appModel.addFTPShare(
                             baseURL: c.baseURL,
                             auth: c.auth,
-                            displayName: c.displayName
+                            displayName: c.displayName,
+                            libraryConfiguration: c.libraryConfiguration
                         )
                     }
                     if saved {
@@ -259,11 +264,6 @@ struct PlozziOSUnifiedAddShareView: View {
 
             credentialSection
 
-            Section("Display") {
-                TextField("Nickname — e.g. Living Room NAS", text: $viewModel.displayName)
-                    .autocorrectionDisabled()
-            }
-
             if let error = viewModel.connectError {
                 Section {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -368,6 +368,7 @@ struct PlozziOSUnifiedAddShareView: View {
                 List { HStack { ProgressView(); Text("Loading…").foregroundStyle(palette.secondaryText) } }
             case .needsAuth, .badCredentials:
                 List {
+                    libraryConfigurationSection
                     Section("Sign in") {
                         Text("This server needs a username and password. Go back and enter them.")
                             .foregroundStyle(palette.secondaryText)
@@ -376,6 +377,7 @@ struct PlozziOSUnifiedAddShareView: View {
                 }
             case .unreachable:
                 List {
+                    libraryConfigurationSection
                     Section("Can’t connect") {
                         Text("Couldn’t connect. Check the address and network.")
                             .foregroundStyle(palette.secondaryText)
@@ -385,6 +387,7 @@ struct PlozziOSUnifiedAddShareView: View {
                 }
             case .failed(let message):
                 List {
+                    libraryConfigurationSection
                     Section("Something went wrong") {
                         Text(message).foregroundStyle(palette.secondaryText)
                         Button("Try Again") { retryLocation() }
@@ -412,6 +415,7 @@ struct PlozziOSUnifiedAddShareView: View {
 
     private var loadedLocations: some View {
         List {
+            libraryConfigurationSection
             if viewModel.showsCurrentFolder {
                 Section {
                     if viewModel.canNavigateUp {
@@ -450,6 +454,46 @@ struct PlozziOSUnifiedAddShareView: View {
             if viewModel.showsManualRootEntry {
                 manualShareSection
             }
+        }
+    }
+
+    private var libraryConfigurationSection: some View {
+        Section("Library") {
+            TextField("Name — e.g. Family Movies", text: $viewModel.displayName)
+                .autocorrectionDisabled()
+            Picker("Content", selection: $viewModel.libraryContentType) {
+                ForEach(MediaShareLibraryConfiguration.ContentType.allCases, id: \.self) { type in
+                    Text(libraryContentLabel(type)).tag(type)
+                }
+            }
+            .onChange(of: viewModel.libraryContentType) { _, type in
+                if type == .personalVideos {
+                    viewModel.libraryIsAnime = false
+                }
+            }
+            if viewModel.libraryContentType != .personalVideos {
+                Toggle(
+                    "Anime",
+                    isOn: Binding(
+                        get: { viewModel.libraryIsAnime },
+                        set: { viewModel.setLibraryIsAnime($0) }
+                    )
+                )
+            }
+            Text("Content type controls scanning and matching. Personal Videos stay playable without movie or show matching. Re-adding the same location updates these settings without changing its library identity.")
+                .font(.footnote)
+                .foregroundStyle(palette.secondaryText)
+        }
+    }
+
+    private func libraryContentLabel(
+        _ type: MediaShareLibraryConfiguration.ContentType
+    ) -> LocalizedStringResource {
+        switch type {
+        case .automatic: "Mixed (Automatic)"
+        case .movies: "Movies"
+        case .tvShows: "TV Shows"
+        case .personalVideos: "Personal Videos"
         }
     }
 

@@ -219,6 +219,15 @@ extension MediaItem {
             // The item itself is the destination; the page re-fetches full
             // detail by id.
             return self
+        case .browseFiles:
+            guard let fileBrowserContainerID, !fileBrowserContainerID.isEmpty else { return nil }
+            return MediaItem(
+                id: fileBrowserContainerID,
+                title: title,
+                kind: .folder,
+                allowsTitleBasedMetadataMatching: false,
+                sourceAccountID: sourceAccountID
+            )
         case .markWatched, .markUnwatched, .markWatchedUpToHere,
              .addToWatchlist, .removeFromWatchlist, .refreshMetadata,
              .startDownload, .pauseDownload, .resumeDownload, .removeDownload,

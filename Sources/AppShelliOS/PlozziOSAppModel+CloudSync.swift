@@ -234,6 +234,7 @@ extension PlozziOSAppModel {
         var settingWrites: [(pid: String, key: String, blob: Data)] = []
         var settingRemoves: [(pid: String, key: String)] = []
         var descriptorsTouched = false
+        var receivedDescriptors: [SyncedAccountDescriptor] = []
         var pendingStore = PendingSyncedServersStore()
         var removalUpserts: [String: Int] = [:]
         var removalClears: Set<String> = []
@@ -252,7 +253,10 @@ extension PlozziOSAppModel {
                 else { settingRemoves.append((key.id, key.subkey)) }
             case .descriptor:
                 descriptorsTouched = true
-                if let value, let d = CanonicalJSON.decode(SyncedAccountDescriptor.self, from: value) { pendingStore.upsertSynced(d.sanitizingURLs()) }
+                if let value, let d = CanonicalJSON.decode(SyncedAccountDescriptor.self, from: value) {
+                    pendingStore.upsertSynced(d.sanitizingURLs())
+                    receivedDescriptors.append(d.sanitizingURLs())
+                }
                 else if value == nil { pendingStore.removeSynced(key.id) }
             case .removal:
                 if let value, let dto = CanonicalJSON.decode(AccountRemovalDTO.self, from: value) { removalUpserts[key.id] = dto.removedAtEpoch }
@@ -277,6 +281,8 @@ extension PlozziOSAppModel {
             }
             for id in removalClears { removed.clear(id) }
         }
+
+        accountsProviders.applySyncedMediaShareLibraries(receivedDescriptors)
 
         // Accounts this device KNOWS aren't Plex. Synced ids for servers not
         // signed in here have an unknown provider, and are deliberately treated

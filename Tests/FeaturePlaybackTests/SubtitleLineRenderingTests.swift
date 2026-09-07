@@ -8,6 +8,31 @@ import XCTest
 
 @MainActor
 final class SubtitleLineRenderingTests: XCTestCase {
+    func testAvenirUsesBuiltInFacesForEveryWeightAndSlant() throws {
+        let view = SubtitleLineView()
+        let faces: [(SubtitleFontWeight, String, String)] = [
+            (.regular, "Avenir-Roman", "Avenir-Oblique"),
+            (.medium, "Avenir-Medium", "Avenir-MediumOblique"),
+            (.semibold, "Avenir-Heavy", "Avenir-HeavyOblique"),
+            (.bold, "Avenir-Black", "Avenir-BlackOblique")
+        ]
+        for (weight, upright, italic) in faces {
+            for (isItalic, expected) in [(false, upright), (true, italic)] {
+                var c = config(family: .avenir, size: 42, text: "Avenir")
+                c.weight = weight
+                c.isItalic = isItalic
+                let resolved = try XCTUnwrap(view.postScriptName(c))
+                XCTAssertEqual(resolved, expected)
+                let font = try XCTUnwrap(UIFont(name: resolved, size: c.fontSize))
+                XCTAssertEqual(font.fontName, expected)
+                XCTAssertEqual(font.familyName, "Avenir")
+                c.isBold = true
+                XCTAssertEqual(view.postScriptName(c), isItalic ? "Avenir-BlackOblique" : "Avenir-Black")
+            }
+        }
+        XCTAssertEqual(SubtitleFontFamily.avenir.postScriptNameCandidates(), ["Avenir-Roman"])
+    }
+
     func testEveryFontHugsItsVisibleBottomAndMatchesCapHeight() throws {
         try registerFonts()
         for size: CGFloat in [25, 42, 105] {
