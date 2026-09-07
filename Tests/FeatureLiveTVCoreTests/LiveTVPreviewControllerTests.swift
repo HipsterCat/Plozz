@@ -3,6 +3,42 @@ import XCTest
 
 @MainActor
 final class LiveTVPreviewControllerTests: XCTestCase {
+    func testSearchSuppressesNavigationUntilTheReturningGuideOwnsFocus() {
+        let preview = LiveTVPreviewController(model: LiveTVPrototypeModel())
+        XCTAssertFalse(preview.suppressesNavigation(isActive: true))
+        XCTAssertTrue(preview.suppressesNavigation(isActive: true, isSearching: true))
+
+        preview.requestBrowsingFocus()
+        XCTAssertTrue(preview.suppressesNavigation(isActive: true, isSearching: true))
+        XCTAssertTrue(preview.suppressesNavigation(isActive: true, isSearching: false))
+        let oldRequest = preview.focusRestoreRequest
+        preview.requestBrowsingFocus()
+        preview.completeGuideFocusRestore(oldRequest)
+        XCTAssertTrue(preview.suppressesNavigation(isActive: true))
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest)
+        XCTAssertFalse(preview.suppressesNavigation(isActive: true))
+    }
+
+    func testSearchKeepsNavigationSuppressedAfterAnInSearchFocusHandoff() {
+        let preview = LiveTVPreviewController(model: LiveTVPrototypeModel())
+        preview.requestBrowsingFocus()
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest)
+        XCTAssertTrue(preview.suppressesNavigation(isActive: true, isSearching: true))
+        XCTAssertFalse(preview.suppressesNavigation(isActive: true, isSearching: false))
+    }
+
+    func testInactiveLiveTVCannotSuppressAnotherDestinationsNavigation() {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        preview.watch(model.channels[0].id)
+        XCTAssertTrue(preview.suppressesNavigation(isActive: true))
+        XCTAssertFalse(preview.suppressesNavigation(isActive: false, isSearching: true))
+        preview.returnToGuide()
+        XCTAssertFalse(preview.suppressesNavigation(isActive: false, isSearching: true))
+        preview.stop()
+        XCTAssertFalse(preview.suppressesNavigation(isActive: false, isSearching: true))
+    }
+
     func testPreviewWaitsForCommitAndOnlyLatestChannelWins() throws {
         let model = LiveTVPrototypeModel(scenario: .noGuide)
         let preview = LiveTVPreviewController(model: model)

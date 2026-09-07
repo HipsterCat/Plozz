@@ -263,7 +263,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             updatePreviewAvailability()
             if active { preview.focus(selectedChannelID) }
         }
-        .onChange(of: preview.isExpanded || preview.isRestoringGuideFocus) { _, hidesChrome in
+        .onChange(of: hidesAppNavigation, initial: true) { _, hidesChrome in
             onExpandedChange(hidesChrome)
         }
         .onDisappear {
@@ -396,6 +396,14 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         )
     }
 
+    private var hidesAppNavigation: Bool {
+        #if os(tvOS)
+        preview.suppressesNavigation(isActive: isActive, isSearching: isSearching)
+        #else
+        preview.suppressesNavigation(isActive: isActive)
+        #endif
+    }
+
     private var heroChannel: LiveTVPrototypeChannel? {
         (selectedChannelID ?? model.playingChannelID).flatMap { model.channel(id: $0) }
     }
@@ -431,6 +439,10 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             searchFocusRequest &+= 1
             return
         }
+        #if os(tvOS)
+        // Gate the shell before UIKit presents its keyboard and claims focus.
+        onExpandedChange(true)
+        #endif
         searchOrigin = PrototypeSearchBookmark(
             row: selectedRowID, guideOffset: guideOffset, timeAnchor: timeAnchor, timelineOffset: timelineOffset
         )
@@ -459,9 +471,9 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             selectedRowID = row
             selectedChannelID = row.channelID
         }
-        isSearching = false
         searchOrigin = nil
         enterGuide()
+        isSearching = false
     }
 
     private func enterGuide() {

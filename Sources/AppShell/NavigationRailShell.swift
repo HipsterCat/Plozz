@@ -21,8 +21,7 @@ import FeatureProfiles
 struct NavigationRailShell<Content: View>: View {
     let profile: Profile
     let entries: [NavigationRailLibraryEntry]
-    let showsWatchlist: Bool
-    let showsMusic: Bool
+    let destinations: [NavigationRailDestination]
     @Binding var selection: NavigationRailDestination
     let onOpenProfileSwitcher: () -> Void
     let chrome: NavigationChromeModel
@@ -134,8 +133,7 @@ struct NavigationRailShell<Content: View>: View {
                     NavigationRailView(
                         profile: profile,
                         entries: entries,
-                        showsWatchlist: showsWatchlist,
-                        showsMusic: showsMusic,
+                        destinations: destinations,
                         selection: $selection,
                         isExpandedOutward: $railExpanded,
                         onOpenProfileSwitcher: onOpenProfileSwitcher,

@@ -627,6 +627,7 @@ private struct PlozziOSSettingsSplitView: View {
             PlozziOSTrackerSettingsView(appModel: appModel)
         case .appearance:
             PlozziOSAppearanceSettingsView(
+                appModel: appModel,
                 theme: appModel.settings.theme,
                 transparency: appModel.settings.transparency,
                 cardStyle: appModel.settings.cardStyle,
@@ -903,6 +904,7 @@ private struct PlozziOSSettingsCompactMenu: View {
                 }
                 NavigationLink {
                     PlozziOSAppearanceSettingsView(
+                        appModel: appModel,
                         theme: appModel.settings.theme,
                         transparency: appModel.settings.transparency,
                         cardStyle: appModel.settings.cardStyle,
@@ -1631,6 +1633,7 @@ struct PlozziOSPlexHomeUserSettingsView: View {
 }
 
 private struct PlozziOSAppearanceSettingsView: View {
+    let appModel: PlozziOSAppModel
     @Bindable var theme: ThemeSettingsModel
     @Bindable var transparency: TransparencyPreferenceModel
     @Bindable var cardStyle: CardStyleSettingsModel
@@ -1638,6 +1641,37 @@ private struct PlozziOSAppearanceSettingsView: View {
     @Bindable var watchIndicator: WatchStatusIndicatorSettingsModel
     @Bindable var navigation: NavigationStyleSettingsModel
     @Environment(AppLanguageSettingsModel.self) private var appLanguage
+
+    private var navigationLibrariesScope: ProfileLibrariesScope {
+        let profile = appModel.profiles.activeProfile
+        return ProfileLibrariesScope(
+            accounts: appModel.accounts,
+            activeProfile: profile,
+            // Individual library tabs are not supported by the iOS tab bar, so
+            // this shared editor needs only its always-available built-ins.
+            discoveredLibraries: .loaded([]),
+            refreshingLibraryAccountIDs: [],
+            unreachableLibraryAccountIDs: [],
+            reloadLibraries: {},
+            homeVisibility: appModel.settings.homeVisibility,
+            isAccountIncludedInActiveProfile: {
+                appModel.activeAccountIDs(for: profile.id).contains($0)
+            },
+            onSetAccountIncluded: {
+                appModel.setAccount($0, enabled: $1, for: profile.id)
+            },
+            onAddAccount: {},
+            plexHomeUsersFetcher: {
+                await appModel.plexHomeUsers.plexHomeUsers(forAccountID: $0)
+            },
+            onSelectPlexHomeUser: {
+                appModel.plexHomeUsers.setPlexHomeUserForActiveProfile(
+                    accountID: $0,
+                    user: $1
+                )
+            }
+        )
+    }
 
     var body: some View {
         @Bindable var appLanguage = appLanguage
@@ -1703,17 +1737,24 @@ private struct PlozziOSAppearanceSettingsView: View {
                         Text(indicator.displayName).tag(indicator)
                     }
                 }
+            }
 
-                SettingsSectionGroup("Navigation") {
-                    Toggle("Show Watchlist", isOn: $navigation.showsWatchlist)
-                } footer: {
-                    Text("Home, Search, profile switching and Settings always stay available.")
-                }
+            SettingsSectionGroup("Hide or Reorder Navigation") {
+                NavigationLibrariesDetailView(
+                    scope: navigationLibrariesScope,
+                    includesIndividualLibraries: false,
+                    excludedKeys: [
+                        NavigationLibraryLayout.musicKey,
+                        NavigationLibraryLayout.allLibrariesKey,
+                    ]
+                )
+                .id(appModel.profiles.activeProfileID)
             }
         }
         .settingsPageSurface()
         .navigationTitle("Appearance")
     }
+
 }
 
 private struct PlozziOSHomeSettingsView: View {

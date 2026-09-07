@@ -42,9 +42,9 @@ public final class NavigationStyleSettingsStore: NavigationStyleSettingsStoring,
 /// chosen navigation chrome persisted + broadcast to the view tree. Mirrors
 /// `CardStyleSettingsModel`.
 ///
-/// Owns **both** halves of the navigation preference — which chrome, and (for the
-/// custom rail) how its library list is arranged. They are one user-facing setting
-/// edited on one Settings page, and keeping them together is what lets the rail
+/// Owns **both** halves of the navigation preference — which chrome, and how its
+/// destinations are arranged. They are one user-facing setting edited on one
+/// Settings page, and keeping them together is what lets every navigation style
 /// read a single model rather than widening `ProfileSettingsModel`'s observable
 /// surface with a second, always-paired entry.
 @MainActor
@@ -78,7 +78,13 @@ public final class NavigationStyleSettingsModel {
         self.store = store
         self.layoutStore = layoutStore
         self.style = store.load()
-        self.libraryLayout = layoutStore.load()
+        let loadedLayout = layoutStore.load()
+        var layout = loadedLayout
+        layout.enforceRequiredVisibility()
+        self.libraryLayout = layout
+        if layout != loadedLayout {
+            layoutStore.save(layout)
+        }
     }
 
     /// The editable enabled/hidden split for the Settings reorder control.
@@ -98,13 +104,9 @@ public final class NavigationStyleSettingsModel {
         layoutStore.save(next)
     }
 
-    /// Restores the default arrangement: every library shown, in discovery order.
+    /// Restores every destination's default visibility and order.
     public func resetLibraryLayout() {
-        var next = NavigationLibraryLayout.default
-        next.hiddenKeys = libraryLayout.hiddenKeys.intersection([
-            NavigationLibraryLayout.watchlistKey,
-            NavigationLibraryLayout.musicKey,
-        ])
+        let next = NavigationLibraryLayout.default
         guard libraryLayout != next else { return }
         libraryLayout = next
         layoutStore.save(libraryLayout)

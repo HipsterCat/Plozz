@@ -50,16 +50,19 @@ struct PrototypePreviewLayout {
         compact = bounds.width < 650
         #if os(tvOS)
         let side: CGFloat = 32
+        // The pinned rail's published inset is additional to the title-safe area.
+        let leading = navigationInset > 0 ? max(side + PrototypeLayout.inset, safeAreaInsets.leading) : side
         let top = max(32, safeAreaInsets.top)
         let bottom: CGFloat = 20
         #else
         let side = max(16, max(safeAreaInsets.leading, safeAreaInsets.trailing))
+        let leading = side
         let top = max(12, safeAreaInsets.top)
         let bottom = max(12, safeAreaInsets.bottom)
         #endif
         contentFrame = CGRect(
-            x: bounds.minX + side + navigationInset, y: bounds.minY + top,
-            width: max(1, bounds.width - side * 2 - navigationInset),
+            x: bounds.minX + leading + navigationInset, y: bounds.minY + top,
+            width: max(1, bounds.width - leading - side - navigationInset),
             height: max(1, bounds.height - top - bottom)
         )
         let browsingHeroHeight = min(

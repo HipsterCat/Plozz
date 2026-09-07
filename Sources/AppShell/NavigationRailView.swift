@@ -109,12 +109,8 @@ enum NavigationRailMetrics {
     /// engine to find one directly beyond the end row — it picks the nearest
     /// candidate in the direction of travel, and nothing else is closer.
     static let bumperHeight: CGFloat = 10
-    /// How far the library list dissolves at its top and bottom edges.
-    ///
-    /// The list scrolls between fixed chrome — the LIBRARIES label above, the
-    /// pinned Settings row below — so a row leaving it must fade out rather than
-    /// be cut mid-glyph or, worse, carry on drawing over that chrome. Roughly one
-    /// row tall, so a row is fully gone by the time it reaches either edge.
+    /// How far the destination list dissolves at its top and bottom edges. Roughly
+    /// one row tall, so a row is fully gone by the time it reaches either edge.
     static let listEdgeFade: CGFloat = 44
     /// How far the fade mask overhangs the list horizontally, so a focused row's
     /// pill and its shadow are not clipped by the mask that feathers the ends.
@@ -130,11 +126,9 @@ enum NavigationRailMetrics {
 ///
 /// Layout, top to bottom:
 /// 1. the active profile's avatar — opens the existing profile switcher;
-/// 2. Search, Home, then Watchlist;
-/// 3. the viewer's libraries, in their own arrangement, each with a glyph for what
-///    it holds (film / TV / anime / photos / mixed), scrolling if there are many;
-/// 4. Settings, **pinned to the bottom** so it is reachable at a glance no matter
-///    how many libraries sit above it.
+/// 2. every visible built-in and library destination in the viewer's chosen order,
+///    scrolling as one list when there are many. Settings is required but may be
+///    moved like every other visible destination.
 ///
 /// Everything about the list is data: which libraries appear and in what order
 /// comes from the profile's ``NavigationLibraryLayout``, so re-arranging is a value
@@ -142,8 +136,7 @@ enum NavigationRailMetrics {
 struct NavigationRailView: View {
     let profile: Profile
     let entries: [NavigationRailLibraryEntry]
-    let showsWatchlist: Bool
-    let showsMusic: Bool
+    let destinations: [NavigationRailDestination]
     @Binding var selection: NavigationRailDestination
     /// Mirrors "focus is inside the rail" outward, so the shell can coordinate
     /// preferred focus and directional fallback while the overlay is open.
@@ -261,31 +254,7 @@ struct NavigationRailView: View {
             profileButton
                 .padding(.bottom, PlozzTheme.Spacing.large)
 
-            item(.search, symbol: "magnifyingglass", label: Text(Self.searchTitle))
-            item(.home, symbol: "house.fill", label: Text(Self.homeTitle))
-            if showsWatchlist {
-                item(
-                    .watchlist,
-                    symbol: "bookmark.fill",
-                    label: Text(Self.watchlistTitle)
-                )
-            }
-            #if DEBUG
-            item(.liveTV, symbol: "tv.fill", label: Text(Self.liveTVTitle))
-            #endif
-            if showsMusic {
-                item(.music, symbol: "music.note", label: Text(Self.musicTitle))
-            }
-
-            if !entries.isEmpty {
-                sectionDivider
-                libraryList
-                sectionDivider
-            } else {
-                Spacer(minLength: 0)
-            }
-
-            item(.settings, symbol: "gearshape.fill", label: Text(Self.settingsTitle))
+            destinationList
 
             edgeBumper(.bottomBumper)
         }
@@ -445,18 +414,19 @@ struct NavigationRailView: View {
 
     // MARK: - Pieces
 
-    /// The libraries block. Scrollable so a household with forty libraries can
-    /// still reach them all, while Settings below stays pinned and visible.
-    private var libraryList: some View {
+    /// The complete viewer-arranged destination list. It is one scrollable block
+    /// because built-ins may be interleaved with libraries, including moving
+    /// Settings away from its historical bottom position.
+    private var destinationList: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: NavigationRailMetrics.itemSpacing) {
-                ForEach(entries) { entry in
-                    libraryItem(entry)
+                ForEach(destinations, id: \.storageValue) { destination in
+                    destinationItem(destination)
                 }
             }
         }
         .scrollIndicators(.hidden)
-        // Takes whatever height is left between Home and the pinned Settings row.
+        // Takes whatever height is left beneath the fixed profile row.
         .frame(maxHeight: .infinity, alignment: .top)
         // The scroll view must NOT clip: a focused row's pill is wider than the
         // list (and carries a shadow), so the scroll view's own clip sheared its
@@ -464,11 +434,10 @@ struct NavigationRailView: View {
         // vertically, where rows would otherwise cover the chrome, while
         // overhanging horizontally so the pill stays whole.
         .scrollClipDisabled()
-        // Rows must never be readable outside this list: with the clip disabled a
-        // scrolled row kept drawing over the pinned Settings row below and the
-        // section label above. The mask both clips and feathers, so a row dissolves
-        // as it reaches either end instead of being cut mid-glyph. It overhangs
-        // horizontally so a focused row's pill and shadow stay intact.
+        // Rows must never be readable outside this list. The mask both clips and
+        // feathers, so a row dissolves as it reaches either end instead of being
+        // cut mid-glyph. It overhangs horizontally so a focused row's pill and
+        // shadow stay intact.
         //
         // Each end fades in continuously as content travels beneath it. The mask
         // always keeps the same view structure and geometry, avoiding the flicker
@@ -489,6 +458,30 @@ struct NavigationRailView: View {
             )
         } action: { _, fade in
             libraryListFade = fade
+        }
+    }
+
+    @ViewBuilder
+    private func destinationItem(_ destination: NavigationRailDestination) -> some View {
+        switch destination {
+        case .home:
+            item(.home, symbol: "house.fill", label: Text(Self.homeTitle))
+        case .search:
+            item(.search, symbol: "magnifyingglass", label: Text(Self.searchTitle))
+        case .watchlist:
+            item(.watchlist, symbol: "bookmark.fill", label: Text(Self.watchlistTitle))
+        #if DEBUG
+        case .liveTV:
+            item(.liveTV, symbol: "tv.fill", label: Text(Self.liveTVTitle))
+        #endif
+        case .music:
+            item(.music, symbol: "music.note", label: Text(Self.musicTitle))
+        case .settings:
+            item(.settings, symbol: "gearshape.fill", label: Text(Self.settingsTitle))
+        case .allLibraries, .library:
+            if let entry = entries.first(where: { $0.destination == destination }) {
+                libraryItem(entry)
+            }
         }
     }
 
@@ -615,28 +608,6 @@ struct NavigationRailView: View {
             return colorScheme == .dark ? .black : .white
         }
         return isSelected ? palette.accent : .primary
-    }
-
-    /// A quiet separator between fixed destinations and the viewer's libraries.
-    /// It stays identical in both rail states so expansion changes no content.
-    private var sectionDivider: some View {
-        let collapsedDividerWidth = NavigationRailMetrics.iconColumnWidth * 0.6
-        let expandedDividerWidth = NavigationRailMetrics.expandedWidth
-            - (NavigationRailMetrics.expandedContentHorizontalPadding * 2)
-            + (NavigationRailMetrics.expandedRowBackgroundOutset * 2)
-            - (NavigationRailMetrics.dividerHorizontalInset * 2)
-        let dividerWidth = collapsedDividerWidth
-            + (expandedDividerWidth - collapsedDividerWidth) * expansionProgress
-
-        return Capsule(style: .continuous)
-            .fill(.white.opacity(0.22))
-            .frame(width: dividerWidth, height: 2)
-            .frame(width: animatedRowContentWidth, alignment: .center)
-            // Match the icon's inset inside its focus pill in both states.
-            .padding(.leading, NavigationRailMetrics.rowHorizontalPadding)
-            .padding(.vertical, PlozzTheme.Spacing.medium)
-            .offset(x: animatedContentOffset)
-            .accessibilityHidden(true)
     }
 
     /// The rail's backing.

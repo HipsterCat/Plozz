@@ -114,7 +114,10 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
                 )
                 #if os(tvOS)
                 XCTAssertEqual(layout.contentFrame.maxX + layout.guideTrailingExtension, layout.bounds.maxX)
-                XCTAssertEqual(layout.contentFrame.minX - layout.bounds.minX, 32 + navigationInset)
+                XCTAssertEqual(
+                    layout.contentFrame.minX - layout.bounds.minX,
+                    (navigationInset > 0 ? 90 : 32) + navigationInset
+                )
                 XCTAssertEqual(PrototypeLayout.guideTrailingInset, 0)
                 XCTAssertEqual(PrototypeLayout.guideShape.cornerRadii.topTrailing, 0)
                 #else
@@ -229,13 +232,24 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
         XCTAssertEqual(fitting.trailing, 0)
     }
 
-    func testProgrammeSurfacesHaveVerticalClearanceInsideEveryRowSize() {
+    func testProgrammeSurfacesMatchTheFullStationPlateHeight() {
         for rowHeight in [PrototypeLayout.rowHeight, PrototypeLayout.rowHeight * 2] {
             let cellHeight = PrototypeLayout.programHeight(in: rowHeight)
-            XCTAssertGreaterThanOrEqual(rowHeight - cellHeight, 16)
-            XCTAssertEqual(cellHeight + PrototypeLayout.programInset * 2, rowHeight)
+            XCTAssertEqual(cellHeight, rowHeight)
+            for selected in [false, true] {
+                let button = Button {} label: {
+                    PrototypeProgramLabel(program: program("Current show", from: 0, to: 3_600), now: start)
+                        .frame(width: 400, height: cellHeight, alignment: .leading)
+                }
+                .buttonStyle(PrototypeButtonStyle(selected: selected, padded: false, surface: .program))
+                let size = UIHostingController(rootView: button)
+                    .sizeThatFits(in: CGSize(width: 600, height: 600))
+                XCTAssertEqual(size.height, rowHeight, accuracy: 0.5)
+            }
         }
-        XCTAssertEqual(PrototypeLayout.programRadius + PrototypeLayout.programInset, PrototypeLayout.rowRadius)
+        XCTAssertEqual(PrototypeLayout.programInset, 0)
+        XCTAssertEqual(PrototypeLayout.programRadius, PrototypeLayout.rowRadius)
+        XCTAssertGreaterThanOrEqual(PrototypeLayout.rowGap, 16)
     }
 
     func testNavigationRailInsetsContentWithoutShrinkingVideo() {
@@ -245,8 +259,36 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
         let rail = PrototypePreviewLayout(size: size, safeAreaInsets: insets, navigationInset: 112)
         XCTAssertEqual(rail.bounds, plain.bounds)
         XCTAssertEqual(rail.videoFrame, plain.videoFrame)
+        #if os(tvOS)
+        XCTAssertEqual(rail.contentFrame.minX - plain.contentFrame.minX, 112 + 90 - 32, accuracy: 0.5)
+        #else
         XCTAssertEqual(rail.contentFrame.minX - plain.contentFrame.minX, 112, accuracy: 0.5)
+        #endif
         XCTAssertEqual(rail.contentFrame.maxX, plain.contentFrame.maxX, accuracy: 0.5)
+    }
+
+    func testExtraLeadingClearanceOnlyAppliesToVisiblePinnedNavigation() {
+        #if os(tvOS)
+        for safeLeading: CGFloat in [0, 90] {
+            let insets = EdgeInsets(top: 60, leading: safeLeading, bottom: 60, trailing: safeLeading)
+            let normal = PrototypePreviewLayout(size: CGSize(width: 1_740, height: 960), safeAreaInsets: insets)
+            let pinned = PrototypePreviewLayout(
+                size: CGSize(width: 1_740, height: 960), safeAreaInsets: insets, navigationInset: 64
+            )
+            let hiddenForSearch = PrototypePreviewLayout(
+                size: CGSize(width: 1_740, height: 960), safeAreaInsets: insets, isSearching: true
+            )
+            XCTAssertEqual(normal.contentFrame.minX - normal.bounds.minX, 32)
+            XCTAssertGreaterThanOrEqual(
+                pinned.contentFrame.minX - normal.contentFrame.minX,
+                64 + PrototypeLayout.inset
+            )
+            XCTAssertEqual(pinned.contentFrame.minX - pinned.bounds.minX, max(64, safeLeading) + 64)
+            XCTAssertEqual(pinned.contentFrame.maxX, normal.contentFrame.maxX)
+            XCTAssertEqual(pinned.videoFrame, normal.videoFrame)
+            XCTAssertEqual(hiddenForSearch.contentFrame, normal.contentFrame)
+        }
+        #endif
     }
 
     func testTVLayoutLeavesRoomForFourRoomyRows() {

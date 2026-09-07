@@ -32,6 +32,10 @@ public final class LiveTVPreviewController {
         self.followsFocus = followsFocus
     }
 
+    public func suppressesNavigation(isActive: Bool, isSearching: Bool = false) -> Bool {
+        isActive && (isSearching || isExpanded || isRestoringGuideFocus)
+    }
+
     public func focus(_ channelID: String?) {
         guard focusedChannelID != channelID else { return }
         focusedChannelID = channelID

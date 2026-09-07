@@ -83,10 +83,19 @@ is no prior in-memory history to migrate on the first updated launch.
   without sliding down; closing reverses that handoff. Reduce Motion removes
   the fade timing. Temporarily opening playback or another sheet hides Search
   without discarding its query or results host.
+  App navigation is suppressed before the TV keyboard opens and stays suppressed
+  through closing and guide-focus restoration, so Back does not briefly open the
+  native navigation menu or pinned rail.
+  Live TV also participates in the profile's Hide or Reorder Navigation list,
+  alongside Home, Search and the other destinations. Settings remains visible
+  but can be moved. Press-and-hold Hide keeps focus at the vacated list position;
+  Move Up/Down follows the moved item.
 - Wide screens pin Search and an independently scrolling category list
   to the left of the guide. Search never scrolls away
   with either list. Select a category directly; Right returns to the remembered
   guide channel/program. Compact or short windows keep pinned horizontal controls.
+  With pinned navigation visible, the Live TV controls also clear its title-safe
+  margin; native top-bar/sidebar styles keep their tighter leading spacing.
   The selected category uses a checkmark rather than a second focused-looking
   box. Favorites are grouped in the guide, not a separate sidebar button.
   The More menu is gone: sorting, Auto preview, Favorites-only and guide-only
@@ -138,8 +147,9 @@ is no prior in-memory history to migrate on the first updated launch.
   the sidebar controls retain their safe inset. Touch layouts retain their
   bottom safe-area clearance. Each remaining fade ramps in only
   when content extends beyond that edge, keeping reached endpoints readable.
-  Programme surfaces sit eight points inside the row at top and bottom, with
-  correspondingly smaller concentric corners; their time widths are unchanged.
+  Programme containers match the full height and corner radius of their station
+  logo plates. Row spacing still separates channels; time widths and inner text
+  padding are unchanged.
 - **Sources** reports playlist entries, skipped entries, guide matches, listings,
   coverage dates and per-feed failures. Its toggles enable or disable the five
   preset guides; disabling one immediately removes its contribution. Results

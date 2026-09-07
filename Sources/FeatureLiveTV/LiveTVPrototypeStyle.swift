@@ -15,7 +15,7 @@ enum PrototypeLayout {
     static let rowInset = PlozzTheme.Spacing.medium
     static let logoRadius = PlozzTheme.Metrics.Radius.content
     static let rowRadius = logoRadius + rowInset
-    static let programInset = PlozzTheme.Spacing.xSmall
+    static let programInset: CGFloat = 0
     static let programRadius = rowRadius - programInset
     static let horizontalFade = PlozzTheme.Spacing.large
     static let verticalFade = PlozzTheme.Spacing.xLarge

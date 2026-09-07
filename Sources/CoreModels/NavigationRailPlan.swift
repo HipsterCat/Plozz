@@ -83,13 +83,67 @@ public struct NavigationRailLibraryEntry: Hashable, Sendable, Identifiable {
 /// Pure resolution of the rail's library slots from the live library set plus the
 /// profile's saved arrangement. SwiftUI-free so the ordering/visibility rules are
 /// unit-testable without a running view hierarchy.
+public enum NavigationDestinationDefaults {
+    public static func compact(hasMusic: Bool) -> [String] {
+        var keys = [NavigationLibraryLayout.homeKey, NavigationLibraryLayout.watchlistKey]
+        #if DEBUG
+        keys.append(NavigationLibraryLayout.liveTVKey)
+        #endif
+        keys.append(NavigationLibraryLayout.searchKey)
+        if hasMusic { keys.append(NavigationLibraryLayout.musicKey) }
+        keys.append(NavigationLibraryLayout.settingsKey)
+        return keys
+    }
+
+    public static func sidebar(visibleLibraries: [AggregatedLibrary], hasMusic: Bool) -> [String] {
+        var keys = compact(hasMusic: hasMusic)
+        keys.insert(
+            contentsOf: NavigationRailPlan.availableKeys(visibleLibraries: visibleLibraries),
+            at: keys.count - 1
+        )
+        return keys
+    }
+
+    public static func rail(visibleLibraries: [AggregatedLibrary], hasMusic: Bool) -> [String] {
+        var keys = sidebar(visibleLibraries: visibleLibraries, hasMusic: hasMusic)
+        keys.removeAll { $0 == NavigationLibraryLayout.searchKey }
+        keys.insert(NavigationLibraryLayout.searchKey, at: 0)
+        return keys
+    }
+
+    public static var iOS: [String] {
+        var keys = [NavigationLibraryLayout.homeKey, NavigationLibraryLayout.watchlistKey]
+        #if DEBUG
+        keys.append(NavigationLibraryLayout.liveTVKey)
+        #endif
+        return keys + [
+            NavigationLibraryLayout.downloadsKey,
+            NavigationLibraryLayout.settingsKey,
+            NavigationLibraryLayout.searchKey,
+        ]
+    }
+}
+
 public enum NavigationRailPlan {
-    /// Every key the viewer can arrange right now: the combined entry first, then
-    /// each visible (non-music) library in discovery order.
-    ///
-    /// Music libraries are excluded deliberately: music has its own destination
-    /// (and its own landing screen), so listing an artist section beside the video
-    /// libraries would open a video grid over music content.
+    /// Every key offered by Settings' shared navigation arranger. Built-ins are
+    /// present even with no connected libraries so a temporarily-offline server
+    /// cannot make Home, Search, Settings, or another app destination disappear
+    /// from the editor.
+    public static func customizableKeys(
+        visibleLibraries: [AggregatedLibrary],
+        style: NavigationStyle = .sidebar
+    ) -> [String] {
+        let keys: [String]
+        switch style {
+        case .tabBar: keys = NavigationDestinationDefaults.compact(hasMusic: true)
+        case .sidebar: keys = NavigationDestinationDefaults.sidebar(visibleLibraries: visibleLibraries, hasMusic: true)
+        case .rail: keys = NavigationDestinationDefaults.rail(visibleLibraries: visibleLibraries, hasMusic: true)
+        }
+        return deduplicated(keys)
+    }
+
+    /// The arrangeable library keys: the combined entry first, then each visible
+    /// non-music library in discovery order.
     public static func availableKeys(visibleLibraries: [AggregatedLibrary]) -> [String] {
         [NavigationLibraryLayout.allLibrariesKey] + browsableLibraries(visibleLibraries).map(\.key)
     }
@@ -105,13 +159,15 @@ public enum NavigationRailPlan {
         layout: NavigationLibraryLayout
     ) -> [NavigationRailLibraryEntry] {
         let browsable = browsableLibraries(visibleLibraries)
-        let byKey = Dictionary(browsable.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+        let byKey = Dictionary(
+            browsable.map { ($0.key, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         let available = availableKeys(visibleLibraries: visibleLibraries)
         return layout.visibleKeys(available: available).compactMap { key in
             if key == NavigationLibraryLayout.allLibrariesKey {
                 // The combined entry is pointless with nothing to combine, and
-                // actively misleading with exactly one library (it would be a
-                // duplicate of that library's own slot).
+                // actively misleading with exactly one library.
                 guard browsable.count > 1 else { return nil }
                 return NavigationRailLibraryEntry(key: key, library: nil)
             }
@@ -120,30 +176,93 @@ public enum NavigationRailPlan {
         }
     }
 
-    /// Resolves a selected destination back to a still-valid one, so a library that
-    /// has been hidden, removed, or signed out of can never leave the rail pointing
-    /// at a destination with nothing to render.
+    /// Resolves the complete ordered destination list for one navigation style.
+    ///
+    /// `availableKeys` is both the style's supported set and its historical
+    /// default order. A compact top bar therefore omits libraries, while the
+    /// native sidebar and custom rail include them. Once a profile has explicitly
+    /// arranged built-ins, that saved order wins wherever the style supports the
+    /// destination.
+    public static func destinations(
+        visibleLibraries: [AggregatedLibrary],
+        layout: NavigationLibraryLayout,
+        availableKeys: [String]
+    ) -> [NavigationRailDestination] {
+        let libraryEntries = entries(visibleLibraries: visibleLibraries, layout: layout)
+        let libraryDestinations = Dictionary(
+            uniqueKeysWithValues: libraryEntries.map { ($0.key, $0.destination) }
+        )
+        let validKeys = deduplicated(availableKeys).filter { key in
+            if key == NavigationLibraryLayout.allLibrariesKey {
+                return libraryDestinations[key] != nil
+            }
+            if isBuiltInKey(key) {
+                return true
+            }
+            return libraryDestinations[key] != nil
+        }
+        let orderedKeys = layout.visibleKeys(available: validKeys)
+        var destinations = orderedKeys.compactMap { key -> NavigationRailDestination? in
+            if let libraryDestination = libraryDestinations[key] {
+                return libraryDestination
+            }
+            return destination(for: key)
+        }
+
+        if validKeys.contains(NavigationLibraryLayout.settingsKey),
+           !destinations.contains(.settings) {
+            destinations.append(.settings)
+        }
+        return destinations
+    }
+
+    /// Maps a persisted arrangement key to its built-in destination.
+    public static func destination(for key: String) -> NavigationRailDestination? {
+        switch key {
+        case NavigationLibraryLayout.homeKey: return .home
+        case NavigationLibraryLayout.searchKey: return .search
+        case NavigationLibraryLayout.watchlistKey: return .watchlist
+        #if DEBUG
+        case NavigationLibraryLayout.liveTVKey: return .liveTV
+        #endif
+        case NavigationLibraryLayout.musicKey: return .music
+        case NavigationLibraryLayout.settingsKey: return .settings
+        case NavigationLibraryLayout.allLibrariesKey: return .allLibraries
+        default: return nil
+        }
+    }
+
+    /// Stable arrangement key for any destination.
+    public static func key(for destination: NavigationRailDestination) -> String {
+        switch destination {
+        case .home: return NavigationLibraryLayout.homeKey
+        case .search: return NavigationLibraryLayout.searchKey
+        case .watchlist: return NavigationLibraryLayout.watchlistKey
+        #if DEBUG
+        case .liveTV: return NavigationLibraryLayout.liveTVKey
+        #endif
+        case .music: return NavigationLibraryLayout.musicKey
+        case .settings: return NavigationLibraryLayout.settingsKey
+        case .allLibraries: return NavigationLibraryLayout.allLibrariesKey
+        case let .library(key): return key
+        }
+    }
+
+    /// Resolves a selected destination to the first destination the active style
+    /// can actually show. Settings is the final invariant fallback.
     public static func resolvedSelection(
         _ selection: NavigationRailDestination,
-        entries: [NavigationRailLibraryEntry],
-        showsWatchlist: Bool,
-        showsMusic: Bool
+        destinations: [NavigationRailDestination]
     ) -> NavigationRailDestination {
-        switch selection {
-        case .home, .search, .settings:
-            return selection
-        #if DEBUG
-        case .liveTV:
-            return selection
-        #endif
-        case .watchlist:
-            return showsWatchlist ? .watchlist : .home
-        case .music:
-            return showsMusic ? .music : .home
-        case .allLibraries:
-            return entries.contains(where: \.isAllLibraries) ? .allLibraries : .home
-        case let .library(key):
-            return entries.contains(where: { $0.key == key }) ? selection : .home
-        }
+        destinations.contains(selection) ? selection : (destinations.first ?? .settings)
+    }
+
+    private static func isBuiltInKey(_ key: String) -> Bool {
+        destination(for: key) != nil
+    }
+
+    private static func deduplicated(_ keys: [String]) -> [String] {
+        var seen: Set<String> = []
+        return keys.filter { seen.insert($0).inserted }
     }
 }

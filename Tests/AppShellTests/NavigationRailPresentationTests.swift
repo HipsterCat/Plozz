@@ -91,6 +91,24 @@ final class NavigationRailPresentationTests: XCTestCase {
         XCTAssertFalse(presentation.opensExpanded)
     }
 
+    #if DEBUG
+    func testLiveTVSearchSuppressionBlocksEvenAnAlreadyRequestedMenu() {
+        for expanded in [false, true] {
+            for opening in [false, true] {
+                let presentation = NavigationRailPresentation(
+                    destination: .liveTV, chromeHidden: true,
+                    isExpanded: expanded, isOpening: opening
+                )
+                XCTAssertFalse(presentation.isRailVisible)
+                XCTAssertFalse(presentation.isRailEnabled)
+                XCTAssertFalse(presentation.isEdgeNavigationEnabled())
+                XCTAssertFalse(presentation.showsPageButton)
+                XCTAssertEqual(presentation.contentInset, 0)
+            }
+        }
+    }
+    #endif
+
     private func make(
         _ destination: NavigationRailDestination,
         expanded: Bool = false,

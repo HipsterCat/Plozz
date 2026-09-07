@@ -493,13 +493,12 @@ struct MainTabView: View {
     }
 
     private func resolvedTopBarTab(_ tab: MainTab) -> MainTab {
-        switch tab {
-        case .watchlist where !showsWatchlistDestination,
-             .music where !showsMusicDestination:
-            return .home
-        default:
-            return tab
-        }
+        mainTab(
+            for: NavigationRailPlan.resolvedSelection(
+                destination(for: tab),
+                destinations: topBarDestinations
+            )
+        )
     }
 
     private func persistPrunedTopBarSelection() {
@@ -524,11 +523,10 @@ struct MainTabView: View {
     /// Reads the **pruned** selection.
     ///
     /// The rail must be told what is actually on screen, not what was last stored:
-    /// when the selected library disappears (a server goes unreachable) the content
-    /// falls back to Home, and a raw binding would leave the rail highlighting
-    /// nothing. The setter writes the raw value, and `railShell` persists the
-    /// resolved one when they diverge — otherwise a library returning later would
-    /// silently yank the viewer out of Home and into a destination they never chose.
+    /// when the selected destination disappears, content falls back to the first
+    /// visible destination rather than an invisible Home. The setter writes the
+    /// raw value, and `railShell` persists the resolved one when they diverge —
+    /// otherwise a library returning later could silently yank the viewer away.
     private var libraryNavigationSelection: Binding<NavigationRailDestination> {
         Binding(
             get: { activeLibraryNavigationDestination },
@@ -605,9 +603,12 @@ struct MainTabView: View {
         // the viewer's remembered library selection on a Top Shelf launch.
         guard !isActiveTab(.home) else { return }
         if navigationStyle == .tabBar {
-            selectedTabRaw = MainTab.home.rawValue
+            selectedTabRaw = resolvedTopBarTab(.home).rawValue
         } else {
-            libraryNavigationSelection.wrappedValue = .home
+            libraryNavigationSelection.wrappedValue = NavigationRailPlan.resolvedSelection(
+                .home,
+                destinations: activeNavigationDestinations
+            )
         }
     }
 
@@ -662,22 +663,64 @@ struct MainTabView: View {
         )
     }
 
-    private var showsWatchlistDestination: Bool {
-        navigationStyleModel.showsWatchlist
-    }
-
     private var showsMusicDestination: Bool {
-        navigationStyleModel.showsMusic && musicAvailability.hasMusic
+        navigationStyleModel.libraryLayout.isVisible(
+            NavigationLibraryLayout.musicKey
+        ) && musicAvailability.hasMusic
     }
 
-    /// The selection after pruning: a library that has been hidden, removed, or
-    /// signed out of falls back to Home rather than leaving a blank screen.
+    private var topBarDestinations: [NavigationRailDestination] {
+        NavigationRailPlan.destinations(
+            visibleLibraries: availableRailLibraries,
+            layout: navigationStyleModel.libraryLayout,
+            availableKeys: compactDestinationKeys
+        )
+    }
+
+    private var sidebarDestinations: [NavigationRailDestination] {
+        NavigationRailPlan.destinations(
+            visibleLibraries: availableRailLibraries,
+            layout: navigationStyleModel.libraryLayout,
+            availableKeys: sidebarDestinationKeys
+        )
+    }
+
+    private var customRailDestinations: [NavigationRailDestination] {
+        NavigationRailPlan.destinations(
+            visibleLibraries: availableRailLibraries,
+            layout: navigationStyleModel.libraryLayout,
+            availableKeys: customRailDestinationKeys
+        )
+    }
+
+    private var activeNavigationDestinations: [NavigationRailDestination] {
+        navigationStyle == .sidebar ? sidebarDestinations : customRailDestinations
+    }
+
+    private var compactDestinationKeys: [String] {
+        NavigationDestinationDefaults.compact(hasMusic: musicAvailability.hasMusic)
+    }
+
+    private var sidebarDestinationKeys: [String] {
+        NavigationDestinationDefaults.sidebar(
+            visibleLibraries: availableRailLibraries,
+            hasMusic: musicAvailability.hasMusic
+        )
+    }
+
+    private var customRailDestinationKeys: [String] {
+        NavigationDestinationDefaults.rail(
+            visibleLibraries: availableRailLibraries,
+            hasMusic: musicAvailability.hasMusic
+        )
+    }
+
+    /// The selection after pruning. A hidden/removed destination falls back to the
+    /// first destination this style can render, never to an invisible Home.
     private var resolvedRailSelection: NavigationRailDestination {
         NavigationRailPlan.resolvedSelection(
             storedRailSelection,
-            entries: railEntries,
-            showsWatchlist: showsWatchlistDestination,
-            showsMusic: showsMusicDestination
+            destinations: activeNavigationDestinations
         )
     }
 
@@ -967,6 +1010,15 @@ struct MainTabView: View {
             : activeLibraryNavigationDestination.storageValue
     }
 
+    private var topBarAvailabilityKey: String {
+        navigationStyle.rawValue + "|" + topBarDestinations.map(\.storageValue).joined(separator: "|")
+    }
+
+    private func openPersonFromPlayer(_ person: MediaPerson, _ accountID: String?) {
+        playRequest = nil
+        pendingPersonRoute = PersonRoute(person: person, sourceAccountID: accountID)
+    }
+
     /// Live playback blocks all shell-owned ambient audio for as long as the
     /// development destination is visible.
     private var isLiveTVDestinationActive: Bool {
@@ -993,45 +1045,103 @@ struct MainTabView: View {
     }
     #endif
 
+    private func topBarDestinationContent(
+        _ destination: NavigationRailDestination
+    ) -> AnyView {
+        switch destination {
+        case .home:
+            return AnyView(homeTabContent())
+        case .watchlist:
+            return AnyView(watchlistTabContent(isActive: isActiveTab(.watchlist)))
+        #if DEBUG
+        case .liveTV:
+            return AnyView(LiveTVShellDestination(
+                isActive: isActiveTab(.liveTV),
+                profileID: activeProfile.id,
+                preferencesNamespace: liveTVPreferencesNamespace
+            ))
+        #endif
+        case .search:
+            return AnyView(searchTabContent)
+        case .music:
+            return AnyView(musicTabContent)
+        case .settings:
+            return AnyView(settingsTabContent)
+        case .allLibraries, .library:
+            return AnyView(homeTabContent())
+        }
+    }
+
+    private func sidebarDestinationContent(
+        _ destination: NavigationRailDestination
+    ) -> AnyView {
+        switch destination {
+        case .home:
+            return AnyView(
+                homeTabContent(isActive: activeLibraryNavigationDestination == .home)
+            )
+        case .watchlist:
+            return AnyView(watchlistTabContent(
+                isActive: activeLibraryNavigationDestination == .watchlist
+            ))
+        #if DEBUG
+        case .liveTV:
+            return AnyView(LiveTVShellDestination(
+                isActive: activeLibraryNavigationDestination == .liveTV,
+                profileID: activeProfile.id,
+                preferencesNamespace: liveTVPreferencesNamespace
+            ))
+        #endif
+        case .search:
+            return AnyView(searchTabContent)
+        case .music:
+            return AnyView(musicTabContent)
+        case .settings:
+            return AnyView(settingsTabContent)
+        case .allLibraries, .library:
+            guard let entry = railEntries.first(where: { $0.destination == destination }) else {
+                return AnyView(homeTabContent())
+            }
+            return AnyView(libraryDestination(entry))
+        }
+    }
+
+    private func rootNavigationLabel(
+        for destination: NavigationRailDestination
+    ) -> AnyView {
+        switch destination {
+        case .home:
+            return AnyView(homeTabLabel)
+        case .search:
+            return AnyView(searchTabLabel)
+        case .watchlist:
+            return AnyView(watchlistTabLabel)
+        #if DEBUG
+        case .liveTV:
+            return AnyView(liveTVTabLabel)
+        #endif
+        case .music:
+            return AnyView(musicTabLabel)
+        case .settings:
+            return AnyView(settingsTabLabel)
+        case .allLibraries, .library:
+            guard let entry = railEntries.first(where: { $0.destination == destination }) else {
+                return AnyView(EmptyView())
+            }
+            return AnyView(navigationLibraryLabel(entry))
+        }
+    }
+
     /// Native top bar keeps a compact set of destinations rather than expanding
     /// every library across the top.
     private var nativeTopBarShell: some View {
         TabView(selection: selectedTab) {
-            Tab("Home", systemImage: "house.fill", value: MainTab.home) {
-                AnyView(homeTabContent())
-            }
-
-            if showsWatchlistDestination {
-                Tab("Watchlist", systemImage: "bookmark.fill", value: MainTab.watchlist) {
-                    AnyView(watchlistTabContent(isActive: isActiveTab(.watchlist)))
+            ForEach(topBarDestinations, id: \.storageValue) { destination in
+                Tab(value: mainTab(for: destination)) {
+                    topBarDestinationContent(destination)
+                } label: {
+                    rootNavigationLabel(for: destination)
                 }
-            }
-
-            #if DEBUG
-            Tab("Live TV", systemImage: "tv.fill", value: MainTab.liveTV) {
-                LiveTVShellDestination(
-                    isActive: isActiveTab(.liveTV),
-                    profileID: activeProfile.id,
-                    preferencesNamespace: liveTVPreferencesNamespace
-                )
-            }
-            #endif
-
-            Tab("Search", systemImage: "magnifyingglass", value: MainTab.search) {
-                searchTabContent
-            }
-
-            // Conditional Music tab: present only when at least one signed-in
-            // account exposes a music library. Video-only users see no tab and no
-            // mini-player — the app is byte-for-byte unchanged for them.
-            if showsMusicDestination {
-                Tab("Music", systemImage: "music.note", value: MainTab.music) {
-                    musicTabContent
-                }
-            }
-
-            Tab("Settings", systemImage: "gearshape.fill", value: MainTab.settings) {
-                settingsTabContent
             }
         }
         .tabViewStyle(.tabBarOnly)
@@ -1057,62 +1167,12 @@ struct MainTabView: View {
                 })
             }
 
-            Tab(value: NativeSidebarDestination.content(.home)) {
-                AnyView(homeTabContent(isActive: activeLibraryNavigationDestination == .home))
-            } label: {
-                AnyView(homeTabLabel)
-            }
-
-            if showsWatchlistDestination {
-                Tab(value: NativeSidebarDestination.content(.watchlist)) {
-                    AnyView(watchlistTabContent(
-                        isActive: activeLibraryNavigationDestination == .watchlist
-                    ))
+            ForEach(sidebarDestinations, id: \.storageValue) { destination in
+                Tab(value: NativeSidebarDestination.content(destination)) {
+                    sidebarDestinationContent(destination)
                 } label: {
-                    AnyView(watchlistTabLabel)
+                    rootNavigationLabel(for: destination)
                 }
-            }
-
-            #if DEBUG
-            Tab(value: NativeSidebarDestination.content(.liveTV)) {
-                AnyView(LiveTVShellDestination(
-                    isActive: activeLibraryNavigationDestination == .liveTV,
-                    profileID: activeProfile.id,
-                    preferencesNamespace: liveTVPreferencesNamespace
-                ))
-            } label: {
-                AnyView(liveTVTabLabel)
-            }
-            #endif
-
-            Tab(value: NativeSidebarDestination.content(.search)) {
-                AnyView(searchTabContent)
-            } label: {
-                AnyView(searchTabLabel)
-            }
-
-            if showsMusicDestination {
-                Tab(value: NativeSidebarDestination.content(.music)) {
-                    AnyView(musicTabContent)
-                } label: {
-                    AnyView(musicTabLabel)
-                }
-            }
-
-            TabSection("Libraries") {
-                ForEach(railEntries) { entry in
-                    Tab(value: NativeSidebarDestination.content(entry.destination)) {
-                        AnyView(libraryDestination(entry))
-                    } label: {
-                        AnyView(navigationLibraryLabel(entry))
-                    }
-                }
-            }
-
-            Tab(value: NativeSidebarDestination.content(.settings)) {
-                AnyView(settingsTabContent)
-            } label: {
-                AnyView(settingsTabLabel)
             }
         }
         .tabViewStyle(.sidebarAdaptable)
@@ -1124,8 +1184,7 @@ struct MainTabView: View {
         NavigationRailShell(
             profile: activeProfile,
             entries: railEntries,
-            showsWatchlist: showsWatchlistDestination,
-            showsMusic: showsMusicDestination,
+            destinations: customRailDestinations,
             selection: libraryNavigationSelection,
             onOpenProfileSwitcher: openProfileSwitcher,
             chrome: navigationChrome,
@@ -1312,10 +1371,7 @@ struct MainTabView: View {
                 persistPrunedTopBarSelection()
             }
         }
-        .onChange(
-            of: "\(navigationStyle.rawValue)|\(showsWatchlistDestination)|\(showsMusicDestination)",
-            initial: true
-        ) { _, _ in
+        .onChange(of: topBarAvailabilityKey, initial: true) { _, _ in
             guard navigationStyle == .tabBar else { return }
             persistPrunedTopBarSelection()
         }
@@ -1417,10 +1473,7 @@ struct MainTabView: View {
             // showing. The player is hosted here on the root TabView while the
             // navigation stacks live inside the tabs, so this is the only place
             // that can see both.
-            onOpenPerson: { person, accountID in
-                playRequest = nil
-                pendingPersonRoute = PersonRoute(person: person, sourceAccountID: accountID)
-            },
+            onOpenPerson: openPersonFromPlayer,
             onOpenTitle: { item in
                 playRequest = nil
                 pendingTitleRoute = item
