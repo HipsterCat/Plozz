@@ -7,6 +7,25 @@ import XCTest
 
 @MainActor
 final class LiveChannelPlayerModelTests: XCTestCase {
+    func testLiveFailureCopyDoesNotAskPublicChannelViewersToSignInAgain() {
+        let messages: [(AppError, String)] = [
+            (.notFound, "playlist link may be outdated"),
+            (.unauthorized, "provider refused access"),
+            (.serverUnreachable, "streaming server"),
+            (.invalidResponse, "playlist or video data"),
+            (.decoding, "could not decode"),
+            (.rateLimited(retryAfter: nil), "Wait before trying again"),
+            (.unknown("https://example.invalid/?token=fixture-secret"), "could not start this live stream")
+        ]
+        for (error, expected) in messages {
+            let message = String(localized: LiveChannelPlaybackFailure.engineMessage(error))
+            XCTAssertTrue(message.contains(expected), message)
+            XCTAssertFalse(message.contains("fixture-secret"))
+            XCTAssertFalse(message.contains("sign in again"))
+            XCTAssertFalse(message.contains("Something went wrong"))
+        }
+    }
+
     private func makeModel(
         engine: LiveEngineSpy,
         clock: LiveTestClock = LiveTestClock()

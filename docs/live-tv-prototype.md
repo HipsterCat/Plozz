@@ -121,6 +121,12 @@ not sufficient: inspect its media playlist and segments, then exercise actual
 device playback. Playlist request headers pass through the live host to Aether,
 including retries and automatic source resets.
 
+For example, ABC News Live 1's published master returned HTTP 200 on September 7,
+2026, while all ten advertised media playlists returned HTTP 404. A guide match
+or a valid master cannot make those missing media playlists playable. The
+prototype keeps the supplied channel identity rather than silently substituting
+a different ABC feed.
+
 Guide loading and parsing run outside the main actor. Listings are associated
 with imported channel identities, not synthetic layout scenarios. Unknown or
 ambiguous matches receive no schedule. Guide failure does not remove a working
@@ -230,6 +236,14 @@ tvOS app container, attach a debugger, or relaunch with `--console` during
 someone's viewing without authorization: these can interrupt playback.
 The existing `PlozzigenVideoEngine` log mirror is reused; the live host installs
 no competing `EngineLog.handler`.
+
+Terminal live errors retain Aether's typed `PlaybackErrorInfo` classification.
+Explicit source HTTP refusals, connection failures, rate limiting and decoder
+failures receive distinct channel-specific copy, rather than generic media-server
+or sign-in instructions. Native AVFoundation failures do not imply a particular
+HTTP status unless the engine actually supplies it. Bounded failure diagnostics
+include an allowlisted error kind/domain and numeric code; messages are not
+regex-parsed for classification, and raw locators are not added to those fields.
 
 Run the focused model tests through the existing simulator runner:
 

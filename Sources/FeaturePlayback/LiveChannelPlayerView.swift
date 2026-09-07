@@ -1053,6 +1053,27 @@ enum LiveChannelPlaybackFailure: Equatable {
     case bufferingTimedOut
     case recoveryExhausted
     case engine(AppError)
+
+    static func engineMessage(_ error: AppError) -> LocalizedStringResource {
+        switch error {
+        case .notFound:
+            "The channel provider could not find this stream. Its playlist link may be outdated, or the feed may be temporarily off air."
+        case .unauthorized, .invalidCredentials:
+            "The channel provider refused access to this stream. It may require authorization or be unavailable in your region."
+        case .serverUnreachable:
+            "Plozz could not reach the channel's streaming server. Check your internet connection or try again later."
+        case .rateLimited:
+            "The channel provider is limiting requests. Wait before trying again."
+        case .invalidResponse:
+            "The channel's playlist or video data could not be opened. Its link may be outdated or the feed may be temporarily unavailable."
+        case .decoding:
+            "The player could not decode this channel's audio or video. Try another stream version or channel."
+        case .cancelled:
+            "Opening this channel was cancelled."
+        default:
+            "Plozz could not start this live stream. Try another channel or retry later."
+        }
+    }
 }
 
 private struct LiveChannelInterruption {
@@ -1082,7 +1103,7 @@ private struct LiveChannelInterruption {
             base = LiveChannelInterruption(
                 icon: "exclamationmark.triangle.fill",
                 title: "Unable to Play Channel",
-                message: error.userMessage
+                message: LiveChannelPlaybackFailure.engineMessage(error)
             )
         case .recoveryExhausted:
             base = LiveChannelInterruption(

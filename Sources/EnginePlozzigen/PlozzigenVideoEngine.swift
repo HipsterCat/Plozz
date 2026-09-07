@@ -600,14 +600,18 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         stage: String
     ) {
         guard liveAttemptGate.consumeFailure(for: generation) else { return }
+        // A queued state publication may outlive its errorInfo. Never classify
+        // an older message using a replacement session's failure.
+        let info = engine.errorInfo.flatMap { $0.message == detail ? $0 : nil }
+        let classification = PlozzigenLiveFailure.diagnostic(info)
         let redacted = HandoffDiagnostics.redactedDetail(detail)
         HandoffDiagnostics.emit(
-            "aether LIVE_FAILED stage=\(stage) detail=\(redacted)"
+            "aether LIVE_FAILED stage=\(stage) \(classification) detail=\(redacted)"
         )
         PlozzLog.playback.error(
-            "Plozzigen live playback failed at \(stage): \(redacted)"
+            "Plozzigen live playback failed at \(stage): \(classification) \(redacted)"
         )
-        let error: AppError = .unknown(redacted)
+        let error = PlozzigenLiveFailure.appError(info)
         status = .failed(error)
         onFailure?(error)
     }
