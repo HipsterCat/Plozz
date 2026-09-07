@@ -97,21 +97,23 @@ public struct SeasonEpisodeAvailabilityLabel: View {
     }
 
     public var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: availability.systemImage)
-                .frame(width: iconWidth)
-                .accessibilityHidden(true)
-            if let title {
-                Text(title)
-            } else if availability == .unaired, let airDate {
-                Text(
-                    "Releases \(airDate, format: Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: calendarDayStoredInUTC ? .gmt : .current))"
-                )
-            } else {
-                Text(availability.title)
+        if availability != .inLibrary || title != nil {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: availability.systemImage)
+                    .frame(width: iconWidth)
+                    .accessibilityHidden(true)
+                if let title {
+                    Text(title)
+                } else if availability == .unaired, let airDate {
+                    Text(
+                        "Releases \(airDate, format: Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: calendarDayStoredInUTC ? .gmt : .current))"
+                    )
+                } else {
+                    Text(availability.title)
+                }
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityElement(children: .combine)
         }
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityElement(children: .combine)
     }
 }

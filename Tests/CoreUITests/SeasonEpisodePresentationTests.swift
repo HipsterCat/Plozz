@@ -132,6 +132,23 @@ final class SeasonEpisodePresentationTests: XCTestCase {
         }
     }
 
+    func testLibraryAvailabilityLeavesNoStatusLineOrReservedSpacing() throws {
+        for size in [DynamicTypeSize.large, .accessibility5] {
+            let title = Text("Episode title")
+            let expected = try XCTUnwrap(ImageRenderer(content:
+                title.environment(\.dynamicTypeSize, size)
+            ).uiImage)
+            let content = VStack(alignment: .leading, spacing: 3) {
+                title
+                SeasonEpisodeAvailabilityLabel(availability: .inLibrary)
+            }
+            .environment(\.dynamicTypeSize, size)
+            let actual = try XCTUnwrap(ImageRenderer(content: content).uiImage)
+            XCTAssertEqual(actual.size.width, expected.size.width, accuracy: 0.5)
+            XCTAssertEqual(actual.size.height, expected.size.height, accuracy: 0.5)
+        }
+    }
+
     private func downloadButton(destination: MediaDownloadDestination = .iPhone) -> some View {
         Button {} label: {
             SeriesDownloadActionLabel(
@@ -176,6 +193,39 @@ final class SeasonEpisodePresentationTests: XCTestCase {
     }
 
     #if os(iOS)
+    func testEpisodeRowsLabelMissingAvailabilityButNotOrdinaryLibraryAvailability() throws {
+        for availability in [SeasonEpisodeAvailability.inLibrary, .missing] {
+            let content = episodeRow(number: 2, availability: availability)
+                .font(.body)
+                .environment(\.locale, Locale(identifier: "en_US"))
+                .environment(\.colorScheme, .light)
+                .frame(width: 320).padding(16).background(.white)
+            let renderer = ImageRenderer(content: content)
+            renderer.scale = 3
+            let text = try recognizedText(in: XCTUnwrap(renderer.uiImage)).lowercased()
+            XCTAssertTrue(text.contains("episode title"), text)
+            if availability == .inLibrary {
+                XCTAssertFalse(text.contains("library"), text)
+            } else {
+                XCTAssertTrue(text.contains("missing from library"), text)
+            }
+        }
+    }
+
+    func testAlternateVersionAvailabilityLabelRemainsVisible() throws {
+        let content = SeasonEpisodeAvailabilityLabel(
+            availability: .inLibrary, title: "Available in Another Version"
+        )
+        .font(.body)
+        .environment(\.locale, Locale(identifier: "en_US"))
+        .environment(\.colorScheme, .light)
+        .frame(width: 320).padding(16).background(.white)
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 3
+        let text = try recognizedText(in: XCTUnwrap(renderer.uiImage)).lowercased()
+        XCTAssertTrue(text.contains("available in another version"), text)
+    }
+
     func testFullDownloadLabelNeverTruncatesOnSmallPhoneOrLargestText() throws {
         for (destination, deviceName) in [
             (MediaDownloadDestination.iPhone, "iphone"), (.iPad, "ipad"),
