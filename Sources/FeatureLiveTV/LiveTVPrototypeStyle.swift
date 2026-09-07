@@ -11,14 +11,16 @@ enum PrototypeLayout {
     #if os(tvOS)
     static let inset = PlozzTheme.Spacing.xLarge
     static let stationSize: CGFloat = 64
-    static let rowHeight: CGFloat = 100
-    static let controlsWidth: CGFloat = 270
+    static let rowHeight: CGFloat = 76
     #else
     static let inset = PlozzTheme.Spacing.medium
     static let stationSize: CGFloat = 48
-    static let rowHeight: CGFloat = 80
-    static let controlsWidth: CGFloat = 260
+    static let rowHeight: CGFloat = 72
     #endif
+
+    static func stationWidth(for width: CGFloat) -> CGFloat {
+        width > 1_100 ? 280 : 210
+    }
 }
 
 extension LiveTVPrototypeSource {
@@ -118,7 +120,7 @@ private struct PrototypeButtonBody: View {
 }
 
 enum PrototypeSheet: Identifiable {
-    case search, filters, sources
+    case search, filters, sources, options
     case program(LiveTVPrototypeProgram)
 
     var id: String {
@@ -126,6 +128,7 @@ enum PrototypeSheet: Identifiable {
         case .search: "search"
         case .filters: "filters"
         case .sources: "sources"
+        case .options: "options"
         case .program(let program): program.id
         }
     }

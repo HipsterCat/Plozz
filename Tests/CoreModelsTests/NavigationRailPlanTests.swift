@@ -196,6 +196,17 @@ final class NavigationRailPlanTests: XCTestCase {
             ),
             .home
         )
+        #if DEBUG
+        XCTAssertEqual(
+            NavigationRailPlan.resolvedSelection(
+                .liveTV,
+                entries: [],
+                showsWatchlist: false,
+                showsMusic: false
+            ),
+            .liveTV
+        )
+        #endif
         XCTAssertEqual(
             NavigationRailPlan.resolvedSelection(
                 .allLibraries,
@@ -219,10 +230,13 @@ final class NavigationRailPlanTests: XCTestCase {
     // MARK: Scene-storage round trip
 
     func testDestinationStorageValueRoundTrips() {
-        let cases: [NavigationRailDestination] = [
+        var cases: [NavigationRailDestination] = [
             .home, .search, .watchlist, .music, .settings, .allLibraries,
             .library("acct:lib:with:colons")
         ]
+        #if DEBUG
+        cases.append(.liveTV)
+        #endif
         for destination in cases {
             XCTAssertEqual(
                 NavigationRailDestination(storageValue: destination.storageValue),

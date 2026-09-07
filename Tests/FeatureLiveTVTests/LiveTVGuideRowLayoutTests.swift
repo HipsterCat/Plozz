@@ -55,6 +55,55 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
         XCTAssertEqual(withoutGuide, regular, accuracy: 0.5)
     }
 
+    func testPreviewExtendsToTheScreenEdgeInsteadOfStackingSafeAreaMargins() {
+        let layout = PrototypePreviewLayout(
+            size: CGSize(width: 1_740, height: 960),
+            safeAreaInsets: EdgeInsets(top: 60, leading: 90, bottom: 60, trailing: 90)
+        )
+        XCTAssertEqual(layout.bounds, CGRect(x: -90, y: -60, width: 1_920, height: 1_080))
+        XCTAssertEqual(layout.videoFrame.maxX, layout.bounds.maxX, accuracy: 0.5)
+        XCTAssertEqual(layout.videoFrame.width / layout.videoFrame.height, 16.0 / 9.0, accuracy: 0.001)
+        #if os(tvOS)
+        XCTAssertEqual(layout.contentFrame.minX - layout.bounds.minX, 32, accuracy: 0.5)
+        XCTAssertEqual(layout.bounds.maxX - layout.contentFrame.maxX, 32, accuracy: 0.5)
+        XCTAssertEqual(layout.bounds.maxY - layout.contentFrame.maxY, 20, accuracy: 0.5)
+        #endif
+    }
+
+    func testNavigationRailInsetsContentWithoutShrinkingVideo() {
+        let size = CGSize(width: 1_740, height: 960)
+        let insets = EdgeInsets(top: 60, leading: 90, bottom: 60, trailing: 90)
+        let plain = PrototypePreviewLayout(size: size, safeAreaInsets: insets)
+        let rail = PrototypePreviewLayout(size: size, safeAreaInsets: insets, navigationInset: 112)
+        XCTAssertEqual(rail.bounds, plain.bounds)
+        XCTAssertEqual(rail.videoFrame, plain.videoFrame)
+        XCTAssertEqual(rail.contentFrame.minX - plain.contentFrame.minX, 112, accuracy: 0.5)
+        XCTAssertEqual(rail.contentFrame.maxX, plain.contentFrame.maxX, accuracy: 0.5)
+    }
+
+    func testTVLayoutLeavesRoomForAtLeastSixUniformRows() {
+        #if os(tvOS)
+        let layout = PrototypePreviewLayout(
+            size: CGSize(width: 1_740, height: 960),
+            safeAreaInsets: EdgeInsets(top: 60, leading: 90, bottom: 60, trailing: 90)
+        )
+        let toolbarAndRuler: CGFloat = 44 + 80
+        let spacing = PrototypeLayout.gap * 2 + PrototypeLayout.smallGap * 3
+        let listHeight = layout.contentFrame.height - layout.heroHeight - toolbarAndRuler - spacing
+        XCTAssertGreaterThanOrEqual(listHeight / (PrototypeLayout.rowHeight + PrototypeLayout.smallGap), 6)
+        #endif
+    }
+
+    func testCompactAndAccessibilityLayoutsKeepTheGuideInBounds() {
+        for size in [CGSize(width: 390, height: 750), CGSize(width: 700, height: 500)] {
+            let layout = PrototypePreviewLayout(size: size, largeText: true)
+            XCTAssertGreaterThan(layout.contentFrame.width, 0)
+            XCTAssertGreaterThan(layout.contentFrame.height - layout.heroHeight, 200)
+            XCTAssertLessThanOrEqual(layout.metadataWidth, layout.contentFrame.width)
+            XCTAssertLessThanOrEqual(layout.contentFrame.maxY, layout.bounds.maxY)
+        }
+    }
+
     private func program(
         _ title: String,
         from: TimeInterval,

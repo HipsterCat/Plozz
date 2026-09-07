@@ -2,13 +2,19 @@ import Foundation
 
 /// A top-level destination in the custom navigation rail.
 ///
-/// Unlike the native tab styles — where the four tabs are fixed — the rail treats
-/// each of the viewer's libraries as a first-class destination, so a library grid
-/// is a *root* screen with chrome rather than a page pushed on top of Home.
+/// Unlike the native tab styles — where the compact destinations are fixed — the
+/// rail treats each of the viewer's libraries as a first-class destination, so a
+/// library grid is a *root* screen with chrome rather than a page pushed on top of
+/// Home.
 public enum NavigationRailDestination: Hashable, Sendable {
     case home
     case search
     case watchlist
+    #if DEBUG
+    /// Development-only Live TV prototype. Release builds deliberately cannot
+    /// restore this destination from persisted scene storage.
+    case liveTV
+    #endif
     case music
     case settings
     /// A single library, addressed by its ``AggregatedLibrary/key``.
@@ -22,6 +28,9 @@ public enum NavigationRailDestination: Hashable, Sendable {
         case .home: return "home"
         case .search: return "search"
         case .watchlist: return "watchlist"
+        #if DEBUG
+        case .liveTV: return "liveTV"
+        #endif
         case .music: return "music"
         case .settings: return "settings"
         case .allLibraries: return "allLibraries"
@@ -34,6 +43,9 @@ public enum NavigationRailDestination: Hashable, Sendable {
         case "home": self = .home
         case "search": self = .search
         case "watchlist": self = .watchlist
+        #if DEBUG
+        case "liveTV": self = .liveTV
+        #endif
         case "music": self = .music
         case "settings": self = .settings
         case "allLibraries": self = .allLibraries
@@ -120,6 +132,10 @@ public enum NavigationRailPlan {
         switch selection {
         case .home, .search, .settings:
             return selection
+        #if DEBUG
+        case .liveTV:
+            return selection
+        #endif
         case .watchlist:
             return showsWatchlist ? .watchlist : .home
         case .music:

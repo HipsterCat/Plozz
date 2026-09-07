@@ -133,6 +133,37 @@ final class LiveTVPreviewControllerTests: XCTestCase {
         XCTAssertEqual(model.playingChannelID, model.channels[0].id)
     }
 
+    func testLeavingTheDestinationStopsFullScreenWithoutChangingPreviewPreference() {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        preview.watch(model.channels[0].id)
+        preview.stop()
+        preview.setBrowsingActive(false)
+        XCTAssertNil(model.playingChannelID)
+        XCTAssertFalse(preview.isExpanded)
+        XCTAssertFalse(preview.followsFocus)
+        preview.focus(model.channels[1].id)
+        XCTAssertNil(preview.pendingRequest)
+    }
+
+    func testReturningToDestinationCanPreviewTheRememberedChannelWithoutAcceptingOldWork() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        let channelID = model.channels[0].id
+        preview.focus(channelID)
+        let oldRequest = try XCTUnwrap(preview.pendingRequest)
+        preview.stop()
+        preview.setBrowsingActive(false)
+        preview.focus(channelID)
+        XCTAssertFalse(preview.commitPreview(oldRequest))
+        XCTAssertNil(model.playingChannelID)
+        preview.setBrowsingActive(true)
+        let newRequest = try XCTUnwrap(preview.pendingRequest)
+        XCTAssertNotEqual(oldRequest, newRequest)
+        XCTAssertTrue(preview.commitPreview(newRequest))
+        XCTAssertEqual(model.playingChannelID, channelID)
+    }
+
     func testFailedSelectionKeepsCurrentPreviewWithoutExpanding() throws {
         let model = LiveTVPrototypeModel()
         let preview = LiveTVPreviewController(model: model)

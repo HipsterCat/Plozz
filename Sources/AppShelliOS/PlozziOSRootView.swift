@@ -586,6 +586,9 @@ private enum ServerPromptFollowUp {
 private enum PlozziOSDestination: String, CaseIterable, Identifiable, Hashable {
     case home
     case watchlist
+    #if DEBUG
+    case liveTV
+    #endif
     case downloads
     case search
 
@@ -595,6 +598,9 @@ private enum PlozziOSDestination: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .home: "Home"
         case .watchlist: "Watchlist"
+        #if DEBUG
+        case .liveTV: "Live TV"
+        #endif
         case .downloads: "Downloads"
         case .search: "Search"
         }
@@ -604,6 +610,9 @@ private enum PlozziOSDestination: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .home: "house"
         case .watchlist: "bookmark"
+        #if DEBUG
+        case .liveTV: "tv.fill"
+        #endif
         case .downloads: "arrow.down.circle"
         case .search: "magnifyingglass"
         }
@@ -632,6 +641,8 @@ private struct PlozziOSTabShell: View {
     @Environment(\.themePalette) private var palette
     @Environment(PlozziOSSidebarGeometryModel.self)
     private var sidebarGeometry
+    @Environment(HeroTrailerController.self)
+    private var heroTrailerController
     @State private var settingsPresentationColorScheme: ColorScheme = .dark
     @State private var selectedDestination: PlozziOSDestination = .home
     @State private var sharedHomeViewModel: HomeViewModel
@@ -748,6 +759,18 @@ private struct PlozziOSTabShell: View {
                 }
             }
 
+            #if DEBUG
+            Tab(
+                "Live TV",
+                systemImage: "tv.fill",
+                value: PlozziOSDestination.liveTV
+            ) {
+                PlozziOSLiveTVDestination(
+                    isActive: selectedDestination == .liveTV
+                )
+            }
+            #endif
+
             Tab(value: PlozziOSDestination.downloads) {
                 NavigationStack {
                     PlozziOSDestinationView(
@@ -806,6 +829,13 @@ private struct PlozziOSTabShell: View {
                 home: .home,
                 showsWatchlist: showsWatchlist
             )
+        }
+        .onChange(of: selectedDestination, initial: true) { _, destination in
+            #if DEBUG
+            if destination == .liveTV {
+                heroTrailerController.stop()
+            }
+            #endif
         }
         .onChange(of: homeContentIdentity) {
             _, _ in
@@ -1082,6 +1112,10 @@ private struct PlozziOSDestinationView: View {
                 viewModel: sharedHomeViewModel,
                 onShowSettings: onShowSettings
             )
+        #if DEBUG
+        case .liveTV:
+            EmptyView()
+        #endif
         case .search:
             PlozziOSSearchView(
                 appModel: appModel,

@@ -26,19 +26,32 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
     @State private var sheet: PrototypeSheet?
     @State private var selectedChannelID: String?
     @State private var topRequest = 0
-    @State private var railActive = false
+    @State private var controlsActive = false
+    @State private var guideHasFocus = false
+    @State private var toolbarFocusRequest = 0
+    @State private var focusedProgram: LiveTVPrototypeProgram?
+    @State private var loadedRequest: Int?
     @State private var guideOffset: TimeInterval = 0
     @State private var pendingTuneID: String?
     @State private var playPauseRequest = 0
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.themePalette) private var palette
+    @Environment(\.plozzNavigationContentInset) private var navigationInset
+    @Environment(\.plozzReduceTransparency) private var reduceTransparency
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.layoutDirection) private var layoutDirection
-    @ScaledMetric(relativeTo: .headline) private var stackedMetadataHeight = 66
+    private let isActive: Bool
+    private let onExpandedChange: (Bool) -> Void
     private let player: (LiveTVPrototypePlayback) -> PlayerContent
 
-    public init(@ViewBuilder player: @escaping (LiveTVPrototypePlayback) -> PlayerContent) {
+    public init(
+        isActive: Bool = true,
+        onExpandedChange: @escaping (Bool) -> Void = { _ in },
+        @ViewBuilder player: @escaping (LiveTVPrototypePlayback) -> PlayerContent
+    ) {
+        self.isActive = isActive
+        self.onExpandedChange = onExpandedChange
         self.player = player
         let arguments = ProcessInfo.processInfo.arguments
         let model = LiveTVPrototypeModel(
@@ -57,22 +70,12 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
     public var body: some View {
         GeometryReader { geometry in
             let layout = PrototypePreviewLayout(
-                size: geometry.size, largeText: typeSize.isAccessibilitySize,
-                metadataHeight: stackedMetadataHeight
+                size: geometry.size, safeAreaInsets: geometry.safeAreaInsets,
+                navigationInset: navigationInset, largeText: typeSize.isAccessibilitySize
             )
-            let fullFrame = CGRect(
-                x: -geometry.safeAreaInsets.leading, y: -geometry.safeAreaInsets.top,
-                width: geometry.size.width + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing,
-                height: geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom
-            )
-            let videoFrame = preview.isExpanded ? fullFrame : layout.videoFrame
+            let videoFrame = preview.isExpanded ? layout.bounds : layout.videoFrame
             ZStack(alignment: .topLeading) {
                 palette.backgroundBase.ignoresSafeArea()
-                LinearGradient(
-                    colors: [palette.backgroundSecondary, palette.backgroundBase],
-                    startPoint: .top, endPoint: .bottom
-                )
-                .frame(height: layout.heroHeight + PrototypeLayout.inset)
 
                 // This is the only player construction site. Its identity is
                 // unchanged when the guide moves away or another channel tunes.
@@ -89,6 +92,19 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                     .environment(\.themePalette, ThemePalette.dark)
                     .frame(width: videoFrame.width, height: videoFrame.height)
                     .clipped()
+                    .overlay {
+                        LinearGradient(
+                            stops: [
+                                .init(color: palette.backgroundBase, location: 0),
+                                .init(color: .clear, location: 0.28),
+                                .init(color: .clear, location: 1)
+                            ],
+                            startPoint: .leading, endPoint: .trailing
+                        )
+                        .opacity(preview.isExpanded || layout.compact ? 0 : 1)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                    }
                     .position(
                         x: layoutDirection == .rightToLeft ? geometry.size.width - videoFrame.midX : videoFrame.midX,
                         y: videoFrame.midY
@@ -96,82 +112,67 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                     .animation(reduceMotion ? nil : .easeInOut(duration: 0.32), value: preview.isExpanded)
                 }
 
-                #if os(iOS)
-                if let channel = heroChannel {
-                    PrototypePreviewExpandButton { tune(channel.id) }
-                        .frame(width: layout.videoFrame.width, height: layout.videoFrame.height)
-                        .position(
-                            x: layoutDirection == .rightToLeft
-                                ? geometry.size.width - layout.videoFrame.midX : layout.videoFrame.midX,
-                            y: layout.videoFrame.midY
-                        )
-                        .opacity(preview.isExpanded ? 0 : 1)
-                        .disabled(preview.isExpanded)
-                        .allowsHitTesting(!preview.isExpanded)
-                        .accessibilityHidden(preview.isExpanded)
-                }
-                #endif
-
-                HStack(alignment: .top, spacing: PrototypeLayout.gap) {
-                    VStack(spacing: PrototypeLayout.gap) {
-                        PrototypePreviewHero(
-                            channel: heroChannel,
-                            program: heroChannel.flatMap { model.currentProgram(for: $0.id) },
-                            hasPlayer: model.playingChannelID != nil,
-                            followsFocus: preview.followsFocus,
-                            layout: layout,
-                            watch: { if let id = heroChannel?.id { tune(id) } }
-                        )
-                        PrototypeNavigation(model: model)
-                            .disabled(railActive)
-                        PrototypeStatus(model: model, imports: imports)
-                        #if os(iOS)
-                        PrototypeTouchToolbar(
-                            model: model,
-                            search: { sheet = .search },
-                            filters: { sheet = .filters },
-                            sources: { sheet = .sources },
-                            top: { topRequest += 1 }
-                        )
-                        #endif
-                        PrototypeBrowser(
-                            model: model, imports: imports,
-                            selectedID: $selectedChannelID, railActive: $railActive,
-                            topRequest: topRequest, guideOffset: $guideOffset,
-                            restoreFocusRequest: preview.focusRestoreRequest,
-                            isPresented: !preview.isExpanded,
-                            tune: tune,
-                            details: { sheet = .program($0) },
-                            openControls: { sheet = .filters },
-                            isLoading: model.channels.isEmpty
-                                && (imports.playlistPhase == .idle || imports.playlistPhase == .loading),
-                            loadFailed: imports.playlistPhase == .failed,
-                            reload: { reloadRequest += 1 }
-                        )
-                        .background(palette.backgroundBase)
-                    }
-                    .frame(width: layout.contentWidth)
-                    #if os(tvOS)
-                    .focusSection()
-                    #endif
-                    #if os(tvOS)
-                    PrototypeTVControls(
-                        model: model, active: $railActive,
-                        search: { sheet = .search }, filters: { sheet = .filters },
-                        sources: { sheet = .sources },
-                        top: { topRequest += 1 },
-                        followsFocus: preview.followsFocus,
-                        togglePreview: { preview.setFollowsFocus(!preview.followsFocus) }
+                PrototypePreviewScrim(layout: layout, reduceTransparency: reduceTransparency)
+                    .frame(width: layout.bounds.width, height: layout.bounds.height)
+                    .position(
+                        x: layoutDirection == .rightToLeft
+                            ? geometry.size.width - layout.bounds.midX : layout.bounds.midX,
+                        y: layout.bounds.midY
                     )
-                    .frame(width: PrototypeLayout.controlsWidth)
-                    #endif
+                    .opacity(preview.isExpanded ? 0 : 1)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.32), value: preview.isExpanded)
+
+                VStack(spacing: PrototypeLayout.gap) {
+                    PrototypePreviewHero(
+                        channel: heroChannel,
+                        program: heroProgram,
+                        isPlaying: heroChannel?.id == model.playingChannelID && model.playingChannelID != nil,
+                        layout: layout,
+                        watch: { if let id = heroChannel?.id { tune(id) } }
+                    )
+                    PrototypeBrowseToolbar(
+                        model: model, active: $controlsActive,
+                        focusRequest: toolbarFocusRequest,
+                        search: { sheet = .search },
+                        filters: { sheet = .filters },
+                        more: { sheet = .options }
+                    )
+                    PrototypeBrowser(
+                        model: model, imports: imports,
+                        selectedID: $selectedChannelID, railActive: $controlsActive,
+                        focusedProgram: $focusedProgram,
+                        hasFocus: $guideHasFocus,
+                        topRequest: topRequest, guideOffset: $guideOffset,
+                        restoreFocusRequest: preview.focusRestoreRequest,
+                        isPresented: !preview.isExpanded,
+                        tune: tune,
+                        details: { sheet = .program($0) },
+                        openControls: { sheet = .options },
+                        openToolbar: {
+                            controlsActive = true
+                            toolbarFocusRequest &+= 1
+                        },
+                        isLoading: model.channels.isEmpty
+                            && (imports.playlistPhase == .idle || imports.playlistPhase == .loading),
+                        loadFailed: imports.playlistPhase == .failed,
+                        reload: { reloadRequest += 1 }
+                    )
+                    .background(palette.backgroundBase)
                 }
-                .padding(PrototypeLayout.inset)
+                #if os(tvOS)
+                .focusSection()
+                #endif
+                .frame(width: layout.contentFrame.width, height: layout.contentFrame.height)
+                .position(
+                    x: layoutDirection == .rightToLeft
+                        ? geometry.size.width - layout.contentFrame.midX : layout.contentFrame.midX,
+                    y: layout.contentFrame.midY
+                )
                 .opacity(preview.isExpanded ? 0 : 1)
                 .offset(y: preview.isExpanded && !reduceMotion ? geometry.size.height * 0.55 : 0)
-                .disabled(preview.isExpanded)
-                .allowsHitTesting(!preview.isExpanded)
-                .accessibilityHidden(preview.isExpanded)
+                .disabled(preview.isExpanded || !isActive)
+                .allowsHitTesting(!preview.isExpanded && isActive)
+                .accessibilityHidden(preview.isExpanded || !isActive)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.32), value: preview.isExpanded)
             }
         }
@@ -180,7 +181,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         .foregroundStyle(palette.primaryText)
         #if os(tvOS)
         .onPlayPauseCommand {
-            if !preview.isExpanded { playPauseRequest &+= 1 }
+            if isActive && !preview.isExpanded { playPauseRequest &+= 1 }
         }
         #endif
         .sheet(item: $sheet, onDismiss: {
@@ -192,6 +193,9 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             PrototypeSheetContent(
                 model: model, imports: imports, destination: destination,
                 reload: { reloadRequest += 1 },
+                followsFocus: preview.followsFocus,
+                togglePreview: { preview.setFollowsFocus(!preview.followsFocus) },
+                top: { topRequest += 1 },
                 showGuide: {
                     model.guideOnly = true
                     topRequest += 1
@@ -209,8 +213,10 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         } message: {
             Text("Demo scenario: another viewer is using the tuner. Your current channel has not changed.")
         }
-        .task(id: reloadRequest) {
+        .task(id: isActive ? reloadRequest : -1) {
+            guard isActive, loadedRequest != reloadRequest else { return }
             await imports.reload(into: model)
+            if !Task.isCancelled { loadedRequest = reloadRequest }
         }
         .task(id: preview.pendingRequest) {
             guard let request = preview.pendingRequest else { return }
@@ -231,8 +237,8 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                 )
             }
         }
-        .task {
-            while !Task.isCancelled {
+        .task(id: isActive) {
+            while isActive && !Task.isCancelled {
                 model.synchronizeClock()
                 try? await Task.sleep(for: .seconds(30))
             }
@@ -241,27 +247,56 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             if id == nil { preview.playbackEnded() }
         }
         .onChange(of: selectedChannelID) { _, id in preview.focus(id) }
-        .onChange(of: railActive) { _, _ in updatePreviewAvailability() }
+        .onChange(of: controlsActive) { _, _ in updatePreviewAvailability() }
+        .onChange(of: guideHasFocus) { _, _ in updatePreviewAvailability() }
         .onChange(of: sheet?.id) { _, _ in updatePreviewAvailability() }
         .onChange(of: scenePhase, initial: true) { _, _ in updatePreviewAvailability() }
-        .onDisappear { preview.stop() }
+        .onChange(of: isActive, initial: true) { _, active in
+            if !active {
+                pendingTuneID = nil
+                sheet = nil
+                preview.stop()
+            }
+            updatePreviewAvailability()
+            if active { preview.focus(selectedChannelID) }
+        }
+        .onChange(of: preview.isExpanded) { _, expanded in onExpandedChange(expanded) }
+        .onDisappear {
+            preview.stop()
+            onExpandedChange(false)
+        }
     }
 
-    private var palette: ThemePalette { colorScheme == .light ? .light : .dark }
-
     private var heroChannel: LiveTVPrototypeChannel? {
-        (model.playingChannelID ?? selectedChannelID).flatMap { model.channel(id: $0) }
+        (selectedChannelID ?? model.playingChannelID).flatMap { model.channel(id: $0) }
+    }
+
+    private var heroProgram: LiveTVPrototypeProgram? {
+        if let focusedProgram, focusedProgram.channelID == heroChannel?.id { return focusedProgram }
+        return heroChannel.flatMap { model.currentProgram(for: $0.id) }
     }
 
     private func updatePreviewAvailability() {
-        preview.setBrowsingActive(scenePhase == .active && sheet == nil && !railActive)
+        #if os(tvOS)
+        let canFollowFocus = guideHasFocus
+        #else
+        let canFollowFocus = true
+        #endif
+        preview.setBrowsingActive(
+            isActive && scenePhase == .active && sheet == nil && !controlsActive && canFollowFocus
+        )
     }
 
     private func tune(_ id: String) {
+        guard isActive else {
+            HandoffDiagnostics.emit("LIVE_TV event=watchIgnored reason=inactiveDestination")
+            return
+        }
         preview.watch(id)
         if !model.tuneFailed {
             selectedChannelID = id
-            railActive = false
+            focusedProgram = nil
+            controlsActive = false
         }
     }
 
@@ -271,61 +306,6 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         else { return }
         let count = model.visibleChannels.count
         tune(model.visibleChannels[(index + offset + count) % count].id)
-    }
-}
-
-private struct PrototypeNavigation: View {
-    @Bindable var model: LiveTVPrototypeModel
-
-    var body: some View {
-        HStack(spacing: PrototypeLayout.smallGap) {
-            Text("Live TV").font(.title2.bold())
-            Spacer()
-            Button {
-                model.favoritesOnly.toggle()
-            } label: {
-                Label("Favorites", systemImage: model.favoritesOnly ? "star.fill" : "star")
-                    #if os(iOS)
-                    .labelStyle(.iconOnly)
-                    #endif
-            }
-            .buttonStyle(PrototypeButtonStyle(selected: model.favoritesOnly))
-            .accessibilityAddTraits(model.favoritesOnly ? .isSelected : [])
-            .accessibilityIdentifier("live-tv-favorites-filter")
-            #if os(tvOS)
-            Spacer()
-            TimelineView(.periodic(from: .now, by: 30)) { context in
-                Text(context.date, format: .dateTime.hour().minute())
-                    .font(.title3.monospacedDigit())
-            }
-            #endif
-        }
-    }
-}
-
-private struct PrototypeStatus: View {
-    let model: LiveTVPrototypeModel
-    let imports: LiveTVPrototypeImportModel
-    @Environment(\.themePalette) private var palette
-
-    var body: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("\(model.visibleChannels.count) of \(model.channels.count) channels").fontWeight(.medium)
-                if !model.query.isEmpty { Text("Search: \(model.query)").lineLimit(1) }
-                if let category = model.category { Text(category).lineLimit(1) }
-                if model.guideOnly { Text("With guide listings") }
-            }
-            Spacer()
-            if model.isLargeCatalog {
-                Text("Repeated channels · Scrolling test")
-            } else {
-                PrototypeImportStatus(imports: imports, listedChannels: model.guideChannelCount)
-            }
-        }
-        .font(.caption)
-        .foregroundStyle(palette.secondaryText)
-        .accessibilityElement(children: .combine)
     }
 }
 

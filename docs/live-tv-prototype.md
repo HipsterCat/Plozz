@@ -1,9 +1,10 @@
 # Live TV prototype
 
-A native, Debug-only harness for iterating on a physical Apple TV, iPhone and
-iPad. It browses real public channels and plays their HLS streams through
-Plozz's existing AetherEngine (`PlozzigenVideoEngine`) integration. Production onboarding and navigation
-are unchanged.
+A native, Debug-only Live TV destination for iterating on a physical Apple TV,
+iPhone and iPad. It browses real public channels and plays their HLS streams through
+Plozz's existing AetherEngine (`PlozzigenVideoEngine`) integration. It now lives
+inside Plozz's actual navigation instead of replacing the application root.
+Release navigation and onboarding remain unchanged.
 
 ## Run
 
@@ -14,25 +15,27 @@ export GIT_CONFIG_PARAMETERS="'safe.bareRepository=all'"
 tools/generate-project.sh
 ```
 
-Open `Plozz.xcodeproj` and run **Plozz Live TV Prototype** on Apple TV or
-**PlozziOS Live TV Prototype** on iPhone/iPad. These schemes pass
-`--live-tv-prototype` to the existing app target. Device installation must be
-explicitly authorized; a build alone does not install anything.
+Open `Plozz.xcodeproj` and run a Debug **Plozz** build on Apple TV or
+**PlozziOS** on iPhone/iPad. After normal profile/account setup, select **Live TV**
+in navigation. Apple TV supports the top tabs, native sidebar and custom
+navigation rail variations; iPhone/iPad expose the same destination in their
+tab shell. Device installation must be authorized; a build alone does not
+install anything.
 
 For isolated physical-TV iteration, build a branded Debug app using the existing
 per-branch build configuration. It has its own bundle ID, preferences and data;
 normal Plozz remains installed and untouched. Cloud sync and Top Shelf are not
-enabled for branded builds. Once installed, launch that bundle explicitly:
+enabled for branded builds. A branded app therefore needs its own normal
+profile/account setup. Once installed, launch that bundle explicitly:
 
 ```sh
 xcrun devicectl device process launch --device <device-id> \
-  <branded-bundle-id> --live-tv-prototype --live-tv-prototype-remember
+  <branded-bundle-id>
 ```
 
-`--live-tv-prototype-remember` is an explicit Debug-only opt-in: opening the app
-again from the TV home screen returns to Live TV. Launch with
-`--live-tv-prototype-off` to clear it and return to normal onboarding.
-`--live-tv-prototype` alone remains transient and changes no preference.
+The old `--live-tv-prototype` and remembered prototype-entry preference no
+longer bypass Plozz's root or its background services. The older prototype
+schemes also open the normal app; enter Live TV through navigation.
 
 Additional launch arguments:
 
@@ -52,14 +55,19 @@ Channels become available before guide loading finishes. There is one unified
 channel guide, not separate Channels and Guide tabs. **Favorites** is an
 independent filter. Search, categories, sorting and Favorites survive opening
 the player, returning to the guide and refreshing sources.
-Favorites, filters and guide-source selections are still in-memory; restarting
-the process resets them.
+Favorites, filters and guide-source selections are still in-memory. Switching
+destinations retains them within the signed-in shell, including under the
+custom rail; profile/root rebuilds, memory eviction or process restart may
+reset them.
 
 - Browse, search names/numbers/categories/sources, filter and sort.
 - Favorite channels through their context menu.
-- On Apple TV, move Right from a channel (or past its guide programs) to Search.
-  Sources lives in that same persistent controls rail, below Sort, rather than
-  in an unreachable header corner. Left returns to the channel/program.
+- Search, category filtering, Favorites and More share a compact horizontal bar.
+  On Apple TV, Back from a guide row focuses that bar without scrolling the list;
+  Down returns to the remembered channel/program. Back from the bar goes to the
+  surrounding app navigation. Holding Select on a channel/program also opens
+  its context menu with Search and options and Back to top.
+  **More** contains source management, sorting, Auto preview and Back to top.
   Back to top works without resetting the selected time.
 - **Sources** reports playlist entries, skipped entries, guide matches, listings,
   coverage dates and per-feed failures. Its toggles enable or disable the five
@@ -80,19 +88,21 @@ the process resets them.
   vertical list and follows the same horizontal offset. Earlier/Later shifts the
   window from one day back through seven days ahead, subject to source coverage.
   The time anchor does not jump at the half hour while browsing; **Now** recenters
-  it on the current wall clock. Program progress and current-title labels still
-  update with the clock.
+  it on the current wall clock. A shared Now line extends through the guide.
+  Focused programme details above the grid show the full title and broadcast times,
+  including for very narrow cells.
 - Wide-guide stations, programme cells and horizontal scrollers share one scaled
   row height. Short programmes and clipped edge intervals cannot enlarge an
   entire row through timestamp wrapping, including cells outside the viewport.
-  Narrow cells omit secondary text; very small slices show an ellipsis.
+  Wide cells prioritize titles rather than repeating timestamps/progress bars in
+  every row; very small slices show an ellipsis. Compact touch cards retain times.
   Their time widths remain accurate, and full titles/times remain available
   through accessibility and programme details.
 - iPhone and narrow iPad windows use compact rows with horizontally browsable
   program cards; no-guide rows put genre directly under the channel name.
   Video stays above the scrolling list. Touch browsing does not automatically
   open streams; selecting a channel starts playback, and returning leaves its
-  preview visible. Tap the preview's expand action to reopen the same player.
+  preview visible. Use Watch channel to reopen playback.
 - Select a channel or its currently airing program to watch real video.
   Past/future programs open details, not a pretend future broadcast.
   The live host exposes real buffering,
@@ -109,20 +119,24 @@ There is only one active player, with sound on while browsing. No second stream
 is opened to fake an instant crossfade. Search, controls, sheets and inactive
 scenes cancel pending focus-driven tunes.
 
-The upper-right 16:9 picture stays anchored while the guide scrolls. Video is
-aspect-fit, not cropped under hero text or a ticker-obscuring fade. Selecting a
-ready preview slides/fades the guide away and expands the existing surface.
+Live video fills the upper backdrop rather than a boxed preview. A leading scrim
+protects programme details and a bottom fade blends into the opaque guide.
+The picture remains anchored while either guide axis scrolls. The backdrop
+extends through the safe-area margins; only text and controls receive the
+navigation rail's leading inset. Selecting a ready preview slides/fades the guide
+away and expands the existing surface to unobscured, aspect-fit playback.
 Back restores the guide's row, program, filters and time position; it does not
 stop, reload or replace the engine. Reduced Motion removes the spatial animation.
 Returning from fullscreen keeps the chosen channel playing rather than retuning
-on the first navigation press. **Auto preview** in the TV controls rail re-enables
+on the first navigation press. **Auto preview** in More re-enables
 following channel focus. The remote's Play/Pause also works during browsing.
 
 Tuning another channel reuses the engine with a new, fenced source attempt.
 Loading/failure states remain local and nonfocusable in the preview, with an
 opaque placeholder until the new source actually produces a first frame.
 Opening a failed preview exposes the existing full retry/close UI.
-Leaving the Live TV screen releases playback; app backgrounding retains the
+Leaving the Live TV destination releases playback and invalidates pending tunes,
+including when a native tab keeps its view alive. App backgrounding retains the
 existing foreground-only teardown/reload policy.
 
 ## Real inputs and artwork
@@ -212,11 +226,12 @@ iteration connects selectable public guide presets, not a finished multi-source
 account manager. Many streams still lack a confidently identified schedule;
 more name guesses are not a substitute for accurate provider/region mapping.
 
-The harness does not construct production account/profile models. The small
+The normal shell owns account/profile models; the Live TV feature does not
+create a second account or profile stack. The small
 `FeaturePlayback.LiveChannelPlayerView` hosts the existing real engine without
 constructing the VOD `PlayerViewModel`, media-provider reporting sessions, resume
 writers or trackers. This avoids incorrectly treating an endless channel as a
-movie while leaving ordinary library playback unchanged. App targets inject the
+movie while leaving ordinary library playback unchanged. The app shells inject the
 player into `FeatureLiveTV`; UI feature modules do not import one another.
 The app also injects the `LiveChannelEngine` implementation into the host, so
 `FeaturePlayback` does not depend back on `EnginePlozzigen`. Engine initialization

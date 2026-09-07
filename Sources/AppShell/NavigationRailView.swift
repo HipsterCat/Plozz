@@ -270,6 +270,9 @@ struct NavigationRailView: View {
                     label: Text(Self.watchlistTitle)
                 )
             }
+            #if DEBUG
+            item(.liveTV, symbol: "tv.fill", label: Text(Self.liveTVTitle))
+            #endif
             if showsMusic {
                 item(.music, symbol: "music.note", label: Text(Self.musicTitle))
             }
@@ -676,6 +679,13 @@ struct NavigationRailView: View {
         defaultValue: "Watchlist",
         comment: "Navigation rail destination for the user's universal Watchlist."
     )
+    #if DEBUG
+    private static let liveTVTitle = LocalizedStringResource(
+        "navigationRail.liveTV",
+        defaultValue: "Live TV",
+        comment: "Development-only Live TV prototype navigation destination."
+    )
+    #endif
     private static let musicTitle = LocalizedStringResource(
         "navigationRail.music",
         defaultValue: "Music",

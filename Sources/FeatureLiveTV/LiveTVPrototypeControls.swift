@@ -3,122 +3,107 @@ import CoreUI
 import FeatureLiveTVCore
 import SwiftUI
 
-#if os(tvOS)
-struct PrototypeTVControls: View {
+struct PrototypeBrowseToolbar: View {
     @Bindable var model: LiveTVPrototypeModel
     @Binding var active: Bool
+    let focusRequest: Int
     let search: () -> Void
     let filters: () -> Void
-    let sources: () -> Void
-    let top: () -> Void
-    let followsFocus: Bool
-    let togglePreview: () -> Void
+    let more: () -> Void
     @FocusState private var focused: Control?
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.themePalette) private var palette
 
-    private enum Control: Hashable { case search, filters, sort, sources, top, preview }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: PrototypeLayout.gap) {
-            Text("Browse controls").font(.headline)
-                .foregroundStyle(palette.secondaryText)
-            Button(action: search) {
-                Label("Search", systemImage: "magnifyingglass").frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .focused($focused, equals: .search)
-            Button(action: filters) {
-                Label("Filters", systemImage: "line.3.horizontal.decrease")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .focused($focused, equals: .filters)
-            .disabled(!active)
-            Button {
-                model.sort = model.sort == .channelNumber ? .name : .channelNumber
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Sort", systemImage: "arrow.up.arrow.down")
-                    Text(model.sort.title).font(.caption).opacity(0.7)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .focused($focused, equals: .sort)
-            .disabled(!active)
-            Button(action: sources) {
-                Label("Sources", systemImage: "antenna.radiowaves.left.and.right")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .focused($focused, equals: .sources)
-            .disabled(!active)
-            .accessibilityIdentifier("live-tv-sources")
-            Button(action: top) {
-                Label("Back to top", systemImage: "arrow.up.to.line")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .focused($focused, equals: .top)
-            .disabled(!active)
-            Button(action: togglePreview) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Auto preview", systemImage: followsFocus ? "play.rectangle.fill" : "play.rectangle")
-                    Text(followsFocus ? "Follows channel focus" : "Keeps current channel")
-                        .font(.caption).opacity(0.7)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .focused($focused, equals: .preview)
-            .disabled(!active)
-            .accessibilityValue(followsFocus ? "On" : "Off")
-            Text("Press Right for controls.\nLeft returns to your channel.")
-                .font(.caption).foregroundStyle(palette.secondaryText)
-                .padding(.top, PrototypeLayout.gap)
-            Spacer(minLength: 0)
-        }
-        .buttonStyle(PrototypeButtonStyle())
-        .focusSection()
-        .onChange(of: focused) { _, target in
-            if target != nil { active = true }
-        }
-    }
-}
-#endif
-
-#if os(iOS)
-struct PrototypeTouchToolbar: View {
-    @Bindable var model: LiveTVPrototypeModel
-    let search: () -> Void
-    let filters: () -> Void
-    let sources: () -> Void
-    let top: () -> Void
+    private enum Control: Hashable { case search, filters, favorites, more }
 
     var body: some View {
         HStack(spacing: PrototypeLayout.smallGap) {
-            Button("Search", systemImage: "magnifyingglass", action: search)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Filters", systemImage: "line.3.horizontal.decrease", action: filters)
-                .labelStyle(.iconOnly)
-            Menu {
-                Picker("Sort", selection: $model.sort) {
-                    ForEach(LiveTVPrototypeSort.allCases) { sort in Text(sort.title).tag(sort) }
-                }
-            } label: {
-                Label("Sort", systemImage: "arrow.up.arrow.down").labelStyle(.iconOnly)
+            Button(action: search) {
+                Label("Search", systemImage: "magnifyingglass")
+                    .labelStyle(PrototypeToolbarLabelStyle(compact: compact))
+                    .padding(.horizontal, 12).frame(minHeight: 44)
             }
-            Button("Back to top", systemImage: "arrow.up.to.line", action: top)
-                .labelStyle(.iconOnly)
-            Button("Sources", systemImage: "antenna.radiowaves.left.and.right", action: sources)
-                .labelStyle(.iconOnly)
-                .accessibilityIdentifier("live-tv-sources")
+            .focused($focused, equals: .search)
+            .buttonStyle(PrototypeButtonStyle(selected: !model.query.isEmpty, padded: false))
+            .accessibilityValue(model.query)
+            .accessibilityIdentifier("live-tv-search")
+            Button(action: filters) {
+                HStack(spacing: 8) {
+                    if let category = model.category { Text(category) }
+                    else { Text("All categories") }
+                    Image(systemName: "chevron.down").font(.caption2)
+                }
+                .padding(.horizontal, 12).frame(minHeight: 44)
+            }
+            .focused($focused, equals: .filters)
+            .buttonStyle(PrototypeButtonStyle(
+                selected: model.category != nil || model.guideOnly || model.source != nil, padded: false
+            ))
+            .accessibilityIdentifier("live-tv-category")
+            Button {
+                model.favoritesOnly.toggle()
+            } label: {
+                Label("Favorites", systemImage: model.favoritesOnly ? "star.fill" : "star")
+                    .labelStyle(PrototypeToolbarLabelStyle(compact: compact))
+                    .padding(.horizontal, 12).frame(minHeight: 44)
+            }
+            .buttonStyle(PrototypeButtonStyle(selected: model.favoritesOnly, padded: false))
+            .focused($focused, equals: .favorites)
+            .accessibilityAddTraits(model.favoritesOnly ? .isSelected : [])
+            .accessibilityIdentifier("live-tv-favorites-filter")
+            Button(action: more) {
+                Label("More", systemImage: "ellipsis")
+                    .labelStyle(PrototypeToolbarLabelStyle(compact: compact))
+                    .padding(.horizontal, 12).frame(minHeight: 44)
+            }
+            .focused($focused, equals: .more)
+            .accessibilityIdentifier("live-tv-options")
+            if !compact {
+                Spacer(minLength: 0)
+                Text(model.now, format: .dateTime.hour().minute())
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(palette.secondaryText)
+            }
         }
         .font(.subheadline)
-        .buttonStyle(PrototypeButtonStyle())
+        .lineLimit(1)
+        .buttonStyle(PrototypeButtonStyle(padded: false))
+        #if os(tvOS)
+        .focusSection()
+        #endif
+        .onChange(of: focused) { _, target in
+            if target != nil { active = true }
+        }
+        .onChange(of: focusRequest) { _, _ in focused = .search }
+    }
+
+    private var compact: Bool {
+        #if os(tvOS)
+        false
+        #else
+        sizeClass == .compact
+        #endif
     }
 }
-#endif
+
+private struct PrototypeToolbarLabelStyle: LabelStyle {
+    let compact: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 8) {
+            configuration.icon
+            if !compact { configuration.title }
+        }
+    }
+}
 
 struct PrototypeSheetContent: View {
     @Bindable var model: LiveTVPrototypeModel
     let imports: LiveTVPrototypeImportModel
     let destination: PrototypeSheet
     let reload: () -> Void
+    let followsFocus: Bool
+    let togglePreview: () -> Void
+    let top: () -> Void
     let showGuide: () -> Void
     let tune: (String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -136,7 +121,14 @@ struct PrototypeSheetContent: View {
                         .navigationTitle("Search channels")
                 case .filters:
                     PrototypeFilterForm(model: model)
-                        .navigationTitle("Browse controls")
+                        .navigationTitle("Filter channels")
+                case .options:
+                    PrototypeOptionsForm(
+                        model: model, imports: imports, reload: reload,
+                        followsFocus: followsFocus, togglePreview: togglePreview,
+                        top: top, showGuide: showGuide, tune: tune
+                    )
+                    .navigationTitle("Live TV")
                 case .sources:
                     PrototypeSourcesForm(model: model, imports: imports, reload: reload) {
                         showGuide()
@@ -162,6 +154,66 @@ struct PrototypeSheetContent: View {
                 }
             }
             .background(palette.backgroundBase)
+        }
+    }
+}
+
+private struct PrototypeOptionsForm: View {
+    @Bindable var model: LiveTVPrototypeModel
+    let imports: LiveTVPrototypeImportModel
+    let reload: () -> Void
+    let followsFocus: Bool
+    let togglePreview: () -> Void
+    let top: () -> Void
+    let showGuide: () -> Void
+    let tune: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Form {
+            Section {
+                NavigationLink {
+                    PrototypeSearchForm(model: model) { id in
+                        tune(id)
+                        dismiss()
+                    }
+                    .navigationTitle("Search channels")
+                } label: {
+                    Label("Search channels", systemImage: "magnifyingglass")
+                }
+                NavigationLink {
+                    PrototypeFilterForm(model: model).navigationTitle("Filter channels")
+                } label: {
+                    Label("Filter channels", systemImage: "line.3.horizontal.decrease")
+                }
+                Picker("Sort", selection: $model.sort) {
+                    ForEach(LiveTVPrototypeSort.allCases) { sort in Text(sort.title).tag(sort) }
+                }
+                Toggle("Auto preview", isOn: Binding(
+                    get: { followsFocus },
+                    set: { if $0 != followsFocus { togglePreview() } }
+                ))
+                Button("Back to top", systemImage: "arrow.up.to.line") {
+                    top()
+                    dismiss()
+                }
+            } footer: {
+                Text("Auto preview follows channel focus. Turn it off to keep your current channel playing while you browse.")
+            }
+            Section {
+                NavigationLink {
+                    PrototypeSourcesForm(model: model, imports: imports, reload: reload) {
+                        showGuide()
+                        dismiss()
+                    }
+                    .navigationTitle("Live TV sources")
+                } label: {
+                    Label("Sources", systemImage: "antenna.radiowaves.left.and.right")
+                }
+                .accessibilityIdentifier("live-tv-sources")
+                Text("\(model.visibleChannels.count) of \(model.channels.count) channels")
+                PrototypeImportStatus(imports: imports, listedChannels: model.guideChannelCount)
+            }
         }
     }
 }

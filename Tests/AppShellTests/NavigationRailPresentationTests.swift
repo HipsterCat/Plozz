@@ -54,7 +54,13 @@ final class NavigationRailPresentationTests: XCTestCase {
     }
 
     func testOtherRootDestinationsKeepPinnedNavigation() {
-        for destination: NavigationRailDestination in [.home, .watchlist, .settings, .music, .allLibraries] {
+        var destinations: [NavigationRailDestination] = [
+            .home, .watchlist, .settings, .music, .allLibraries
+        ]
+        #if DEBUG
+        destinations.append(.liveTV)
+        #endif
+        for destination in destinations {
             let presentation = make(destination)
             XCTAssertFalse(presentation.usesPageButton)
             XCTAssertTrue(presentation.isRailVisible)

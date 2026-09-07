@@ -82,9 +82,15 @@ struct MainTabView: View {
                 switch activeLibraryNavigationDestination {
                 case .home, .library, .allLibraries: return true
                 case .watchlist, .search, .music, .settings: return false
+                #if DEBUG
+                case .liveTV: return false
+                #endif
                 }
             case .watchlist: return activeLibraryNavigationDestination == .watchlist
             case .search: return activeLibraryNavigationDestination == .search
+            #if DEBUG
+            case .liveTV: return activeLibraryNavigationDestination == .liveTV
+            #endif
             case .music: return activeLibraryNavigationDestination == .music
             case .settings: return activeLibraryNavigationDestination == .settings
             }
@@ -93,7 +99,11 @@ struct MainTabView: View {
     }
 
     private enum MainTab: String {
-        case home, watchlist, search, music, settings
+        case home, watchlist, search
+        #if DEBUG
+        case liveTV
+        #endif
+        case music, settings
     }
 
     private var homeTabLabel: some View {
@@ -127,6 +137,16 @@ struct MainTabView: View {
             usesCompactSidebarText: navigationStyle == .sidebar
         )
     }
+
+    #if DEBUG
+    private var liveTVTabLabel: some View {
+        RootNavigationTabLabel(
+            title: Text("Live TV"),
+            systemImage: "tv.fill",
+            usesCompactSidebarText: navigationStyle == .sidebar
+        )
+    }
+    #endif
 
     private var settingsTabLabel: some View {
         RootNavigationTabLabel(
@@ -538,6 +558,9 @@ struct MainTabView: View {
         case .home, .library, .allLibraries: return .home
         case .watchlist: return .watchlist
         case .search: return .search
+        #if DEBUG
+        case .liveTV: return .liveTV
+        #endif
         case .music: return .music
         case .settings: return .settings
         }
@@ -548,6 +571,9 @@ struct MainTabView: View {
         case .home: return .home
         case .watchlist: return .watchlist
         case .search: return .search
+        #if DEBUG
+        case .liveTV: return .liveTV
+        #endif
         case .music: return .music
         case .settings: return .settings
         }
@@ -937,6 +963,32 @@ struct MainTabView: View {
             : activeLibraryNavigationDestination.storageValue
     }
 
+    /// Live playback blocks all shell-owned ambient audio for as long as the
+    /// development destination is visible.
+    private var isLiveTVDestinationActive: Bool {
+        #if DEBUG
+        navigationStyle == .tabBar
+            ? resolvedSelectedTab == .liveTV
+            : activeLibraryNavigationDestination == .liveTV
+        #else
+        false
+        #endif
+    }
+
+    #if DEBUG
+    /// Custom-rail chrome is shared by destination stacks. An outgoing retained
+    /// Live TV view can report disappearance after the next destination has
+    /// already installed its own depth, so only the currently selected Live TV
+    /// destination may write it.
+    private func updateLiveTVChrome(_ expanded: Bool) {
+        guard navigationStyle == .rail,
+              activeLibraryNavigationDestination == .liveTV else {
+            return
+        }
+        navigationChrome.setStackDepth(expanded ? 1 : 0)
+    }
+    #endif
+
     /// Native top bar keeps a compact set of destinations rather than expanding
     /// every library across the top.
     private var nativeTopBarShell: some View {
@@ -950,6 +1002,12 @@ struct MainTabView: View {
                     AnyView(watchlistTabContent(isActive: isActiveTab(.watchlist)))
                 }
             }
+
+            #if DEBUG
+            Tab("Live TV", systemImage: "tv.fill", value: MainTab.liveTV) {
+                LiveTVShellDestination(isActive: isActiveTab(.liveTV))
+            }
+            #endif
 
             Tab("Search", systemImage: "magnifyingglass", value: MainTab.search) {
                 searchTabContent
@@ -1007,6 +1065,16 @@ struct MainTabView: View {
                 }
             }
 
+            #if DEBUG
+            Tab(value: NativeSidebarDestination.content(.liveTV)) {
+                AnyView(LiveTVShellDestination(
+                    isActive: activeLibraryNavigationDestination == .liveTV
+                ))
+            } label: {
+                AnyView(liveTVTabLabel)
+            }
+            #endif
+
             Tab(value: NativeSidebarDestination.content(.search)) {
                 AnyView(searchTabContent)
             } label: {
@@ -1051,9 +1119,36 @@ struct MainTabView: View {
             selection: libraryNavigationSelection,
             onOpenProfileSwitcher: openProfileSwitcher,
             chrome: navigationChrome,
-            content: railDestination
+            content: railContent
         )
         .environment(navigationChrome)
+    }
+
+    /// Keeps the development Live TV destination mounted while another custom-rail
+    /// route is selected. Native TabView already retains visited tabs; matching that
+    /// lifetime here preserves in-memory source, Favorites, and filter choices while
+    /// `isActive = false` still tears down playback and pending tune work.
+    @ViewBuilder
+    private var railContent: some View {
+        #if DEBUG
+        let showsLiveTV = activeLibraryNavigationDestination == .liveTV
+        ZStack {
+            railDestination
+                .opacity(showsLiveTV ? 0 : 1)
+                .allowsHitTesting(!showsLiveTV)
+                .accessibilityHidden(showsLiveTV)
+
+            LiveTVShellDestination(
+                isActive: showsLiveTV,
+                onExpandedChange: updateLiveTVChrome
+            )
+            .opacity(showsLiveTV ? 1 : 0)
+            .allowsHitTesting(showsLiveTV)
+            .accessibilityHidden(!showsLiveTV)
+        }
+        #else
+        railDestination
+        #endif
     }
 
     /// The destination custom rail has selected.
@@ -1069,6 +1164,12 @@ struct MainTabView: View {
             return AnyView(homeBackedRailDestination)
         case .search:
             return AnyView(searchTabContent)
+        #if DEBUG
+        case .liveTV:
+            // The retained sibling in `railContent` renders Live TV. Keeping this
+            // switch exhaustive avoids creating a second player tree.
+            return AnyView(Color.clear)
+        #endif
         case .music:
             return AnyView(musicTabContent)
         case .settings:
@@ -1322,7 +1423,9 @@ struct MainTabView: View {
             authenticatedHTTPResolver
         )
         .onChange(of: audioController.hasActivePlayback, initial: true) { _, active in
-            themeMusicController.setBlocked(active)
+            themeMusicController.setBlocked(
+                active || heroTrailerController.isPlaying || isLiveTVDestinationActive
+            )
         }
         .onChange(of: playRequest != nil) { _, videoStarting in
             if videoStarting {
@@ -1342,14 +1445,23 @@ struct MainTabView: View {
             if !settings.homeTrailerEnabled && !settings.detailTrailerEnabled {
                 heroTrailerController.stop()
             }
-            themeMusicController.setBlocked(heroTrailerController.isPlaying)
+            themeMusicController.setBlocked(
+                audioController.hasActivePlayback
+                    || heroTrailerController.isPlaying
+                    || isLiveTVDestinationActive
+            )
         }
         .onChange(of: heroTrailerController.isPlaying) { _, playing in
-            themeMusicController.setBlocked(playing)
+            themeMusicController.setBlocked(
+                audioController.hasActivePlayback || playing || isLiveTVDestinationActive
+            )
         }
         .onChange(of: activeDestinationKey) {
             themeMusicController.stop()
             heroTrailerController.stop()
+            themeMusicController.setBlocked(
+                audioController.hasActivePlayback || isLiveTVDestinationActive
+            )
         }
         .environment(musicPlayerModel)
         .environment(uiDensityModel)
