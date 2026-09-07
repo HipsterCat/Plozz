@@ -145,23 +145,18 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                     .opacity(preview.isExpanded ? 0 : 1)
                     .animation(reduceMotion ? nil : .easeInOut(duration: 0.32), value: preview.isExpanded)
 
-                guideContent(layout)
+                guideContent(layout, canvasWidth: geometry.size.width)
                 #if os(tvOS)
                 .focusSection()
                 #endif
-                .frame(width: layout.contentFrame.width, height: layout.contentFrame.height)
-                .position(
-                    x: layoutDirection == .rightToLeft
-                        ? geometry.size.width - layout.contentFrame.midX : layout.contentFrame.midX,
-                    y: layout.contentFrame.midY
-                )
+                .frame(width: geometry.size.width, height: geometry.size.height)
                 .opacity(preview.isExpanded ? 0 : 1)
                 .offset(y: preview.isExpanded && !reduceMotion ? geometry.size.height * 0.55 : 0)
                 .disabled(preview.isExpanded || !isActive)
                 .allowsHitTesting(!preview.isExpanded && isActive)
                 .accessibilityHidden(preview.isExpanded || !isActive)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.32), value: preview.isExpanded)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.32), value: isSearching)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isSearching)
             }
         }
         .environment(\.themePalette, palette)
@@ -278,31 +273,41 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
     }
 
     @ViewBuilder
-    private func guideContent(_ layout: PrototypePreviewLayout) -> some View {
-        #if os(tvOS)
-        if isSearching {
-            PrototypeNativeSearch(
-                query: $model.query, restoresGuideFocus: preview.isRestoringGuideFocus,
-                isPresented: isActive && !preview.isExpanded && sheet == nil,
-                close: closeSearch, editing: { controlsActive = true }
-            ) {
-                VStack(alignment: .leading, spacing: PrototypeLayout.smallGap) {
-                    PrototypeSearchSummary(channelCount: model.visibleChannels.count, category: model.category)
-                    guideBrowser
+    private func guideContent(_ layout: PrototypePreviewLayout, canvasWidth: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            #if os(tvOS)
+            if isSearching {
+                PrototypeGuidePlacement(frame: layout.bounds, canvasWidth: canvasWidth) {
+                    PrototypeNativeSearch(
+                        query: $model.query, restoresGuideFocus: preview.isRestoringGuideFocus,
+                        isPresented: isActive && !preview.isExpanded && sheet == nil,
+                        close: closeSearch, editing: { controlsActive = true }
+                    ) { dismissSearch in
+                        VStack(alignment: .leading, spacing: PrototypeLayout.smallGap) {
+                            PrototypeSearchSummary(channelCount: model.visibleChannels.count, category: model.category)
+                            guideBrowser(closeSearch: dismissSearch)
+                        }
+                        .ignoresSafeArea(.container, edges: [.bottom, .trailing])
+                        .environment(\.themePalette, palette)
+                        .environment(\.plozzReduceTransparency, reduceTransparency)
+                        .environment(\.dynamicTypeSize, typeSize)
+                        .environment(\.layoutDirection, layoutDirection)
+                        .environment(\.locale, locale)
+                    }
                 }
-                .environment(\.themePalette, palette)
-                .environment(\.plozzReduceTransparency, reduceTransparency)
-                .environment(\.dynamicTypeSize, typeSize)
-                .environment(\.layoutDirection, layoutDirection)
-                .environment(\.locale, locale)
+                .transition(.opacity)
+            } else {
+                PrototypeGuidePlacement(frame: layout.contentFrame, canvasWidth: canvasWidth) {
+                    browsingContent(layout)
+                }
+                .transition(.opacity)
             }
-            .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
-        } else {
-            browsingContent(layout).transition(.opacity)
+            #else
+            PrototypeGuidePlacement(frame: layout.contentFrame, canvasWidth: canvasWidth) {
+                browsingContent(layout)
+            }
+            #endif
         }
-        #else
-        browsingContent(layout)
-        #endif
     }
 
     private func browsingContent(_ layout: PrototypePreviewLayout) -> some View {
@@ -325,7 +330,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                     )
                     .frame(maxWidth: min(layout.contentFrame.width, 1_200), alignment: .leading)
                     .disabled(preview.isRestoringGuideFocus)
-                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
+                    .transition(.opacity)
                 }
                 #endif
             }
@@ -353,15 +358,16 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         )
                         .disabled(preview.isRestoringGuideFocus)
                     }
-                    guideBrowser
+                    guideBrowser(closeSearch: closeSearch)
                 }
-                .frame(width: layout.guideWidth)
+                .frame(width: layout.guideWidth + layout.guideTrailingExtension)
+                .padding(.trailing, -layout.guideTrailingExtension)
                 .padding(.bottom, -layout.guideBottomExtension)
             }
         }
     }
 
-    private var guideBrowser: some View {
+    private func guideBrowser(closeSearch: @escaping () -> Void) -> some View {
         PrototypeBrowser(
             model: model, imports: imports,
             selectedID: $selectedChannelID, selectedRowID: $selectedRowID,
@@ -442,6 +448,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
     }
 
     private func closeSearch() {
+        guard isSearching else { return }
         model.query = ""
         if let bookmark = searchOrigin {
             guideOffset = bookmark.guideOffset

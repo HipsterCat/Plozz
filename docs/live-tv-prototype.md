@@ -77,6 +77,12 @@ is no prior in-memory history to migrate on the first updated launch.
   Both use the same query and filtered catalog, not an extra eight-result list.
   The current category remains identified. Leaving Search restores the
   original guide occurrence and time position; the video stays in the same player.
+  On Apple TV, Back works from both the native keyboard and the results.
+  Search has a full-screen, transparent navigation host rather than an inset
+  sheet. The old guide fades away, then the native search surface fades in
+  without sliding down; closing reverses that handoff. Reduce Motion removes
+  the fade timing. Temporarily opening playback or another sheet hides Search
+  without discarding its query or results host.
 - Wide screens pin Search and an independently scrolling category list
   to the left of the guide. Search never scrolls away
   with either list. Select a category directly; Right returns to the remembered
@@ -127,7 +133,8 @@ is no prior in-memory history to migrate on the first updated launch.
   down, with a solid fallback for Reduce Transparency or increased contrast.
   Shared smooth edge masks dissolve rows underneath the fixed time header and
   programme cells at the horizontal viewport edges. The guide has no bottom
-  fade and extends to the TV screen's bottom edge with square bottom corners;
+  fade and extends to the TV screen's bottom and trailing edges in both Search
+  and normal browsing, without a trailing gutter or rounded trailing edge;
   the sidebar controls retain their safe inset. Touch layouts retain their
   bottom safe-area clearance. Each remaining fade ramps in only
   when content extends beyond that edge, keeping reached endpoints readable.

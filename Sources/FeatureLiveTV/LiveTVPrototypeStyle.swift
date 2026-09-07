@@ -20,6 +20,13 @@ enum PrototypeLayout {
     static let horizontalFade = PlozzTheme.Spacing.large
     static let verticalFade = PlozzTheme.Spacing.xLarge
     static let guideInset = PlozzTheme.Metrics.Radius.inset
+    static var guideTrailingInset: CGFloat {
+        #if os(tvOS)
+        0
+        #else
+        guideInset
+        #endif
+    }
     static let guideRadius = rowRadius + guideInset
     static let controlRadius = PlozzTheme.Metrics.Radius.control
     static let controlInset = PlozzTheme.Spacing.xSmall
@@ -42,12 +49,14 @@ enum PrototypeLayout {
     static var guideShape: UnevenRoundedRectangle {
         #if os(tvOS)
         let bottom: CGFloat = 0
+        let trailing: CGFloat = 0
         #else
         let bottom = guideRadius
+        let trailing = guideRadius
         #endif
         return UnevenRoundedRectangle(
             topLeadingRadius: guideRadius, bottomLeadingRadius: bottom,
-            bottomTrailingRadius: bottom, topTrailingRadius: guideRadius
+            bottomTrailingRadius: bottom, topTrailingRadius: trailing
         )
     }
 

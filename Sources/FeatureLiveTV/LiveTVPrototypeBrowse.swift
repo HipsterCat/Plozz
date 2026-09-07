@@ -186,7 +186,8 @@ struct PrototypeBrowser: View {
                 timelineOffset = new < 650 ? 0 : min(newWidth * 2, timelineOffset / oldWidth * newWidth)
             }
         }
-        .padding([.horizontal, .top], PrototypeLayout.guideInset)
+        .padding([.leading, .top], PrototypeLayout.guideInset)
+        .padding(.trailing, PrototypeLayout.guideTrailingInset)
         .background { PrototypeGuideSurface() }
         .clipShape(PrototypeLayout.guideShape)
         #if os(tvOS)

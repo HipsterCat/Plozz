@@ -104,6 +104,27 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
         #endif
     }
 
+    func testGuideExtendsToTrailingScreenEdgeWithoutMovingItsLeadingControls() {
+        for searching in [false, true] {
+            for navigationInset: CGFloat in [0, 112] {
+                let layout = PrototypePreviewLayout(
+                    size: CGSize(width: 1_740, height: 960),
+                    safeAreaInsets: EdgeInsets(top: 60, leading: 90, bottom: 60, trailing: 90),
+                    navigationInset: navigationInset, isSearching: searching
+                )
+                #if os(tvOS)
+                XCTAssertEqual(layout.contentFrame.maxX + layout.guideTrailingExtension, layout.bounds.maxX)
+                XCTAssertEqual(layout.contentFrame.minX - layout.bounds.minX, 32 + navigationInset)
+                XCTAssertEqual(PrototypeLayout.guideTrailingInset, 0)
+                XCTAssertEqual(PrototypeLayout.guideShape.cornerRadii.topTrailing, 0)
+                #else
+                XCTAssertEqual(layout.guideTrailingExtension, 0)
+                XCTAssertEqual(PrototypeLayout.guideTrailingInset, PrototypeLayout.guideInset)
+                #endif
+            }
+        }
+    }
+
     func testLogoOnlyStationColumnReservesALargerReadableMarkAndMoreTimelineSpace() {
         let size = UIHostingController(rootView: PrototypeStationMark(channel: LiveTVPrototypeModel().channels[0]))
             .sizeThatFits(in: CGSize(width: 500, height: 500))

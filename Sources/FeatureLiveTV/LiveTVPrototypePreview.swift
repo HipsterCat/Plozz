@@ -30,6 +30,14 @@ struct PrototypePreviewLayout {
         #endif
     }
 
+    var guideTrailingExtension: CGFloat {
+        #if os(tvOS)
+        max(0, bounds.maxX - contentFrame.maxX)
+        #else
+        0
+        #endif
+    }
+
     init(
         size: CGSize, safeAreaInsets: EdgeInsets = EdgeInsets(),
         navigationInset: CGFloat = 0, largeText: Bool = false, isSearching: Bool = false
@@ -70,6 +78,22 @@ struct PrototypePreviewLayout {
             width: videoWidth, height: videoHeight
         )
         fadeEnd = min(bounds.height * 0.82, videoHeight * 0.88)
+    }
+}
+
+struct PrototypeGuidePlacement<Content: View>: View {
+    let frame: CGRect
+    let canvasWidth: CGFloat
+    @ViewBuilder let content: () -> Content
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    var body: some View {
+        content()
+            .frame(width: frame.width, height: frame.height)
+            .position(
+                x: layoutDirection == .rightToLeft ? canvasWidth - frame.midX : frame.midX,
+                y: frame.midY
+            )
     }
 }
 
