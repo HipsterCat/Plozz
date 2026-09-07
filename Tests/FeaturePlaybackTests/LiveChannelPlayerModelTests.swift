@@ -654,6 +654,183 @@ final class LiveChannelPlayerModelTests: XCTestCase {
     }
 }
 
+final class LiveChannelPlaybackFocusPolicyTests: XCTestCase {
+    func testPlaybackPrefersPlayPauseWhenAvailable() {
+        let availability = LiveChannelPlaybackFocusPolicy.Availability(
+            isPresented: true,
+            canPlayPause: true,
+            canGoLive: false
+        )
+
+        XCTAssertEqual(availability.preferredControl, .playPause)
+    }
+
+    func testPlaybackFallsBackToNextWhenPlayPauseIsUnavailable() {
+        let availability = LiveChannelPlaybackFocusPolicy.Availability(
+            isPresented: true,
+            canPlayPause: false,
+            canGoLive: false
+        )
+
+        XCTAssertEqual(availability.preferredControl, .next)
+    }
+
+    func testNewPlayPauseAvailabilityDoesNotInvalidateExistingTransportFocus() {
+        let availability = LiveChannelPlaybackFocusPolicy.Availability(
+            isPresented: true,
+            canPlayPause: true,
+            canGoLive: false
+        )
+
+        XCTAssertTrue(availability.contains(.next))
+        XCTAssertTrue(availability.contains(.previous))
+    }
+
+    func testPlaybackEligibilityExcludesMissingAndEscapeControls() {
+        let availability = LiveChannelPlaybackFocusPolicy.Availability(
+            isPresented: true,
+            canPlayPause: false,
+            canGoLive: true
+        )
+
+        XCTAssertTrue(availability.contains(.previous))
+        XCTAssertTrue(availability.contains(.goLive))
+        XCTAssertTrue(availability.contains(.next))
+        XCTAssertFalse(availability.contains(.playPause))
+        XCTAssertFalse(availability.contains(.surface))
+        XCTAssertFalse(availability.contains(.close))
+        XCTAssertFalse(availability.contains(.retry))
+        XCTAssertFalse(availability.contains(nil))
+        XCTAssertFalse(
+            LiveChannelPlaybackFocusPolicy.Availability.hidden.contains(.next)
+        )
+    }
+
+    func testInterruptionPrefersRetryThenFallsBackToClose() {
+        XCTAssertEqual(
+            LiveChannelPlaybackFocusPolicy.interruptionControl(canRetry: true),
+            .retry
+        )
+        XCTAssertEqual(
+            LiveChannelPlaybackFocusPolicy.interruptionControl(canRetry: false),
+            .close
+        )
+    }
+}
+
+final class LiveChannelPlaybackStartPolicyTests: XCTestCase {
+    func testExpandedAlreadyPlayingPreviewBecomesEligible() {
+        XCTAssertNil(
+            eligibleSource(
+                "station-a",
+                isExpanded: false,
+                phase: .playing,
+                hasPresentedFrame: true
+            )
+        )
+        XCTAssertEqual(
+            eligibleSource(
+                "station-a",
+                isExpanded: true,
+                phase: .playing,
+                hasPresentedFrame: true
+            ),
+            "station-a"
+        )
+    }
+
+    func testDelayedStartupWaitsForPlayingFrame() {
+        XCTAssertNil(
+            eligibleSource(
+                "station-a",
+                isExpanded: true,
+                phase: .loading,
+                hasPresentedFrame: false
+            )
+        )
+        XCTAssertNil(
+            eligibleSource(
+                "station-a",
+                isExpanded: true,
+                phase: .playing,
+                hasPresentedFrame: false
+            )
+        )
+        XCTAssertEqual(
+            eligibleSource(
+                "station-a",
+                isExpanded: true,
+                phase: .playing,
+                hasPresentedFrame: true
+            ),
+            "station-a"
+        )
+    }
+
+    func testPreviewStalePausedAndInterruptedSourcesAreIneligible() {
+        XCTAssertNil(
+            eligibleSource(
+                "station-a",
+                sourceMatches: false,
+                isExpanded: true,
+                phase: .playing,
+                hasPresentedFrame: true
+            )
+        )
+        XCTAssertNil(
+            eligibleSource(
+                "station-a",
+                isExpanded: true,
+                phase: .paused,
+                hasPresentedFrame: true
+            )
+        )
+        XCTAssertNil(
+            eligibleSource(
+                "station-a",
+                isExpanded: true,
+                phase: .failed(.startupTimedOut),
+                hasPresentedFrame: true
+            )
+        )
+    }
+
+    func testSuccessfulFullscreenSourcesNotifyOncePerViewing() {
+        var policy = LiveChannelPlaybackStartPolicy<String>()
+
+        XCTAssertTrue(policy.consume("station-a"))
+        XCTAssertFalse(policy.consume("station-a"))
+        policy.resetViewing()
+        XCTAssertTrue(policy.consume("station-b"))
+        XCTAssertFalse(policy.consume("station-b"))
+        policy.resetViewing()
+        XCTAssertTrue(policy.consume("station-a"))
+    }
+
+    func testFailedTuneDoesNotConsumeNotification() {
+        var policy = LiveChannelPlaybackStartPolicy<String>()
+
+        XCTAssertFalse(policy.consume(nil))
+        XCTAssertTrue(policy.consume("station-b"))
+    }
+
+    private func eligibleSource(
+        _ source: String,
+        sourceMatches: Bool = true,
+        isExpanded: Bool,
+        phase: LiveChannelPlaybackPhase,
+        hasPresentedFrame: Bool
+    ) -> String? {
+        LiveChannelPlaybackStartPolicy<String>.eligibleSource(
+            source,
+            sourceMatches: sourceMatches,
+            isExpanded: isExpanded,
+            phase: phase,
+            hasPresentedFrame: hasPresentedFrame
+        )
+    }
+}
+
 private final class LiveTestClock {
     var now: TimeInterval = 0
 }

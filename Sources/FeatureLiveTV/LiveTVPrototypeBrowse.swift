@@ -14,7 +14,9 @@ struct PrototypeBrowser: View {
     @Binding var focusedProgram: LiveTVPrototypeProgram?
     @Binding var hasFocus: Bool
     let topRequest: Int
+    let nowRequest: Int
     @Binding var guideOffset: TimeInterval
+    @Binding var timeAnchor: Date
     let restoreFocusRequest: Int
     let isPresented: Bool
     let isRestoringFocus: Bool
@@ -32,7 +34,6 @@ struct PrototypeBrowser: View {
     @State private var verticalFade = PrototypeScrollFade()
     @State private var lastFocused: PrototypeBrowseFocus?
     @State private var timelineOffset: CGFloat = 0
-    @State private var timeAnchor = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970 / 1_800) * 1_800)
     @FocusState private var focused: PrototypeBrowseFocus?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -40,17 +41,16 @@ struct PrototypeBrowser: View {
         GeometryReader { geometry in
             let focusReturnTarget = returnTarget
             VStack(spacing: PrototypeLayout.gap) {
-                if model.guideChannelCount > 0 {
-                    if geometry.size.width >= 650 {
+                if !model.guideChannels.isEmpty {
+                    if geometry.size.width >= 650, model.guideChannelCount > 0 {
                         PrototypeTimeRuler(
                             start: guideStart, now: model.now, width: geometry.size.width,
-                            timelineOffset: timelineOffset, guideOffset: $guideOffset,
-                            goToNow: goToNow
+                            timelineOffset: timelineOffset, section: currentSection
                         )
                         .disabled(railActive || isRestoringFocus)
                     } else {
-                        PrototypeGuidePaging(start: guideStart, offset: $guideOffset, goToNow: goToNow)
-                            .disabled(railActive || isRestoringFocus)
+                        PrototypeGuideSectionLabel(section: currentSection)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 if isLoading {
@@ -97,31 +97,38 @@ struct PrototypeBrowser: View {
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(spacing: PrototypeLayout.rowGap) {
-                                ForEach(model.visibleChannels) { channel in
-                                    PrototypeGuideRow(
-                                        channel: channel,
-                                        programs: model.programs(
-                                            for: channel.id, from: guideStart,
-                                            hours: geometry.size.width >= 650 ? 6 : 2
-                                        ),
-                                        start: guideStart, now: model.now,
-                                        width: geometry.size.width, timelineOffset: $timelineOffset,
-                                        focus: $focused, railActive: railActive || isRestoringFocus,
-                                        returnTarget: focusReturnTarget,
-                                        favorite: model.favoriteIDs.contains(channel.id),
-                                        playing: model.playingChannelID == channel.id,
-                                        toggleFavorite: { model.toggleFavorite(channel.id) },
-                                        tune: { tune(channel.id) }, details: details,
-                                        controls: openControls,
-                                        top: { goToTop(proxy) },
-                                        goToNow: goToNow
-                                    )
+                                ForEach(model.guideChannels) { entry in
+                                    let channel = entry.channel
+                                    VStack(alignment: .leading, spacing: PrototypeLayout.rowGap) {
+                                        if entry.startsSection, entry.section != model.guideChannels.first?.section {
+                                            PrototypeGuideSectionLabel(section: entry.section)
+                                                .padding(.top, PrototypeLayout.smallGap)
+                                        }
+                                        PrototypeGuideRow(
+                                            channel: channel,
+                                            programs: model.programs(
+                                                for: channel.id, from: guideStart,
+                                                hours: geometry.size.width >= 650 ? 6 : 2
+                                            ),
+                                            start: guideStart, now: model.now,
+                                            width: geometry.size.width, timelineOffset: $timelineOffset,
+                                            focus: $focused, railActive: railActive || isRestoringFocus,
+                                            returnTarget: focusReturnTarget,
+                                            favorite: model.favoriteIDs.contains(channel.id),
+                                            playing: model.playingChannelID == channel.id,
+                                            toggleFavorite: { model.toggleFavorite(channel.id) },
+                                            tune: { tune(channel.id) }, details: details,
+                                            controls: openControls,
+                                            top: { goToTop(proxy) },
+                                            goToNow: goToNow
+                                        )
+                                    }
                                     .id(channel.id)
                                     .onAppear { completePendingFocus(channel.id) }
                                 }
                             }
                             .scrollTargetLayout()
-                            .padding(.vertical, PrototypeLayout.smallGap)
+                            .padding(.top, PrototypeLayout.smallGap)
                         }
                         .scrollIndicators(.hidden)
                         .background(alignment: .topLeading) {
@@ -137,7 +144,7 @@ struct PrototypeBrowser: View {
                         .verticalEdgeFadeMask(
                             fadeHeight: PrototypeLayout.verticalFade,
                             topStrength: verticalFade.leading,
-                            bottomStrength: verticalFade.trailing
+                            bottomStrength: 0
                         )
                         .onScrollGeometryChange(for: PrototypeScrollFade.self) { geometry in
                             PrototypeScrollFade(
@@ -160,9 +167,7 @@ struct PrototypeBrowser: View {
                             pendingFocus = nil
                             restorationFallback = nil
                             revealCurrentProgram(width: geometry.size.width)
-                            if lastFocused?.channelID != target.channelID {
-                                proxy.scrollTo(target.channelID, anchor: .center)
-                            }
+                            proxy.scrollTo(target.channelID, anchor: .center)
                             if reduceMotion { await Task.yield() }
                             else { try? await Task.sleep(for: .milliseconds(340)) }
                             guard !Task.isCancelled else { return }
@@ -205,9 +210,9 @@ struct PrototypeBrowser: View {
                 timelineOffset = new < 650 ? 0 : min(newWidth * 2, timelineOffset / oldWidth * newWidth)
             }
         }
-        .padding(PrototypeLayout.guideInset)
+        .padding([.horizontal, .top], PrototypeLayout.guideInset)
         .background { PrototypeGuideSurface() }
-        .clipShape(RoundedRectangle(cornerRadius: PrototypeLayout.guideRadius, style: .continuous))
+        .clipShape(PrototypeLayout.guideShape)
         #if os(tvOS)
         .focusSection()
         .onExitCommand {
@@ -233,6 +238,7 @@ struct PrototypeBrowser: View {
             }
         }
         .onChange(of: guideOffset) { _, _ in timelineOffset = 0 }
+        .onChange(of: nowRequest) { _, _ in goToNow() }
         .onChange(of: isRestoringFocus) { _, restoring in
             if !restoring { restorationFallback = nil }
             if restoring, playbackReturnTarget == nil {
@@ -245,7 +251,7 @@ struct PrototypeBrowser: View {
             }
             if !channels.contains(where: { $0.id == selectedID }) {
                 focusedProgram = nil
-                selectedID = channels.first?.id
+                selectedID = model.guideChannels.first?.id
                 scrollID = selectedID
                 lastFocused = selectedID.map(PrototypeBrowseFocus.channel)
             }
@@ -255,6 +261,11 @@ struct PrototypeBrowser: View {
 
     private var guideStart: Date {
         timeAnchor.addingTimeInterval(guideOffset)
+    }
+
+    private var currentSection: LiveTVGuideSection {
+        model.guideChannels.first { $0.id == scrollID }?.section
+            ?? model.guideChannels.first?.section ?? .channels
     }
 
     private var returnTarget: PrototypeBrowseFocus? {
@@ -268,7 +279,7 @@ struct PrototypeBrowser: View {
             return lastFocused
         }
         let channelID = model.visibleChannels.first { $0.id == selectedID }?.id
-            ?? model.visibleChannels.first?.id
+            ?? model.guideChannels.first?.id
         return channelID.map(PrototypeBrowseFocus.channel)
     }
 
@@ -305,7 +316,7 @@ struct PrototypeBrowser: View {
     }
 
     private func goToTop(_ proxy: ScrollViewProxy) {
-        guard let first = model.visibleChannels.first else { return }
+        guard let first = model.guideChannels.first else { return }
         railActive = false
         selectedID = first.id
         focusedProgram = nil
@@ -315,31 +326,19 @@ struct PrototypeBrowser: View {
     }
 }
 
-private struct PrototypeGuidePaging: View {
-    let start: Date
-    @Binding var offset: TimeInterval
-    let goToNow: () -> Void
+struct PrototypeGuideSectionLabel: View {
+    let section: LiveTVGuideSection
+    @Environment(\.themePalette) private var palette
+    @ScaledMetric(relativeTo: .caption) private var fontSize = PrototypeLayout.sectionFontSize
 
     var body: some View {
-        HStack(spacing: PrototypeLayout.smallGap) {
-            Text(start, format: .dateTime.month(.abbreviated).day())
-                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                .padding(.leading, PrototypeLayout.rowInset)
-            Button { offset = max(-86_400, offset - 7_200) } label: {
-                Image(systemName: "chevron.backward").frame(minWidth: 44, minHeight: 44)
-            }
-            .accessibilityLabel("Earlier").disabled(offset <= -86_400)
-            Button(action: goToNow) {
-                Text("Now").padding(.horizontal, 12).frame(minHeight: 44)
-            }
-            Button { offset = min(604_800, offset + 7_200) } label: {
-                Image(systemName: "chevron.forward").frame(minWidth: 44, minHeight: 44)
-            }
-            .accessibilityLabel("Later").disabled(offset >= 604_800)
-        }
-        .font(.caption)
-        .buttonStyle(PrototypeButtonStyle(padded: false, surface: .control))
-        .focusEffectDisabled()
+        Text(section.title)
+            .font(.system(size: fontSize, weight: .medium))
+            .foregroundStyle(palette.secondaryText)
+            .lineLimit(1).minimumScaleFactor(0.8)
+            .padding(.horizontal, PrototypeLayout.rowInset)
+            .frame(minHeight: 44, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -348,14 +347,13 @@ private struct PrototypeTimeRuler: View {
     let now: Date
     let width: CGFloat
     let timelineOffset: CGFloat
-    @Binding var guideOffset: TimeInterval
-    let goToNow: () -> Void
+    let section: LiveTVGuideSection
     @Environment(\.themePalette) private var palette
     @ScaledMetric(relativeTo: .caption) private var height: CGFloat = 44
 
     var body: some View {
         HStack(alignment: .center, spacing: PrototypeLayout.columnGap) {
-            PrototypeGuidePaging(start: start, offset: $guideOffset, goToNow: goToNow)
+            PrototypeGuideSectionLabel(section: section)
                 .frame(width: PrototypeLayout.stationWidth(for: width), alignment: .leading)
             GeometryReader { geometry in
                 PrototypeNowLine(start: start, now: now, timelineOffset: timelineOffset)
@@ -438,12 +436,17 @@ struct PrototypeGuideRow: View {
     var body: some View {
         if width < 650 {
             VStack(alignment: .leading, spacing: PrototypeLayout.smallGap) {
-                PrototypeGuideStation(
-                    channel: channel, favorite: favorite, playing: playing, tune: tune, toggleFavorite: toggleFavorite,
-                    controls: controls, top: top, subtitle: programs.isEmpty ? channel.category : nil
-                )
+                HStack(spacing: PrototypeLayout.columnGap) {
+                    PrototypeGuideStation(
+                        channel: channel, favorite: favorite, playing: playing, tune: tune, toggleFavorite: toggleFavorite,
+                        controls: controls, top: top
+                    )
                     .focused(focus, equals: .channel(channel.id))
                     .disabled(railActive && returnTarget != .channel(channel.id))
+                    if programs.isEmpty {
+                        PrototypeGuideGap(category: channel.category, height: rowHeight)
+                    }
+                }
                 if !programs.isEmpty {
                     ScrollView(.horizontal) {
                         HStack(spacing: PrototypeLayout.smallGap) {
@@ -577,36 +580,19 @@ private struct PrototypeGuideStation: View {
     let toggleFavorite: () -> Void
     let controls: () -> Void
     let top: () -> Void
-    var subtitle: String? = nil
     var height: CGFloat? = nil
 
     var body: some View {
         Button(action: tune) {
-            HStack(spacing: PrototypeLayout.gap) {
-                PrototypeStationMark(channel: channel)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(channel.name).font(.subheadline.weight(.medium)).lineLimit(1)
-                    if let subtitle {
-                        Text(subtitle).font(.subheadline).opacity(0.75).lineLimit(1)
-                    }
-                    HStack {
-                        Text(channel.number, format: .number.grouping(.never))
-                        if playing {
-                            Image(systemName: "speaker.wave.2.fill").accessibilityLabel("Current channel")
-                        }
-                        if favorite { Image(systemName: "star.fill").accessibilityLabel("Favorite") }
-                    }
-                    .font(.caption).opacity(0.7)
-                }
-                Spacer(minLength: 0)
-            }
-            .frame(minHeight: PrototypeLayout.rowHeight)
-            .padding(.horizontal, PrototypeLayout.rowInset)
-            .frame(height: height)
-            .clipped()
+            PrototypeStationMark(channel: channel)
+                .frame(width: PrototypeLayout.stationColumnWidth, height: height ?? PrototypeLayout.rowHeight)
+                .clipped()
         }
-        .buttonStyle(PrototypeButtonStyle(selected: playing, padded: false, surface: .guide))
+        .buttonStyle(PrototypeButtonStyle(padded: false, surface: .guide))
         .focusEffectDisabled()
+        .accessibilityLabel(Text(channel.name))
+        .accessibilityValue(Text("Channel \(channel.number)"))
+        .accessibilityAddTraits(playing ? .isSelected : [])
         .accessibilityIdentifier("live-tv-channel-\(channel.number)")
         .contextMenu {
             Button(
@@ -624,15 +610,14 @@ struct PrototypeProgramLabel: View {
     let now: Date
     var availableWidth: CGFloat? = nil
     @ScaledMetric(relativeTo: .subheadline) private var minimumTitleWidth: CGFloat = 44
+    @ScaledMetric(relativeTo: .subheadline) private var fontSize = PrototypeLayout.guideFontSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: PrototypeLayout.smallGap) {
             if let availableWidth, availableWidth < minimumTitleWidth {
                 Image(systemName: "ellipsis").font(.caption)
             } else {
-                Text(program.title).font(.subheadline.weight(
-                    program.start <= now && now < program.end ? .medium : .regular
-                ))
+                Text(program.title).font(.system(size: fontSize, weight: .regular))
                     .lineLimit(availableWidth == nil ? 2 : 1)
             }
             if availableWidth == nil {
@@ -657,9 +642,10 @@ private struct PrototypeGuideGap: View {
     let category: String
     let height: CGFloat
     @Environment(\.themePalette) private var palette
+    @ScaledMetric(relativeTo: .subheadline) private var fontSize = PrototypeLayout.guideFontSize
     var body: some View {
         Text(category)
-            .font(.subheadline).foregroundStyle(palette.primaryText.opacity(0.8)).lineLimit(2)
+            .font(.system(size: fontSize)).foregroundStyle(palette.primaryText.opacity(0.8)).lineLimit(2)
             .padding(.horizontal, PrototypeLayout.rowInset)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: height)

@@ -16,6 +16,7 @@ public struct LiveTVPrototypePlayback {
     public let isExpanded: Bool
     public let returnToGuide: () -> Void
     public let playPauseRequest: Int
+    public let playbackStarted: () -> Void
 }
 
 public struct LiveTVPrototypeView<PlayerContent: View>: View {
@@ -26,12 +27,15 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
     @State private var sheet: PrototypeSheet?
     @State private var selectedChannelID: String?
     @State private var topRequest = 0
+    @State private var nowRequest = 0
+    @State private var channelSequence = LiveTVChannelSequence(channels: [])
     @State private var controlsActive = false
     @State private var guideHasFocus = false
     @State private var toolbarFocusRequest = 0
     @State private var focusedProgram: LiveTVPrototypeProgram?
     @State private var loadedRequest: Int?
     @State private var guideOffset: TimeInterval = 0
+    @State private var timeAnchor = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970 / 1_800) * 1_800)
     @State private var pendingTuneID: String?
     @State private var playPauseRequest = 0
     @Environment(\.themePalette) private var palette
@@ -87,7 +91,8 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         nextChannel: { changeChannel(by: 1) },
                         isExpanded: preview.isExpanded,
                         returnToGuide: returnToGuide,
-                        playPauseRequest: playPauseRequest
+                        playPauseRequest: playPauseRequest,
+                        playbackStarted: { confirmWatching(channel) }
                     ))
                     .environment(\.themePalette, ThemePalette.dark)
                     .frame(width: videoFrame.width, height: videoFrame.height)
@@ -126,7 +131,6 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                     PrototypePreviewHero(
                         channel: heroChannel,
                         program: heroProgram,
-                        isPlaying: heroChannel?.id == model.playingChannelID && model.playingChannelID != nil,
                         layout: layout,
                         watch: { if let id = heroChannel?.id { tune(id) } }
                     )
@@ -158,7 +162,8 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                                 selectedID: $selectedChannelID, railActive: $controlsActive,
                                 focusedProgram: $focusedProgram,
                                 hasFocus: $guideHasFocus,
-                                topRequest: topRequest, guideOffset: $guideOffset,
+                                topRequest: topRequest, nowRequest: nowRequest, guideOffset: $guideOffset,
+                                timeAnchor: $timeAnchor,
                                 restoreFocusRequest: preview.focusRestoreRequest,
                                 isPresented: !preview.isExpanded,
                                 isRestoringFocus: preview.isRestoringGuideFocus,
@@ -178,6 +183,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                             )
                         }
                         .frame(width: layout.guideWidth)
+                        .padding(.bottom, -layout.guideBottomExtension)
                     }
                 }
                 #if os(tvOS)
@@ -221,6 +227,8 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                     model.guideOnly = true
                     topRequest += 1
                 },
+                guideOffset: $guideOffset, goToNow: { nowRequest += 1 },
+                guideStart: timeAnchor.addingTimeInterval(guideOffset),
                 tune: { pendingTuneID = $0 }
             )
             .environment(\.themePalette, palette)
@@ -325,6 +333,9 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             HandoffDiagnostics.emit("LIVE_TV event=watchIgnored reason=inactiveDestination")
             return
         }
+        if !preview.isExpanded {
+            channelSequence = LiveTVChannelSequence(channels: model.guideChannels.map(\.channel))
+        }
         preview.watch(id)
         if !model.tuneFailed {
             selectedChannelID = id
@@ -334,11 +345,21 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
     }
 
     private func changeChannel(by offset: Int) {
-        guard !model.visibleChannels.isEmpty,
-              let index = model.visibleChannels.firstIndex(where: { $0.id == model.playingChannelID })
-        else { return }
-        let count = model.visibleChannels.count
-        tune(model.visibleChannels[(index + offset + count) % count].id)
+        guard let id = channelSequence.neighbor(
+            of: model.playingChannelID, offset: offset, visibleChannels: model.visibleChannels
+        ) else { return }
+        tune(id)
+    }
+
+    private func confirmWatching(_ channel: LiveTVPrototypeChannel) {
+        guard isActive, preview.isExpanded,
+              let current = model.channel(id: channel.id),
+              current.streamURL == channel.streamURL, current.httpHeaders == channel.httpHeaders,
+              model.recordWatched(channel.id)
+        else {
+            HandoffDiagnostics.emit("LIVE_TV event=watchConfirmationIgnored reason=staleOrInactive")
+            return
+        }
     }
 }
 

@@ -27,7 +27,8 @@ struct PlozziOSLiveTVDestination: View {
                 onNextChannel: playback.nextChannel,
                 isExpanded: playback.isExpanded,
                 onReturnToGuide: playback.returnToGuide,
-                playPauseRequest: playback.playPauseRequest
+                playPauseRequest: playback.playPauseRequest,
+                onPlaybackStarted: playback.playbackStarted
             )
         }
         .toolbar(isExpanded ? .hidden : .visible, for: .tabBar)

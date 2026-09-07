@@ -22,6 +22,14 @@ struct PrototypePreviewLayout {
         contentFrame.width - (sidebarWidth > 0 ? sidebarWidth + PrototypeLayout.sectionGap : 0)
     }
 
+    var guideBottomExtension: CGFloat {
+        #if os(tvOS)
+        max(0, bounds.maxY - contentFrame.maxY)
+        #else
+        0
+        #endif
+    }
+
     init(
         size: CGSize, safeAreaInsets: EdgeInsets = EdgeInsets(),
         navigationInset: CGFloat = 0, largeText: Bool = false
@@ -100,7 +108,6 @@ struct PrototypePreviewScrim: View {
 struct PrototypePreviewHero: View {
     let channel: LiveTVPrototypeChannel?
     let program: LiveTVPrototypeProgram?
-    let isPlaying: Bool
     let layout: PrototypePreviewLayout
     let watch: () -> Void
     @Environment(\.themePalette) private var palette
@@ -111,15 +118,11 @@ struct PrototypePreviewHero: View {
                 HStack(spacing: PrototypeLayout.gap) {
                     PrototypeStationMark(channel: channel, size: layout.compact ? 48 : 72)
                     if program != nil { Text(channel.name).lineLimit(1) }
-                    if isPlaying {
-                        Image(systemName: "speaker.wave.2.fill")
-                            .accessibilityLabel("Current channel")
-                    }
                 }
                 .font(.caption.weight(.medium))
                 .foregroundStyle(palette.secondaryText)
                 Text(program?.title ?? channel.name)
-                    .font(.system(layout.compact ? .title2 : .title, design: .rounded).weight(.semibold))
+                    .font((layout.compact ? Font.title2 : Font.title).weight(.semibold))
                     .lineLimit(2)
                 HStack(spacing: PrototypeLayout.gap) {
                     Text(channel.category).lineLimit(1)
@@ -137,7 +140,7 @@ struct PrototypePreviewHero: View {
                 #endif
             } else {
                 Text("Find your next channel")
-                    .font(.system(.title, design: .rounded).weight(.semibold))
+                    .font(.title.weight(.semibold))
                 Text("Browse by channel, genre or what's on.")
                     .font(.subheadline).foregroundStyle(palette.secondaryText)
             }

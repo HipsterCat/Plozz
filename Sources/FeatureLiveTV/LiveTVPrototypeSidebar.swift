@@ -11,10 +11,11 @@ struct PrototypeBrowseSidebar: View {
     let more: () -> Void
     @FocusState private var focused: Control?
     @State private var categoryFade = PrototypeScrollFade()
+    @ScaledMetric(relativeTo: .subheadline) private var fontSize = PrototypeLayout.guideFontSize
     @Environment(\.themePalette) private var palette
 
     private enum Control: Hashable {
-        case search, favorites, more
+        case search, more
         case category(String?)
     }
 
@@ -31,22 +32,6 @@ struct PrototypeBrowseSidebar: View {
             .accessibilityIdentifier("live-tv-search")
             .padding(PrototypeLayout.controlInset)
             .background { PrototypeControlSurface() }
-
-            Button {
-                model.favoritesOnly.toggle()
-            } label: {
-                Label("Favorites", systemImage: model.favoritesOnly ? "star.fill" : "star")
-                    .frame(maxWidth: .infinity, minHeight: PrototypeLayout.controlHeight, alignment: .leading)
-                    .padding(.horizontal, PrototypeLayout.gap)
-            }
-            .buttonStyle(PrototypeButtonStyle(selected: model.favoritesOnly, padded: false, surface: .control))
-            .focused($focused, equals: .favorites)
-            .accessibilityAddTraits(model.favoritesOnly ? .isSelected : [])
-            .accessibilityIdentifier("live-tv-favorites-filter")
-
-            Text("Categories")
-                .font(.caption).foregroundStyle(palette.secondaryText)
-                .padding(.horizontal, PrototypeLayout.gap)
 
             ScrollView {
                 LazyVStack(spacing: PrototypeLayout.smallGap) {
@@ -68,7 +53,7 @@ struct PrototypeBrowseSidebar: View {
                             .padding(.horizontal, PrototypeLayout.gap)
                         }
                         .buttonStyle(PrototypeButtonStyle(
-                            selected: model.category == category, padded: false, surface: .control
+                            padded: false, surface: .control
                         ))
                         .focused($focused, equals: .category(category))
                         .accessibilityAddTraits(model.category == category ? .isSelected : [])
@@ -98,7 +83,8 @@ struct PrototypeBrowseSidebar: View {
                     .padding(.horizontal, PrototypeLayout.gap)
             }
             .buttonStyle(PrototypeButtonStyle(
-                selected: model.source != nil || model.guideOnly, padded: false, surface: .control
+                selected: model.source != nil || model.guideOnly || model.favoritesOnly,
+                padded: false, surface: .control
             ))
             .focused($focused, equals: .more)
             .accessibilityIdentifier("live-tv-options")
@@ -108,7 +94,7 @@ struct PrototypeBrowseSidebar: View {
                 .foregroundStyle(palette.secondaryText)
                 .padding(.horizontal, PrototypeLayout.gap)
         }
-        .font(.subheadline.weight(.medium))
+        .font(.system(size: fontSize, weight: .regular))
         .lineLimit(1)
         .focusEffectDisabled()
         #if os(tvOS)

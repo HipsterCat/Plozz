@@ -9,7 +9,7 @@ enum PrototypeLayout {
     static let smallGap = PlozzTheme.Spacing.xSmall
     static let radius = PlozzTheme.Metrics.cornerRadius
     static let sectionGap = PlozzTheme.Spacing.large
-    static let rowGap = PlozzTheme.Spacing.small
+    static let rowGap = PlozzTheme.Spacing.medium
     static let columnGap = PlozzTheme.Spacing.small
     static let cellGap = PlozzTheme.Spacing.xSmall
     static let rowInset = PlozzTheme.Spacing.medium
@@ -26,17 +26,33 @@ enum PrototypeLayout {
     static let controlGroupRadius = controlRadius + controlInset
     #if os(tvOS)
     static let inset = PlozzTheme.Spacing.xLarge
-    static let stationSize: CGFloat = 72
+    static let stationSize: CGFloat = 96
     static let controlHeight: CGFloat = 56
+    static let guideFontSize: CGFloat = 26
+    static let sectionFontSize: CGFloat = 22
     #else
     static let inset = PlozzTheme.Spacing.medium
-    static let stationSize: CGFloat = 64
+    static let stationSize: CGFloat = 80
     static let controlHeight: CGFloat = 44
+    static let guideFontSize: CGFloat = 16
+    static let sectionFontSize: CGFloat = 14
     #endif
     static let rowHeight = stationSize + rowInset * 2
+    static let stationColumnWidth = stationSize * 1.75 + rowInset * 2
+    static var guideShape: UnevenRoundedRectangle {
+        #if os(tvOS)
+        let bottom: CGFloat = 0
+        #else
+        let bottom = guideRadius
+        #endif
+        return UnevenRoundedRectangle(
+            topLeadingRadius: guideRadius, bottomLeadingRadius: bottom,
+            bottomTrailingRadius: bottom, topTrailingRadius: guideRadius
+        )
+    }
 
-    static func stationWidth(for width: CGFloat) -> CGFloat {
-        width > 1_100 ? 384 : 280
+    static func stationWidth(for _: CGFloat) -> CGFloat {
+        stationColumnWidth
     }
 
     static func timelineWidth(for width: CGFloat) -> CGFloat {
@@ -45,6 +61,16 @@ enum PrototypeLayout {
 
     static func programHeight(in rowHeight: CGFloat) -> CGFloat {
         max(1, rowHeight - programInset * 2)
+    }
+}
+
+extension LiveTVGuideSection {
+    var title: LocalizedStringResource {
+        switch self {
+        case .recent: "Recently watched"
+        case .favorites: "Favorites"
+        case .channels: "Channels"
+        }
     }
 }
 
@@ -175,7 +201,9 @@ private struct PrototypeButtonBody: View {
         if focused || selected { return palette.fill }
         switch surface {
         case .standard: return palette.cardSurface
-        case .guide, .program: return palette.fillSubtle
+        case .guide: return .clear
+        case .program:
+            return palette.fillSubtle.opacity(reduceTransparency || contrast == .increased ? 1 : 0.45)
         case .control: return .clear
         }
     }
@@ -209,9 +237,10 @@ struct PrototypeGuideSurface: View {
     var body: some View {
         Group {
             if reduceTransparency || contrast == .increased {
-                Color.clear.plozzSurface(.raised, cornerRadius: PrototypeLayout.guideRadius)
+                Color.clear.plozzSurface(.raised, cornerRadius: 0)
+                    .clipShape(PrototypeLayout.guideShape)
             } else {
-                RoundedRectangle(cornerRadius: PrototypeLayout.guideRadius, style: .continuous)
+                PrototypeLayout.guideShape
                     .fill(LinearGradient(
                         stops: [
                             .init(color: .clear, location: 0),

@@ -25,6 +25,7 @@ public struct LiveChannelPlayerView: View {
     private let isExpanded: Bool
     private let onReturnToGuide: (() -> Void)?
     private let playPauseRequest: Int
+    private let onPlaybackStarted: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -33,6 +34,7 @@ public struct LiveChannelPlayerView: View {
     @State private var controlsVisible = true
     @State private var autoHideRevision = 0
     @State private var focusRevision = 0
+    @State private var playbackStartPolicy = LiveChannelPlaybackStartPolicy<LiveChannelSource>()
     @FocusState private var focusedControl: LiveChannelControl?
 
     public init(
@@ -47,7 +49,8 @@ public struct LiveChannelPlayerView: View {
         onNextChannel: @escaping () -> Void,
         isExpanded: Bool = true,
         onReturnToGuide: (() -> Void)? = nil,
-        playPauseRequest: Int = 0
+        playPauseRequest: Int = 0,
+        onPlaybackStarted: @escaping () -> Void = {}
     ) {
         self.channelID = channelID
         self.title = title
@@ -61,6 +64,7 @@ public struct LiveChannelPlayerView: View {
         self.isExpanded = isExpanded
         self.onReturnToGuide = onReturnToGuide
         self.playPauseRequest = playPauseRequest
+        self.onPlaybackStarted = onPlaybackStarted
     }
 
     public var body: some View {
@@ -110,7 +114,7 @@ public struct LiveChannelPlayerView: View {
                             onGoLive: goLive,
                             onNext: channelNext
                         )
-                        .onAppear { focusAfterPresentation(.close) }
+                        .onAppear(perform: focusPlaybackControlIfNeeded)
                         .transition(.opacity)
                     }
 
@@ -193,6 +197,12 @@ public struct LiveChannelPlayerView: View {
             guard let newValue, newValue != .surface else { return }
             noteInteraction()
         }
+        .onChange(of: playbackFocusAvailability) { _, _ in
+            focusPlaybackControlIfNeeded()
+        }
+        .onChange(of: playbackStartedSource) { _, _ in
+            reportPlaybackStartedIfNeeded()
+        }
         .onChange(of: model?.phase) { _, phase in
             autoHideRevision &+= 1
             guard let phase else { return }
@@ -208,8 +218,16 @@ public struct LiveChannelPlayerView: View {
             focusRevision &+= 1
             if expanded {
                 controlsVisible = true
-                focusAfterPresentation(.close)
+                reportPlaybackStartedIfNeeded()
+                if model == nil {
+                    focusAfterPresentation(.close)
+                } else if sourceMatchesCurrentModel, model?.phase.isInterrupted == true {
+                    focusInterruptionAction()
+                } else {
+                    focusPlaybackControlIfNeeded()
+                }
             } else {
+                playbackStartPolicy.resetViewing()
                 focusedControl = nil
             }
         }
@@ -221,6 +239,7 @@ public struct LiveChannelPlayerView: View {
             model?.handleScenePhase(phase)
         }
         .task(id: source) {
+            playbackStartPolicy.resetViewing()
             if let model {
                 await model.changeSource(
                     channelID: channelID,
@@ -277,6 +296,40 @@ public struct LiveChannelPlayerView: View {
         )
     }
 
+    private var sourceMatchesCurrentModel: Bool {
+        model?.matchesSource(
+            channelID: channelID,
+            streamURL: streamURL,
+            httpHeaders: httpHeaders
+        ) == true
+    }
+
+    private var playbackFocusAvailability: LiveChannelPlaybackFocusPolicy.Availability {
+        guard isExpanded, controlsVisible, let model else {
+            return .hidden
+        }
+        let sourceMatches = sourceMatchesCurrentModel
+        guard !sourceMatches || model.interruption == nil else {
+            return .hidden
+        }
+        return .init(
+            isPresented: true,
+            canPlayPause: sourceMatches && model.canPause,
+            canGoLive: sourceMatches && model.canGoLive
+        )
+    }
+
+    private var playbackStartedSource: LiveChannelSource? {
+        guard let model else { return nil }
+        return LiveChannelPlaybackStartPolicy<LiveChannelSource>.eligibleSource(
+            source,
+            sourceMatches: sourceMatchesCurrentModel,
+            isExpanded: isExpanded,
+            phase: model.phase,
+            hasPresentedFrame: model.hasPresentedFrame
+        )
+    }
+
     private func noteInteraction() {
         guard isExpanded else { return }
         controlsVisible = true
@@ -285,7 +338,7 @@ public struct LiveChannelPlayerView: View {
 
     private func revealControls() {
         noteInteraction()
-        focusAfterPresentation(.next)
+        focusPlaybackControlIfNeeded()
     }
 
     private func hideControls() {
@@ -308,8 +361,40 @@ public struct LiveChannelPlayerView: View {
         #endif
     }
 
+    private func focusPlaybackControlIfNeeded() {
+        #if os(tvOS)
+        let availability = playbackFocusAvailability
+        guard availability.isPresented,
+              !availability.contains(focusedControl) else {
+            return
+        }
+        focusRevision &+= 1
+        let revision = focusRevision
+        Task { @MainActor in
+            await Task.yield()
+            let latestAvailability = playbackFocusAvailability
+            guard isExpanded,
+                  revision == focusRevision,
+                  latestAvailability.isPresented,
+                  !latestAvailability.contains(focusedControl) else {
+                return
+            }
+            focusedControl = latestAvailability.preferredControl
+        }
+        #endif
+    }
+
     private func focusInterruptionAction() {
-        focusAfterPresentation(model?.canRetry == true ? .retry : .close)
+        focusAfterPresentation(
+            LiveChannelPlaybackFocusPolicy.interruptionControl(
+                canRetry: model?.canRetry == true
+            )
+        )
+    }
+
+    private func reportPlaybackStartedIfNeeded() {
+        guard playbackStartPolicy.consume(playbackStartedSource) else { return }
+        onPlaybackStarted()
     }
 
     private func togglePlayPause() {
@@ -342,6 +427,7 @@ public struct LiveChannelPlayerView: View {
 
     private func dismissPlayer() {
         if let onReturnToGuide {
+            playbackStartPolicy.resetViewing()
             onReturnToGuide()
             return
         }
@@ -356,7 +442,39 @@ private struct LiveChannelSource: Equatable {
     let httpHeaders: [String: String]
 }
 
-private enum LiveChannelControl: Hashable {
+struct LiveChannelPlaybackStartPolicy<Source: Equatable> {
+    private var reportedSource: Source?
+
+    static func eligibleSource(
+        _ source: Source,
+        sourceMatches: Bool,
+        isExpanded: Bool,
+        phase: LiveChannelPlaybackPhase,
+        hasPresentedFrame: Bool
+    ) -> Source? {
+        guard sourceMatches,
+              isExpanded,
+              phase == .playing,
+              hasPresentedFrame else {
+            return nil
+        }
+        return source
+    }
+
+    mutating func consume(_ eligibleSource: Source?) -> Bool {
+        guard let eligibleSource, eligibleSource != reportedSource else {
+            return false
+        }
+        reportedSource = eligibleSource
+        return true
+    }
+
+    mutating func resetViewing() {
+        reportedSource = nil
+    }
+}
+
+enum LiveChannelControl: Hashable {
     case surface
     case close
     case previous
@@ -364,6 +482,42 @@ private enum LiveChannelControl: Hashable {
     case goLive
     case next
     case retry
+}
+
+enum LiveChannelPlaybackFocusPolicy {
+    struct Availability: Equatable {
+        let isPresented: Bool
+        let canPlayPause: Bool
+        let canGoLive: Bool
+
+        static let hidden = Availability(
+            isPresented: false,
+            canPlayPause: false,
+            canGoLive: false
+        )
+
+        var preferredControl: LiveChannelControl {
+            canPlayPause ? .playPause : .next
+        }
+
+        func contains(_ control: LiveChannelControl?) -> Bool {
+            guard isPresented, let control else { return false }
+            switch control {
+            case .previous, .next:
+                return true
+            case .playPause:
+                return canPlayPause
+            case .goLive:
+                return canGoLive
+            case .surface, .close, .retry:
+                return false
+            }
+        }
+    }
+
+    static func interruptionControl(canRetry: Bool) -> LiveChannelControl {
+        canRetry ? .retry : .close
+    }
 }
 
 private struct LiveChannelRevealSurface: View {
@@ -472,15 +626,15 @@ private struct LiveChannelHeader: View {
 
             Spacer()
 
+            #if os(iOS)
             Button(action: onClose) {
                 Label("Close", systemImage: "xmark")
             }
-            #if os(iOS)
             .labelStyle(.iconOnly)
-            #endif
             .accessibilityIdentifier("live-channel-close")
             .focused($focus, equals: .close)
             .playerGlassButton(prominent: false)
+            #endif
         }
         .foregroundStyle(.white)
     }

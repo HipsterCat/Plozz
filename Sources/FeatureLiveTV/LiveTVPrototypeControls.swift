@@ -14,7 +14,7 @@ struct PrototypeBrowseToolbar: View {
     @FocusState private var focused: Control?
     @Environment(\.themePalette) private var palette
 
-    private enum Control: Hashable { case search, filters, favorites, more }
+    private enum Control: Hashable { case search, filters, more }
 
     var body: some View {
         HStack(spacing: PrototypeLayout.gap) {
@@ -45,18 +45,6 @@ struct PrototypeBrowseToolbar: View {
                     padded: false, surface: .control
                 ))
                 .accessibilityIdentifier("live-tv-category")
-                Button {
-                    model.favoritesOnly.toggle()
-                } label: {
-                    Label("Favorites", systemImage: model.favoritesOnly ? "star.fill" : "star")
-                        .labelStyle(PrototypeToolbarLabelStyle(compact: compact))
-                        .padding(.horizontal, compact ? 12 : 20)
-                        .frame(minWidth: 44, minHeight: PrototypeLayout.controlHeight)
-                }
-                .buttonStyle(PrototypeButtonStyle(selected: model.favoritesOnly, padded: false, surface: .control))
-                .focused($focused, equals: .favorites)
-                .accessibilityAddTraits(model.favoritesOnly ? .isSelected : [])
-                .accessibilityIdentifier("live-tv-favorites-filter")
                 Button(action: more) {
                     Label("More", systemImage: "ellipsis")
                         .labelStyle(PrototypeToolbarLabelStyle(compact: compact))
@@ -108,6 +96,9 @@ struct PrototypeSheetContent: View {
     let togglePreview: () -> Void
     let top: () -> Void
     let showGuide: () -> Void
+    @Binding var guideOffset: TimeInterval
+    let goToNow: () -> Void
+    let guideStart: Date
     let tune: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.themePalette) private var palette
@@ -129,7 +120,8 @@ struct PrototypeSheetContent: View {
                     PrototypeOptionsForm(
                         model: model, imports: imports, reload: reload,
                         followsFocus: followsFocus, togglePreview: togglePreview,
-                        top: top, showGuide: showGuide, tune: tune
+                        top: top, showGuide: showGuide,
+                        guideOffset: $guideOffset, goToNow: goToNow, guideStart: guideStart, tune: tune
                     )
                     .navigationTitle("Live TV")
                 case .sources:
@@ -169,6 +161,9 @@ private struct PrototypeOptionsForm: View {
     let togglePreview: () -> Void
     let top: () -> Void
     let showGuide: () -> Void
+    @Binding var guideOffset: TimeInterval
+    let goToNow: () -> Void
+    let guideStart: Date
     let tune: (String) -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -202,6 +197,25 @@ private struct PrototypeOptionsForm: View {
                 }
             } footer: {
                 Text("Auto preview follows channel focus. Turn it off to keep your current channel playing while you browse.")
+            }
+            if model.guideChannelCount > 0 {
+                Section("Guide time") {
+                    Text(guideStart, format: .dateTime.weekday(.wide).month(.abbreviated).day())
+                    Button("Earlier", systemImage: "chevron.backward") {
+                        guideOffset = max(-86_400, guideOffset - 7_200)
+                        dismiss()
+                    }
+                    .disabled(guideOffset <= -86_400)
+                    Button("Now", systemImage: "clock") {
+                        goToNow()
+                        dismiss()
+                    }
+                    Button("Later", systemImage: "chevron.forward") {
+                        guideOffset = min(604_800, guideOffset + 7_200)
+                        dismiss()
+                    }
+                    .disabled(guideOffset >= 604_800)
+                }
             }
             Section {
                 NavigationLink {

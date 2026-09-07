@@ -15,7 +15,7 @@ public enum LiveTVGuideFocusTarget: Hashable, Sendable {
     public static func returningToPlayback(
         in model: LiveTVPrototypeModel, selectedChannelID: String?
     ) -> Self? {
-        let candidates = [model.playingChannelID, selectedChannelID, model.visibleChannels.first?.id]
+        let candidates = [model.playingChannelID, selectedChannelID, model.guideChannels.first?.id]
         guard let id = candidates.compactMap({ $0 }).first(where: { id in
             model.visibleChannels.contains { $0.id == id }
         }) else { return nil }

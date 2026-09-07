@@ -87,6 +87,49 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
         }
     }
 
+    func testGuideReachesTVBottomWithoutMovingSidebarControlsIntoOverscan() {
+        let layout = PrototypePreviewLayout(
+            size: CGSize(width: 1_740, height: 960),
+            safeAreaInsets: EdgeInsets(top: 60, leading: 90, bottom: 60, trailing: 90)
+        )
+        #if os(tvOS)
+        XCTAssertEqual(layout.contentFrame.maxY + layout.guideBottomExtension, layout.bounds.maxY)
+        XCTAssertGreaterThan(layout.guideBottomExtension, 0)
+        XCTAssertEqual(PrototypeLayout.guideShape.cornerRadii.bottomLeading, 0)
+        XCTAssertEqual(PrototypeLayout.guideShape.cornerRadii.bottomTrailing, 0)
+        #else
+        XCTAssertEqual(layout.guideBottomExtension, 0)
+        XCTAssertLessThan(layout.contentFrame.maxY, layout.bounds.maxY)
+        #endif
+    }
+
+    func testLogoOnlyStationColumnReservesALargerReadableMarkAndMoreTimelineSpace() {
+        let size = UIHostingController(rootView: PrototypeStationMark(channel: LiveTVPrototypeModel().channels[0]))
+            .sizeThatFits(in: CGSize(width: 500, height: 500))
+        XCTAssertEqual(size.height, PrototypeLayout.stationSize, accuracy: 0.5)
+        XCTAssertEqual(size.width, PrototypeLayout.stationSize * 1.75, accuracy: 0.5)
+        XCTAssertEqual(PrototypeLayout.stationColumnWidth - size.width, PrototypeLayout.rowInset * 2, accuracy: 0.5)
+        #if os(tvOS)
+        XCTAssertGreaterThan(size.width, 126)
+        XCTAssertGreaterThan(size.height, 72)
+        XCTAssertLessThan(PrototypeLayout.stationColumnWidth, 280)
+        #endif
+    }
+
+    func testSectionLabelsFitTheStationColumnInBothReadingDirections() {
+        for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+            for section in [LiveTVGuideSection.recent, .favorites, .channels] {
+                let label = PrototypeGuideSectionLabel(section: section)
+                    .environment(\.layoutDirection, direction)
+                    .dynamicTypeSize(.large)
+                let size = UIHostingController(rootView: label)
+                    .sizeThatFits(in: CGSize(width: PrototypeLayout.stationColumnWidth, height: 60))
+                XCTAssertLessThanOrEqual(size.width, PrototypeLayout.stationColumnWidth + 0.5)
+                XCTAssertLessThanOrEqual(size.height, 60)
+            }
+        }
+    }
+
     func testTVPreviewRemainsVisibleBehindTheUpperGuide() {
         let layout = PrototypePreviewLayout(size: CGSize(width: 1_920, height: 1_080))
         let guideTop = layout.contentFrame.minY + layout.heroHeight + PrototypeLayout.sectionGap * 2

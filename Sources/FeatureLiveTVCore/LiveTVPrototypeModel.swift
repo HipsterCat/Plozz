@@ -174,6 +174,8 @@ public final class LiveTVPrototypeModel {
     }
 
     public private(set) var visibleChannels: [LiveTVPrototypeChannel] = []
+    public private(set) var guideChannels: [LiveTVGuideChannel] = []
+    public private(set) var recentChannelIDs: [String] = []
     public private(set) var channels: [LiveTVPrototypeChannel] = []
     public private(set) var favoriteIDs: Set<String>
     public private(set) var now: Date
@@ -254,7 +256,20 @@ public final class LiveTVPrototypeModel {
         }
         if favoritesOnly {
             refreshVisibleChannels()
+        } else {
+            refreshGuideChannels()
         }
+    }
+
+    /// Called only after deliberate watching has presented live video.
+    /// A stale-source confirmation is rejected without changing the lineup.
+    @discardableResult
+    public func recordWatched(_ id: String) -> Bool {
+        guard id == playingChannelID, channelsByID[id] != nil else { return false }
+        guard recentChannelIDs.first != id else { return true }
+        recentChannelIDs = [id] + recentChannelIDs.filter { $0 != id }.prefix(2)
+        refreshGuideChannels()
+        return true
     }
 
     public func resetFilters() {
@@ -388,6 +403,7 @@ public final class LiveTVPrototypeModel {
             channels = (1...count).map(Self.makeChannel)
         }
         channelsByID = Dictionary(uniqueKeysWithValues: channels.map { ($0.id, $0) })
+        recentChannelIDs.removeAll { channelsByID[$0] == nil }
         channelOrdinalsByID = Dictionary(
             uniqueKeysWithValues: channels.enumerated().map { ($0.element.id, $0.offset + 1) }
         )
@@ -440,6 +456,27 @@ public final class LiveTVPrototypeModel {
             return channelsAreOrdered(lhs.0, before: rhs.0)
         }
         .map(\.0)
+        refreshGuideChannels()
+    }
+
+    private func refreshGuideChannels() {
+        let visibleByID = Dictionary(uniqueKeysWithValues: visibleChannels.map { ($0.id, $0) })
+        let recent = recentChannelIDs.compactMap { visibleByID[$0] }
+        let recentIDs = Set(recent.map(\.id))
+        let favorites = visibleChannels.filter {
+            favoriteIDs.contains($0.id) && !recentIDs.contains($0.id)
+        }
+        let remainder = visibleChannels.filter {
+            !favoriteIDs.contains($0.id) && !recentIDs.contains($0.id)
+        }
+        let groups: [(LiveTVGuideSection, [LiveTVPrototypeChannel])] = [
+            (.recent, recent), (.favorites, favorites), (.channels, remainder)
+        ]
+        guideChannels = groups.flatMap { section, channels in
+            channels.enumerated().map { index, channel in
+                LiveTVGuideChannel(channel: channel, section: section, startsSection: index == 0)
+            }
+        }
     }
 
     private func channelsAreOrdered(

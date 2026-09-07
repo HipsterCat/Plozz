@@ -52,34 +52,45 @@ Release builds.
 
 The preview loads the complete supplied US playlist, then the enabled XMLTV guides.
 Channels become available before guide loading finishes. There is one unified
-channel guide, not separate Channels and Guide tabs. **Favorites** is an
-independent filter. Search, categories, sorting and Favorites survive opening
-the player, returning to the guide and refreshing sources.
-Favorites, filters and guide-source selections are still in-memory. Switching
+channel guide, not separate Channels and Guide tabs. It groups up to three
+**Recently watched** channels first, then **Favorites**, then the remaining
+channels. Empty groups are omitted and a channel appears only once.
+Search, categories, source and guide filters apply across every group.
+Search, categories, sorting and Favorites survive opening the player,
+returning to the guide and refreshing sources.
+Favorites, recent channels, filters and guide-source selections are still in-memory. Switching
 destinations retains them within the signed-in shell, including under the
 custom rail; profile/root rebuilds, memory eviction or process restart may
 reset them.
 
 - Browse, search names/numbers/categories/sources, filter and sort.
 - Favorite channels through their context menu.
-- Wide screens pin Search, Favorites, an independently scrolling category list
-  and More to the left of the guide. Search/Favorites/More never scroll away
+- Wide screens pin Search, an independently scrolling category list
+  and More to the left of the guide. Search and More never scroll away
   with either list. Select a category directly; Right returns to the remembered
   guide channel/program. Compact or short windows keep pinned horizontal controls.
+  The selected category uses a checkmark rather than a second focused-looking
+  box. Favorites are grouped in the guide, not a separate sidebar button;
+  Favorites-only filtering remains available through More > Filter channels.
   On Apple TV, Back from a guide row focuses Search without scrolling the list.
   Back from the controls goes to the
   surrounding app navigation. Holding Select on a channel/program also opens
   its context menu with Search and options and Back to top.
-  **More** contains source management, sorting, Auto preview and Back to top.
+  **More** contains source management, sorting, Auto preview, Guide time and Back to top.
   Back to top works without resetting the selected time.
 - Category, source and sorting choices use explicit navigation lists with
   checkmarked selections, not nested system Picker presentations inside a sheet.
 - The guide sits in one rounded tray with roomier channel rows and
   quieter programme tiles. Logo plates, channel tiles and the outer tray use
-  concentric radii derived from their insets. The default TV layout shows about
-  four to five full rows rather than squeezing in six or seven.
-  The shared background behind each complete channel row is removed, so channel
-  titles and inset programme cards do not touch an enclosing row border.
+  concentric radii derived from their insets. TV rows are 128 points tall,
+  with larger 168 x 96-point station marks and 16-point row spacing.
+  Station tiles show only the logo, or a name fallback when artwork is missing,
+  rather than repeating names, numbers and badges beside it. Names and numbers
+  remain searchable and available to accessibility; the focused channel's name
+  and full programme title remain in the hero.
+  Unfocused station tiles have no background. Programme surfaces are quieter,
+  with lighter-weight 26-point TV titles and the standard Plozz system font,
+  not a separate rounded face.
   A small Liquid Glass surface anchors Search on the left; compact windows
   retain the glass control group. Programme cells do not create individual glass
   surfaces. Glass reduction preferences and Reduce Transparency use the existing shared
@@ -91,7 +102,10 @@ reset them.
   header no longer starts an opaque panel. The tray grows more opaque lower
   down, with a solid fallback for Reduce Transparency or increased contrast.
   Shared smooth edge masks dissolve rows underneath the fixed time header and
-  programme cells at the horizontal viewport edges. Each fade ramps in only
+  programme cells at the horizontal viewport edges. The guide has no bottom
+  fade and extends to the TV screen's bottom edge with square bottom corners;
+  the sidebar controls retain their safe inset. Touch layouts retain their
+  bottom safe-area clearance. Each remaining fade ramps in only
   when content extends beyond that edge, keeping reached endpoints readable.
   Programme surfaces sit eight points inside the row at top and bottom, with
   correspondingly smaller concentric corners; their time widths are unchanged.
@@ -111,7 +125,10 @@ reset them.
   not repeated on every channel. Program details identify the selected guide source.
 - On wide screens, the station/logo column stays fixed while program rows scroll
   horizontally through a shared six-hour window. The time ruler stays above the
-  vertical list and follows the same horizontal offset. Earlier/Later shifts the
+  vertical list and follows the same horizontal offset. Its leading label
+  identifies the visible channel group instead of showing a date and buttons.
+  More > Guide time retains the date and Earlier/Now/Later controls.
+  Earlier/Later shifts the
   window from one day back through seven days ahead, subject to source coverage.
   The time anchor does not jump at the half hour while browsing; **Now** recenters
   it on the current wall clock. A shared Now line extends through the guide.
@@ -125,7 +142,7 @@ reset them.
   Their time widths remain accurate, and full titles/times remain available
   through accessibility and programme details.
 - iPhone and narrow iPad windows use compact rows with horizontally browsable
-  program cards; no-guide rows put genre directly under the channel name.
+  program cards; no-guide rows put genre beside the channel logo.
   Video stays above the scrolling list. Touch browsing does not automatically
   open streams; selecting a channel starts playback, and returning leaves its
   preview visible. Use Watch channel to reopen playback.
@@ -133,7 +150,12 @@ reset them.
   Past/future programs open details, not a pretend future broadcast.
   The live host exposes real buffering,
   failure/retry and live transport state rather than a fabricated VOD timeline.
-  Next/Previous follows the currently filtered channel list.
+  Recently watched records only deliberate fullscreen viewing after the matching
+  source is playing and has presented video. Automatic previews, failed startup
+  and stale callbacks do not count. Revisiting moves a channel to the front.
+  Next/Previous snapshots the filtered guide order when watching starts, so
+  promoting a channel into Recents cannot make transport bounce between stations.
+  This channel history never writes movie/episode progress or watched status.
 
 ### Required follow-up: channel scanning
 
@@ -181,6 +203,10 @@ the channel. A changed channel or offscreen programme is brought into view.
 Returning from fullscreen keeps the chosen channel playing rather than retuning
 on the first navigation press. **Auto preview** in More re-enables
 following channel focus. The remote's Play/Pause also works during browsing.
+The normal tvOS player header has no Close button; Back returns to the guide.
+Transport focus selects an available playback action instead of a removed
+header target. Startup and interruption escape/retry controls remain available,
+and iPhone/iPad retain their touch Close button.
 
 Tuning another channel reuses the engine with a new, fenced source attempt.
 Loading/failure states remain local and nonfocusable in the preview, with an
