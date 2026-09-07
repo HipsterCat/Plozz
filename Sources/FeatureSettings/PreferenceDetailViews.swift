@@ -140,8 +140,7 @@ struct AppearanceDetailView: View {
                 CompactNavigationPicker(selection: $navigation.style)
 
                 SettingsDetailGroup(
-                    title: "Hide or Reorder Navigation",
-                    description: "Choose your shortcuts and their order."
+                    title: "Hide or Reorder Navigation"
                 ) {
                     NavigationLibrariesDetailView(
                         scope: librariesScope,
