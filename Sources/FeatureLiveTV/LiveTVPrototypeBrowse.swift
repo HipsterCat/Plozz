@@ -439,12 +439,12 @@ struct PrototypeGuideRow: View {
                 HStack(spacing: PrototypeLayout.columnGap) {
                     PrototypeGuideStation(
                         channel: channel, favorite: favorite, playing: playing, tune: tune, toggleFavorite: toggleFavorite,
-                        controls: controls, top: top
+                        controls: controls, top: top, height: rowHeight
                     )
                     .focused(focus, equals: .channel(channel.id))
                     .disabled(railActive && returnTarget != .channel(channel.id))
                     if programs.isEmpty {
-                        PrototypeGuideGap(category: channel.category, height: rowHeight)
+                        PrototypeGuideGap(channelName: channel.name, height: rowHeight)
                     }
                 }
                 if !programs.isEmpty {
@@ -491,7 +491,7 @@ struct PrototypeGuideRow: View {
                     .focused(focus, equals: .channel(channel.id))
                     .disabled(railActive && returnTarget != .channel(channel.id))
                 if programs.isEmpty {
-                    PrototypeGuideGap(category: channel.category, height: rowHeight)
+                    PrototypeGuideGap(channelName: channel.name, height: rowHeight)
                         .frame(maxWidth: .infinity)
                 } else {
                     PrototypeSynchronizedTimeline(
@@ -539,7 +539,7 @@ struct PrototypeGuideRow: View {
                                         Button("Now", systemImage: "clock", action: goToNow)
                                     }
                                 } else {
-                                    PrototypeGuideGap(category: channel.category, height: rowHeight)
+                                    PrototypeGuideGap(channelName: channel.name, height: rowHeight)
                                         .frame(width: slotWidth(slot)).clipped()
                                 }
                             }
@@ -584,11 +584,14 @@ private struct PrototypeGuideStation: View {
 
     var body: some View {
         Button(action: tune) {
-            PrototypeStationMark(channel: channel)
-                .frame(width: PrototypeLayout.stationColumnWidth, height: height ?? PrototypeLayout.rowHeight)
+            PrototypeStationMark(
+                channel: channel,
+                plateSize: CGSize(width: PrototypeLayout.stationColumnWidth, height: height ?? PrototypeLayout.rowHeight),
+                cornerRadius: PrototypeLayout.rowRadius
+            )
                 .clipped()
         }
-        .buttonStyle(PrototypeButtonStyle(padded: false, surface: .guide))
+        .buttonStyle(PrototypeButtonStyle(padded: false, surface: .station))
         .focusEffectDisabled()
         .accessibilityLabel(Text(channel.name))
         .accessibilityValue(Text("Channel \(channel.number)"))
@@ -638,18 +641,18 @@ struct PrototypeProgramLabel: View {
     }
 }
 
-private struct PrototypeGuideGap: View {
-    let category: String
+struct PrototypeGuideGap: View {
+    let channelName: String
     let height: CGFloat
     @Environment(\.themePalette) private var palette
     @ScaledMetric(relativeTo: .subheadline) private var fontSize = PrototypeLayout.guideFontSize
     var body: some View {
-        Text(category)
+        Text(channelName)
             .font(.system(size: fontSize)).foregroundStyle(palette.primaryText.opacity(0.8)).lineLimit(2)
             .padding(.horizontal, PrototypeLayout.rowInset)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: height)
-            .accessibilityHint("Channel genre. No program listing for this time.")
+            .accessibilityHint("No program listing for this time.")
     }
 }
 

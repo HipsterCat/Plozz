@@ -120,7 +120,17 @@ extension LiveTVPrototypeSort {
 struct PrototypeStationMark: View {
     let channel: LiveTVPrototypeChannel
     var size: CGFloat = PrototypeLayout.stationSize
+    var plateSize: CGSize? = nil
+    var cornerRadius: CGFloat = PrototypeLayout.logoRadius
     @State private var resolvedTone: ResolvedLogoTone?
+
+    private var dimensions: CGSize {
+        plateSize ?? CGSize(width: size * 1.75, height: size)
+    }
+
+    private var artworkInset: CGFloat {
+        plateSize == nil ? 6 : PrototypeLayout.guideInset
+    }
 
     private var lightPlate: Bool {
         guard let resolvedTone else { return false }
@@ -132,7 +142,7 @@ struct PrototypeStationMark: View {
     var body: some View {
         HeroLogoArtwork(
             primaryURL: channel.logoURL,
-            maxWidth: size * 1.75 - 12, maxHeight: size - 12,
+            maxWidth: dimensions.width - artworkInset * 2, maxHeight: dimensions.height - artworkInset * 2,
             constrainsToBounds: true, alignment: .center, haloStyle: .gentle,
             onResolve: { resolvedTone = $0 }
         ) {
@@ -143,11 +153,12 @@ struct PrototypeStationMark: View {
                 .foregroundStyle(lightPlate ? .black : .white)
         }
             .environment(\.colorScheme, lightPlate ? .light : .dark)
-            .frame(width: size * 1.75, height: size)
+            .frame(width: dimensions.width, height: dimensions.height)
             .background(
                 lightPlate ? Color.white : Color(white: 0.07),
-                in: RoundedRectangle(cornerRadius: PrototypeLayout.logoRadius, style: .continuous)
+                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             )
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .onChange(of: channel.logoURL) { _, _ in resolvedTone = nil }
             .accessibilityHidden(true)
     }
@@ -170,7 +181,7 @@ struct PrototypeButtonStyle: ButtonStyle {
 }
 
 enum PrototypeButtonSurface: Equatable {
-    case standard, guide, program, control
+    case standard, guide, station, program, control
 }
 
 private struct PrototypeButtonBody: View {
@@ -184,13 +195,14 @@ private struct PrototypeButtonBody: View {
     @Environment(\.colorSchemeContrast) private var contrast
 
     private var solidFocus: Bool {
-        focused && ((surface != .guide && surface != .program) || reduceTransparency || contrast == .increased)
+        focused && surface != .station
+            && ((surface != .guide && surface != .program) || reduceTransparency || contrast == .increased)
     }
 
     private var cornerRadius: CGFloat {
         switch surface {
         case .standard: PrototypeLayout.radius
-        case .guide: PrototypeLayout.rowRadius
+        case .guide, .station: PrototypeLayout.rowRadius
         case .program: PrototypeLayout.programRadius
         case .control: PrototypeLayout.controlRadius
         }
@@ -201,7 +213,7 @@ private struct PrototypeButtonBody: View {
         if focused || selected { return palette.fill }
         switch surface {
         case .standard: return palette.cardSurface
-        case .guide: return .clear
+        case .guide, .station: return .clear
         case .program:
             return palette.fillSubtle.opacity(reduceTransparency || contrast == .increased ? 1 : 0.45)
         case .control: return .clear
@@ -218,10 +230,11 @@ private struct PrototypeButtonBody: View {
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(
-                        focused && !solidFocus ? palette.primaryText.opacity(0.9)
+                        focused && !solidFocus ? (surface == .station ? Color.white : palette.primaryText).opacity(0.9)
                             : (selected && !focused ? palette.accent.opacity(0.35) : .clear),
-                        lineWidth: focused ? 2.5 : 1
+                        lineWidth: focused ? (surface == .station && contrast == .increased ? 4 : 2.5) : 1
                     )
+                    .shadow(color: surface == .station && focused ? .black : .clear, radius: 1.5)
             }
             .opacity(configuration.isPressed ? 0.75 : 1)
             // Directional entry gates remove candidates without dimming the rail.

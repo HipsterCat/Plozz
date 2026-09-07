@@ -76,19 +76,26 @@ reset them.
   Back from the controls goes to the
   surrounding app navigation. Holding Select on a channel/program also opens
   its context menu with Search and options and Back to top.
-  **More** contains source management, sorting, Auto preview, Guide time and Back to top.
-  Back to top works without resetting the selected time.
+  **More** contains source management, sorting, Auto preview and Guide time.
+  Its Back to top entry and the sidebar's bottom clock are removed.
+  The channel/program context-menu Back to top action remains and does not
+  reset the selected time.
 - Category, source and sorting choices use explicit navigation lists with
   checkmarked selections, not nested system Picker presentations inside a sheet.
 - The guide sits in one rounded tray with roomier channel rows and
   quieter programme tiles. Logo plates, channel tiles and the outer tray use
   concentric radii derived from their insets. TV rows are 128 points tall,
-  with larger 168 x 96-point station marks and 16-point row spacing.
+  with full-height 200 x 128-point logo plates and 16-point row spacing.
+  The backing fills the complete station focus bounds, with the same corner
+  radius and no outside gutter. Artwork fits inside without stretching.
+  Plozz adds the light/dark backing based on logo contrast; source images can
+  also contain their own baked-in background. Hero/search logo sizes remain
+  independent of the full-row guide treatment.
   Station tiles show only the logo, or a name fallback when artwork is missing,
   rather than repeating names, numbers and badges beside it. Names and numbers
   remain searchable and available to accessibility; the focused channel's name
   and full programme title remain in the hero.
-  Unfocused station tiles have no background. Programme surfaces are quieter,
+  No second surface surrounds the logo backing. Programme surfaces are quieter,
   with lighter-weight 26-point TV titles and the standard Plozz system font,
   not a separate rounded face.
   A small Liquid Glass surface anchors Search on the left; compact windows
@@ -96,6 +103,8 @@ reset them.
   surfaces. Glass reduction preferences and Reduce Transparency use the existing shared
   fallbacks. Guide focus uses a crisp rounded outline and tonal fill, with a
   solid high-contrast treatment under increased contrast or Reduce Transparency.
+  Logo tiles retain a contrasting outline above their opaque backing, including
+  with accessibility contrast settings, rather than hiding focus behind the image.
   Focus and selection never swap the button's structural identity.
 - The preview spans the screen width behind the upper guide. One continuous
   fade reaches the page colour before the video's lower edge; the date/time
@@ -118,8 +127,9 @@ reset them.
 - Guide retains all channels, even if none has a schedule. Unknown intervals
   remain honest gaps; they do not hide channels or shift later programs under
   the wrong time. Channel buttons still tune live without guide data.
-  Missing listings show the channel's genre/category in place of a program,
-  without inventing its title, start time or duration. Entirely unlisted rows
+  Missing listings show the channel name to the right of the logo in place of
+  a program, without inventing a show title, start time or duration. Real
+  listings still show their programme title. Entirely unlisted rows
   keep that label stationary rather than drawing an empty six-hour program.
   Loading, disabled, failed and unmatched-source diagnostics remain in Sources,
   not repeated on every channel. Program details identify the selected guide source.
@@ -142,7 +152,7 @@ reset them.
   Their time widths remain accurate, and full titles/times remain available
   through accessibility and programme details.
 - iPhone and narrow iPad windows use compact rows with horizontally browsable
-  program cards; no-guide rows put genre beside the channel logo.
+  program cards; no-guide rows put the channel name beside its logo.
   Video stays above the scrolling list. Touch browsing does not automatically
   open streams; selecting a channel starts playback, and returning leaves its
   preview visible. Use Watch channel to reopen playback.

@@ -94,7 +94,6 @@ struct PrototypeSheetContent: View {
     let reload: () -> Void
     let followsFocus: Bool
     let togglePreview: () -> Void
-    let top: () -> Void
     let showGuide: () -> Void
     @Binding var guideOffset: TimeInterval
     let goToNow: () -> Void
@@ -120,7 +119,7 @@ struct PrototypeSheetContent: View {
                     PrototypeOptionsForm(
                         model: model, imports: imports, reload: reload,
                         followsFocus: followsFocus, togglePreview: togglePreview,
-                        top: top, showGuide: showGuide,
+                        showGuide: showGuide,
                         guideOffset: $guideOffset, goToNow: goToNow, guideStart: guideStart, tune: tune
                     )
                     .navigationTitle("Live TV")
@@ -159,7 +158,6 @@ private struct PrototypeOptionsForm: View {
     let reload: () -> Void
     let followsFocus: Bool
     let togglePreview: () -> Void
-    let top: () -> Void
     let showGuide: () -> Void
     @Binding var guideOffset: TimeInterval
     let goToNow: () -> Void
@@ -191,10 +189,6 @@ private struct PrototypeOptionsForm: View {
                     get: { followsFocus },
                     set: { if $0 != followsFocus { togglePreview() } }
                 ))
-                Button("Back to top", systemImage: "arrow.up.to.line") {
-                    top()
-                    dismiss()
-                }
             } footer: {
                 Text("Auto preview follows channel focus. Turn it off to keep your current channel playing while you browse.")
             }

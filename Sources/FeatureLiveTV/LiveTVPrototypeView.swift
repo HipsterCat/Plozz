@@ -222,7 +222,6 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                 reload: { reloadRequest += 1 },
                 followsFocus: preview.followsFocus,
                 togglePreview: { preview.setFollowsFocus(!preview.followsFocus) },
-                top: { topRequest += 1 },
                 showGuide: {
                     model.guideOnly = true
                     topRequest += 1

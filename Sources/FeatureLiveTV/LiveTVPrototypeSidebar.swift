@@ -12,7 +12,6 @@ struct PrototypeBrowseSidebar: View {
     @FocusState private var focused: Control?
     @State private var categoryFade = PrototypeScrollFade()
     @ScaledMetric(relativeTo: .subheadline) private var fontSize = PrototypeLayout.guideFontSize
-    @Environment(\.themePalette) private var palette
 
     private enum Control: Hashable {
         case search, more
@@ -88,11 +87,6 @@ struct PrototypeBrowseSidebar: View {
             ))
             .focused($focused, equals: .more)
             .accessibilityIdentifier("live-tv-options")
-
-            Text(model.now, format: .dateTime.hour().minute())
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(palette.secondaryText)
-                .padding(.horizontal, PrototypeLayout.gap)
         }
         .font(.system(size: fontSize, weight: .regular))
         .lineLimit(1)

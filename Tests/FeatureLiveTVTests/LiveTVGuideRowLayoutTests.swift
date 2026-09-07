@@ -1,4 +1,5 @@
 #if DEBUG && canImport(SwiftUI) && canImport(UIKit)
+import CoreGraphics
 import FeatureLiveTVCore
 import SwiftUI
 import UIKit
@@ -19,7 +20,7 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
         XCTAssertEqual(height(programs: programs), PrototypeLayout.rowHeight, accuracy: 0.5)
     }
 
-    func testGuideAndGenreOnlyRowsHaveTheSameHeight() {
+    func testGuideAndChannelOnlyRowsHaveTheSameHeight() {
         let regular = height(programs: [program("regular", from: 0, to: 21_600)])
         let narrow = height(programs: [program("brief", from: 0, to: 30)])
         let withoutGuide = height(programs: [])
@@ -128,6 +129,58 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
                 XCTAssertLessThanOrEqual(size.height, 60)
             }
         }
+    }
+
+    func testGuideLogoBackingFillsTheFocusBoundsWithoutAnOuterGutter() throws {
+        let width = Int(PrototypeLayout.stationColumnWidth)
+        let height = Int(PrototypeLayout.rowHeight)
+        let mark = PrototypeStationMark(
+            channel: LiveTVPrototypeModel().channels[0],
+            plateSize: CGSize(width: width, height: height),
+            cornerRadius: PrototypeLayout.rowRadius
+        )
+        let renderer = ImageRenderer(content: mark)
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.cgImage)
+        XCTAssertEqual(image.width, width)
+        XCTAssertEqual(image.height, height)
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        try pixels.withUnsafeMutableBytes { bytes in
+            let context = try XCTUnwrap(CGContext(
+                data: bytes.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+            ))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        for (x, y) in [(width / 2, 1), (width / 2, height - 2), (1, height / 2), (width - 2, height / 2)] {
+            XCTAssertGreaterThan(pixels[(y * width + x) * 4 + 3], 250)
+        }
+    }
+
+    func testGuideLogoBackingMatchesScaledRows() {
+        for height in [PrototypeLayout.rowHeight, PrototypeLayout.rowHeight * 2] {
+            let mark = PrototypeStationMark(
+                channel: LiveTVPrototypeModel().channels[0],
+                plateSize: CGSize(width: PrototypeLayout.stationColumnWidth, height: height),
+                cornerRadius: PrototypeLayout.rowRadius
+            )
+            let size = UIHostingController(rootView: mark).sizeThatFits(in: CGSize(width: 600, height: 600))
+            XCTAssertEqual(size.width, PrototypeLayout.stationColumnWidth, accuracy: 0.5)
+            XCTAssertEqual(size.height, height, accuracy: 0.5)
+        }
+    }
+
+    func testLongChannelNamesWithoutListingsStayInsideTheRow() {
+        let label = PrototypeGuideGap(
+            channelName: String(repeating: "International channel ", count: 12),
+            height: PrototypeLayout.rowHeight
+        )
+        let size = UIHostingController(rootView: label)
+            .sizeThatFits(in: CGSize(width: 500, height: 600))
+        XCTAssertEqual(size.height, PrototypeLayout.rowHeight, accuracy: 0.5)
+        XCTAssertLessThanOrEqual(size.width, 500.5)
     }
 
     func testTVPreviewRemainsVisibleBehindTheUpperGuide() {
