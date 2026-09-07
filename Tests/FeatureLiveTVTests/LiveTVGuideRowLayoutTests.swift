@@ -138,8 +138,8 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
             size: CGSize(width: 1_740, height: 960),
             safeAreaInsets: EdgeInsets(top: 60, leading: 90, bottom: 60, trailing: 90)
         )
-        let toolbarAndRuler = PrototypeLayout.controlHeight + PrototypeLayout.controlInset * 2 + 44
-        let spacing = PrototypeLayout.sectionGap * 2 + PrototypeLayout.guideInset * 2
+        let toolbarAndRuler: CGFloat = 44
+        let spacing = PrototypeLayout.sectionGap + PrototypeLayout.guideInset * 2
             + PrototypeLayout.gap + PrototypeLayout.smallGap * 2
         let listHeight = layout.contentFrame.height - layout.heroHeight - toolbarAndRuler - spacing
         let visibleRows = listHeight / (PrototypeLayout.rowHeight + PrototypeLayout.rowGap)
@@ -147,6 +147,47 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
         XCTAssertLessThan(visibleRows, 5)
         XCTAssertGreaterThanOrEqual(PrototypeLayout.rowHeight, 100)
         #endif
+    }
+
+    func testWideGuideReservesSpaceForPinnedControlsWithoutShrinkingVideo() {
+        for size in [CGSize(width: 1_920, height: 1_080), CGSize(width: 1_024, height: 768)] {
+            let layout = PrototypePreviewLayout(size: size)
+            XCTAssertGreaterThan(layout.sidebarWidth, 0)
+            XCTAssertEqual(
+                layout.sidebarWidth + PrototypeLayout.sectionGap + layout.guideWidth,
+                layout.contentFrame.width, accuracy: 0.01
+            )
+            XCTAssertGreaterThanOrEqual(layout.guideWidth - PrototypeLayout.guideInset * 2, 650)
+            XCTAssertEqual(layout.videoFrame.width, layout.bounds.width)
+        }
+    }
+
+    func testCompactOrShortWindowsKeepPinnedHorizontalControls() {
+        for size in [
+            CGSize(width: 390, height: 844),
+            CGSize(width: 700, height: 750),
+            CGSize(width: 1_024, height: 500)
+        ] {
+            let layout = PrototypePreviewLayout(size: size)
+            XCTAssertEqual(layout.sidebarWidth, 0)
+            XCTAssertEqual(layout.guideWidth, layout.contentFrame.width)
+        }
+    }
+
+    func testSidebarFitsWithLongAndScrollableCategoryLists() {
+        let widths: [CGFloat] = [224, 272]
+        for width in widths {
+            for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+                let fixture = SidebarFixture()
+                    .environment(\.layoutDirection, direction)
+                    .dynamicTypeSize(.large)
+                let size = UIHostingController(rootView: fixture)
+                    .sizeThatFits(in: CGSize(width: width, height: 600))
+                XCTAssertLessThanOrEqual(size.width, width + 0.5)
+                XCTAssertLessThanOrEqual(size.height, 600.5)
+                XCTAssertGreaterThan(size.height, 400)
+            }
+        }
     }
 
     func testGuideAndLogoCornersStayConcentric() {
@@ -278,6 +319,24 @@ private struct ToolbarFixture: View {
             model: model, active: $active, focusRequest: 0, compact: compact,
             search: {}, filters: {}, more: {}
         )
+    }
+}
+
+private struct SidebarFixture: View {
+    @State private var active = false
+    private let model = LiveTVPrototypeModel(
+        now: Date(), scenario: .noGuide,
+        channels: (1 ... 30).map { number in
+            LiveTVPrototypeChannel(
+                id: "sidebar-\(number)", number: number, name: "Channel \(number)",
+                category: "Documentaries and entertainment \(number)",
+                symbol: "tv", accent: 0, source: .iptv, tagline: ""
+            )
+        }
+    )
+
+    var body: some View {
+        PrototypeBrowseSidebar(model: model, active: $active, focusRequest: 0, search: {}, more: {})
     }
 }
 #endif

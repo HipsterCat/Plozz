@@ -209,6 +209,7 @@ struct PrototypeBrowser: View {
         .background { PrototypeGuideSurface() }
         .clipShape(RoundedRectangle(cornerRadius: PrototypeLayout.guideRadius, style: .continuous))
         #if os(tvOS)
+        .focusSection()
         .onExitCommand {
             if !isRestoringFocus { openToolbar() }
         }
@@ -431,7 +432,6 @@ struct PrototypeGuideRow: View {
     let controls: () -> Void
     let top: () -> Void
     let goToNow: () -> Void
-    @Environment(\.themePalette) private var palette
     @ScaledMetric(relativeTo: .subheadline) private var rowHeight: CGFloat = PrototypeLayout.rowHeight
     @State private var compactFade = PrototypeScrollFade()
 
@@ -547,9 +547,6 @@ struct PrototypeGuideRow: View {
                 }
             }
             .frame(height: rowHeight)
-            .background(palette.fillSubtle, in: RoundedRectangle(
-                cornerRadius: PrototypeLayout.rowRadius, style: .continuous
-            ))
         }
     }
 

@@ -12,6 +12,16 @@ struct PrototypePreviewLayout {
     let metadataWidth: CGFloat
     let compact: Bool
 
+    var sidebarWidth: CGFloat {
+        guard contentFrame.width >= 960,
+              contentFrame.height - heroHeight - PrototypeLayout.sectionGap >= 420 else { return 0 }
+        return contentFrame.width >= 1_400 ? 272 : 224
+    }
+
+    var guideWidth: CGFloat {
+        contentFrame.width - (sidebarWidth > 0 ? sidebarWidth + PrototypeLayout.sectionGap : 0)
+    }
+
     init(
         size: CGSize, safeAreaInsets: EdgeInsets = EdgeInsets(),
         navigationInset: CGFloat = 0, largeText: Bool = false

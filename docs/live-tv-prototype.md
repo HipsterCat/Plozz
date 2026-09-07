@@ -62,9 +62,12 @@ reset them.
 
 - Browse, search names/numbers/categories/sources, filter and sort.
 - Favorite channels through their context menu.
-- Search, category filtering, Favorites and More share a compact horizontal bar.
-  On Apple TV, Back from a guide row focuses that bar without scrolling the list;
-  Down returns to the remembered channel/program. Back from the bar goes to the
+- Wide screens pin Search, Favorites, an independently scrolling category list
+  and More to the left of the guide. Search/Favorites/More never scroll away
+  with either list. Select a category directly; Right returns to the remembered
+  guide channel/program. Compact or short windows keep pinned horizontal controls.
+  On Apple TV, Back from a guide row focuses Search without scrolling the list.
+  Back from the controls goes to the
   surrounding app navigation. Holding Select on a channel/program also opens
   its context menu with Search and options and Back to top.
   **More** contains source management, sorting, Auto preview and Back to top.
@@ -72,12 +75,14 @@ reset them.
 - Category, source and sorting choices use explicit navigation lists with
   checkmarked selections, not nested system Picker presentations inside a sheet.
 - The guide sits in one rounded tray with roomier channel rows and
-  quieter programme tiles. Logo plates, row surfaces and the outer tray use
+  quieter programme tiles. Logo plates, channel tiles and the outer tray use
   concentric radii derived from their insets. The default TV layout shows about
-  four full rows rather than squeezing in six or seven.
-  A single Liquid Glass underlay groups the Search/category/Favorites/More
-  controls; programme cells do not create individual glass surfaces. Glass
-  reduction preferences and Reduce Transparency use the existing shared
+  four to five full rows rather than squeezing in six or seven.
+  The shared background behind each complete channel row is removed, so channel
+  titles and inset programme cards do not touch an enclosing row border.
+  A small Liquid Glass surface anchors Search on the left; compact windows
+  retain the glass control group. Programme cells do not create individual glass
+  surfaces. Glass reduction preferences and Reduce Transparency use the existing shared
   fallbacks. Guide focus uses a crisp rounded outline and tonal fill, with a
   solid high-contrast treatment under increased contrast or Reduce Transparency.
   Focus and selection never swap the button's structural identity.
@@ -129,6 +134,26 @@ reset them.
   The live host exposes real buffering,
   failure/retry and live transport state rather than a fabricated VOD timeline.
   Next/Previous follows the currently filtered channel list.
+
+### Required follow-up: channel scanning
+
+Channel scanning is a committed product follow-up, deliberately **not implemented
+in this UI pass**. After importing a source, offer an optional scan without
+blocking browsing or playback; also expose manual scans/rescans through Sources
+and the browsing controls.
+
+Keep results per profile/source/channel and stream identity. Hide confirmed
+broken links reversibly rather than deleting playlist entries, Favorites or
+guide mappings. Provide results, Show hidden, Restore and Rescan actions. Leave
+timeouts, offline checks, authentication/geo restrictions and unsupported
+playback cases visible as uncertain; one failed request must not remove a channel.
+An HTTP 200 master playlist alone is not evidence of a working HLS stream.
+
+Use bounded concurrency, response sizes, request deadlines and retries, with
+progress and cancellation. Fence results when a source refreshes or the profile
+changes, and never log raw URLs or credentials. Start with imported IPTV links,
+not network discovery or tuner-consuming Plex/Jellyfin/Emby scans. Scanning must
+not commandeer the playing engine or interrupt the current channel.
 
 ### Audible previews and seamless viewing
 

@@ -130,38 +130,55 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         layout: layout,
                         watch: { if let id = heroChannel?.id { tune(id) } }
                     )
-                    PrototypeBrowseToolbar(
-                        model: model, active: $controlsActive,
-                        focusRequest: toolbarFocusRequest,
-                        compact: layout.contentFrame.width < 650,
-                        search: { sheet = .search },
-                        filters: { sheet = .filters },
-                        more: { sheet = .options }
-                    )
-                    .disabled(preview.isRestoringGuideFocus)
-                    PrototypeBrowser(
-                        model: model, imports: imports,
-                        selectedID: $selectedChannelID, railActive: $controlsActive,
-                        focusedProgram: $focusedProgram,
-                        hasFocus: $guideHasFocus,
-                        topRequest: topRequest, guideOffset: $guideOffset,
-                        restoreFocusRequest: preview.focusRestoreRequest,
-                        isPresented: !preview.isExpanded,
-                        isRestoringFocus: preview.isRestoringGuideFocus,
-                        focusRestored: { preview.completeGuideFocusRestore($0) },
-                        tune: tune,
-                        details: { sheet = .program($0) },
-                        openControls: { sheet = .options },
-                        openToolbar: {
-                            guard !preview.isRestoringGuideFocus else { return }
-                            controlsActive = true
-                            toolbarFocusRequest &+= 1
-                        },
-                        isLoading: model.channels.isEmpty
-                            && (imports.playlistPhase == .idle || imports.playlistPhase == .loading),
-                        loadFailed: imports.playlistPhase == .failed,
-                        reload: { reloadRequest += 1 }
-                    )
+                    HStack(alignment: .top, spacing: PrototypeLayout.sectionGap) {
+                        if layout.sidebarWidth > 0 {
+                            PrototypeBrowseSidebar(
+                                model: model, active: $controlsActive,
+                                focusRequest: toolbarFocusRequest,
+                                search: { sheet = .search },
+                                more: { sheet = .options }
+                            )
+                            .frame(width: layout.sidebarWidth)
+                            .disabled(preview.isRestoringGuideFocus)
+                        }
+                        VStack(spacing: PrototypeLayout.sectionGap) {
+                            if layout.sidebarWidth == 0 {
+                                PrototypeBrowseToolbar(
+                                    model: model, active: $controlsActive,
+                                    focusRequest: toolbarFocusRequest,
+                                    compact: layout.contentFrame.width < 650,
+                                    search: { sheet = .search },
+                                    filters: { sheet = .filters },
+                                    more: { sheet = .options }
+                                )
+                                .disabled(preview.isRestoringGuideFocus)
+                            }
+                            PrototypeBrowser(
+                                model: model, imports: imports,
+                                selectedID: $selectedChannelID, railActive: $controlsActive,
+                                focusedProgram: $focusedProgram,
+                                hasFocus: $guideHasFocus,
+                                topRequest: topRequest, guideOffset: $guideOffset,
+                                restoreFocusRequest: preview.focusRestoreRequest,
+                                isPresented: !preview.isExpanded,
+                                isRestoringFocus: preview.isRestoringGuideFocus,
+                                focusRestored: { preview.completeGuideFocusRestore($0) },
+                                tune: tune,
+                                details: { sheet = .program($0) },
+                                openControls: { sheet = .options },
+                                openToolbar: {
+                                    guard !preview.isRestoringGuideFocus else { return }
+                                    controlsActive = true
+                                    toolbarFocusRequest &+= 1
+                                },
+                                isLoading: model.channels.isEmpty
+                                    && (imports.playlistPhase == .idle || imports.playlistPhase == .loading),
+                                loadFailed: imports.playlistPhase == .failed,
+                                reload: { reloadRequest += 1 }
+                            )
+                        }
+                        .frame(width: layout.guideWidth)
+                    }
                 }
                 #if os(tvOS)
                 .focusSection()
