@@ -159,6 +159,20 @@ final class TVNavigationExitProtectionTests: XCTestCase {
         XCTAssertFalse(recognizer.isEnabled)
     }
 
+    func testBackPressIsDeferredUntilShortPressRecognitionFinishes() throws {
+        let coordinator = TVNavigationExitProtection.Coordinator()
+        coordinator.update(isEnabled: true, window: window)
+        let recognizer = try XCTUnwrap(exitProtectionRecognizers(in: window).first)
+
+        XCTAssertTrue(recognizer.delaysTouchesBegan)
+        XCTAssertTrue(recognizer.delaysTouchesEnded)
+        XCTAssertTrue(recognizer.cancelsTouchesInView)
+        XCTAssertEqual(
+            recognizer.allowedPressTypes,
+            [NSNumber(value: UIPress.PressType.menu.rawValue)]
+        )
+    }
+
     func testCustomNavigationYieldsToPresentedContentAndTextInput() {
         let focusedView = UIView()
         selected.view.addSubview(focusedView)

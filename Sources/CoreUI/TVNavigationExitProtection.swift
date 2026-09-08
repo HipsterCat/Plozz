@@ -79,6 +79,9 @@ public struct TVNavigationExitProtection: UIViewRepresentable {
                 recognizer.allowedPressTypes = [
                     NSNumber(value: UIPress.PressType.menu.rawValue)
                 ]
+                // Recognition waits for release to distinguish a tap from a hold.
+                // Keep UIKit from acting on the initial Back press in the meantime.
+                recognizer.delaysTouchesBegan = true
                 recognizer.delegate = self
                 recognizer.name = "Plozz navigation exit protection"
                 window.addGestureRecognizer(recognizer)
