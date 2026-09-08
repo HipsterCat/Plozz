@@ -7,6 +7,7 @@ final class LiveTVSourceNavigationSmokeTests: XCTestCase {
         defer { app.terminate() }
         let welcome = app.staticTexts["Bring your channels to Plozz"]
         XCTAssertTrue(welcome.waitForExistence(timeout: 10))
+        assertNoPublicChannelOffer(in: app)
         assertNoSourcesOrNetwork(in: app)
 
         guard select(app.buttons.containing(.staticText, identifier: "Add an IPTV playlist").firstMatch, in: app) else { return }
@@ -18,14 +19,15 @@ final class LiveTVSourceNavigationSmokeTests: XCTestCase {
     }
 
     @MainActor
-    func testFreeChannelsRequireConfirmationWithoutAddingOrDownloading() {
+    func testServerSetupExplainsMissingAccountsWithoutOfferingChannels() {
         let app = launchFixture()
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["Bring your channels to Plozz"].waitForExistence(timeout: 10))
 
-        guard select(app.buttons["Try free channels"], in: app) else { return }
-        XCTAssertTrue(app.staticTexts["Try free US channels"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Add free channels"].exists)
+        assertNoPublicChannelOffer(in: app)
+        guard select(app.buttons.containing(.staticText, identifier: "Use a media server").firstMatch, in: app) else { return }
+        XCTAssertTrue(app.staticTexts["No connected Live TV servers"].waitForExistence(timeout: 5))
+        assertNoPublicChannelOffer(in: app)
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(app.staticTexts["Bring your channels to Plozz"].waitForExistence(timeout: 5))
         assertNoSourcesOrNetwork(in: app)
@@ -39,6 +41,7 @@ final class LiveTVSourceNavigationSmokeTests: XCTestCase {
         guard select(app.buttons["fixture-sources"], in: app) else { return }
         let addPlaylist = app.buttons["Add IPTV playlist"]
         XCTAssertTrue(addPlaylist.waitForExistence(timeout: 5))
+        assertNoPublicChannelOffer(in: app)
         guard select(addPlaylist, in: app) else { return }
         XCTAssertTrue(app.textFields["M3U playlist URL"].waitForExistence(timeout: 5))
         XCUIRemote.shared.press(.menu)
@@ -62,6 +65,14 @@ final class LiveTVSourceNavigationSmokeTests: XCTestCase {
         XCTAssertEqual(app.staticTexts["fixture-source-metrics"].label, "Sources 0 writes 0 requests 0")
         XCTAssertFalse(app.staticTexts["fixture-unexpected-playback"].exists)
         XCTAssertFalse(app.staticTexts["Profile settings unavailable"].exists)
+    }
+
+    @MainActor
+    private func assertNoPublicChannelOffer(in app: XCUIApplication) {
+        XCTAssertFalse(app.buttons["Try free channels"].exists)
+        XCTAssertFalse(app.buttons["Try free US channels"].exists)
+        XCTAssertFalse(app.buttons["Add free channels"].exists)
+        XCTAssertFalse(app.staticTexts["Free channels"].exists)
     }
 
     @MainActor

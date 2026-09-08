@@ -18,11 +18,12 @@ public struct LiveTVGuideSource: Identifiable, Equatable, Sendable {
         self.provider = provider
     }
 
-    public static let us2 = LiveTVGuideSource(
+    static let us2 = LiveTVGuideSource(
         id: "us2", name: "EPGShare US2",
         url: URL(string: "https://epgshare01.online/epgshare01/epg_ripper_US2.xml.gz")!
     )
-    public static let defaults: [LiveTVGuideSource] = [
+    // Recognition metadata for explicitly supplied guides, never a source selection.
+    static let recognizedSources: [LiveTVGuideSource] = [
         LiveTVGuideSource(
             id: "pluto-us", name: "Pluto TV US", url: URL(string: "https://i.mjh.nz/PlutoTV/us.xml.gz")!,
             provider: .pluto
@@ -43,7 +44,7 @@ public struct LiveTVGuideSource: Identifiable, Equatable, Sendable {
     ]
 
     public static func provider(for url: URL) -> LiveTVGuideProvider? {
-        defaults.first { $0.url == url }?.provider
+        recognizedSources.first { $0.url == url }?.provider
     }
 }
 

@@ -5,6 +5,29 @@ import XCTest
 
 @MainActor
 final class LiveTVConfiguredImportTests: XCTestCase {
+    func testDefaultImporterNeverSelectsOrLoadsPublicFeeds() async {
+        let loader = ConfiguredImportLoader()
+        let imports = LiveTVPrototypeImportModel(loader: loader)
+        await imports.reload(into: LiveTVPrototypeModel(channels: []))
+        XCTAssertEqual(imports.configuration, .empty)
+        XCTAssertNil(imports.playlistURL)
+        XCTAssertTrue(imports.guideSources.isEmpty)
+        let calls = await loader.calls
+        XCTAssertTrue(calls.playlists.isEmpty)
+        XCTAssertTrue(calls.guides.isEmpty)
+    }
+
+    func testExplicitPlaylistDoesNotImplicitlyAddPublicGuides() async {
+        let playlist = source()
+        let loader = ConfiguredImportLoader(playlists: [playlist.playlistURL: m3u])
+        let imports = LiveTVPrototypeImportModel(playlistURL: playlist.playlistURL, loader: loader)
+        await imports.reload(into: LiveTVPrototypeModel(channels: []))
+        XCTAssertTrue(imports.guideSources.isEmpty)
+        let calls = await loader.calls
+        XCTAssertEqual(calls.playlists, [playlist.playlistURL])
+        XCTAssertTrue(calls.guides.isEmpty)
+    }
+
     func testApplyingAnAlreadyEmptyConfigurationClearsAnExistingCatalogImmediately() throws {
         let model = LiveTVPrototypeModel()
         let imports = LiveTVPrototypeImportModel(configuration: .empty, loader: ConfiguredImportLoader())
@@ -365,11 +388,17 @@ final class LiveTVConfiguredImportTests: XCTestCase {
         XCTAssertEqual(imports.failedSourceCount, 1)
     }
 
-    func testExplicitFreePresetUsesExistingPublicDefaultsAndPreservesLegacyChannelIDs() async throws {
-        let configuration = LiveTVSourcesConfiguration.freeUS
+    func testSavedDeveloperTestPlaylistPreservesLegacyChannelAndGuideIDs() async throws {
+        let configuration = LiveTVSourcesConfiguration(playlists: [
+            LiveTVPlaylistSource(
+                id: "free-us", name: "Developer test channels",
+                playlistURL: URL(string: "https://iptv-org.github.io/iptv/countries/us.m3u")!,
+                guideURLs: LiveTVGuideSource.recognizedSources.map(\.url)
+            )
+        ])
         try configuration.validate()
         let playlist = try XCTUnwrap(configuration.playlists.first)
-        XCTAssertEqual(playlist.guideURLs, LiveTVGuideSource.defaults.map(\.url))
+        XCTAssertEqual(playlist.guideURLs, LiveTVGuideSource.recognizedSources.map(\.url))
         let loader = ConfiguredImportLoader(playlists: [playlist.playlistURL: m3u])
         let imports = LiveTVPrototypeImportModel(configuration: configuration, loader: loader)
         let model = LiveTVPrototypeModel(channels: [])
@@ -377,7 +406,7 @@ final class LiveTVConfiguredImportTests: XCTestCase {
         let parsed = try LiveTVPlaylistParser().parse(m3u)
         XCTAssertEqual(model.channels.map(\.id), parsed.channels.map(\.id))
         XCTAssertTrue(model.channels.allSatisfy { $0.playlistSourceID == playlist.id })
-        XCTAssertEqual(imports.guideSources.map(\.id), LiveTVGuideSource.defaults.map(\.id))
+        XCTAssertEqual(imports.guideSources.map(\.id), LiveTVGuideSource.recognizedSources.map(\.id))
     }
 
     func testInvalidConfigurationNeverFetchesAndCanBeReplacedWithoutAffectingValidWork() async throws {

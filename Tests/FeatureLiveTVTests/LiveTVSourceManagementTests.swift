@@ -16,13 +16,13 @@ final class LiveTVSourceManagementTests: XCTestCase {
         XCTAssertEqual(store.writeCount, 0)
     }
 
-    func testUnreadableStorageCannotBeOverwrittenByFreePreset() {
+    func testUnreadableStorageCannotBeOverwrittenByPlaylistSetup() {
         let original = LiveTVSourcesConfiguration(playlists: [source("existing")])
         let store = SourceManagementTestStore(original)
         store.setReadFailure(true)
         let model = LiveTVSourceManagementModel(store: store)
         model.reload()
-        model.addFreeChannels()
+        XCTAssertThrowsError(try model.savePlaylist(input: input("new")))
         XCTAssertFalse(model.hasLoaded)
         XCTAssertEqual(model.loadIssue, .load)
         XCTAssertEqual(store.snapshot, original)
@@ -90,15 +90,16 @@ final class LiveTVSourceManagementTests: XCTestCase {
         XCTAssertEqual(model.mutationRevision, 1)
     }
 
-    func testExplicitFreePresetIsIdempotentAndPreservesCustomSources() {
+    func testReloadPreservesPreviouslyAddedTestSourcesWithoutWriting() {
         let custom = source("custom")
-        let store = SourceManagementTestStore(.init(playlists: [custom]))
+        let legacy = source("free-us", enabled: false)
+        let original = LiveTVSourcesConfiguration(playlists: [custom, legacy])
+        let store = SourceManagementTestStore(original)
         let model = LiveTVSourceManagementModel(store: store)
         model.reload()
-        model.addFreeChannels()
-        model.addFreeChannels()
-        XCTAssertEqual(model.configuration.playlists.count, 1 + LiveTVSourcesConfiguration.freeUS.playlists.count)
-        XCTAssertEqual(model.configuration.playlists.first, custom)
+        XCTAssertEqual(model.configuration, original)
+        XCTAssertEqual(store.snapshot, original)
+        XCTAssertEqual(store.writeCount, 0)
     }
 
     func testRevokedSourceManagementCannotPersistChanges() {
@@ -107,7 +108,7 @@ final class LiveTVSourceManagementTests: XCTestCase {
         let model = LiveTVSourceManagementModel(store: store, canMutate: { allowed })
         model.reload()
         allowed = false
-        model.addFreeChannels()
+        model.setPlaylistEnabled("missing", enabled: true)
         XCTAssertEqual(model.mutationIssue, .accessDenied)
         XCTAssertEqual(store.writeCount, 0)
         XCTAssertEqual(model.configuration, .empty)

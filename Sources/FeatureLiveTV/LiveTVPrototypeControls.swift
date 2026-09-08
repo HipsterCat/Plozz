@@ -103,7 +103,7 @@ struct PrototypeSheetContent: View {
                 case .guideTime:
                     PrototypeGuideTimeForm(guideOffset: $guideOffset, goToNow: goToNow, guideStart: guideStart)
                         .navigationTitle("Guide time")
-                case .sources, .addPlaylist, .serverSetup, .freeChannels:
+                case .sources, .addPlaylist, .serverSetup:
                     if let sourceManagement {
                         sourceManagement(destination)
                     } else {

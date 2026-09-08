@@ -95,20 +95,6 @@ final class LiveTVSourceManagementModel {
         }
     }
 
-    func addFreeChannels() {
-        perform {
-            try mutate { configuration in
-                for preset in LiveTVSourcesConfiguration.freeUS.playlists {
-                    if let index = configuration.playlists.firstIndex(where: { $0.id == preset.id }) {
-                        configuration.playlists[index].isEnabled = true
-                    } else {
-                        configuration.playlists.append(preset)
-                    }
-                }
-            }
-        }
-    }
-
     func addServer(_ choice: LiveTVServerChoice) throws {
         try mutate { configuration in
             if let index = configuration.servers.firstIndex(where: { $0.accountID == choice.id }) {

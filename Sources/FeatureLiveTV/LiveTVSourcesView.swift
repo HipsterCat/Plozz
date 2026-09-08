@@ -164,15 +164,10 @@ public struct LiveTVSourcesView: View {
                     } label: {
                         Label("Use a media server", systemImage: "server.rack")
                     }
-                    NavigationLink {
-                        LiveTVFreeChannelsSetup(sources: model, didConfigurePlaylist: didConfigurePlaylist)
-                    } label: {
-                        Label("Try free US channels", systemImage: "play.rectangle")
-                    }
                 } header: {
                     Text("Add a source")
                 } footer: {
-                    Text("The free option uses a public US playlist and public guides. Availability varies by region.")
+                    Text("Add sources you have permission to access. Plozz doesn't provide channels.")
                 }
 
                 if let imports {

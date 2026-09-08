@@ -112,9 +112,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             LiveTVSourceManagementModel(store: $0, canMutate: { false })
         }
         _sources = State(initialValue: sources)
-        let imports = sourceStore == nil
-            ? LiveTVPrototypeImportModel()
-            : LiveTVPrototypeImportModel(configuration: .empty, serverProviderResolver: resolver)
+        let imports = LiveTVPrototypeImportModel(configuration: .empty, serverProviderResolver: resolver)
         _imports = State(initialValue: imports)
         self.onExpandedChange = onExpandedChange
         self.player = player
@@ -470,7 +468,6 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                     LiveTVSetupWelcome(
                         addPlaylist: { sheet = .addPlaylist },
                         useServer: { sheet = .serverSetup },
-                        tryFreeChannels: { sheet = .freeChannels },
                         issue: sources.mutationIssue?.message
                     )
                 }
@@ -546,10 +543,6 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         resolver: serverProviderResolver,
                         connectServer: connectServer == nil ? nil : requestServerConnection
                     )
-                }
-            case .freeChannels:
-                LiveTVSourceAccessGate(model: sources) {
-                    LiveTVFreeChannelsSetup(sources: sources, didConfigurePlaylist: didConfigurePlaylist)
                 }
             default:
                 LiveTVSourcesView(

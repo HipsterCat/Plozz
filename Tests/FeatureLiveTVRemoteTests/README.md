@@ -59,9 +59,9 @@ does not regenerate the shipping app project or install the app on an Apple TV.
   player tests from this focused run.
 - Source onboarding uses an isolated `ProfilesModel`, an empty in-memory source
   store, and an HTTP(S)-blocking `URLProtocol`. Smokes open the playlist form and
-  return, inspect free-channel confirmation without pressing Add, and navigate a
+  return, inspect the no-server state, and navigate a
   typed Sources destination into its child editor and back. They assert zero
-  configured sources, writes, and HTTP(S) requests.
+  configured sources, writes, and HTTP(S) requests, and no free-channel offers.
 
 UI tests terminate their fixture application after each test. They do not access
 real accounts, servers, playlists, production preferences, or playback streams.

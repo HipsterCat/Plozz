@@ -5,7 +5,6 @@ import SwiftUI
 struct LiveTVSetupWelcome: View {
     let addPlaylist: () -> Void
     let useServer: () -> Void
-    let tryFreeChannels: () -> Void
     var issue: LocalizedStringResource? = nil
     @Environment(\.themePalette) private var palette
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -32,18 +31,11 @@ struct LiveTVSetupWelcome: View {
                             action: useServer
                         )
                     }
-                    VStack(alignment: .leading, spacing: 12) {
-                        Button("Try free channels", systemImage: "play.rectangle", action: tryFreeChannels)
-                            .buttonStyle(PrototypeButtonStyle(surface: .control))
-                        Text("Start with a public US playlist. Channels and guide availability vary by region.")
-                            .font(.caption)
-                            .foregroundStyle(palette.secondaryText)
-                        if let issue {
-                            Label {
-                                Text(issue)
-                            } icon: {
-                                Image(systemName: "exclamationmark.triangle")
-                            }
+                    if let issue {
+                        Label {
+                            Text(issue)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle")
                         }
                     }
                     LiveTVNoGuideExplanation()
@@ -71,7 +63,7 @@ private struct LiveTVSetupIntroduction: View {
             Text("Bring your channels to Plozz")
                 .font(.largeTitle.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Connect your own source, or start with free channels. Nothing loads until you choose a source.")
+            Text("Connect your own IPTV playlist or media server. Plozz doesn't provide channels.")
                 .font(.title3)
                 .foregroundStyle(palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)

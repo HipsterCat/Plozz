@@ -120,7 +120,7 @@ public final class LiveTVPrototypeImportModel {
     }
 
     public init(
-        configuration: LiveTVSourcesConfiguration,
+        configuration: LiveTVSourcesConfiguration = .empty,
         loader: any LiveTVSourceLoading = LiveTVSourceLoader(),
         serverProviderResolver: @escaping LiveTVServerProviderResolver = { _ in nil }
     ) {
@@ -141,9 +141,9 @@ public final class LiveTVPrototypeImportModel {
 
     /// Legacy fixture/prototype initializer. Production must pass explicit profile configuration.
     public init(
-        playlistURL: URL = URL(string: "https://iptv-org.github.io/iptv/countries/us.m3u")!,
+        playlistURL: URL,
         guideURL: URL? = nil,
-        sources: [LiveTVGuideSource] = LiveTVGuideSource.defaults,
+        sources: [LiveTVGuideSource] = [],
         loader: any LiveTVSourceLoading = LiveTVSourceLoader()
     ) {
         let sources = guideURL.map {

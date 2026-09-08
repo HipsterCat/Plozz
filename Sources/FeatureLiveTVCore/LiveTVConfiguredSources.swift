@@ -3,23 +3,10 @@ import CoreModels
 import CryptoKit
 import Foundation
 
-extension LiveTVSourcesConfiguration {
-    /// An explicit opt-in, never the fallback for absent or unreadable profile configuration.
-    public static var freeUS: LiveTVSourcesConfiguration {
-        LiveTVSourcesConfiguration(playlists: [
-            LiveTVPlaylistSource(
-                id: "free-us", name: "Free US channels",
-                playlistURL: URL(string: "https://iptv-org.github.io/iptv/countries/us.m3u")!,
-                guideURLs: LiveTVGuideSource.defaults.map(\.url)
-            )
-        ])
-    }
-}
-
 enum LiveTVConfiguredSources {
     static func guides(for source: LiveTVPlaylistSource) -> [LiveTVGuideSource] {
         source.guideURLs.enumerated().map { index, url in
-            let preset = source.id == "free-us" ? LiveTVGuideSource.defaults.first { $0.url == url } : nil
+            let preset = source.id == "free-us" ? LiveTVGuideSource.recognizedSources.first { $0.url == url } : nil
             return LiveTVGuideSource(
                 id: preset?.id ?? "guide-\(digest(source.id + "\u{1F}" + url.absoluteString))",
                 name: preset?.name ?? "\(source.name) · Guide \(index + 1)",

@@ -2,6 +2,15 @@ import Foundation
 import XCTest
 @testable import FeatureLiveTVCore
 
+private extension LiveTVPrototypeImportModel {
+    convenience init(sources: [LiveTVGuideSource], loader: any LiveTVSourceLoading) {
+        self.init(
+            playlistURL: URL(string: "https://iptv-org.github.io/iptv/countries/us.m3u")!,
+            sources: sources, loader: loader
+        )
+    }
+}
+
 @MainActor
 final class LiveTVPrototypeImportModelTests: XCTestCase {
     func testChannelsPublishBeforeGuideAndGuideFailureDoesNotRemoveThem() async {
@@ -237,7 +246,7 @@ final class LiveTVPrototypeImportModelTests: XCTestCase {
             #EXTINF:-1 tvg-id="Example.us",Example
             https://example.com/live.m3u8
             """).channels.first)
-        let pluto = try XCTUnwrap(LiveTVGuideSource.defaults.first { $0.provider == .pluto })
+        let pluto = try XCTUnwrap(LiveTVGuideSource.recognizedSources.first { $0.provider == .pluto })
         let empty = LiveTVGuideImport(
             programs: [], matchedChannelCount: 0, guideChannelCount: 0,
             programCount: 0, coverageStart: nil, coverageEnd: nil

@@ -54,8 +54,9 @@ Release builds.
 ## Try
 
 An empty configuration opens source setup; it does not contact a public feed or
-play an unsolicited channel. Add an M3U playlist, use an authorized connected
-server, or explicitly confirm the free US preset. Enabled sources are combined;
+play an unsolicited channel. Add your own M3U playlist or use an authorized
+connected server. Plozz does not provide or offer a public channel catalog.
+Enabled sources are combined;
 adding one does not replace another. Channels become available before guide
 loading finishes. There is one unified
 channel guide, not separate Channels and Guide tabs. It groups up to three
@@ -375,9 +376,12 @@ Leaving the Live TV destination releases playback and invalidates pending tunes,
 including when a native tab keeps its view alive. App backgrounding retains the
 existing foreground-only teardown/reload policy.
 
-## Real inputs and artwork
+## Developer test inputs and artwork
 
-The explicitly selected free US preset uses these developer test inputs:
+These public addresses are developer test inputs only. They are not offered
+in onboarding or Sources, and the importer has no default playlist or guides.
+To use one for manual testing, add its address explicitly through the ordinary
+playlist editor. Previously saved sources remain editable and are not removed:
 
 - Playlist: `https://iptv-org.github.io/iptv/countries/us.m3u`
 - Pluto TV US: `https://i.mjh.nz/PlutoTV/us.xml.gz`
