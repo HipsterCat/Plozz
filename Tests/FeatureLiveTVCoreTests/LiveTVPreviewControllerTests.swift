@@ -3,6 +3,47 @@ import XCTest
 
 @MainActor
 final class LiveTVPreviewControllerTests: XCTestCase {
+    func testInitialGuideFocusTargetsFirstVisibleChannelExactlyOnce() {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        XCTAssertEqual(
+            preview.requestInitialGuideFocus(isActive: true, hasOverlay: false),
+            model.guideChannels.first?.id
+        )
+        XCTAssertTrue(preview.hasRequestedInitialGuideFocus)
+        XCTAssertTrue(preview.isRestoringGuideFocus)
+        XCTAssertFalse(preview.restoresPlaybackFocus)
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest)
+        XCTAssertNil(preview.requestInitialGuideFocus(isActive: true, hasOverlay: false))
+        preview.stop()
+        XCTAssertNil(preview.requestInitialGuideFocus(isActive: true, hasOverlay: false))
+    }
+
+    func testInitialFocusWaitsForChannelsAndAnActiveUnobscuredGuide() {
+        let empty = LiveTVPreviewController(model: LiveTVPrototypeModel(channels: []))
+        XCTAssertNil(empty.requestInitialGuideFocus(isActive: true, hasOverlay: false))
+        XCTAssertFalse(empty.hasRequestedInitialGuideFocus)
+        let preview = LiveTVPreviewController(model: LiveTVPrototypeModel())
+        XCTAssertNil(preview.requestInitialGuideFocus(isActive: false, hasOverlay: false))
+        XCTAssertNil(preview.requestInitialGuideFocus(isActive: true, hasOverlay: true))
+        XCTAssertFalse(preview.hasRequestedInitialGuideFocus)
+        XCTAssertNotNil(preview.requestInitialGuideFocus(isActive: true, hasOverlay: false))
+    }
+
+    func testInitialFocusNeverReplacesAnExplicitGuideOrPlaybackReturn() {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        preview.watch(model.channels[1].id)
+        preview.returnToGuide()
+        let request = preview.focusRestoreRequest
+        XCTAssertNil(preview.requestInitialGuideFocus(isActive: true, hasOverlay: false))
+        XCTAssertEqual(preview.focusRestoreRequest, request)
+        XCTAssertTrue(preview.restoresPlaybackFocus)
+        let browsing = LiveTVPreviewController(model: model)
+        browsing.requestBrowsingFocus()
+        XCTAssertNil(browsing.requestInitialGuideFocus(isActive: true, hasOverlay: false))
+    }
+
     func testSearchSuppressesNavigationUntilTheReturningGuideOwnsFocus() {
         let preview = LiveTVPreviewController(model: LiveTVPrototypeModel())
         XCTAssertFalse(preview.suppressesNavigation(isActive: true))

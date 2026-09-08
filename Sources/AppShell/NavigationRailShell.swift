@@ -215,7 +215,7 @@ struct NavigationRailPresentation: Equatable {
 
     var usesPageButton: Bool { destination == .search }
     var showsPageButton: Bool { !chromeHidden && usesPageButton }
-    var opensExpanded: Bool { showsPageButton && isOpening }
+    var opensExpanded: Bool { !chromeHidden && isOpening }
     var shouldEnterSearchContent: Bool { showsPageButton && !isExpanded && !isOpening }
     func isEdgeNavigationEnabled(searchResultsHaveFocus: Bool = false) -> Bool {
         !chromeHidden && (

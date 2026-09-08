@@ -1,10 +1,69 @@
 #if os(tvOS)
 import XCTest
 import UIKit
+import SwiftUI
+import CoreModels
 @testable import AppShell
 
 @MainActor
 final class NavigationRowFocusRequesterTests: XCTestCase {
+    func testOpeningLongNavigationRevealsSelectedSettingsBeforeNativeFocus() async throws {
+        let profile = Profile(name: "Viewer")
+        let entries = (0..<30).map { index in
+            NavigationRailLibraryEntry(
+                key: "account:\(index)",
+                library: AggregatedLibrary(
+                    accountID: "account", accountName: "Account", serverName: "Server",
+                    providerKind: .jellyfin,
+                    library: MediaLibrary(id: "\(index)", title: "Library \(index)", kind: .movie)
+                )
+            )
+        }
+        func rail(token: Int, opening: Bool) -> NavigationRailView {
+            NavigationRailView(
+                profile: profile, entries: entries,
+                destinations: [.home] + entries.map(\.destination) + [.settings],
+                selection: .constant(.settings), isExpandedOutward: .constant(false),
+                onOpenProfileSwitcher: {}, focusRequestToken: token,
+                opensExpanded: opening
+            )
+        }
+        let host = UIHostingController(rootView: rail(token: 0, opening: false))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1_920, height: 1_080))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(150))
+        let scroll = try XCTUnwrap(
+            descendantViews(of: host.view).compactMap { $0 as? UIScrollView }
+                .first { $0.contentSize.height > $0.bounds.height }
+        )
+        XCTAssertGreaterThan(scroll.contentOffset.y, 0, "Initial entry must reveal a selected row below the fold")
+        scroll.setContentOffset(.zero, animated: false)
+        host.rootView = rail(token: 1, opening: true)
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(400))
+        host.view.layoutIfNeeded()
+        let markers = descendantViews(of: scroll).compactMap { $0 as? NavigationRowFocusRequester.RequestView }
+        let lastMarker = try XCTUnwrap(markers.max {
+            $0.convert($0.bounds, to: scroll).maxY < $1.convert($1.bounds, to: scroll).maxY
+        })
+        let lastFrame = lastMarker.convert(lastMarker.bounds, to: scroll)
+        XCTAssertGreaterThan(scroll.contentOffset.y, 0)
+        XCTAssertGreaterThanOrEqual(lastFrame.minY, scroll.bounds.minY - 1, "\(lastFrame) in \(scroll.bounds)")
+        XCTAssertLessThanOrEqual(lastFrame.maxY, scroll.bounds.maxY + 1, "\(lastFrame) in \(scroll.bounds)")
+        let target = try XCTUnwrap(NavigationRowFocusRequester.target(for: lastMarker, in: window))
+        XCTAssertFalse(target === scroll, "Entry must resolve a destination row, not the scroll container")
+    }
+
+    private func descendantViews(of view: UIView) -> [UIView] {
+        view.subviews.flatMap { [$0] + descendantViews(of: $0) }
+    }
+
     func testHandoffReevaluatesWindowAndConfirmsActualRowFocus() {
         let window = UIWindow()
         let row = UIButton()

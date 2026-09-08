@@ -69,7 +69,31 @@ final class NavigationRailPresentationTests: XCTestCase {
             XCTAssertEqual(presentation.contentInset, NavigationRailMetrics.contentInset)
             XCTAssertEqual(presentation.headerHeight, 0)
             XCTAssertFalse(presentation.shouldEnterSearchContent)
-            XCTAssertFalse(make(destination, opening: true).opensExpanded)
+            XCTAssertTrue(make(destination, opening: true).opensExpanded)
+        }
+    }
+
+    func testOpenRequestsExpandThePanelBeforeAnyDestinationHasFocus() {
+        for destination in [NavigationRailDestination.home, .settings, .library("account:movies")] {
+            let pending = make(destination, opening: true)
+            XCTAssertTrue(pending.opensExpanded)
+            XCTAssertTrue(pending.isRailEnabled)
+            XCTAssertEqual(
+                NavigationGlassSurface.resolve(
+                    isExpanded: pending.isExpanded || pending.isOpening,
+                    showsPageButton: pending.showsPageButton, hasButtonFrame: false
+                ),
+                .menu
+            )
+            let closed = make(destination)
+            XCTAssertFalse(closed.opensExpanded)
+            XCTAssertEqual(
+                NavigationGlassSurface.resolve(
+                    isExpanded: closed.isExpanded || closed.isOpening,
+                    showsPageButton: closed.showsPageButton, hasButtonFrame: false
+                ),
+                .none
+            )
         }
     }
 

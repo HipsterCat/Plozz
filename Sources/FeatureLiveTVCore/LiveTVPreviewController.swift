@@ -22,6 +22,7 @@ public final class LiveTVPreviewController {
     public private(set) var isRestoringGuideFocus = false
     public private(set) var watchOrigin: LiveTVGuideRowID?
     public private(set) var restoresPlaybackFocus = true
+    public private(set) var hasRequestedInitialGuideFocus = false
     private let model: LiveTVPrototypeModel
     private var focusedChannelID: String?
     private var browsingActive = true
@@ -34,6 +35,13 @@ public final class LiveTVPreviewController {
 
     public func suppressesNavigation(isActive: Bool, isSearching: Bool = false) -> Bool {
         isActive && (isSearching || isExpanded || isRestoringGuideFocus)
+    }
+
+    public func requestInitialGuideFocus(isActive: Bool, hasOverlay: Bool) -> LiveTVGuideRowID? {
+        guard isActive, !hasOverlay, !isExpanded, !hasRequestedInitialGuideFocus,
+              let first = model.guideChannels.first?.id else { return nil }
+        requestBrowsingFocus()
+        return first
     }
 
     public func focus(_ channelID: String?) {
@@ -67,6 +75,7 @@ public final class LiveTVPreviewController {
         cancelPendingPreview()
         model.tune(channelID)
         guard !model.tuneFailed else { return }
+        hasRequestedInitialGuideFocus = true
         let preferredSection = origin?.channelID == channelID ? origin?.section
             : (isExpanded ? watchOrigin?.section : nil)
         watchOrigin = model.guideRow(for: channelID, preferring: preferredSection)
@@ -85,6 +94,7 @@ public final class LiveTVPreviewController {
 
     public func requestBrowsingFocus() {
         guard !isExpanded else { return }
+        hasRequestedInitialGuideFocus = true
         cancelPendingPreview()
         restoresPlaybackFocus = false
         isRestoringGuideFocus = true

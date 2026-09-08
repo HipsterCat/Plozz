@@ -251,7 +251,13 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         .onChange(of: model.guideOnly) { _, _ in persistViewFilters() }
         .onChange(of: controlsActive) { _, _ in updatePreviewAvailability() }
         .onChange(of: guideHasFocus) { _, _ in updatePreviewAvailability() }
-        .onChange(of: sheet?.id) { _, _ in updatePreviewAvailability() }
+        .onChange(of: sheet?.id) { _, _ in
+            updatePreviewAvailability()
+            focusInitialChannelIfNeeded()
+        }
+        .onChange(of: model.guideChannels.first?.id, initial: true) { _, _ in
+            focusInitialChannelIfNeeded()
+        }
         .onChange(of: scenePhase, initial: true) { _, _ in updatePreviewAvailability() }
         .onChange(of: isActive, initial: true) { _, active in
             if !active {
@@ -262,6 +268,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             if active { applyViewSettings() }
             updatePreviewAvailability()
             if active { preview.focus(selectedChannelID) }
+            focusInitialChannelIfNeeded()
         }
         .onChange(of: hidesAppNavigation, initial: true) { _, hidesChrome in
             onExpandedChange(hidesChrome)
@@ -329,7 +336,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         focusChanged: { if $0 { controlsActive = true } }
                     )
                     .frame(maxWidth: min(layout.contentFrame.width, 1_200), alignment: .leading)
-                    .disabled(preview.isRestoringGuideFocus)
+                    .disabled(blocksBrowseControls)
                     .transition(.opacity)
                 }
                 #endif
@@ -344,7 +351,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         enterGuide: enterGuide
                     )
                     .frame(width: layout.sidebarWidth)
-                    .disabled(preview.isRestoringGuideFocus)
+                    .disabled(blocksBrowseControls)
                 }
                 VStack(spacing: PrototypeLayout.sectionGap) {
                     if layout.sidebarWidth == 0 {
@@ -356,7 +363,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                             search: { if isSearching { closeSearch() } else { openSearch() } },
                             filters: { sheet = .filters }
                         )
-                        .disabled(preview.isRestoringGuideFocus)
+                        .disabled(blocksBrowseControls)
                     }
                     guideBrowser(closeSearch: closeSearch)
                 }
@@ -401,6 +408,28 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         preview.suppressesNavigation(isActive: isActive, isSearching: isSearching)
         #else
         preview.suppressesNavigation(isActive: isActive)
+        #endif
+    }
+
+    private var blocksBrowseControls: Bool {
+        #if os(tvOS)
+        if !preview.hasRequestedInitialGuideFocus,
+           model.guideChannels.first != nil || imports.playlistPhase == .idle || imports.playlistPhase == .loading {
+            return true
+        }
+        #endif
+        return preview.isRestoringGuideFocus
+    }
+
+    private func focusInitialChannelIfNeeded() {
+        #if os(tvOS)
+        guard let row = preview.requestInitialGuideFocus(
+            isActive: isActive, hasOverlay: isSearching || sheet != nil
+        ) else { return }
+        selectedRowID = row
+        selectedChannelID = row.channelID
+        focusedProgram = nil
+        controlsActive = false
         #endif
     }
 

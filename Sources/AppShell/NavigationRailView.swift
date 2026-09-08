@@ -181,7 +181,7 @@ struct NavigationRailView: View {
     @State private var animatedExpansionProgress: CGFloat = 0
 
     private var expansionProgress: CGFloat {
-        usesPageButtonSurface || opensExpanded ? 1 : animatedExpansionProgress
+        usesPageButtonSurface ? 1 : animatedExpansionProgress
     }
 
     /// Explicit page-button entry shows the full menu while focus catches up.
@@ -281,7 +281,7 @@ struct NavigationRailView: View {
         .focusSection()
         .focusScope(railFocusScope)
         .accessibilityLabel(Text(Self.accessibilityTitle))
-        .onChange(of: isExpanded) { _, expanded in
+        .onChange(of: isExpanded, initial: true) { _, expanded in
             withAnimation(NavigationRailMetrics.expandAnimation) {
                 animatedExpansionProgress = expanded ? 1 : 0
             }
@@ -418,10 +418,41 @@ struct NavigationRailView: View {
     /// because built-ins may be interleaved with libraries, including moving
     /// Settings away from its historical bottom position.
     private var destinationList: some View {
+        ScrollViewReader { proxy in
+            scrollingDestinations
+                .onChange(of: selection, initial: true) { _, destination in
+                    reveal(destination, using: proxy)
+                }
+                .onChange(of: focusRequestToken) { _, _ in
+                    reveal(selection, using: proxy)
+                }
+                .onChange(of: destinations) { _, _ in
+                    if !hasFocus { reveal(selection, using: proxy) }
+                }
+                .onChange(of: pendingFocusTarget) { _, target in
+                    if case let .destination(destination) = target {
+                        reveal(destination, using: proxy)
+                    }
+                }
+        }
+    }
+
+    private func reveal(_ destination: NavigationRailDestination, using proxy: ScrollViewProxy) {
+        // Native focus discovery only sees rows inside the scroll viewport.
+        // Reveal the selected row before its UIKit marker requests focus.
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo(destination, anchor: .center)
+        }
+    }
+
+    private var scrollingDestinations: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: NavigationRailMetrics.itemSpacing) {
                 ForEach(destinations, id: \.storageValue) { destination in
                     destinationItem(destination)
+                        .id(destination)
                 }
             }
         }

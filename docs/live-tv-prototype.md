@@ -90,6 +90,10 @@ is no prior in-memory history to migrate on the first updated launch.
   alongside Home, Search and the other destinations. Settings remains visible
   but can be moved. Press-and-hold Hide keeps focus at the vacated list position;
   Move Up/Down follows the moved item.
+  Pinned navigation reveals its selected row before requesting native focus,
+  including Settings or another destination below a long list's visible area.
+  An open request expands the complete panel instead of leaving a thin backing
+  at collapsed width. Collapsed icons have no panel behind them.
 - Wide screens pin Search and an independently scrolling category list
   to the left of the guide. Search never scrolls away
   with either list. Select a category directly; Right returns to the remembered
@@ -116,6 +120,8 @@ is no prior in-memory history to migrate on the first updated launch.
   quieter programme tiles. Logo plates, channel tiles and the outer tray use
   concentric radii derived from their insets. TV rows are 128 points tall,
   with full-height 200 x 128-point logo plates and 16-point row spacing.
+  On first entry, focus moves to the first available channel once the playlist
+  arrives; subsequent playback/Search returns keep their remembered position.
   The backing fills the complete station focus bounds, with the same corner
   radius and no outside gutter. Artwork fits inside without stretching.
   Plozz adds the light/dark backing based on logo contrast; source images can
