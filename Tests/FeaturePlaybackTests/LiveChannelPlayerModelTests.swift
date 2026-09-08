@@ -1,6 +1,7 @@
 #if DEBUG && canImport(UIKit)
 import CoreModels
 import CoreNetworking
+import Observation
 import SwiftUI
 import UIKit
 import XCTest
@@ -877,8 +878,194 @@ private final class LiveTestClock {
     var now: TimeInterval = 0
 }
 
+#if os(tvOS)
+@MainActor
+final class LiveChannelFullscreenPresentationTests: XCTestCase {
+    func testNativeFullscreenCoversNavigationAndReturnsTheSameOutputWithoutRetuning() async throws {
+        let probe = LiveFullscreenProbe()
+        let window = try await makeWindow(probe)
+        defer { window.isHidden = true; window.rootViewController = nil; probe.engine.stop() }
+        await waitUntil { probe.engine.liveLoads == 1 && probe.engine.outputView.window != nil }
+        let root = try XCTUnwrap(window.rootViewController)
+        let surface = probe.engine.outputView
+        XCTAssertTrue(surface.isDescendant(of: root.view))
+
+        for _ in 0..<2 {
+            probe.expanded = true
+            await waitUntil { root.presentedViewController?.view.window != nil }
+            let fullscreen = try XCTUnwrap(root.presentedViewController)
+            await waitUntil { surface.isDescendant(of: fullscreen.view) }
+            XCTAssertTrue(surface.isDescendant(of: fullscreen.view))
+            await waitUntil { focusIsInside(fullscreen.view, window: window) }
+            XCTAssertTrue(focusIsInside(fullscreen.view, window: window),
+                          "Focused item: \(String(describing: UIFocusSystem.focusSystem(for: window)?.focusedItem)); key window: \(window.isKeyWindow)")
+            XCTAssertEqual(fullscreen.view.frame, window.bounds)
+            XCTAssertTrue([UIModalPresentationStyle.fullScreen, .overFullScreen].contains(fullscreen.modalPresentationStyle))
+            XCTAssertEqual(probe.creations, 1)
+            XCTAssertEqual(probe.engine.liveLoads, 1)
+            XCTAssertEqual(probe.engine.stopCount, 0)
+
+            // Exercise a real presentation dismissal, not just an expanded flag.
+            fullscreen.dismiss(animated: false)
+            await waitUntil { !probe.expanded && surface.isDescendant(of: root.view) }
+            XCTAssertFalse(probe.expanded)
+            XCTAssertTrue(surface.isDescendant(of: root.view))
+            XCTAssertEqual(probe.engine.liveLoads, 1)
+            XCTAssertEqual(probe.engine.stopCount, 0)
+        }
+        XCTAssertEqual(probe.returns, 2)
+        probe.active = false
+        await waitUntil { probe.engine.stopCount == 1 }
+        XCTAssertEqual(probe.engine.stopCount, 1)
+    }
+
+    func testExpandingDuringStartupDoesNotCancelThePendingLiveLoad() async throws {
+        let probe = LiveFullscreenProbe()
+        probe.engine.suspendsLoads = true
+        let window = try await makeWindow(probe)
+        defer { window.isHidden = true; window.rootViewController = nil; probe.engine.stop() }
+        await waitUntil { probe.engine.liveLoads == 1 }
+        probe.expanded = true
+        await waitUntil { window.rootViewController?.presentedViewController?.view.window != nil }
+        probe.engine.resumeLoad(1)
+        await waitUntil { !probe.engine.cancelledLoads.isEmpty }
+        XCTAssertEqual(probe.engine.cancelledLoads, [false])
+        XCTAssertEqual(probe.creations, 1)
+        XCTAssertEqual(probe.engine.liveLoads, 1)
+        XCTAssertEqual(probe.engine.stopCount, 0)
+
+        probe.active = false
+        await waitUntil {
+            probe.engine.stopCount == 1 && window.rootViewController?.presentedViewController == nil
+        }
+        XCTAssertEqual(probe.engine.stopCount, 1)
+        XCTAssertNil(window.rootViewController?.presentedViewController)
+        XCTAssertEqual(probe.returns, 0)
+    }
+
+    func testTopBarFullscreenRetunesInPlaceAndHonorsAnExternalGuideReturn() async throws {
+        let probe = LiveFullscreenProbe(usesSidebar: false)
+        let window = try await makeWindow(probe)
+        defer { window.isHidden = true; window.rootViewController = nil; probe.engine.stop() }
+        await waitUntil { probe.engine.liveLoads == 1 }
+        probe.expanded = true
+        let root = try XCTUnwrap(window.rootViewController)
+        await waitUntil { root.presentedViewController?.view.window != nil }
+        let fullscreen = try XCTUnwrap(root.presentedViewController)
+        probe.favorite = true
+        probe.channelID = "replacement"
+        await waitUntil { probe.engine.liveLoads == 2 }
+        XCTAssertEqual(probe.engine.loadedURLs.last?.lastPathComponent, "replacement.m3u8")
+        XCTAssertTrue(root.presentedViewController === fullscreen)
+        XCTAssertTrue(probe.engine.outputView.isDescendant(of: fullscreen.view))
+        XCTAssertEqual(probe.creations, 1)
+        XCTAssertEqual(probe.engine.stopCount, 0)
+
+        probe.expanded = false
+        await waitUntil { root.presentedViewController == nil && probe.engine.outputView.isDescendant(of: root.view) }
+        XCTAssertNil(root.presentedViewController)
+        XCTAssertTrue(probe.engine.outputView.isDescendant(of: root.view))
+        XCTAssertEqual(probe.returns, 0)
+        XCTAssertEqual(probe.engine.liveLoads, 2)
+        XCTAssertEqual(probe.engine.stopCount, 0)
+        probe.active = false
+        await waitUntil { probe.engine.stopCount == 1 }
+    }
+
+    private func makeWindow(_ probe: LiveFullscreenProbe) async throws -> UIWindow {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first else {
+            throw XCTSkip("Native fullscreen regressions require an app-hosted test with a window scene.")
+        }
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIHostingController(
+            rootView: LiveFullscreenHarness(probe: probe).environment(\.scenePhase, .active)
+        )
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(300))
+        probe.active = true
+        return window
+    }
+
+    private func waitUntil(_ predicate: () -> Bool) async {
+        for _ in 0..<100 {
+            if predicate() { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    private func focusIsInside(_ view: UIView, window: UIWindow) -> Bool {
+        var environment: (any UIFocusEnvironment)? = UIFocusSystem.focusSystem(for: window)?.focusedItem
+        while let current = environment {
+            if let focusedView = current as? UIView {
+                return focusedView.isDescendant(of: view)
+            }
+            environment = current.parentFocusEnvironment
+        }
+        return false
+    }
+}
+
+@MainActor
+@Observable
+private final class LiveFullscreenProbe {
+    let engine = LiveEngineSpy()
+    let usesSidebar: Bool
+    var expanded = false
+    var active = false
+    var channelID = "channel"
+    var favorite = false
+    var creations = 0
+    var returns = 0
+
+    init(usesSidebar: Bool = true) {
+        self.usesSidebar = usesSidebar
+    }
+}
+
+private struct LiveFullscreenHarness: View {
+    let probe: LiveFullscreenProbe
+
+    var body: some View {
+        if #available(tvOS 27.0, *), probe.usesSidebar {
+            tabs.tabViewStyle(.sidebarAdaptable)
+        } else {
+            tabs.tabViewStyle(.tabBarOnly)
+        }
+    }
+
+    private var tabs: some View {
+        TabView {
+            Tab("Live TV", systemImage: "tv") {
+                NavigationStack {
+                    LiveChannelPlayerView(
+                        channelID: probe.channelID,
+                        title: "Live channel",
+                        streamURL: URL(string: "https://example.invalid/\(probe.channelID).m3u8")!,
+                        logoURL: nil,
+                        makeEngine: { probe.creations += 1; return probe.engine },
+                        onPreviousChannel: {}, onNextChannel: {},
+                        isFavorite: probe.favorite, canToggleFavorite: true,
+                        onToggleFavorite: { probe.favorite.toggle() },
+                        isExpanded: probe.expanded,
+                        usesNativeFullscreen: true,
+                        isActive: probe.active,
+                        onReturnToGuide: { probe.returns += 1; probe.expanded = false }
+                    )
+                }
+                .toolbar(probe.expanded ? .hidden : .visible, for: .tabBar)
+                .toolbar(.hidden, for: .navigationBar)
+            }
+            Tab("Home", systemImage: "house") { Text("Home") }
+        }
+    }
+}
+#endif
+
 @MainActor
 private final class LiveEngineSpy: LiveChannelEngine {
+    let outputView = UIView()
     var liveSnapshot = LiveChannelEngineSnapshot(
         phase: .playing, firstFrameReady: true, position: 100,
         bufferedPosition: 110, seekableRange: 90...110,
@@ -902,6 +1089,7 @@ private final class LiveEngineSpy: LiveChannelEngine {
     var onLoad: (@MainActor () async -> Void)?
     var onGoLive: (@MainActor () -> Void)?
     var liveLoads = 0
+    var cancelledLoads: [Bool] = []
     var loadedURLs: [URL] = []
     var loadedHeaders: [[String: String]] = []
     var capturedFailureHandlers: [(@MainActor (AppError) -> Void)] = []
@@ -930,6 +1118,7 @@ private final class LiveEngineSpy: LiveChannelEngine {
             }
         }
         await onLoad?()
+        cancelledLoads.append(Task.isCancelled)
     }
     func resumeLoad(_ loadNumber: Int) {
         loadContinuations.removeValue(forKey: loadNumber)?.resume()
@@ -951,6 +1140,6 @@ private final class LiveEngineSpy: LiveChannelEngine {
     }
     func selectAudioTrack(_ track: MediaTrack?) {}
     func selectSubtitleTrack(_ track: MediaTrack?) {}
-    func makeVideoOutputView() -> UIView { UIView() }
+    func makeVideoOutputView() -> UIView { outputView }
 }
 #endif

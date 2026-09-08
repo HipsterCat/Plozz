@@ -96,9 +96,14 @@ is no prior in-memory history to migrate on the first updated launch.
   native navigation menu or pinned rail.
   Live TV is the root of its native navigation stack, with no hidden empty page
   for Back to expose. Its shell sends Search/playback chrome visibility directly
-  to that owning stack, restoring native navigation while browsing. Playback
-  publishes hiding in the same action that expands the picture. The player
-  remains mounted, independent of guide scrolling. The custom pinned rail
+  to that owning stack, restoring native navigation while browsing. With native
+  navigation, watching uses a real fullscreen presentation above the tab shell,
+  rather than relying on a root toolbar preference to hide its menu chip.
+  The existing playback owner transfers the same engine's output view into
+  that presentation and back; it does not create another engine or reload the
+  channel. Pending startup survives the handoff. Presentation does not slide
+  the picture in, and dismissal restores the retained guide before restoring
+  its focus. The custom pinned rail
   retains its existing chrome coordinator.
   Live TV also participates in the profile's Hide or Reorder Navigation list,
   alongside Home, Search and the other destinations. Settings remains visible
@@ -488,3 +493,9 @@ Run the focused model and native layout tests through the existing simulator run
 ```sh
 tools/run-tests.sh FeatureLiveTVTests FeatureLiveTVCoreTests FeaturePlaybackTests EnginePlozzigenTests
 ```
+
+`LiveChannelFullscreenPresentationTests` additionally needs an app-hosted tvOS
+test target with a window scene; the standalone package runner skips it.
+It exercises native sidebar/top-bar presentation, actual dismissal, focus
+ownership, in-flight startup, channel changes and reuse of the engine's output
+view. It does not substitute for a physical Siri Remote usability pass.

@@ -62,18 +62,21 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
     @Environment(\.layoutDirection) private var layoutDirection
     @Environment(\.locale) private var locale
     private let isActive: Bool
+    private let usesNativeFullscreen: Bool
     private let viewSettingsStore: (any LiveTVViewSettingsStoring)?
     private let onExpandedChange: (Bool) -> Void
     private let player: (LiveTVPrototypePlayback) -> PlayerContent
 
     public init(
         isActive: Bool = true,
+        usesNativeFullscreen: Bool = false,
         preferencesStore: (any LiveTVPreferencesStoring)? = nil,
         viewSettingsStore: (any LiveTVViewSettingsStoring)? = nil,
         onExpandedChange: @escaping (Bool) -> Void = { _ in },
         @ViewBuilder player: @escaping (LiveTVPrototypePlayback) -> PlayerContent
     ) {
         self.isActive = isActive
+        self.usesNativeFullscreen = usesNativeFullscreen
         self.viewSettingsStore = viewSettingsStore
         self.onExpandedChange = onExpandedChange
         self.player = player
@@ -283,6 +286,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             onExpandedChange(hidesChrome)
         }
         .onDisappear {
+            guard !(isActive && usesNativeFullscreen && preview.isExpanded) else { return }
             preview.stop()
             onExpandedChange(false)
         }

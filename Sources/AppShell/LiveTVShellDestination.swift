@@ -49,6 +49,7 @@ struct LiveTVShellDestination: View {
     private var liveTVContent: some View {
         LiveTVPrototypeView(
             isActive: isActive,
+            usesNativeFullscreen: usesNativeNavigation,
             preferencesStore: preferencesStore,
             viewSettingsStore: viewSettingsStore,
             onExpandedChange: updateExpandedState
@@ -66,6 +67,8 @@ struct LiveTVShellDestination: View {
                 canToggleFavorite: playback.canToggleFavorite,
                 onToggleFavorite: playback.onToggleFavorite,
                 isExpanded: playback.isExpanded,
+                usesNativeFullscreen: usesNativeNavigation,
+                isActive: isActive,
                 onReturnToGuide: playback.returnToGuide,
                 playPauseRequest: playback.playPauseRequest,
                 onPlaybackStarted: playback.playbackStarted
@@ -78,6 +81,7 @@ struct LiveTVShellDestination: View {
             }
         }
         .onDisappear {
+            guard !(isActive && usesNativeNavigation && hidesNavigation) else { return }
             updateExpandedState(false)
         }
     }

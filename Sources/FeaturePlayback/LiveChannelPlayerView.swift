@@ -25,6 +25,8 @@ public struct LiveChannelPlayerView: View {
     private let canToggleFavorite: Bool
     private let onToggleFavorite: () -> Void
     private let isExpanded: Bool
+    private let usesNativeFullscreen: Bool
+    private let isActive: Bool
     private let onReturnToGuide: (() -> Void)?
     private let playPauseRequest: Int
     private let onPlaybackStarted: () -> Void
@@ -32,6 +34,10 @@ public struct LiveChannelPlayerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var model: LiveChannelPlayerModel?
+    @State private var sourceTask: Task<Void, Never>?
+    @State private var fullscreenPresented = false
+    @State private var fullscreenOwnsSurface = false
+    @State private var returnsToGuideAfterFullscreen = false
     @State private var engineInitializationFailed = false
     @State private var controlsVisible = true
     @State private var autoHideRevision = 0
@@ -52,6 +58,8 @@ public struct LiveChannelPlayerView: View {
         canToggleFavorite: Bool,
         onToggleFavorite: @escaping () -> Void,
         isExpanded: Bool = true,
+        usesNativeFullscreen: Bool = false,
+        isActive: Bool = true,
         onReturnToGuide: (() -> Void)? = nil,
         playPauseRequest: Int = 0,
         onPlaybackStarted: @escaping () -> Void = {}
@@ -68,12 +76,14 @@ public struct LiveChannelPlayerView: View {
         self.canToggleFavorite = canToggleFavorite
         self.onToggleFavorite = onToggleFavorite
         self.isExpanded = isExpanded
+        self.usesNativeFullscreen = usesNativeFullscreen
+        self.isActive = isActive
         self.onReturnToGuide = onReturnToGuide
         self.playPauseRequest = playPauseRequest
         self.onPlaybackStarted = onPlaybackStarted
     }
 
-    public var body: some View {
+    private var playerSurface: some View {
         ZStack {
             Color.black
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -201,6 +211,43 @@ public struct LiveChannelPlayerView: View {
             togglePlayPause()
         }
         #endif
+        .task(id: autoHideRevision) {
+            let revision = autoHideRevision
+            guard isExpanded, controlsVisible, model?.phase == .playing else { return }
+            try? await Task.sleep(for: .seconds(ControlsAutoHidePolicy.minSinceInput))
+            guard !Task.isCancelled,
+                  revision == autoHideRevision,
+                  isExpanded,
+                  controlsVisible,
+                  model?.phase == .playing else {
+                return
+            }
+            hideControls()
+        }
+    }
+
+    public var body: some View {
+        ZStack {
+            Color.black
+            if !fullscreenOwnsSurface {
+                playerSurface
+            }
+        }
+        .fullScreenCover(isPresented: $fullscreenPresented, onDismiss: fullscreenDidDismiss) {
+            playerSurface
+                .ignoresSafeArea()
+        }
+        .onChange(of: wantsNativeFullscreen, initial: true) { _, presented in
+            returnsToGuideAfterFullscreen = presented
+            updateFullscreenPresentation(presented)
+        }
+        .onChange(of: isActive) { _, active in
+            if active {
+                updateSource()
+            } else {
+                stopPlayback()
+            }
+        }
         .onChange(of: focusedControl) { _, newValue in
             guard let newValue, newValue != .surface else { return }
             noteInteraction()
@@ -246,54 +293,82 @@ public struct LiveChannelPlayerView: View {
         .onChange(of: scenePhase) { _, phase in
             model?.handleScenePhase(phase)
         }
-        .task(id: source) {
-            playbackStartPolicy.resetViewing()
-            if let model {
-                await model.changeSource(
-                    channelID: channelID,
-                    streamURL: streamURL,
-                    httpHeaders: httpHeaders
-                )
-                return
-            }
+        .onChange(of: source, initial: true) { _, _ in updateSource() }
+        .onDisappear {
+            // A native fullscreen presentation obscures, but does not retire,
+            // this owner. The same engine and output view return to the guide.
+            guard !isActive || !fullscreenOwnsSurface else { return }
+            stopPlayback()
+        }
+    }
 
-            engineInitializationFailed = false
-            let engine: any LiveChannelEngine
-            do {
-                engine = try makeEngine()
-            } catch {
-                LiveChannelDiagnostics().event(.initializationFailure, attempt: 0)
-                engineInitializationFailed = true
-                focusAfterPresentation(.close)
-                return
+    private var wantsNativeFullscreen: Bool {
+        #if os(tvOS)
+        usesNativeFullscreen && isExpanded && isActive
+        #else
+        false
+        #endif
+    }
+
+    private func updateFullscreenPresentation(_ presented: Bool) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            if presented { fullscreenOwnsSurface = true }
+            fullscreenPresented = presented
+        }
+    }
+
+    private func fullscreenDidDismiss() {
+        fullscreenOwnsSurface = false
+        // SwiftUI may retain the dismissal closure from presentation time.
+        // Read current state rather than its captured isActive/isExpanded inputs.
+        if returnsToGuideAfterFullscreen {
+            returnsToGuideAfterFullscreen = false
+            returnFromPlayer()
+        }
+    }
+
+    private func updateSource() {
+        guard isActive else { return }
+        playbackStartPolicy.resetViewing()
+        sourceTask?.cancel()
+        if let model {
+            sourceTask = Task {
+                guard !Task.isCancelled else { return }
+                await model.changeSource(
+                    channelID: channelID, streamURL: streamURL, httpHeaders: httpHeaders
+                )
             }
-            let playerModel = LiveChannelPlayerModel(
-                engine: engine,
-                channelID: channelID,
-                streamURL: streamURL,
-                httpHeaders: httpHeaders
-            )
-            model = playerModel
-            playerModel.handleScenePhase(scenePhase)
+            return
+        }
+
+        engineInitializationFailed = false
+        let engine: any LiveChannelEngine
+        do {
+            engine = try makeEngine()
+        } catch {
+            LiveChannelDiagnostics().event(.initializationFailure, attempt: 0)
+            engineInitializationFailed = true
+            focusAfterPresentation(.close)
+            return
+        }
+        let playerModel = LiveChannelPlayerModel(
+            engine: engine, channelID: channelID, streamURL: streamURL, httpHeaders: httpHeaders
+        )
+        model = playerModel
+        playerModel.handleScenePhase(scenePhase)
+        sourceTask = Task {
+            guard !Task.isCancelled else { return }
             await playerModel.start()
         }
-        .task(id: autoHideRevision) {
-            let revision = autoHideRevision
-            guard isExpanded, controlsVisible, model?.phase == .playing else { return }
-            try? await Task.sleep(for: .seconds(ControlsAutoHidePolicy.minSinceInput))
-            guard !Task.isCancelled,
-                  revision == autoHideRevision,
-                  isExpanded,
-                  controlsVisible,
-                  model?.phase == .playing else {
-                return
-            }
-            hideControls()
-        }
-        .onDisappear {
-            model?.stop()
-            model = nil
-        }
+    }
+
+    private func stopPlayback() {
+        sourceTask?.cancel()
+        sourceTask = nil
+        model?.stop()
+        model = nil
     }
 
     private var source: LiveChannelSource {
@@ -441,12 +516,20 @@ public struct LiveChannelPlayerView: View {
     }
 
     private func dismissPlayer() {
+        if fullscreenOwnsSurface {
+            updateFullscreenPresentation(false)
+        } else {
+            returnFromPlayer()
+        }
+    }
+
+    private func returnFromPlayer() {
         if let onReturnToGuide {
             playbackStartPolicy.resetViewing()
             onReturnToGuide()
             return
         }
-        model?.stop()
+        stopPlayback()
         dismiss()
     }
 }
