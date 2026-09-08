@@ -34,6 +34,7 @@ struct PrototypeBrowser: View {
     let isLoading: Bool
     let loadFailed: Bool
     let reload: () -> Void
+    var hideChannel: ((LiveTVPrototypeChannel, LiveTVGuideRowID) -> Void)?
     @State private var scrollID: LiveTVGuideRowID?
     @State private var pendingFocus: PrototypeBrowseFocus?
     @State private var restorationFallback: PrototypeBrowseFocus?
@@ -42,6 +43,7 @@ struct PrototypeBrowser: View {
     @State private var confirmedFocus: PrototypeBrowseFocus?
     @State private var mountedRows = Set<LiveTVGuideRowID>()
     @State private var restrictDirectionalEntry = true
+    @State private var guideHours = 6
     @FocusState private var focused: PrototypeBrowseFocus?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -85,6 +87,12 @@ struct PrototypeBrowser: View {
                         Button("Reload playlist", action: reload).buttonStyle(PrototypeButtonStyle())
                         Button("Sources", action: openSources).buttonStyle(PrototypeButtonStyle())
                     }
+                } else if allChannelsHidden {
+                    ContentUnavailableView {
+                        Label("All channels are hidden", systemImage: "eye.slash")
+                    } description: {
+                        Text("Restore channels in Settings > Live TV > Hidden channels.")
+                    }
                 } else if model.visibleChannels.isEmpty {
                     ContentUnavailableView {
                         if model.guideOnly && imports.guidePhase == .loading {
@@ -118,12 +126,13 @@ struct PrototypeBrowser: View {
                                             channel: channel, section: entry.section,
                                             programs: model.programs(
                                                 for: channel.id, from: guideStart,
-                                                hours: geometry.size.width >= 650 ? 6 : 2
+                                                hours: guideHours
                                             ),
                                             start: guideStart, now: model.now,
                                             width: geometry.size.width, timelineOffset: $timelineOffset,
                                             focus: $focused,
-                                            railActive: (railActive && restrictDirectionalEntry) || isRestoringFocus,
+                                            railActive: (railActive && restrictDirectionalEntry)
+                                                || isRestoringFocus || requiresContentFocusHandoff,
                                             returnTarget: focusReturnTarget,
                                             favorite: model.favoriteIDs.contains(channel.id),
                                             playing: model.playingChannelID == channel.id,
@@ -133,7 +142,8 @@ struct PrototypeBrowser: View {
                                             top: { goToTop(proxy) },
                                             goToNow: goToNow,
                                             focusChanged: confirmFocus,
-                                            sources: openSources, guideTime: openGuideTime
+                                            sources: openSources, guideTime: openGuideTime,
+                                            hide: hideChannel.map { action in { action(channel, entry.id) } }
                                         )
                                     }
                                     .id(entry.id)
@@ -180,7 +190,8 @@ struct PrototypeBrowser: View {
                     }
                 }
             }
-            .onChange(of: geometry.size.width) { old, new in
+            .onChange(of: geometry.size.width, initial: true) { old, new in
+                guideHours = new < 650 ? 2 : 6
                 let oldWidth = PrototypeLayout.timelineWidth(for: old)
                 let newWidth = PrototypeLayout.timelineWidth(for: new)
                 timelineOffset = new < 650 ? 0 : min(newWidth * 2, timelineOffset / oldWidth * newWidth)
@@ -200,10 +211,10 @@ struct PrototypeBrowser: View {
             hasFocus = target != nil
             if let target {
                 switch target {
-                case .channel:
+                case .channel, .channelContent:
                     focusedProgram = nil
                 case .program(let channelID, let programID, _):
-                    focusedProgram = model.programs(for: channelID, from: guideStart, hours: 6)
+                    focusedProgram = model.programs(for: channelID, from: guideStart, hours: guideHours)
                         .first { $0.id == programID }
                 }
                 selectedID = target.channelID
@@ -236,18 +247,31 @@ struct PrototypeBrowser: View {
                 selectedRowID = replacement
                 selectedID = replacement?.channelID
                 scrollID = replacement
-                lastFocused = replacement.map { .channel($0.channelID, section: $0.section) }
+                lastFocused = replacement.map {
+                    .defaultContent(in: model, row: $0, from: guideStart, hours: guideHours)
+                }
                 if hasFocus, !isRestoringFocus {
                     pendingFocus = lastFocused
                     focused = lastFocused
                 }
             }
         }
+        .onChange(of: browseReturnTarget) { _, target in
+            guard requiresContentFocusHandoff, let target else { return }
+            pendingFocus = target
+            focused = target
+        }
         .onDisappear { hasFocus = false }
     }
 
     private var guideStart: Date {
         timeAnchor.addingTimeInterval(guideOffset)
+    }
+
+    private var allChannelsHidden: Bool {
+        guard model.visibleChannels.isEmpty else { return false }
+        let hidden = model.hiddenChannelIDs
+        return !model.channels.isEmpty && model.channels.allSatisfy { hidden.contains($0.id) }
     }
 
     private var currentSection: LiveTVGuideSection {
@@ -261,19 +285,20 @@ struct PrototypeBrowser: View {
     }
 
     private var browseReturnTarget: PrototypeBrowseFocus? {
-        if case .program(let channelID, let programID, _) = lastFocused,
-           lastFocused?.rowID == selectedRowID,
-           model.guideChannels.contains(where: { $0.id == lastFocused?.rowID }),
-           LiveTVGuideTimeline.slots(
-               programs: model.programs(for: channelID, from: guideStart, hours: 6),
-               from: guideStart, to: guideStart.addingTimeInterval(21_600)
-           ).contains(where: { $0.program?.id == programID }) {
+        if let lastFocused, lastFocused.rowID == selectedRowID,
+           lastFocused.isAvailable(in: model, from: guideStart, hours: guideHours) {
             return lastFocused
         }
         let row = selectedID.flatMap {
             model.guideRow(for: $0, preferring: selectedRowID?.section)
         } ?? model.guideChannels.first?.id
-        return row.map { .channel($0.channelID, section: $0.section) }
+        return row.map { .defaultContent(in: model, row: $0, from: guideStart, hours: guideHours) }
+    }
+
+    private var requiresContentFocusHandoff: Bool {
+        guard isPresented, !railActive, !isRestoringFocus, let lastFocused,
+              lastFocused.rowID == selectedRowID else { return false }
+        return !lastFocused.isAvailable(in: model, from: guideStart, hours: guideHours)
     }
 
     private var restorationTarget: PrototypeBrowseFocus? {
@@ -281,7 +306,10 @@ struct PrototypeBrowser: View {
     }
 
     private var playbackReturnTarget: PrototypeBrowseFocus? {
-        .returningToPlayback(in: model, selectedChannelID: selectedID, originRow: watchOrigin)
+        .returningToPlayback(
+            in: model, selectedChannelID: selectedID, originRow: watchOrigin,
+            from: guideStart, hours: guideHours
+        )
     }
 
     private func completePendingFocus(_ id: LiveTVGuideRowID) {
@@ -298,6 +326,7 @@ struct PrototypeBrowser: View {
     private func restoreFocus(using proxy: ScrollViewProxy, width: CGFloat) async {
         guard isPresented, isRestoringFocus else { return }
         let request = restoreFocusRequest
+        if restoresPlaybackFocus { revealCurrentTime(width: width) }
         guard let target = restorationTarget else {
             railActive = false
             focusRestored(request)
@@ -305,7 +334,6 @@ struct PrototypeBrowser: View {
         }
         pendingFocus = nil
         restorationFallback = nil
-        if restoresPlaybackFocus { revealCurrentProgram(width: width) }
         proxy.scrollTo(target.rowID, anchor: .center)
         if reduceMotion { await Task.yield() }
         else { try? await Task.sleep(for: .milliseconds(340)) }
@@ -315,7 +343,7 @@ struct PrototypeBrowser: View {
             focusRestored(request)
             return
         }
-        if restoresPlaybackFocus { revealCurrentProgram(width: width) }
+        if restoresPlaybackFocus { revealCurrentTime(width: width) }
         if latestTarget.rowID != target.rowID {
             proxy.scrollTo(latestTarget.rowID, anchor: .center)
         }
@@ -360,16 +388,14 @@ struct PrototypeBrowser: View {
         }
     }
 
-    private func revealCurrentProgram(width: CGFloat) {
-        guard let target = playbackReturnTarget,
-              let program = model.currentProgram(for: target.channelID) else { return }
-        if model.now < guideStart || model.now >= guideStart.addingTimeInterval(21_600) {
+    private func revealCurrentTime(width: CGFloat) {
+        if model.now < guideStart || model.now >= guideStart.addingTimeInterval(Double(guideHours) * 3_600) {
             goToNow()
         }
         let timelineWidth = PrototypeLayout.timelineWidth(for: width)
         let visibleStart = guideStart.addingTimeInterval(Double(timelineOffset / timelineWidth) * 7_200)
         let visibleEnd = visibleStart.addingTimeInterval(7_200)
-        if program.end <= visibleStart || program.start >= visibleEnd {
+        if model.now < visibleStart || model.now >= visibleEnd {
             timelineOffset = min(timelineWidth * 2, max(
                 0, timelineWidth * (model.now.timeIntervalSince(guideStart) - 1_800) / 7_200
             ))
@@ -388,7 +414,7 @@ struct PrototypeBrowser: View {
         selectedID = first.channel.id
         selectedRowID = first.id
         focusedProgram = nil
-        pendingFocus = .channel(first.channel.id, section: first.section)
+        pendingFocus = .defaultContent(in: model, row: first.id, from: guideStart, hours: guideHours)
         proxy.scrollTo(first.id, anchor: .top)
         focused = pendingFocus
     }
@@ -502,6 +528,7 @@ struct PrototypeGuideRow: View {
     var focusChanged: (PrototypeBrowseFocus, Bool) -> Void = { _, _ in }
     var sources: () -> Void = {}
     var guideTime: () -> Void = {}
+    var hide: (() -> Void)?
     @ScaledMetric(relativeTo: .subheadline) private var rowHeight: CGFloat = PrototypeLayout.rowHeight
     @State private var compactFade = PrototypeScrollFade()
 
@@ -514,28 +541,34 @@ struct PrototypeGuideRow: View {
                         favorite: favorite, playing: playing, tune: tune, toggleFavorite: toggleFavorite,
                         controls: controls, top: top, height: rowHeight,
                         focusChanged: { focusChanged(channelFocus, $0) },
-                        sources: sources, guideTime: programs.isEmpty ? nil : guideTime
+                        sources: sources, guideTime: programs.isEmpty ? nil : guideTime, hide: hide
                     )
                     .focused(focus, equals: channelFocus)
                     .disabled(railActive && returnTarget != channelFocus)
                     if programs.isEmpty {
-                        PrototypeGuideGap(channelName: channel.name, height: rowHeight)
+                        channelContent()
                     }
                 }
                 if !programs.isEmpty {
                     ScrollView(.horizontal) {
                         HStack(spacing: PrototypeLayout.smallGap) {
-                            ForEach(programs) { program in
-                                Button { open(program) } label: {
-                                    PrototypeProgramLabel(program: program, now: now)
-                                        .frame(width: 230, alignment: .leading)
+                            ForEach(LiveTVGuideTimeline.slots(
+                                programs: programs, from: start, to: start.addingTimeInterval(7_200)
+                            )) { slot in
+                                if let program = slot.program {
+                                    Button { open(program) } label: {
+                                        PrototypeProgramLabel(program: program, now: now)
+                                            .frame(width: 230, alignment: .leading)
+                                    }
+                                    .buttonStyle(PrototypeButtonStyle(
+                                        surface: .program, focusChanged: { focusChanged(programFocus(program.id), $0) }
+                                    ))
+                                    .focusEffectDisabled()
+                                    .focused(focus, equals: programFocus(program.id))
+                                    .disabled(railActive && returnTarget != programFocus(program.id))
+                                } else {
+                                    channelContent(slotID: slot.id).frame(width: 230)
                                 }
-                                .buttonStyle(PrototypeButtonStyle(
-                                    surface: .program, focusChanged: { focusChanged(programFocus(program.id), $0) }
-                                ))
-                                .focusEffectDisabled()
-                                .focused(focus, equals: programFocus(program.id))
-                                .disabled(railActive && returnTarget != programFocus(program.id))
                             }
                         }
                     }
@@ -565,13 +598,13 @@ struct PrototypeGuideRow: View {
                     favorite: favorite, playing: playing, tune: tune, toggleFavorite: toggleFavorite,
                     controls: controls, top: top, height: rowHeight,
                     focusChanged: { focusChanged(channelFocus, $0) },
-                    sources: sources, guideTime: programs.isEmpty ? nil : guideTime
+                    sources: sources, guideTime: programs.isEmpty ? nil : guideTime, hide: hide
                 )
                     .frame(width: PrototypeLayout.stationWidth(for: width))
                     .focused(focus, equals: channelFocus)
                     .disabled(railActive && returnTarget != channelFocus)
                 if programs.isEmpty {
-                    PrototypeGuideGap(channelName: channel.name, height: rowHeight)
+                    channelContent()
                         .frame(maxWidth: .infinity)
                 } else {
                     PrototypeSynchronizedTimeline(
@@ -612,11 +645,7 @@ struct PrototypeGuideRow: View {
                                     )
                                     .contextMenu {
                                         Button("Program details", systemImage: "info.circle") { details(program) }
-                                        Button("Watch channel live", systemImage: "play.fill", action: tune)
-                                        Button(
-                                            favorite ? "Remove from Favorites" : "Add to Favorites",
-                                            systemImage: "star", action: toggleFavorite
-                                        )
+                                        PrototypeChannelActions(favorite: favorite, play: tune, toggleFavorite: toggleFavorite, hide: hide)
                                         Button("Search channels", systemImage: "magnifyingglass", action: controls)
                                         Button("Sources", systemImage: "antenna.radiowaves.left.and.right", action: sources)
                                         Button("Guide time", systemImage: "calendar", action: guideTime)
@@ -624,8 +653,11 @@ struct PrototypeGuideRow: View {
                                         Button("Now", systemImage: "clock", action: goToNow)
                                     }
                                 } else {
-                                    PrototypeGuideGap(channelName: channel.name, height: rowHeight)
-                                        .frame(width: slotWidth(slot)).clipped()
+                                    channelContent(slotID: slot.id)
+                                        .frame(width: cellWidth(slot))
+                                        .padding(.trailing, min(PrototypeLayout.cellGap, slotWidth(slot) / 4))
+                                        .frame(width: slotWidth(slot), height: rowHeight)
+                                        .clipped()
                                 }
                             }
                         }
@@ -644,6 +676,30 @@ struct PrototypeGuideRow: View {
 
     private func programFocus(_ id: String) -> PrototypeBrowseFocus {
         .program(channelID: channel.id, programID: id, section: section)
+    }
+
+    private func channelContent(slotID: String? = nil) -> some View {
+        let target = PrototypeBrowseFocus.channelContent(channel.id, slotID: slotID, section: section)
+        return Button(action: tune) {
+            PrototypeGuideGap(channelName: channel.name, height: rowHeight)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PrototypeButtonStyle(
+            padded: false, surface: .guide, focusChanged: { focusChanged(target, $0) }
+        ))
+        .focusEffectDisabled()
+        .focused(focus, equals: target)
+        .disabled(railActive && returnTarget != target)
+        .accessibilityLabel(Text(channel.name))
+        .accessibilityHint("Play channel")
+        .accessibilityIdentifier("live-tv-channel-content-\(section.rawValue)-\(channel.number)-\(slotID ?? "whole")")
+        .contextMenu {
+            PrototypeChannelActions(favorite: favorite, play: tune, toggleFavorite: toggleFavorite, hide: hide)
+            Button("Search channels", systemImage: "magnifyingglass", action: controls)
+            Button("Sources", systemImage: "antenna.radiowaves.left.and.right", action: sources)
+            Button("Back to top", systemImage: "arrow.up.to.line", action: top)
+        }
     }
 
     private func slotWidth(_ slot: LiveTVGuideSlot) -> CGFloat {
@@ -665,7 +721,7 @@ struct PrototypeGuideRow: View {
     }
 }
 
-private struct PrototypeGuideStation: View {
+struct PrototypeGuideStation: View {
     let channel: LiveTVPrototypeChannel
     let section: LiveTVGuideSection
     let favorite: Bool
@@ -678,9 +734,19 @@ private struct PrototypeGuideStation: View {
     var focusChanged: ((Bool) -> Void)?
     var sources: () -> Void = {}
     var guideTime: (() -> Void)?
+    var hide: (() -> Void)?
 
     var body: some View {
-        Button(action: tune) {
+        Menu {
+            PrototypeChannelActions(favorite: favorite, play: tune, toggleFavorite: toggleFavorite, hide: hide)
+            Divider()
+            Button("Search channels", systemImage: "magnifyingglass", action: controls)
+            Button("Sources", systemImage: "antenna.radiowaves.left.and.right", action: sources)
+            if let guideTime {
+                Button("Guide time", systemImage: "calendar", action: guideTime)
+            }
+            Button("Back to top", systemImage: "arrow.up.to.line", action: top)
+        } label: {
             PrototypeStationMark(
                 channel: channel,
                 plateSize: CGSize(width: PrototypeLayout.stationColumnWidth, height: height ?? PrototypeLayout.rowHeight),
@@ -692,19 +758,26 @@ private struct PrototypeGuideStation: View {
         .focusEffectDisabled()
         .accessibilityLabel(Text(channel.name))
         .accessibilityValue(Text("Channel \(channel.number)"))
+        .accessibilityHint("Channel actions")
         .accessibilityAddTraits(playing ? .isSelected : [])
         .accessibilityIdentifier("live-tv-channel-\(section.rawValue)-\(channel.number)")
-        .contextMenu {
-            Button(
-                favorite ? "Remove from Favorites" : "Add to Favorites",
-                systemImage: "star", action: toggleFavorite
-            )
-            Button("Search channels", systemImage: "magnifyingglass", action: controls)
-            Button("Sources", systemImage: "antenna.radiowaves.left.and.right", action: sources)
-            if let guideTime {
-                Button("Guide time", systemImage: "calendar", action: guideTime)
-            }
-            Button("Back to top", systemImage: "arrow.up.to.line", action: top)
+    }
+}
+
+private struct PrototypeChannelActions: View {
+    let favorite: Bool
+    let play: () -> Void
+    let toggleFavorite: () -> Void
+    let hide: (() -> Void)?
+
+    var body: some View {
+        Button("Play channel", systemImage: "play.fill", action: play)
+        Button(
+            favorite ? "Remove from Favorites" : "Add to Favorites",
+            systemImage: favorite ? "star.slash" : "star", action: toggleFavorite
+        )
+        if let hide {
+            Button("Hide channel", systemImage: "eye.slash", action: hide)
         }
     }
 }

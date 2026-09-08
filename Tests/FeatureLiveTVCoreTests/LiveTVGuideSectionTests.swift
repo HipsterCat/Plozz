@@ -135,7 +135,7 @@ final class LiveTVGuideSectionTests: XCTestCase {
         XCTAssertEqual(model.guideChannels.count, 5_000 + model.favoriteIDs.count + 1)
         XCTAssertEqual(Set(model.guideChannels.map(\.id)).count, model.guideChannels.count)
         model.stop()
-        XCTAssertEqual(LiveTVGuideFocusTarget.returningToPlayback(in: model, selectedChannelID: nil), .channel(id))
+        XCTAssertEqual(LiveTVGuideFocusTarget.returningToPlayback(in: model, selectedChannelID: nil), .channelContent(id))
     }
 
     func testTransportSnapshotSkipsDuplicateShortcutOccurrences() {

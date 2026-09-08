@@ -199,7 +199,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         } message: {
             Text("Demo scenario: another viewer is using the tuner. Your current channel has not changed.")
         }
-        .alert("Live TV history unavailable", isPresented: Binding(
+        .alert("Live TV preferences unavailable", isPresented: Binding(
             get: { isActive && model.preferencesIssue != nil },
             set: { if !$0 { model.dismissPreferencesIssue() } }
         )) {
@@ -207,9 +207,9 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             Button("Not now", role: .cancel) { model.dismissPreferencesIssue() }
         } message: {
             if model.preferencesIssue == .loadFailed {
-                Text("Your Favorites and recently watched channels could not be loaded. Retry before making changes. Your saved history has not been replaced.")
+                Text("Your Favorites, recently watched channels, and hidden channels could not be loaded. Retry before making changes. Your saved preferences have not been replaced.")
             } else {
-                Text("The change to your Favorites or recently watched channels could not be saved. Retry to keep it across sessions.")
+                Text("The change to your Favorites, recently watched channels, or hidden channels could not be saved. Retry to keep it across sessions.")
             }
         }
         .task(id: isActive ? reloadRequest : -1) {
@@ -265,7 +265,10 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                 sheet = nil
                 preview.stop()
             }
-            if active { applyViewSettings() }
+            if active {
+                model.reloadPreferences()
+                applyViewSettings()
+            }
             updatePreviewAvailability()
             if active { preview.focus(selectedChannelID) }
             focusInitialChannelIfNeeded()
@@ -382,7 +385,8 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             topRequest: topRequest, nowRequest: nowRequest, guideOffset: $guideOffset,
             timeAnchor: $timeAnchor, timelineOffset: $timelineOffset,
             restoreFocusRequest: preview.focusRestoreRequest,
-            isPresented: !preview.isExpanded, isRestoringFocus: preview.isRestoringGuideFocus,
+            isPresented: isActive && !preview.isExpanded && sheet == nil,
+            isRestoringFocus: preview.isRestoringGuideFocus,
             restoresPlaybackFocus: preview.restoresPlaybackFocus, watchOrigin: preview.watchOrigin,
             focusRestored: { preview.completeGuideFocusRestore($0) },
             tune: { tune($0.channelID, origin: $0) },
@@ -399,7 +403,8 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             },
             isLoading: model.channels.isEmpty && (imports.playlistPhase == .idle || imports.playlistPhase == .loading),
             loadFailed: imports.playlistPhase == .failed,
-            reload: { reloadRequest += 1 }
+            reload: { reloadRequest += 1 },
+            hideChannel: hideChannel
         )
     }
 
@@ -469,7 +474,8 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             return
         }
         #if os(tvOS)
-        // Gate the shell before UIKit presents its keyboard and claims focus.
+        // Exclude both native and custom shell navigation before UIKit presents
+        // its keyboard and claims focus.
         onExpandedChange(true)
         #endif
         searchOrigin = PrototypeSearchBookmark(
@@ -511,6 +517,21 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         #if os(tvOS)
         preview.requestBrowsingFocus()
         #endif
+    }
+
+    private func hideChannel(_ channel: LiveTVPrototypeChannel, from row: LiveTVGuideRowID) {
+        let replacement = LiveTVGuideFocusTarget.rowAfterHiding(row, in: model.guideChannels)
+        guard model.hideChannel(channel) else { return }
+        selectedRowID = replacement
+        selectedChannelID = replacement?.channelID
+        focusedProgram = nil
+        if replacement != nil {
+            enterGuide()
+        } else {
+            controlsActive = true
+            if preview.followsFocus { preview.stop() }
+            toolbarFocusRequest &+= 1
+        }
     }
 
     private func applyViewSettings() {

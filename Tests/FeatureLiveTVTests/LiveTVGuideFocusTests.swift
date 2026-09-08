@@ -138,6 +138,40 @@ final class LiveTVGuideFocusTests: XCTestCase {
         XCTAssertNil(controller.view.window)
     }
 
+    func testNativeSidebarKeepsItsNavigationRootAcrossSearchAndPlaybackVisibility() async throws {
+        let probe = try GuideFocusProbe(section: .channels)
+        probe.restoring = false
+        probe.model.query = "Channel 2"
+        let window = makeWindow(NativeSidebarSearchHarness(probe: probe))
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let search = try await waitForSearch(in: window)
+        let root = try XCTUnwrap(window.rootViewController)
+        let results = try XCTUnwrap(search.searchResultsController)
+        let appearances = probe.nativeRootAppearances
+        let disappearances = probe.nativeRootDisappearances
+        XCTAssertGreaterThan(appearances, 0)
+
+        probe.searchPresented = false
+        await waitUntil { results.view.window == nil }
+        XCTAssertNil(results.view.window)
+        XCTAssertTrue(window.rootViewController === root)
+        XCTAssertEqual(probe.model.query, "Channel 2")
+        probe.searchPresented = true
+        await waitUntil { results.view.window != nil }
+        XCTAssertTrue(search.searchResultsController === results)
+        search.closeFromRemote()
+        await waitUntil { probe.searchClosed }
+        probe.navigationExcluded = false
+        await Task.yield()
+        XCTAssertTrue(window.rootViewController === root)
+        probe.navigationExcluded = true
+        probe.searchClosed = false
+        _ = try await waitForSearch(in: window)
+        XCTAssertTrue(window.rootViewController === root)
+        XCTAssertEqual(probe.nativeRootAppearances, appearances)
+        XCTAssertEqual(probe.nativeRootDisappearances, disappearances)
+    }
+
     func testSearchCanCloseWhileGuideFocusIsRecovering() async throws {
         let probe = try GuideFocusProbe(section: .channels)
         let window = makeWindow(NativeGuideFocusHarness(probe: probe))
@@ -308,6 +342,9 @@ private final class GuideFocusProbe {
     var searchCloseCount = 0
     var searchPresented = true
     var resultsFrame: CGRect?
+    var navigationExcluded = true
+    var nativeRootAppearances = 0
+    var nativeRootDisappearances = 0
 
     init(section: LiveTVGuideSection) throws {
         origin = LiveTVGuideRowID(channelID: "24", section: section)
@@ -366,20 +403,48 @@ private struct NativeGuideFocusHarness: View {
     var direction = LayoutDirection.leftToRight
 
     var body: some View {
-        PrototypeNativeSearch(
-            query: Binding(get: { probe.model.query }, set: { probe.model.query = $0 }),
-            restoresGuideFocus: probe.restoring, isPresented: probe.searchPresented && !probe.searchClosed,
-            close: { probe.searchClosed = true; probe.searchCloseCount += 1 },
-            editing: { probe.railActive = true }
-        ) { close in
-            GuideFocusHarness(probe: probe, fixedSize: false, searchExit: close)
-                .background {
-                    NativeSearchViewportProbe { probe.resultsFrame = $0 }
+        ZStack {
+            if !probe.searchClosed {
+                PrototypeNativeSearch(
+                    query: Binding(get: { probe.model.query }, set: { probe.model.query = $0 }),
+                    restoresGuideFocus: probe.restoring, isPresented: probe.searchPresented,
+                    close: { probe.searchClosed = true; probe.searchCloseCount += 1 },
+                    editing: { probe.railActive = true }
+                ) { close in
+                    GuideFocusHarness(probe: probe, fixedSize: false, searchExit: close)
+                        .background {
+                            NativeSearchViewportProbe { probe.resultsFrame = $0 }
+                        }
+                        .ignoresSafeArea(.container, edges: [.bottom, .trailing])
+                        .environment(\.layoutDirection, direction)
                 }
-                .ignoresSafeArea(.container, edges: [.bottom, .trailing])
-                .environment(\.layoutDirection, direction)
+                .ignoresSafeArea()
+            }
         }
-        .ignoresSafeArea()
+    }
+}
+
+private struct NativeSidebarSearchHarness: View {
+    let probe: GuideFocusProbe
+
+    var body: some View {
+        TabView {
+            Tab("Live TV", systemImage: "tv") {
+                LiveTVNavigationContainer {
+                    ZStack {
+                        Color.black
+                        NativeGuideFocusHarness(probe: probe)
+                    }
+                    .toolbar(probe.navigationExcluded ? .hidden : .visible, for: .tabBar)
+                    .onAppear { probe.nativeRootAppearances += 1 }
+                    .onDisappear { probe.nativeRootDisappearances += 1 }
+                }
+            }
+            Tab("Settings", systemImage: "gearshape") {
+                Text("Settings")
+            }
+        }
+        .tabViewStyle(.sidebarAdaptable)
     }
 }
 

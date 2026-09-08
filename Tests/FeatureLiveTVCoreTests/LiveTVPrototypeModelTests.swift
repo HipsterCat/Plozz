@@ -1,3 +1,4 @@
+import CoreModels
 import Foundation
 import XCTest
 @testable import FeatureLiveTVCore
@@ -355,5 +356,206 @@ final class LiveTVPrototypeModelTests: XCTestCase {
         XCTAssertFalse(model.isPaused)
         XCTAssertEqual(model.behindLiveSeconds, 0)
         XCTAssertFalse(model.tuneFailed)
+    }
+
+    func testHidingChannelFiltersEverySectionWithoutErasingStateOrPlayback() throws {
+        let store = HiddenChannelsFixtureStore()
+        let channels = hiddenChannelFixtures
+        let model = LiveTVPrototypeModel(channels: channels, preferencesStore: store)
+        let hidden = channels[0]
+
+        model.toggleFavorite(hidden.id)
+        model.tune(hidden.id)
+        XCTAssertTrue(model.recordWatched(hidden.id))
+        XCTAssertTrue(model.hideChannel(hidden))
+
+        XCTAssertEqual(model.channels, channels)
+        XCTAssertEqual(model.channel(id: hidden.id), hidden)
+        XCTAssertEqual(model.playingChannelID, hidden.id)
+        XCTAssertTrue(model.favoriteIDs.contains(hidden.id))
+        XCTAssertTrue(model.recentChannelIDs.contains(hidden.id))
+        XCTAssertEqual(model.hiddenChannels, [
+            LiveTVHiddenChannel(id: hidden.id, name: hidden.name),
+        ])
+        XCTAssertFalse(model.visibleChannels.contains { $0.id == hidden.id })
+        XCTAssertFalse(model.guideChannels.contains { $0.channel.id == hidden.id })
+        XCTAssertFalse(model.categories.contains(hidden.category))
+
+        model.query = hidden.name
+        XCTAssertTrue(model.visibleChannels.isEmpty)
+        model.resetFilters()
+        XCTAssertFalse(model.visibleChannels.contains { $0.id == hidden.id })
+        XCTAssertEqual(store.value.favoriteIDs, [hidden.id])
+        XCTAssertEqual(store.value.recentChannelIDs, [hidden.id])
+    }
+
+    func testFavoriteAndRecentWritesPreserveHiddenMetadata() {
+        let store = HiddenChannelsFixtureStore()
+        let channels = hiddenChannelFixtures
+        let model = LiveTVPrototypeModel(channels: channels, preferencesStore: store)
+
+        XCTAssertTrue(model.hideChannel(channels[0]))
+        model.toggleFavorite(channels[1].id)
+        model.tune(channels[1].id)
+        XCTAssertTrue(model.recordWatched(channels[1].id))
+
+        XCTAssertEqual(store.value.hiddenChannels, [
+            LiveTVHiddenChannel(id: channels[0].id, name: channels[0].name),
+        ])
+        XCTAssertEqual(store.value.favoriteIDs, [channels[1].id])
+        XCTAssertEqual(store.value.recentChannelIDs, [channels[1].id])
+    }
+
+    func testHiddenMissingSourceSurvivesCatalogReplacementAndReloadedRestore() throws {
+        let store = HiddenChannelsFixtureStore()
+        let channels = hiddenChannelFixtures
+        let hidden = channels[0]
+        let model = LiveTVPrototypeModel(channels: channels, preferencesStore: store)
+
+        XCTAssertTrue(model.hideChannel(hidden))
+        try model.replaceChannels(Array(channels.dropFirst()))
+        XCTAssertEqual(model.hiddenChannels.map(\.id), [hidden.id])
+        XCTAssertEqual(store.value.hiddenChannels.map(\.id), [hidden.id])
+
+        try store.save(store.value.restoringChannel(id: hidden.id))
+        model.reloadPreferences()
+        XCTAssertTrue(model.hiddenChannels.isEmpty)
+        XCTAssertFalse(model.visibleChannels.contains { $0.id == hidden.id })
+
+        try model.replaceChannels(channels)
+        XCTAssertTrue(model.visibleChannels.contains { $0.id == hidden.id })
+        XCTAssertTrue(model.categories.contains(hidden.category))
+    }
+
+    func testReloadRestoresHiddenChannelSubjectToCurrentFilters() throws {
+        let store = HiddenChannelsFixtureStore()
+        let channels = hiddenChannelFixtures
+        let hidden = channels[0]
+        let model = LiveTVPrototypeModel(channels: channels, preferencesStore: store)
+        model.category = hidden.category
+
+        XCTAssertTrue(model.hideChannel(hidden))
+        XCTAssertTrue(model.visibleChannels.isEmpty)
+        try store.save(store.value.restoringAllChannels())
+
+        model.reloadPreferences()
+
+        XCTAssertEqual(model.category, hidden.category)
+        XCTAssertEqual(model.visibleChannels, [hidden])
+    }
+
+    func testHiddenPreferenceSaveFailureRetriesWithoutLosingMutation() {
+        let store = HiddenChannelsFixtureStore()
+        let channels = hiddenChannelFixtures
+        let model = LiveTVPrototypeModel(channels: channels, preferencesStore: store)
+        store.failSave = true
+
+        XCTAssertFalse(model.hideChannel(channels[0]))
+        XCTAssertEqual(model.preferencesIssue, .saveFailed)
+        XCTAssertTrue(model.hiddenChannels.isEmpty)
+        XCTAssertTrue(model.visibleChannels.contains { $0.id == channels[0].id })
+
+        store.failSave = false
+        model.reloadPreferences()
+
+        XCTAssertNil(model.preferencesIssue)
+        XCTAssertEqual(model.hiddenChannels.map(\.id), [channels[0].id])
+        XCTAssertFalse(model.visibleChannels.contains { $0.id == channels[0].id })
+    }
+
+    func testReloadFailurePreservesLastKnownHiddenChannels() {
+        let store = HiddenChannelsFixtureStore()
+        store.value = LiveTVPreferences(
+            hiddenChannels: [
+                LiveTVHiddenChannel(id: hiddenChannelFixtures[0].id, name: "Saved Name"),
+            ]
+        )
+        let model = LiveTVPrototypeModel(
+            channels: hiddenChannelFixtures,
+            preferencesStore: store
+        )
+        store.value = .empty
+        store.failLoad = true
+
+        model.reloadPreferences()
+
+        XCTAssertEqual(model.preferencesIssue, .loadFailed)
+        XCTAssertEqual(model.hiddenChannels.map(\.id), [hiddenChannelFixtures[0].id])
+        XCTAssertFalse(model.visibleChannels.contains { $0.id == hiddenChannelFixtures[0].id })
+    }
+
+    func testRetryingAFavoriteDoesNotUndoSettingsRestoration() {
+        let store = HiddenChannelsFixtureStore()
+        let channels = hiddenChannelFixtures
+        let model = LiveTVPrototypeModel(channels: channels, preferencesStore: store)
+        XCTAssertTrue(model.hideChannel(channels[0]))
+        store.failSave = true
+        model.toggleFavorite(channels[1].id)
+        store.value = store.value.restoringAllChannels()
+
+        model.reloadPreferences()
+        XCTAssertEqual(model.preferencesIssue, .saveFailed)
+        store.failSave = false
+        model.reloadPreferences()
+
+        XCTAssertTrue(model.hiddenChannels.isEmpty)
+        XCTAssertTrue(store.value.hiddenChannels.isEmpty)
+        XCTAssertEqual(store.value.favoriteIDs, [channels[1].id])
+    }
+
+    func testRetryingHidePreservesNewFavoritesAndRecentsSavedElsewhere() {
+        let store = HiddenChannelsFixtureStore()
+        let channels = hiddenChannelFixtures
+        let model = LiveTVPrototypeModel(channels: channels, preferencesStore: store)
+        store.failSave = true
+        XCTAssertFalse(model.hideChannel(channels[0]))
+        store.value = LiveTVPreferences(favoriteIDs: [channels[1].id], recentChannelIDs: [channels[1].id])
+        store.failLoad = true
+        model.reloadPreferences()
+        XCTAssertEqual(model.preferencesIssue, .loadFailed)
+        store.failLoad = false
+        store.failSave = false
+        model.reloadPreferences()
+
+        XCTAssertEqual(model.hiddenChannelIDs, [channels[0].id])
+        XCTAssertEqual(model.favoriteIDs, [channels[1].id])
+        XCTAssertEqual(model.recentChannelIDs, [channels[1].id])
+    }
+
+    private var hiddenChannelFixtures: [LiveTVPrototypeChannel] {
+        [
+            LiveTVPrototypeChannel(
+                id: "news", number: 1, name: "News Channel", category: "News",
+                symbol: "newspaper", accent: 0, source: .iptv, tagline: ""
+            ),
+            LiveTVPrototypeChannel(
+                id: "sports", number: 2, name: "Sports Channel", category: "Sports",
+                symbol: "sportscourt", accent: 1, source: .iptv, tagline: ""
+            ),
+        ]
+    }
+}
+
+private final class HiddenChannelsFixtureStore: LiveTVPreferencesStoring, @unchecked Sendable {
+    enum Failure: Error {
+        case unavailable
+    }
+
+    var value = LiveTVPreferences.empty
+    var failLoad = false
+    var failSave = false
+
+    func load() throws -> LiveTVPreferences {
+        if failLoad {
+            throw Failure.unavailable
+        }
+        return value
+    }
+
+    func save(_ preferences: LiveTVPreferences) throws {
+        if failSave {
+            throw Failure.unavailable
+        }
+        value = preferences
     }
 }

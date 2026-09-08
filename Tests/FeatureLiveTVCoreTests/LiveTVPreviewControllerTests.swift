@@ -353,12 +353,12 @@ final class LiveTVGuideFocusTargetTests: XCTestCase {
         )
     }
 
-    func testMissingGuideReturnsToThePlayingChannel() throws {
+    func testMissingGuideReturnsToThePlayingChannelContentRatherThanItsLogo() throws {
         let model = try makeModel()
         model.tune("other")
         XCTAssertEqual(
             LiveTVGuideFocusTarget.returningToPlayback(in: model, selectedChannelID: "playing"),
-            .channel("other")
+            .channelContent("other")
         )
     }
 
@@ -368,7 +368,7 @@ final class LiveTVGuideFocusTargetTests: XCTestCase {
         model.query = "other"
         XCTAssertEqual(
             LiveTVGuideFocusTarget.returningToPlayback(in: model, selectedChannelID: "playing"),
-            .channel("other")
+            .channelContent("other")
         )
         XCTAssertEqual(model.query, "other")
         model.query = "no matching channel"
@@ -381,8 +381,10 @@ final class LiveTVGuideFocusTargetTests: XCTestCase {
         let programs = sections.map {
             LiveTVGuideFocusTarget.program(channelID: "same", programID: "current", section: $0)
         }
-        XCTAssertEqual(Set(channels + programs).count, 6)
-        XCTAssertEqual(Set((channels + programs).map(\.rowID)).count, 3)
+        let content = sections.map { LiveTVGuideFocusTarget.channelContent("same", section: $0) }
+        let gaps = sections.map { LiveTVGuideFocusTarget.channelContent("same", slotID: "gap:0", section: $0) }
+        XCTAssertEqual(Set(channels + programs + content + gaps).count, 12)
+        XCTAssertEqual(Set((channels + programs + content + gaps).map(\.rowID)).count, 3)
     }
 
     func testReturnStaysInEachOriginSectionAfterRecentPromotion() throws {
@@ -427,13 +429,105 @@ final class LiveTVGuideFocusTargetTests: XCTestCase {
         let origin = LiveTVGuideRowID(channelID: "other", section: .favorites)
         XCTAssertEqual(
             LiveTVGuideFocusTarget.returningToPlayback(in: model, selectedChannelID: nil, originRow: origin),
-            .channel("other", section: .favorites)
+            .channelContent("other", section: .favorites)
         )
         model.query = "playing"
         XCTAssertEqual(
             LiveTVGuideFocusTarget.returningToPlayback(in: model, selectedChannelID: nil, originRow: origin),
             .program(channelID: "playing", programID: "current")
         )
+    }
+
+    func testInitialContentTargetChoosesTheActiveShowAndKeepsLogoSeparate() throws {
+        let model = try makeModel()
+        let row = LiveTVGuideRowID(channelID: "playing", section: .channels)
+        let target = LiveTVGuideFocusTarget.defaultContent(in: model, row: row, from: now)
+        XCTAssertEqual(target, .program(channelID: "playing", programID: "current"))
+        XCTAssertTrue(target.isAvailable(in: model, from: now))
+        XCTAssertTrue(LiveTVGuideFocusTarget.channel("playing").isAvailable(in: model, from: now))
+    }
+
+    func testNoGuideContentTargetBecomesUnavailableWhenRealListingsArrive() throws {
+        let model = try makeModel()
+        let row = LiveTVGuideRowID(channelID: "other", section: .channels)
+        let original = LiveTVGuideFocusTarget.defaultContent(in: model, row: row, from: now)
+        XCTAssertEqual(original, .channelContent("other"))
+        XCTAssertTrue(original.isAvailable(in: model, from: now))
+        try model.replacePrograms([
+            LiveTVPrototypeProgram(
+                id: "arrived", channelID: "other", title: "New listing", subtitle: "",
+                start: now, end: now.addingTimeInterval(1_800)
+            )
+        ])
+        XCTAssertFalse(original.isAvailable(in: model, from: now))
+        XCTAssertEqual(
+            LiveTVGuideFocusTarget.defaultContent(in: model, row: row, from: now),
+            .program(channelID: "other", programID: "arrived")
+        )
+    }
+
+    func testPartialGuideFocusesTheCurrentGapWithoutInventingAProgramme() throws {
+        let model = try makeModel()
+        try model.replacePrograms([
+            LiveTVPrototypeProgram(
+                id: "future", channelID: "playing", title: "Later", subtitle: "",
+                start: now.addingTimeInterval(900), end: now.addingTimeInterval(1_800)
+            )
+        ])
+        let row = LiveTVGuideRowID(channelID: "playing", section: .channels)
+        let slots = LiveTVGuideTimeline.slots(
+            programs: model.programs(for: "playing", from: now, hours: 6),
+            from: now, to: now.addingTimeInterval(21_600)
+        )
+        let gap = try XCTUnwrap(slots.first)
+        let target = LiveTVGuideFocusTarget.defaultContent(in: model, row: row, from: now)
+        XCTAssertEqual(target, .channelContent("playing", slotID: gap.id))
+        XCTAssertTrue(target.isAvailable(in: model, from: now))
+        XCTAssertNotEqual(target, .channelContent("playing"))
+        XCTAssertNil(model.currentProgram(for: "playing"))
+        XCTAssertNotEqual(slots.first?.id, slots.last?.id)
+        XCTAssertFalse(
+            LiveTVGuideFocusTarget.channelContent("playing", slotID: "missing").isAvailable(in: model, from: now)
+        )
+    }
+
+    func testCompactContentFocusUsesOnlyItsVisibleGuideHorizon() throws {
+        let model = try makeModel()
+        try model.replacePrograms([
+            LiveTVPrototypeProgram(
+                id: "late", channelID: "playing", title: "Later", subtitle: "",
+                start: now.addingTimeInterval(10_800), end: now.addingTimeInterval(12_600)
+            )
+        ])
+        let row = LiveTVGuideRowID(channelID: "playing", section: .channels)
+        let target = LiveTVGuideFocusTarget.defaultContent(in: model, row: row, from: now, hours: 2)
+        XCTAssertEqual(target, .channelContent("playing"))
+        XCTAssertTrue(target.isAvailable(in: model, from: now, hours: 2))
+        XCTAssertFalse(target.isAvailable(in: model, from: now, hours: 6))
+    }
+
+    func testPlaybackReturnUsesNowEvenWhenTheOldGuideWasInTheFuture() throws {
+        let model = try makeModel()
+        model.tune("playing")
+        XCTAssertEqual(
+            LiveTVGuideFocusTarget.returningToPlayback(
+                in: model, selectedChannelID: nil, from: now.addingTimeInterval(21_600)
+            ),
+            .program(channelID: "playing", programID: "current")
+        )
+    }
+
+    func testHidingChoosesTheNextRowThenPreviousWithoutAnotherOccurrenceOfTheHiddenChannel() throws {
+        let model = try makeModel()
+        model.toggleFavorite("playing")
+        let main = LiveTVGuideRowID(channelID: "playing", section: .channels)
+        let favorite = LiveTVGuideRowID(channelID: "playing", section: .favorites)
+        let other = LiveTVGuideRowID(channelID: "other", section: .channels)
+        XCTAssertEqual(LiveTVGuideFocusTarget.rowAfterHiding(main, in: model.guideChannels), other)
+        XCTAssertEqual(LiveTVGuideFocusTarget.rowAfterHiding(favorite, in: model.guideChannels), other)
+        XCTAssertEqual(LiveTVGuideFocusTarget.rowAfterHiding(other, in: model.guideChannels), main)
+        model.query = "playing"
+        XCTAssertNil(LiveTVGuideFocusTarget.rowAfterHiding(main, in: model.guideChannels))
     }
 
     private func makeModel() throws -> LiveTVPrototypeModel {

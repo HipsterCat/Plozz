@@ -20,6 +20,7 @@ enum PrototypeLayout {
     static let horizontalFade = PlozzTheme.Spacing.large
     static let verticalFade = PlozzTheme.Spacing.xLarge
     static let guideInset = PlozzTheme.Metrics.Radius.inset
+    static let stationArtworkInset = guideInset + 8
     static var guideTrailingInset: CGFloat {
         #if os(tvOS)
         0
@@ -138,7 +139,7 @@ struct PrototypeStationMark: View {
     }
 
     private var artworkInset: CGFloat {
-        plateSize == nil ? 6 : PrototypeLayout.guideInset
+        plateSize == nil ? 6 : PrototypeLayout.stationArtworkInset
     }
 
     private var lightPlate: Bool {
@@ -164,7 +165,10 @@ struct PrototypeStationMark: View {
             .environment(\.colorScheme, lightPlate ? .light : .dark)
             .frame(width: dimensions.width, height: dimensions.height)
             .background(
-                lightPlate ? Color.white : Color(white: 0.07),
+                LinearGradient(
+                    colors: PrototypeLogoPlate.colors(for: resolvedTone),
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                ),
                 in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             )
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -176,6 +180,42 @@ struct PrototypeStationMark: View {
 enum PrototypeLogoPlate {
     static func usesLightBackground(luminance: Double, brightInk: Double) -> Bool {
         luminance < 0.42 && brightInk < 0.20
+    }
+
+    static func colors(for tone: ResolvedLogoTone?) -> [Color] {
+        let light = tone.map { usesLightBackground(luminance: $0.luminance, brightInk: $0.brightInk) } ?? false
+        // Reuse the cached preparation pass, never resample logos during scrolling.
+        let plate = tone?.backgroundPlate
+        let tint = Color(
+            red: plate?.red ?? tone?.red ?? 0.3,
+            green: plate?.green ?? tone?.green ?? 0.3,
+            blue: plate?.blue ?? tone?.blue ?? 0.3
+        )
+        if light {
+            return [
+                Color(white: 0.995).mix(with: tint, by: 0.03),
+                Color(white: 0.98).mix(with: tint, by: 0.10)
+            ]
+        }
+        return [
+            Color(white: 0.055).mix(with: tint, by: 0.17),
+            Color(white: 0.025).mix(with: tint, by: 0.05)
+        ]
+    }
+}
+
+struct PrototypeFocusOutline: View {
+    let cornerRadius: CGFloat
+    var color: Color = .white
+    var lineWidth: CGFloat = 3.5
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        // A dark inner keyline keeps the white focus edge visible on pale logos.
+        shape.strokeBorder(.black.opacity(0.9), lineWidth: lineWidth * 2)
+            .overlay { shape.strokeBorder(color, lineWidth: lineWidth) }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
@@ -242,13 +282,16 @@ private struct PrototypeButtonBody: View {
                 fill, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             )
             .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(
-                        focused && !solidFocus ? (surface == .station ? Color.white : palette.primaryText).opacity(0.9)
-                            : (selected && !focused ? palette.accent.opacity(0.35) : .clear),
-                        lineWidth: focused ? (surface == .station && contrast == .increased ? 4 : 2.5) : 1
+                if focused && !solidFocus {
+                    PrototypeFocusOutline(
+                        cornerRadius: cornerRadius,
+                        color: surface == .station ? .white : palette.primaryText,
+                        lineWidth: contrast == .increased ? 4 : 3.5
                     )
-                    .shadow(color: surface == .station && focused ? .black : .clear, radius: 1.5)
+                } else {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(selected && !focused ? palette.accent.opacity(0.35) : .clear, lineWidth: 1)
+                }
             }
             .opacity(configuration.isPressed ? 0.75 : 1)
             // Directional entry gates remove candidates without dimming the rail.

@@ -2,6 +2,22 @@
 import SwiftUI
 import UIKit
 
+/// Like detail pages, Live TV needs a navigation root to publish toolbar
+/// visibility to the native TabView. Keep it stable while Search/playback change.
+public struct LiveTVNavigationContainer<Content: View>: View {
+    private let content: Content
+
+    public init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    public var body: some View {
+        NavigationStack {
+            content.toolbar(.hidden, for: .navigationBar)
+        }
+    }
+}
+
 /// tvOS's inline keyboard and the existing guide share one search surface.
 /// A TextField here would open another full-screen text-entry presentation.
 struct PrototypeNativeSearch<Results: View>: UIViewControllerRepresentable {

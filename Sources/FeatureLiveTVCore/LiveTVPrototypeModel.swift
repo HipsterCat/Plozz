@@ -184,6 +184,8 @@ public final class LiveTVPrototypeModel {
     public private(set) var recentChannelIDs: [String] = []
     public private(set) var channels: [LiveTVPrototypeChannel] = []
     public private(set) var favoriteIDs: Set<String>
+    public private(set) var hiddenChannels: [LiveTVHiddenChannel] = []
+    public var hiddenChannelIDs: Set<String> { Set(hiddenChannels.map(\.id)) }
     public private(set) var preferencesIssue: LiveTVPreferencesIssue?
     public private(set) var now: Date
     public private(set) var categories: [String] = []
@@ -277,7 +279,11 @@ public final class LiveTVPrototypeModel {
         } else {
             favorites.insert(id)
         }
-        guard persistPreferences(LiveTVPreferences(favoriteIDs: favorites, recentChannelIDs: recentChannelIDs)) else { return }
+        guard persistPreferences(LiveTVPreferences(
+            favoriteIDs: favorites,
+            recentChannelIDs: recentChannelIDs,
+            hiddenChannels: hiddenChannels
+        )) else { return }
         if favoritesOnly {
             refreshVisibleChannels()
         } else {
@@ -292,8 +298,26 @@ public final class LiveTVPrototypeModel {
         guard id == playingChannelID, channelsByID[id] != nil else { return false }
         guard recentChannelIDs.first != id else { return true }
         let recent = [id] + recentChannelIDs.filter { $0 != id }.prefix(2)
-        guard persistPreferences(LiveTVPreferences(favoriteIDs: favoriteIDs, recentChannelIDs: recent)) else { return false }
+        guard persistPreferences(LiveTVPreferences(
+            favoriteIDs: favoriteIDs,
+            recentChannelIDs: recent,
+            hiddenChannels: hiddenChannels
+        )) else { return false }
         refreshGuideChannels()
+        return true
+    }
+
+    /// Hides every rendered occurrence of a channel while retaining its
+    /// favorite, recent, guide, and source records for later restoration.
+    @discardableResult
+    public func hideChannel(_ channel: LiveTVPrototypeChannel) -> Bool {
+        let current = currentPreferences
+        guard !current.hiddenChannelIDs.contains(channel.id) else { return true }
+        guard persistPreferences(current.hidingChannel(id: channel.id, name: channel.name)) else {
+            return false
+        }
+        refreshCategories()
+        refreshVisibleChannels()
         return true
     }
 
@@ -302,11 +326,24 @@ public final class LiveTVPrototypeModel {
     }
 
     public func retryPreferences() {
-        if !preferencesLoaded {
+        reloadPreferences()
+    }
+
+    /// Reloads profile-scoped preferences after Settings may have restored
+    /// channels. A failed pending mutation is retried first so re-entry never
+    /// silently discards it.
+    public func reloadPreferences() {
+        if let pendingPreferences, let preferencesStore {
+            do {
+                let latest = try preferencesStore.load()
+                _ = persistPreferences(rebasing(pendingPreferences, onto: latest), retrying: true)
+            } catch {
+                preferencesIssue = .loadFailed
+            }
+        } else {
             loadPreferences()
-        } else if let pendingPreferences {
-            _ = persistPreferences(pendingPreferences)
         }
+        refreshCategories()
         refreshVisibleChannels()
     }
 
@@ -316,6 +353,7 @@ public final class LiveTVPrototypeModel {
             let preferences = try preferencesStore.load()
             favoriteIDs = preferences.favoriteIDs
             recentChannelIDs = preferences.recentChannelIDs
+            hiddenChannels = preferences.hiddenChannels
             preferencesLoaded = true
             preferencesIssue = nil
         } catch {
@@ -323,13 +361,13 @@ public final class LiveTVPrototypeModel {
         }
     }
 
-    private func persistPreferences(_ preferences: LiveTVPreferences) -> Bool {
+    private func persistPreferences(_ preferences: LiveTVPreferences, retrying: Bool = false) -> Bool {
         if let preferencesStore {
             guard preferencesLoaded else {
                 preferencesIssue = .loadFailed
                 return false
             }
-            pendingPreferences = preferences
+            if !retrying { pendingPreferences = preferences }
             do {
                 try preferencesStore.save(preferences)
             } catch {
@@ -339,9 +377,35 @@ public final class LiveTVPrototypeModel {
         }
         favoriteIDs = preferences.favoriteIDs
         recentChannelIDs = preferences.recentChannelIDs
+        hiddenChannels = preferences.hiddenChannels
         preferencesIssue = nil
         pendingPreferences = nil
         return true
+    }
+
+    private var currentPreferences: LiveTVPreferences {
+        LiveTVPreferences(
+            favoriteIDs: favoriteIDs,
+            recentChannelIDs: recentChannelIDs,
+            hiddenChannels: hiddenChannels
+        )
+    }
+
+    private func rebasing(_ pending: LiveTVPreferences, onto latest: LiveTVPreferences) -> LiveTVPreferences {
+        let base = currentPreferences
+        let favorites = latest.favoriteIDs
+            .subtracting(base.favoriteIDs.subtracting(pending.favoriteIDs))
+            .union(pending.favoriteIDs.subtracting(base.favoriteIDs))
+        let removedHidden = base.hiddenChannelIDs.subtracting(pending.hiddenChannelIDs)
+        let knownHidden = base.hiddenChannelIDs.union(latest.hiddenChannelIDs)
+        let hidden = latest.hiddenChannels.filter { !removedHidden.contains($0.id) }
+            + pending.hiddenChannels.filter { !knownHidden.contains($0.id) }
+        var recent = latest.recentChannelIDs
+        if pending.recentChannelIDs != base.recentChannelIDs, let watched = pending.recentChannelIDs.first {
+            recent = [watched] + recent.filter { $0 != watched }
+        }
+        // Retry only the failed changes; Settings may have restored channels meanwhile.
+        return LiveTVPreferences(favoriteIDs: favorites, recentChannelIDs: recent, hiddenChannels: hidden)
     }
 
     public func resetFilters() {
@@ -478,9 +542,7 @@ public final class LiveTVPrototypeModel {
         channelOrdinalsByID = Dictionary(
             uniqueKeysWithValues: channels.enumerated().map { ($0.element.id, $0.offset + 1) }
         )
-        categories = Set(channels.map(\.category)).sorted {
-            Self.normalized($0) < Self.normalized($1)
-        }
+        refreshCategories()
         if let playingChannelID, channelsByID[playingChannelID] == nil {
             stop()
         } else if let previousChannelID, channelsByID[previousChannelID] == nil {
@@ -493,9 +555,11 @@ public final class LiveTVPrototypeModel {
         guard !isBatchingFilterChanges else { return }
         let normalizedQuery = Self.normalized(query)
         let selectedCategory = category.map(Self.normalized)
+        let hiddenChannelIDs = Set(hiddenChannels.map(\.id))
 
         visibleChannels = channels.compactMap { channel -> (LiveTVPrototypeChannel, Int)? in
-            guard selectedCategory == nil || Self.normalized(channel.category) == selectedCategory,
+            guard !hiddenChannelIDs.contains(channel.id),
+                  selectedCategory == nil || Self.normalized(channel.category) == selectedCategory,
                   source == nil || channel.source == source,
                   !favoritesOnly || favoriteIDs.contains(channel.id),
                   !guideOnly || hasGuide(for: channel)
@@ -528,6 +592,17 @@ public final class LiveTVPrototypeModel {
         }
         .map(\.0)
         refreshGuideChannels()
+    }
+
+    private func refreshCategories() {
+        let hiddenChannelIDs = Set(hiddenChannels.map(\.id))
+        categories = Set(
+            channels.lazy
+                .filter { !hiddenChannelIDs.contains($0.id) }
+                .map(\.category)
+        ).sorted {
+            Self.normalized($0) < Self.normalized($1)
+        }
     }
 
     private func refreshGuideChannels() {

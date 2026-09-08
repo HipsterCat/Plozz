@@ -1039,6 +1039,9 @@ public struct SettingsView: View {
             LiveTVSettingsView(
                 store: LiveTVViewSettingsStore(
                     namespace: liveTVPreferencesNamespace
+                ),
+                preferencesStore: LiveTVPreferencesStore(
+                    namespace: liveTVPreferencesNamespace
                 )
             )
             .id(activeProfile.id)

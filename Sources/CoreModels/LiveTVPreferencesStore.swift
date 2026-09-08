@@ -1,5 +1,20 @@
 import Foundation
 
+/// Non-secret metadata retained for a channel hidden by one profile.
+///
+/// The display name lets Settings offer restoration even while the channel's
+/// source is offline. Stream URLs, request headers, and credentials never enter
+/// this record.
+public struct LiveTVHiddenChannel: Codable, Equatable, Hashable, Identifiable, Sendable {
+    public let id: String
+    public let name: String
+
+    public init(id: String, name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
 /// Profile-scoped, non-secret Live TV metadata.
 ///
 /// Channel identifiers are retained even when the current catalog is empty or
@@ -10,10 +25,13 @@ public struct LiveTVPreferences: Codable, Equatable, Sendable {
 
     public let favoriteIDs: Set<String>
     public let recentChannelIDs: [String]
+    public let hiddenChannels: [LiveTVHiddenChannel]
+    public var hiddenChannelIDs: Set<String> { Set(hiddenChannels.map(\.id)) }
 
     public init(
         favoriteIDs: Set<String> = [],
-        recentChannelIDs: [String] = []
+        recentChannelIDs: [String] = [],
+        hiddenChannels: [LiveTVHiddenChannel] = []
     ) {
         self.favoriteIDs = favoriteIDs
 
@@ -23,18 +41,58 @@ public struct LiveTVPreferences: Codable, Equatable, Sendable {
                 .filter { seen.insert($0).inserted }
                 .prefix(Self.maximumRecentChannelCount)
         )
+
+        seen.removeAll(keepingCapacity: true)
+        self.hiddenChannels = hiddenChannels.filter {
+            seen.insert($0.id).inserted
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
         case favoriteIDs
         case recentChannelIDs
+        case hiddenChannels
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let hiddenChannels: [LiveTVHiddenChannel]
+        if container.contains(.hiddenChannels) {
+            hiddenChannels = try container.decode(
+                [LiveTVHiddenChannel].self,
+                forKey: .hiddenChannels
+            )
+        } else {
+            hiddenChannels = []
+        }
         self.init(
             favoriteIDs: try container.decode(Set<String>.self, forKey: .favoriteIDs),
-            recentChannelIDs: try container.decode([String].self, forKey: .recentChannelIDs)
+            recentChannelIDs: try container.decode([String].self, forKey: .recentChannelIDs),
+            hiddenChannels: hiddenChannels
+        )
+    }
+
+    public func hidingChannel(id: String, name: String) -> LiveTVPreferences {
+        guard !hiddenChannelIDs.contains(id) else { return self }
+        return LiveTVPreferences(
+            favoriteIDs: favoriteIDs,
+            recentChannelIDs: recentChannelIDs,
+            hiddenChannels: hiddenChannels + [LiveTVHiddenChannel(id: id, name: name)]
+        )
+    }
+
+    public func restoringChannel(id: String) -> LiveTVPreferences {
+        LiveTVPreferences(
+            favoriteIDs: favoriteIDs,
+            recentChannelIDs: recentChannelIDs,
+            hiddenChannels: hiddenChannels.filter { $0.id != id }
+        )
+    }
+
+    public func restoringAllChannels() -> LiveTVPreferences {
+        LiveTVPreferences(
+            favoriteIDs: favoriteIDs,
+            recentChannelIDs: recentChannelIDs
         )
     }
 }
@@ -50,7 +108,8 @@ public enum LiveTVPreferencesStoreError: Error, Equatable, Sendable {
     case encodingFailed
 }
 
-/// Persists Live TV favorites and recent channel identifiers in `UserDefaults`.
+/// Persists Live TV favorites, recent channel identifiers, and hidden channel
+/// metadata in `UserDefaults`.
 ///
 /// A corrupt value is reported rather than treated as empty. `save(_:)` also
 /// refuses to replace an unreadable existing value, preserving it for recovery

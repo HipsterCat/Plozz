@@ -648,6 +648,9 @@ private struct PlozziOSSettingsSplitView: View {
             LiveTVSettingsView(
                 store: LiveTVViewSettingsStore(
                     namespace: appModel.profiles.activeNamespace
+                ),
+                preferencesStore: LiveTVPreferencesStore(
+                    namespace: appModel.profiles.activeNamespace
                 )
             )
             .id(appModel.profiles.activeProfile.id)
@@ -930,6 +933,9 @@ private struct PlozziOSSettingsCompactMenu: View {
                 NavigationLink {
                     LiveTVSettingsView(
                         store: LiveTVViewSettingsStore(
+                            namespace: appModel.profiles.activeNamespace
+                        ),
+                        preferencesStore: LiveTVPreferencesStore(
                             namespace: appModel.profiles.activeNamespace
                         )
                     )

@@ -20,6 +20,9 @@ import SimklService
 import AniListService
 import MALService
 import LastFmService
+#if DEBUG && os(tvOS)
+import FeatureLiveTV
+#endif
 
 /// The signed-in experience: Home, Search and Settings tabs, with item-detail
 /// navigation and full-screen playback.
@@ -1055,11 +1058,13 @@ struct MainTabView: View {
             return AnyView(watchlistTabContent(isActive: isActiveTab(.watchlist)))
         #if DEBUG
         case .liveTV:
-            return AnyView(LiveTVShellDestination(
-                isActive: isActiveTab(.liveTV),
-                profileID: activeProfile.id,
-                preferencesNamespace: liveTVPreferencesNamespace
-            ))
+            return AnyView(LiveTVNavigationContainer {
+                LiveTVShellDestination(
+                    isActive: isActiveTab(.liveTV),
+                    profileID: activeProfile.id,
+                    preferencesNamespace: liveTVPreferencesNamespace
+                )
+            })
         #endif
         case .search:
             return AnyView(searchTabContent)
@@ -1086,11 +1091,13 @@ struct MainTabView: View {
             ))
         #if DEBUG
         case .liveTV:
-            return AnyView(LiveTVShellDestination(
-                isActive: activeLibraryNavigationDestination == .liveTV,
-                profileID: activeProfile.id,
-                preferencesNamespace: liveTVPreferencesNamespace
-            ))
+            return AnyView(LiveTVNavigationContainer {
+                LiveTVShellDestination(
+                    isActive: activeLibraryNavigationDestination == .liveTV,
+                    profileID: activeProfile.id,
+                    preferencesNamespace: liveTVPreferencesNamespace
+                )
+            })
         #endif
         case .search:
             return AnyView(searchTabContent)

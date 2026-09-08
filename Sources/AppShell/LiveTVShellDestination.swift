@@ -15,7 +15,7 @@ struct LiveTVShellDestination: View {
     let profileID: String
     let onExpandedChange: (Bool) -> Void
 
-    @State private var isExpanded = false
+    @State private var hidesNavigation = false
     private let preferencesStore: LiveTVPreferencesStore
     private let viewSettingsStore: LiveTVViewSettingsStore
 
@@ -56,7 +56,7 @@ struct LiveTVShellDestination: View {
             )
         }
         .id(profileID)
-        .toolbar(isExpanded ? .hidden : .visible, for: .tabBar)
+        .toolbar(hidesNavigation ? .hidden : .visible, for: .tabBar)
         .onChange(of: isActive, initial: true) { _, active in
             if !active {
                 updateExpandedState(false)
@@ -68,7 +68,7 @@ struct LiveTVShellDestination: View {
     }
 
     private func updateExpandedState(_ expanded: Bool) {
-        isExpanded = expanded && isActive
+        hidesNavigation = expanded && isActive
         guard isActive else { return }
         onExpandedChange(expanded)
     }

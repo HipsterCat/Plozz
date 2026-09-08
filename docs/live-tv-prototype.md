@@ -70,7 +70,15 @@ Earlier prototype builds did not store Favorites or Recents on disk, so there
 is no prior in-memory history to migrate on the first updated launch.
 
 - Browse, search names/numbers/categories/sources, filter and sort.
-- Favorite channels through their context menu.
+- Select a channel logo to open its Play, Favorite and Hide actions. The
+  right-hand programme/channel-name area plays directly; long-press actions
+  remain available there.
+  Hidden channels are excluded from Search and every guide section for this
+  profile. Restore them in Settings > Live TV > Hidden channels. Hiding retains
+  their favorite/recent metadata and source data, and does not end deliberate
+  playback. After hiding, focus goes to the next remaining row, or the previous
+  row when the hidden row was last; another occurrence of that channel is not
+  a replacement. An all-hidden catalog explains where to restore channels.
 - Search transforms the current screen rather than opening a second results
   dialog. Apple TV uses the native inline search keyboard above the familiar
   channel/programme rows; iPhone/iPad replace the hero with an inline search field.
@@ -86,6 +94,10 @@ is no prior in-memory history to migrate on the first updated launch.
   App navigation is suppressed before the TV keyboard opens and stays suppressed
   through closing and guide-focus restoration, so Back does not briefly open the
   native navigation menu or pinned rail.
+  Native top-bar/sidebar destinations use a stable NavigationStack, matching
+  detail pages, so their tab-bar visibility preference has an owning navigation
+  context. The same policy covers Search and expanded playback without replacing
+  the player. The custom pinned rail retains its existing chrome coordinator.
   Live TV also participates in the profile's Hide or Reorder Navigation list,
   alongside Home, Search and the other destinations. Settings remains visible
   but can be moved. Press-and-hold Hide keeps focus at the vacated list position;
@@ -120,13 +132,20 @@ is no prior in-memory history to migrate on the first updated launch.
   quieter programme tiles. Logo plates, channel tiles and the outer tray use
   concentric radii derived from their insets. TV rows are 128 points tall,
   with full-height 200 x 128-point logo plates and 16-point row spacing.
-  On first entry, focus moves to the first available channel once the playlist
-  arrives; subsequent playback/Search returns keep their remembered position.
+  On first entry, focus moves to the first available channel's current programme
+  to the right of its logo. With no guide data, the channel-name area remains
+  separately focusable and playable. Missing-listing gaps have their own focus
+  identities rather than pretending to be programmes. Subsequent playback/Search
+  returns keep their remembered row; an explicit visit to a logo is still
+  preserved when returning from browsing controls.
   The backing fills the complete station focus bounds, with the same corner
-  radius and no outside gutter. Artwork fits inside without stretching.
-  Plozz adds the light/dark backing based on logo contrast; source images can
-  also contain their own baked-in background. Hero/search logo sizes remain
-  independent of the full-row guide treatment.
+  radius and no outside gutter. Artwork fits inside without stretching, with
+  eight additional points of inner padding; the full-height plate stays unchanged.
+  A subtle, opaque gradient replaces the flat light/dark logo backing. Its tint
+  comes from the logo's original solid background when detected, otherwise its
+  ink colour; light/dark bounds still protect legibility. This is confined to
+  the logo plate, not the programme tiles or preview backdrop. Hero/search logo
+  sizes remain independent of the full-row guide treatment.
   Station tiles show only the logo, or a name fallback when artwork is missing,
   rather than repeating names, numbers and badges beside it. Names and numbers
   remain searchable and available to accessibility; the focused channel's name
@@ -139,8 +158,9 @@ is no prior in-memory history to migrate on the first updated launch.
   surfaces. Glass reduction preferences and Reduce Transparency use the existing shared
   fallbacks. Guide focus uses a crisp rounded outline and tonal fill, with a
   solid high-contrast treatment under increased contrast or Reduce Transparency.
-  Logo tiles retain a contrasting outline above their opaque backing, including
-  with accessibility contrast settings, rather than hiding focus behind the image.
+  Focus outlines pair a bright outer edge with a dark inner keyline so white
+  artwork cannot hide focus. Both strokes sit inside the existing rounded bounds,
+  with no extra gutter, and strengthen under increased contrast.
   Focus and selection never swap the button's structural identity.
 - The preview spans the screen width behind the upper guide. One continuous
   fade reaches the page colour before the video's lower edge; the date/time
@@ -299,8 +319,11 @@ variants without duplicate row IDs. Channel logos come from `tvg-logo` metadata
 in the [iptv-org catalog](https://github.com/iptv-org/iptv).
 Channel and hero marks reuse `HeroLogoArtwork`: cached off-main preparation,
 transparent/solid-margin trimming, ink-aware sizing, monochrome contrast and
-colour-logo halos. A bounded fit contains the whole mark inside a larger slot
-(126 x 72 points in TV rows, 112 x 64 on iPhone/iPad); measured ink chooses a light or dark plate.
+colour-logo halos. A bounded fit contains the whole mark inside the station plate;
+measured ink chooses a light or dark gradient. The existing preparation pass
+retains the background colour it already detects before removing a solid plate.
+That sample follows the prepared-logo cache and synchronous memo to the host.
+The gradient adds no image download, resampling pass, blur or continuous animation.
 Multicolour artwork is not recoloured. Failed/missing artwork keeps a readable
 fixed-size text fallback. Loading artwork never changes the reserved row height.
 

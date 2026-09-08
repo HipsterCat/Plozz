@@ -69,9 +69,9 @@ public enum HeroLogoPresentationPolicy: Sendable, Equatable {
 /// What a resolved logo turned out to look like, reported to hosts that adapt
 /// their backdrop to it.
 ///
-/// Both numbers come free from the pixel pass that already trims and tones every
-/// logo (``PreparedLogo``), so a host can react to the actual artwork without
-/// commissioning any analysis of its own.
+/// These measurements reuse the preparation pass that already trims and tones
+/// every logo (``PreparedLogo``), including its background-plate detection, so a
+/// host can adapt without commissioning any image analysis of its own.
 public struct ResolvedLogoTone: Equatable, Sendable {
     /// Mean luminance of the logo's own ink, 0…1.
     public let luminance: Double
@@ -86,14 +86,21 @@ public struct ResolvedLogoTone: Equatable, Sendable {
     /// a pale highlight. A logo with plenty of it reads on almost any picture,
     /// whatever its mean tone says.
     public let brightInk: Double
+    /// Original solid backing, measured before the shared pipeline removes it.
+    /// Transparent logos have no plate; hosts can use their ink colour instead.
+    public let backgroundPlate: HeroBackgroundSample?
 
-    public init(luminance: Double, coverage: Double, red: Double = 0, green: Double = 0, blue: Double = 0, brightInk: Double = 0) {
+    public init(
+        luminance: Double, coverage: Double, red: Double = 0, green: Double = 0,
+        blue: Double = 0, brightInk: Double = 0, backgroundPlate: HeroBackgroundSample? = nil
+    ) {
         self.luminance = luminance
         self.coverage = coverage
         self.red = red
         self.green = green
         self.blue = blue
         self.brightInk = brightInk
+        self.backgroundPlate = backgroundPlate
     }
 }
 
@@ -436,14 +443,7 @@ private struct LoadedLogo<TextFallback: View>: View {
     private func adopt(_ processed: ProcessedLogo) {
         image = processed
         HeroLogoMemo.store(processed, for: taskKey)
-        onResolve?(ResolvedLogoTone(
-            luminance: processed.luminance,
-            coverage: processed.coverage,
-            red: processed.red,
-            green: processed.green,
-            blue: processed.blue,
-            brightInk: processed.brightInk
-        ))
+        onResolve?(processed.tone)
     }
 }
 
@@ -505,7 +505,8 @@ enum HeroLogoAnalysis {
             red: prepared.red,
             green: prepared.green,
             blue: prepared.blue,
-            brightInk: prepared.brightInk
+            brightInk: prepared.brightInk,
+            backgroundPlate: prepared.backgroundPlate
         )
     }
 
@@ -684,6 +685,7 @@ struct PreparedLogo: @unchecked Sendable {
     /// anything (0…1) — a white keyline, a pale highlight. Distinct from
     /// ``luminance``, which is the mean and so misses exactly this.
     let brightInk: Double
+    let backgroundPlate: HeroBackgroundSample?
 
     /// Luminance above which ink counts as carrying its own contrast.
     static let brightInkLuminance = 0.72
@@ -695,7 +697,8 @@ struct PreparedLogo: @unchecked Sendable {
         green: Double = 0,
         blue: Double = 0,
         coverage: Double = 1.0,
-        brightInk: Double = 0
+        brightInk: Double = 0,
+        backgroundPlate: HeroBackgroundSample? = nil
     ) {
         self.image = image
         self.luminance = luminance
@@ -704,6 +707,7 @@ struct PreparedLogo: @unchecked Sendable {
         self.blue = blue
         self.coverage = coverage
         self.brightInk = brightInk
+        self.backgroundPlate = backgroundPlate
     }
 }
 
@@ -727,6 +731,14 @@ struct ProcessedLogo {
     let green: Double
     let blue: Double
     let brightInk: Double
+    let backgroundPlate: HeroBackgroundSample?
+
+    var tone: ResolvedLogoTone {
+        ResolvedLogoTone(
+            luminance: luminance, coverage: coverage, red: red, green: green,
+            blue: blue, brightInk: brightInk, backgroundPlate: backgroundPlate
+        )
+    }
 }
 
 /// Decodes, background-strips, trims, and measures hero logos, caching the
@@ -924,7 +936,7 @@ actor HeroLogoPipeline {
     /// crisp at hero size on a 4K panel while a fraction of the memory. Alpha is
     /// preserved by the ImageIO thumbnail path; a decode failure falls back to a
     /// full decode so a logo never silently vanishes.
-    private static func decodeAndPrepare(_ data: Data) -> PreparedLogo? {
+    static func decodeAndPrepare(_ data: Data) -> PreparedLogo? {
         let image = ArtworkImageCache.downsample(data, maxPixelSize: 900) ?? UIImage(data: data)
         return image?.preparedAsHeroLogo()
     }
@@ -1110,6 +1122,12 @@ private extension UIImage {
         // from the border ring; `nil` means the logo is genuinely transparent and
         // nothing is stripped.
         let plate = Self.detectBackgroundPlate(data, width: width, height: height, bytesPerRow: bytesPerRow)
+        let backgroundPlate = plate.map {
+            let r = $0.red / 255, g = $0.green / 255, b = $0.blue / 255
+            return HeroBackgroundSample(
+                red: r, green: g, blue: b, luminance: 0.2126 * r + 0.7152 * g + 0.0722 * b
+            )
+        }
 
         // Single fused pass: strip the plate (when present) *and* measure the
         // content bounds + tone of what survives, so the full image is touched
@@ -1140,14 +1158,19 @@ private extension UIImage {
         }
         let cropRect = CGRect(x: stats.minX, y: stats.minY, width: stats.maxX - stats.minX + 1, height: stats.maxY - stats.minY + 1)
         guard let cropped = processedFull.cropping(to: cropRect) else {
-            return PreparedLogo(image: UIImage(cgImage: processedFull, scale: scale, orientation: imageOrientation), luminance: luminance, red: meanR, green: meanG, blue: meanB, coverage: coverage, brightInk: brightInk)
+            return PreparedLogo(
+                image: UIImage(cgImage: processedFull, scale: scale, orientation: imageOrientation),
+                luminance: luminance, red: meanR, green: meanG, blue: meanB,
+                coverage: coverage, brightInk: brightInk, backgroundPlate: backgroundPlate
+            )
         }
         return PreparedLogo(
             image: UIImage(cgImage: cropped, scale: scale, orientation: imageOrientation),
             luminance: luminance,
             red: meanR, green: meanG, blue: meanB,
             coverage: coverage,
-            brightInk: brightInk
+            brightInk: brightInk,
+            backgroundPlate: backgroundPlate
         )
     }
 
