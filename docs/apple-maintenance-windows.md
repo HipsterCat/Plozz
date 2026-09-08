@@ -1,9 +1,11 @@
 # Attested Apple maintenance windows
 
-This is preparation tooling, not authorization to reclaim storage. It does not
-remove `SUSPENDED`, write `rollout-policy-v1`, resolve lease records, change
-schedules, stop writers, or delete build resources. A feature merge does not
-enable global cleanup.
+These tools do not authorize or activate storage reclamation. The policy tool
+does not delete resources; the separate cleanup adapter's explicit `apply`
+command requires an already authorized window and inherited exclusive lease.
+Neither tool removes `SUSPENDED`, writes `rollout-policy-v1`, resolves lease
+records, changes schedules, or stops writers. A feature merge does not enable
+global cleanup.
 
 ## Compatibility and rollout
 
@@ -135,6 +137,181 @@ and an inode-aware tree digest. This companion checks the nonempty schema/scope
 and approval binding, not destructive eligibility. It must never be used alone
 as a deletion implementation.
 
+## Exact-manifest cleanup adapter
+
+`tools/apple-build-cleanup.py` and `tools/lib/apple_build_cleanup.py` implement
+inventory, non-destructive validation, and separately authorized application.
+There is no default deletion, automatic discovery/sweep, installation, owner
+record generation, or automatic resume. Only paths named by supplied owner
+release records are inspected. Inventory reads metadata, not target file
+contents, and writes only stdout unless an explicit new output file is requested.
+
+```bash
+/usr/bin/python3 -B tools/apple-build-cleanup.py inventory \
+  --release-record /physical/private/owner-release.json \
+  --output /physical/private/manifest.json
+/usr/bin/python3 -B tools/apple-build-cleanup.py validate \
+  --manifest /physical/private/manifest.json
+```
+
+`--release-record` can be repeated. All inputs must already exist, be physical
+and owned by the effective UID, and meet the existing private evidence rules.
+Use the executable's `-B` shebang or the explicit `python3 -B` invocations above:
+setting a flag inside Python is too late to prevent interpreter-startup bytecode
+cache writes. The CLI also suppresses bytecode writes in its descendants.
+
+Output/journal parents must already exist and be private, outside owner
+worktrees, targets, protected resources and the maintenance configuration/lease
+namespace. Existing output files are never overwritten. `validate` does not
+acquire a lease, install a policy,
+write a journal, or delete anything; it is not an authorization check.
+
+Owner release schema (exact keys; this is documentation, not an attestation):
+
+```json
+{
+  "schema": 1,
+  "scope": "apple-owner-released-build-outputs-only",
+  "owner": "<responsible owner>",
+  "session_id": "<owner session UUID>",
+  "released_at": "<UTC time of actual release>",
+  "worktree": {"path": "<physical Git worktree>", "device": 1, "inode": 2},
+  "evidence": [{"path": "<private durable owner evidence>", "sha256": "<digest>"}],
+  "targets": [{
+    "kind": "worktree-apple-build",
+    "identity": {"path": "<exact released output>", "device": 1, "inode": 3}
+  }]
+}
+```
+
+The owner evidence must establish that these exact outputs are retired,
+reconstructable, not active/queued or still-needed warm resources, and contain
+no required evidence or protected data. An idle process or an old file does not
+establish that. A file's inode must match the owner's release record before
+inventory; a later replacement cannot inherit the old owner's release.
+
+Eligibility is deliberately narrower than an entire cache:
+
+- `worktree-apple-build`: a file or directory at/below that owner's `.build`.
+  Git-tracked entries are refused, even if they have generated-looking names.
+- `xcode-derived-data`: a file or subtree in a direct app root of the canonical
+  `~/Library/Developer/Xcode/DerivedData`. That root's existing `info.plist`
+  must identify a workspace within the declared owner worktree. Top-level shared
+  `.noindex` roots, aliases and alternate cache-root overrides are not supported.
+- Regular files must have a recognized compiler-output suffix: `.o`, `.pcm`,
+  `.swiftmodule`, `.swiftdoc`, `.swiftsourceinfo`, `.swiftdeps`,
+  `.swiftconstvalues`, `.dia`, or `.hmap`. Unknown files, including ambiguous
+  `.d`/`.pch` source/header files, are refused rather than guessed disposable.
+- Any protected path component or suffix refuses the whole nominated tree:
+  source/Git, package stores/checkouts/artifacts, logs/evidence,
+  archives/IPAs/dSYMs/xcresults, credentials/signing, SDKs/toolchains, simulators,
+  VMs, Trash, and shared dependency stores. Symlinks, hard-linked files, special
+  files, cross-filesystem descendants and group/world-writable entries also
+  refuse. No automatic carving around exclusions occurs.
+- The actual owner release and **every** entry must be at least 72 hours old.
+  Entry age uses the youngest of mtime, ctime and birthtime, not the root's
+  mtime alone. `--minimum-age-hours` can increase, never reduce, that minimum.
+  Nested/overlapping targets and evidence within any target are rejected.
+
+Consequently a normal `.build` containing `SourcePackages`, logs or release
+outputs is **not** an eligible target. Its owner can instead release precise
+retired compiler files or clean compiler-only subtrees. This adapter does not
+solve shared dependency retention, absent-owner/orphan recovery, or release
+artifact retention by widening the deletion policy.
+
+Each manifest target has exactly `kind`, `path`, `owner`, `session_id`,
+`worktree`, `released_at`, `release_record`, `release_evidence`, `observed_at`,
+`retention`, `root`, and `tree`. `release_record` and `release_evidence` are
+private SHA-bound references; worktree identity is path/device/inode.
+`retention` contains `minimum_seconds` and `youngest_entry_at`.
+`root` contains device/inode.
+`tree` contains `sha256`, `entries`, `allocated_bytes`, and `apparent_bytes`.
+Its digest binds sorted relative entries, type, UID/mode, device/inode, link
+count, size/blocks, and modification/change/birth timestamps. These are metadata
+identities, not content hashes. Renames, edits, additions and replacements
+invalidate the approved inventory.
+
+Sizes are sums of `st_size` and `st_blocks * 512`, **not** uniquely owned APFS
+extents or a promise of physical free space. APFS clones and snapshots can
+retain blocks after unlink. Neither inventory nor committing this tool reclaims
+bytes; a future authorized cleanup must report actual filesystem free-space
+changes separately, with concurrent-writer attribution limits.
+
+Only in a later, separately approved and fully covered window:
+
+```bash
+/reviewed/bundle/tools/with-apple-build-lease.sh --exclusive cleanup/exact-manifest -- \
+  /usr/bin/python3 -B /reviewed/bundle/tools/apple-build-cleanup.py apply \
+  --manifest /physical/private/manifest.json \
+  --window-id 00000000-0000-0000-0000-000000000000 \
+  --journal /physical/private/new-window-journal.jsonl
+```
+
+The zero UUID is illustrative; a real call must use its approved window ID.
+
+The global-cleanup cohort must fingerprint the executing CLI/module,
+`apple_maintenance_policy.py`, `apple-build-guard.sh`, and all four frozen lease
+files in that same reviewed bundle. The target owner worktrees must appear in
+the approved app cohorts/registries. These extra checks prevent merely
+fingerprinting an unrelated cleanup script. They do not automatically discover
+unregistered/raw/manual writers.
+
+Apply repeats the existing full companion/lease validation, exact registry
+inspection, owner evidence hashes, bundle/coverage checks and existing build
+process defense before each removal. New unresolved records, changed evidence,
+missing inherited capabilities, an unlocked coordination file, suspension,
+window drift/expiry or backward clock movement stop it. Open paths **and**
+device/inode aliases are refreshed during each step; incomplete `lsof` output
+refuses. Only its own known directory descriptors are excluded from that scan.
+Elapsed-time and UTC deadlines are checked immediately before every
+descriptor-relative unlink/rmdir. Directories are opened without following
+links and their ancestor identities are rechecked; arbitrary path-recursive
+deletion is never used.
+
+A private, create-new JSONL journal is outside all targets. It contains the
+manifest and authorization digests, a complete manifest snapshot, and durable
+per-entry intent/outcome records. Intent is fsynced (including `F_FULLFSYNC` on
+macOS) before unlink; parent directories and outcomes are synced afterward.
+Short writes are completed; write/fsync failures are surfaced. A crash can leave
+an intent without an outcome, which means **possibly removed**, not untouched.
+SIGINT/SIGHUP/SIGTERM stop subsequent removals and preserve a stopped record when
+the journal remains writable. The wrapper retains failed lease evidence.
+There is no rollback, automatic retry/resume, or automatic journal deletion.
+Partial trees and journals require owner review and a newly approved manifest.
+
+This is a cooperative, same-UID operational boundary, not protection against a
+malicious process that ignores the approved hold. No portable pathname unlink
+can atomically assert an inode while excluding arbitrary uncooperative writers.
+Descriptor-relative traversal and repeated checks detect observed drift; the
+whole-lane interlock and verified writer coverage are mandatory. Per-entry
+inspection intentionally prioritizes refusal over throughput: use bounded
+manifests, not a two-hour promise to drain an entire machine.
+
+### Remaining rollout gates
+
+Keep production suspension, both broad schedules, installed scripts, warm
+roots, leases and evidence unchanged until separately authorized:
+
+1. Review/land this adapter and install an exact fingerprinted bundle outside
+   shipping. Retire or enhance **every** machine-wide cleanup entrypoint; the
+   repository legacy scripts' refusal does not update installed copies.
+2. Inventory all writers, including unattended update jobs and raw Xcode/MCP
+   paths. Complete whole-lane wrapping or obtain actual bounded owner holds.
+   Account for active and queued work and all current/legacy cohorts.
+3. Investigate retained lease records with their actual owners and durable lane
+   evidence. Any exact owner-approved record resolution is a separate operation;
+   this adapter neither performs it nor treats records as stale.
+4. Obtain genuine exact-target releases, wait the full retention period, inspect
+   the inventory, and obtain cohort attestations followed by human approval of
+   that exact manifest/window. Install its companion with the existing CAS tool.
+5. Only a separately approved policy-lock activation may open the existing
+   suspension/rollout gates. A first bounded cleanup requires the exclusive
+   lease, complete runtime checks and retained journal. Recurrence requires new
+   eligible owner releases and approved windows, not an age-based unattended
+   sweep or blanket standing deletion permission.
+
+## Canonical digests and window documents
+
 The manifest digest includes **all** parsed fields, including provenance and
 release evidence, using:
 
@@ -249,7 +426,7 @@ Fixture-only validation, no app build:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest \
-  tools.tests.test_apple_maintenance_policy tools.tests.test_run_bounded
+  tools.tests.test_apple_build_cleanup tools.tests.test_apple_maintenance_policy
 ```
 
 Tests create synthetic attestations exclusively under private temporary HOME
@@ -257,4 +434,8 @@ fixtures; no production owner assertions are generated. They cover missing
 Hozz, scope/manifest/evidence/identity changes, expiry, raw queued owners,
 wrapped-client bytes, registered-root snapshots, exclusive policy-update races,
 compare-and-swap, real inherited exclusive checking, suspension, orphan evidence
-retention, fixture confinement, and malformed JSON.
+retention, fixture confinement, and malformed JSON. Cleanup fixtures additionally
+exercise no-follow traversal, changed ancestors/files, refreshed open-inode
+checks, late evidence/lease drift, unlocked capabilities, protected source and
+dependency data, per-removal expiry, short writes, sync/journal failures,
+interruptions, partial-progress evidence, and non-activating legacy refusals.

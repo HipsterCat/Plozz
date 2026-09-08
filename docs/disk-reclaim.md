@@ -1,9 +1,15 @@
 # Disk reclaim safety
 
-`tools/reclaim-disk.sh` removes selected rebuildable Apple build caches across
-Plozz, Mozz, and Twozz. `tools/prune-deriveddata.sh` is its DerivedData-only
-worker. Neither tool may run destructively while release/build ownership is
-uncertain.
+The production deletion paths in `tools/reclaim-disk.sh` and
+`tools/prune-deriveddata.sh` are retired. They refuse before resource writes,
+even if the old gates are opened. Their historical `--dry-run` selections are
+not eligible manifests and may write logs/temporary state.
+
+`tools/apple-build-cleanup.py` supplies an explicit-owner, exact-manifest
+inventory and a separate guarded apply command. It is repository tooling, not
+an installed or activated machine-wide service. See the
+[adapter contract and activation steps](apple-maintenance-windows.md#exact-manifest-cleanup-adapter).
+An implementation/feature merge is not permission to reclaim storage.
 
 ## Current rollout status: destructive cleanup disabled
 

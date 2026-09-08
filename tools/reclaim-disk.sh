@@ -1,49 +1,20 @@
 #!/usr/bin/env bash
 #
-# reclaim-disk.sh — daily, safe reclaim of rebuildable Xcode/Swift build data
-# across ALL of my tvOS/iOS apps (Plozz, Mozz, Twozz) that share one machine.
+# reclaim-disk.sh -- RETIRED production deletion path.
 #
-# WHY
-#   Every branch/worktree builds into caches that nothing ever cleans up:
-#     * ~/Library/Developer/Xcode/DerivedData        (per-worktree, ~2-5 GB each)
-#     * <worktree>/.build                            (SwiftPM output, up to ~11 GB)
-#     * ~/Library/Developer/XcodeBuildMCP/workspaces (a 2nd DerivedData root)
-#   With ~240 worktrees this silently grows to hundreds of GB. Everything this
-#   script deletes is a BUILD CACHE that rebuilds on the next compile. It never
-#   deletes source code, worktrees, commits, or uncommitted edits.
+# Production invocations without --dry-run refuse before touching any resources,
+# regardless of old rollout gates. No whole-cache, simulator, SDK or Git sweep
+# may be re-enabled by opening the old suspension/rollout gates.
 #
-# SAFETY MODEL
-#   * A cache is only removed if its SOURCE worktree has been idle >= --days days
-#     (default 4) OR the worktree is gone entirely. "Idle" = no source file
-#     modified in that window (uncommitted edits count as activity).
-#   * Apply requires the host-wide exclusive build lease. Cooperative build and
-#     release entrypoints hold shared leases for their full lanes, so cleanup
-#     refuses without a start-after-check race.
-#   * SUSPENDED and the explicit cross-app rollout policy are mandatory gates.
-#     Process/open-path checks remain defense in depth after exclusive ownership.
-#   * Recently modified cache directories are still skipped as extra evidence,
-#     but directory mtime is not treated as proof that no build is active.
-#   * --dry-run shows exactly what would be freed and deletes nothing.
+# --dry-run retains the historical age/idle preview, NOT an eligible deletion
+# manifest or a promise of reclaimable physical space. It writes a log and may
+# create guard/selection state; it is not a strictly read-only inventory.
+# Historical preview flags: --days N, --no-extras.
 #
-# WHAT IT DOES (in order)
-#   1. DerivedData: orphaned + idle folders (via prune-deriveddata.sh --stale-days)
-#      and ModuleCache.noindex when it exceeds its size limit.
-#   2. Worktree-local .build dirs whose worktree is idle/gone.
-#   3. XcodeBuildMCP/workspaces older than --days.
-#   4. git worktree prune in each app's main checkout (stale registrations only).
-#   5. EXTRAS (skip with --no-extras): brew cleanup, trim old DeviceSupport
-#      (keep newest 2 per platform), delete unavailable simulators.
-#
-# USAGE
-#   tools/reclaim-disk.sh                 # aggressive daily reclaim (idle >=4d)
-#   tools/reclaim-disk.sh --dry-run       # preview only
-#   tools/reclaim-disk.sh --days 7        # gentler: idle >=7d
-#   tools/reclaim-disk.sh --no-extras     # build caches only
-#
-# BUILD GUARD
-#   APPLE_BUILD_QUIET_SECONDS  Required no-build interval before apply (default 120).
-#   APPLE_BUILD_MAX_WAIT_SECONDS  Maximum wait for quiet (default 900).
-#   See docs/disk-reclaim.md for lease, rollout, suspension, and process details.
+# Use tools/apple-build-cleanup.py inventory with supplied owner release records.
+# Apply is separate and requires an exact approved window plus inherited
+# exclusive lease. This script does not install or activate that adapter.
+# See docs/apple-maintenance-windows.md.
 #
 set -uo pipefail
 
@@ -86,7 +57,7 @@ while [ $# -gt 0 ]; do
     --days)      DAYS="${2:?--days needs a number}"; shift ;;
     --dry-run)   DRY=1 ;;
     --no-extras) DO_EXTRAS=0 ;;
-    -h|--help)   sed -n '2,45p' "$0"; exit 0 ;;
+    -h|--help)   sed -n '2,/^set -/ { /^#/p; }' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -94,6 +65,11 @@ done
 
 if [ "${APPLE_BUILD_INTERLOCK_TESTING:-}" = "1" ] && [ "$DRY" -ne 1 ] && [ "$DO_EXTRAS" -eq 1 ]; then
   echo "Test-mode destructive maintenance requires --no-extras." >&2
+  exit 75
+fi
+
+if [ "$DRY" -ne 1 ] && [ "${APPLE_BUILD_INTERLOCK_TESTING:-}" != "1" ]; then
+  echo "REFUSED: broad age-based cleanup is retired. Use apple-build-cleanup.py with an approved exact manifest." >&2
   exit 75
 fi
 

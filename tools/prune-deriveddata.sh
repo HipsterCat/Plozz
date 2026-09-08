@@ -1,56 +1,20 @@
 #!/usr/bin/env bash
 #
-# prune-deriveddata.sh — keep per-branch Xcode build data from piling up.
+# prune-deriveddata.sh -- RETIRED production deletion path.
 #
-# WHY THIS EXISTS
-#   Every Plozz worktree builds into the *shared* DerivedData root
-#   (~/Library/Developer/Xcode/DerivedData) under its own "<name>-<hash>"
-#   folder (~1.3 GB of Swift compilation output each). Nothing deletes those
-#   when a branch/worktree is done, so they accumulate to many GB. This script
-#   removes the stale ones safely.
+# Production invocations without --dry-run refuse before touching any resources,
+# even if the old suspension/rollout gates are opened. Age, a missing worktree,
+# and an idle process are not owner release evidence.
 #
-# WHAT IS *NOT* TOUCHED (the expensive, shared, reusable stuff)
-#   * ModuleCache.noindex — the Clang module cache, shared by every worktree.
-#     Only trimmed when you pass --module-cache AND it exceeds the size limit.
-#   * Any DerivedData folder modified in the last $ACTIVE_MIN minutes.
-#   * All deletion while a shared build/release lease exists. Apply requires the
-#     nonblocking host-wide exclusive lease plus SUSPENDED/rollout approval, then
-#     retains process and open-path checks as defense in depth.
-#   (Historical: ~/Library/Caches/plozz-mpv/mpv was the retired mpv/FFmpeg codec
-#    cache. mpv is gone; that cache is now an orphaned leftover this script never
-#    touches — safe to delete by hand if you want the ~78 MB back.)
+# --dry-run retains the historical preview, NOT an eligible deletion manifest.
+# Its old --this, --worktree PATH, --all, --orphans, --stale-days N and
+# --module-cache selectors do not authorize cleanup. The preview can create
+# temporary guard/selection state; it is not a strictly read-only inventory.
 #
-# MODES
-#   (default)        Remove "orphaned" DerivedData: folders whose source
-#                    worktree no longer exists on disk. Always safe.
-#   --this           Remove DerivedData for the CURRENT worktree ($PWD). Use as
-#                    the "branch is done" step right before deleting a worktree.
-#   --worktree PATH  Remove DerivedData for the worktree at PATH.
-#   --all            Remove every project DerivedData folder (full reset).
-#                    Next build is a cold compile. Recently-active folders are
-#                    still skipped.
-#
-# FLAGS
-#   --stale-days N   In the default (orphans) mode, ALSO remove DerivedData whose
-#                    worktree still exists but whose SOURCE has not been modified
-#                    in >= N days (i.e. the branch is idle — deleting just forces a
-#                    cold rebuild if you ever return to it). Never deletes source,
-#                    only the rebuildable build cache. 0 (default) disables this.
-#   --module-cache   Also delete ModuleCache.noindex if it exceeds
-#                    ${MODULE_CACHE_LIMIT_GB} GB (it rebuilds on next compile).
-#   --dry-run        Print what would be deleted; delete nothing.
-#   -h | --help      Show this help.
-#
-# BUILD GUARD
-#   APPLE_BUILD_QUIET_SECONDS  Required no-build interval before apply (default 120).
-#   APPLE_BUILD_MAX_WAIT_SECONDS  Maximum wait for quiet (default 900).
-#   See docs/disk-reclaim.md for lease, rollout, suspension, and process details.
-#
-# EXAMPLES
-#   tools/prune-deriveddata.sh                 # safe periodic cleanup
-#   tools/prune-deriveddata.sh --dry-run       # preview the safe cleanup
-#   tools/prune-deriveddata.sh --this          # before removing this worktree
-#   tools/prune-deriveddata.sh --all --module-cache   # full reclaim
+# Use tools/apple-build-cleanup.py inventory with supplied owner release records
+# for an exact manifest. Apply additionally requires a separately approved
+# maintenance window and inherited exclusive lease. Nothing here enables it.
+# See docs/apple-maintenance-windows.md.
 #
 set -euo pipefail
 
@@ -65,7 +29,7 @@ DRY=0
 TRIM_MODULE_CACHE=0
 STALE_DAYS="${STALE_DAYS:-0}"                        # >0: also prune idle live worktrees
 
-usage() { sed -n '2,54p' "$0"; }
+usage() { sed -n '2,/^set -/ { /^#/p; }' "$0"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -81,6 +45,11 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+if [ "$DRY" -ne 1 ] && [ "${APPLE_BUILD_INTERLOCK_TESTING:-}" != "1" ]; then
+  echo "REFUSED: broad DerivedData cleanup is retired. Use apple-build-cleanup.py with an approved exact manifest." >&2
+  exit 75
+fi
 
 [ -d "$DD" ] || { echo "No DerivedData dir at $DD — nothing to do."; exit 0; }
 
