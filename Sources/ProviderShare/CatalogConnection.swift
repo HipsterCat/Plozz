@@ -220,6 +220,10 @@ final class CatalogConnection {
         ON assets(COALESCE(movie_group_key, movie_key));
         """)
         apply("""
+        CREATE INDEX IF NOT EXISTS idx_assets_movie_parent
+        ON assets(library,kind,substr(rel_path,1,length(rel_path)-length(basename)-1));
+        """)
+        apply("""
         CREATE TABLE IF NOT EXISTS movie_alias(
             alias_id  TEXT PRIMARY KEY,
             group_key TEXT NOT NULL
@@ -382,6 +386,25 @@ final class CatalogConnection {
         apply("CREATE INDEX IF NOT EXISTS idx_extras_owner ON extras(owner_id, kind);")
         apply("CREATE INDEX IF NOT EXISTS idx_extras_parent ON extras(parent_dir);")
         apply("CREATE INDEX IF NOT EXISTS idx_extras_scan ON extras(last_scan);")
+        // Complete inventory of every playable file observed by the scanner,
+        // including files intentionally excluded from `assets` classification.
+        // Folder projection uses this to prove no indexed entity would hide an
+        // unrelated playable descendant.
+        apply("""
+        CREATE TABLE IF NOT EXISTS playable_inventory(
+            rel_path TEXT PRIMARY KEY,
+            parent_dir TEXT NOT NULL,
+            last_scan INTEGER NOT NULL
+        );
+        """)
+        apply("CREATE INDEX IF NOT EXISTS idx_playable_inventory_parent ON playable_inventory(parent_dir);")
+        // Folder safety checks need both keys; scan-only lookup rereads the
+        // entire inventory for every folder in a browse listing.
+        apply("""
+        CREATE INDEX IF NOT EXISTS idx_playable_inventory_scan_path
+        ON playable_inventory(last_scan,rel_path);
+        """)
+        apply("DROP INDEX IF EXISTS idx_playable_inventory_scan;")
         apply("PRAGMA user_version=4;")
         // One-shot repair: `attempts` was inflated by a bug, not by real background
         // retries. The fast-track path (an item the user opened) intentionally

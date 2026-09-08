@@ -118,40 +118,85 @@ enum SeerMapper {
     /// therefore requestable (`unknown`). Specials (season 0) stay out of Plozz's
     /// simple request picker.
     static func requestAvailability(from details: SeerMediaDetails) -> MediaRequestAvailability {
-        var tracked = Dictionary(
-            uniqueKeysWithValues: (details.mediaInfo?.seasons ?? []).map {
-                ($0.seasonNumber, $0.status.flatMap(MediaAvailabilityStatus.init(rawValue:)) ?? .unknown)
-            }
-        )
-        var failedRequestSeasons: Set<Int> = []
-        // MediaRequestStatus: pending=1, approved=2, declined=3, failed=4,
-        // completed=5. Seerr blocks duplicate requests for pending/approved/failed
-        // seasons, so preserve those as in-flight even if the availability scanner
-        // has not created a `mediaInfo.seasons` row yet.
-        for request in details.mediaInfo?.requests ?? [] where request.is4k != true {
-            guard let requestStatus = request.status, [1, 2, 4].contains(requestStatus) else { continue }
-            for season in request.seasons {
-                guard let seasonStatus = season.status, [1, 2, 4].contains(seasonStatus) else { continue }
-                let current = tracked[season.seasonNumber] ?? .unknown
-                guard current.isRequestable else { continue }
-                if requestStatus == 4 {
-                    tracked[season.seasonNumber] = .pending
-                    failedRequestSeasons.insert(season.seasonNumber)
-                } else {
-                    tracked[season.seasonNumber] = seasonStatus == 2 ? .processing : .pending
-                }
+        var titles: [Int: String] = [:]
+        for season in details.seasons where season.seasonNumber > 0 {
+            let title = season.name?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+                ?? "Season \(season.seasonNumber)"
+            if titles[season.seasonNumber] == nil
+                || titles[season.seasonNumber] == "Season \(season.seasonNumber)" {
+                titles[season.seasonNumber] = title
             }
         }
-        let seasons = details.seasons
-            .filter { $0.seasonNumber > 0 }
-            .sorted { $0.seasonNumber < $1.seasonNumber }
-            .map { season in
-                MediaSeasonRequestState(
-                    number: season.seasonNumber,
-                    title: season.name?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-                        ?? "Season \(season.seasonNumber)",
-                    status: tracked[season.seasonNumber] ?? .unknown,
-                    requestFailed: failedRequestSeasons.contains(season.seasonNumber)
+
+        var tracked: [Int: MediaAvailabilityStatus] = [:]
+        for season in details.mediaInfo?.seasons ?? [] where season.seasonNumber > 0 {
+            let status = season.status.flatMap(MediaAvailabilityStatus.init(rawValue:)) ?? .unknown
+            tracked[season.seasonNumber] = preferredAvailability(
+                tracked[season.seasonNumber] ?? .unknown,
+                status
+            )
+        }
+
+        var requestStatuses: [Int: MediaSeasonRequestStatus] = [:]
+        // MediaRequestStatus: pending=1, approved=2, declined=3, failed=4,
+        // completed=5. Workflow remains separate from availability because a
+        // partially imported season may still have an active request.
+        for request in details.mediaInfo?.requests ?? [] where request.is4k != true {
+            guard let requestStatus = request.status,
+                  let parentWorkflow = requestWorkflow(from: requestStatus)
+            else { continue }
+            for season in request.seasons {
+                guard season.seasonNumber > 0 else { continue }
+                if titles[season.seasonNumber] == nil {
+                    titles[season.seasonNumber] = "Season \(season.seasonNumber)"
+                }
+                let seasonWorkflow = season.status.flatMap(requestWorkflow(from:))
+                let workflow: MediaSeasonRequestStatus
+                if seasonWorkflow == .completed {
+                    workflow = .completed
+                } else {
+                    switch parentWorkflow {
+                    case .failed, .declined, .completed:
+                        workflow = parentWorkflow
+                    case .pending, .processing:
+                        workflow = seasonWorkflow ?? parentWorkflow
+                    }
+                }
+                requestStatuses[season.seasonNumber] = preferredRequestWorkflow(
+                    requestStatuses[season.seasonNumber],
+                    workflow
+                )
+            }
+        }
+
+        for season in details.seasons where season.seasonNumber > 0 {
+            if tracked[season.seasonNumber] == nil {
+                tracked[season.seasonNumber] = .unknown
+            }
+        }
+
+        let seasons = Set(titles.keys)
+            .union(tracked.keys)
+            .sorted()
+            .map { number in
+                let coverage = tracked[number] ?? .unknown
+                let workflow = coverage == .available ? nil : requestStatuses[number]
+                let status: MediaAvailabilityStatus
+                if coverage.isRequestable {
+                    switch workflow {
+                    case .pending, .failed: status = .pending
+                    case .processing: status = .processing
+                    case .declined, .completed, nil: status = coverage
+                    }
+                } else {
+                    status = coverage
+                }
+                return MediaSeasonRequestState(
+                    number: number,
+                    title: titles[number] ?? "Season \(number)",
+                    status: status,
+                    requestFailed: workflow == .failed,
+                    requestStatus: workflow
                 )
             }
         return MediaRequestAvailability(
@@ -159,6 +204,52 @@ enum SeerMapper {
             downloadProgress: downloadProgress(from: details.mediaInfo?.downloadStatus),
             seasons: seasons
         )
+    }
+
+    private static func preferredAvailability(
+        _ lhs: MediaAvailabilityStatus,
+        _ rhs: MediaAvailabilityStatus
+    ) -> MediaAvailabilityStatus {
+        func rank(_ status: MediaAvailabilityStatus) -> Int {
+            switch status {
+            case .available: 60
+            case .partiallyAvailable: 50
+            case .processing: 40
+            case .pending: 30
+            case .deleted: 20
+            case .unknown: 10
+            }
+        }
+        return rank(lhs) >= rank(rhs) ? lhs : rhs
+    }
+
+    private static func requestWorkflow(from rawValue: Int) -> MediaSeasonRequestStatus? {
+        switch rawValue {
+        case 1: .pending
+        case 2: .processing
+        case 3: .declined
+        case 4: .failed
+        case 5: .completed
+        default: nil
+        }
+    }
+
+    private static func preferredRequestWorkflow(
+        _ lhs: MediaSeasonRequestStatus?,
+        _ rhs: MediaSeasonRequestStatus
+    ) -> MediaSeasonRequestStatus {
+        func rank(_ status: MediaSeasonRequestStatus?) -> Int {
+            switch status {
+            case .processing: 60
+            case .pending: 50
+            case .failed: 40
+            case .declined: 30
+            case .completed: 20
+            case nil: 10
+            }
+        }
+        guard let lhs else { return rhs }
+        return rank(lhs) >= rank(rhs) ? lhs : rhs
     }
 
     // MARK: - Request derivation

@@ -215,7 +215,10 @@ public struct PosterCardView: View {
                 .overlay { resumeChip }
                 .overlay { pendingRemovalOverlay }
                 .clipShape(RoundedRectangle(cornerRadius: PlozzTheme.Metrics.posterArtCornerRadius, style: .continuous))
-                .plozzMediaEdge(cornerRadius: PlozzTheme.Metrics.posterArtCornerRadius)
+                .plozzMediaEdge(
+                    cornerRadius: PlozzTheme.Metrics.posterArtCornerRadius,
+                    isEnabled: MediaArtworkPlaceholder.Symbol(for: item) == .playback
+                )
 
             captionBlock(inset: metrics.posterCaptionInset, spacing: 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -263,7 +266,10 @@ public struct PosterCardView: View {
                 .overlay { resumeChip }
                 .overlay { pendingRemovalOverlay }
                 .clipShape(RoundedRectangle(cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius, style: .continuous))
-                .plozzMediaEdge(cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius)
+                .plozzMediaEdge(
+                    cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius,
+                    isEnabled: MediaArtworkPlaceholder.Symbol(for: item) == .playback
+                )
 
             // Series-artwork cards say everything on the artwork itself — the show
             // as its logo, the episode and time in the chip — so there is no
@@ -357,7 +363,10 @@ public struct PosterCardView: View {
             .overlay { resumeChip }
             .overlay { pendingRemovalOverlay }
             .clipShape(RoundedRectangle(cornerRadius: borderlessCornerRadius, style: .continuous))
-            .plozzMediaEdge(cornerRadius: borderlessCornerRadius)
+            .plozzMediaEdge(
+                cornerRadius: borderlessCornerRadius,
+                isEnabled: MediaArtworkPlaceholder.Symbol(for: item) == .playback
+            )
             .plozzFocusHalo(
                 cornerRadius: borderlessCornerRadius,
                 focusScale: borderlessFocusScale,
@@ -663,12 +672,7 @@ public struct PosterCardView: View {
     @ViewBuilder
     private var artwork: some View {
         if PosterCardPresentation.usesFolderArtwork(for: item.kind) {
-            FolderPlaceholderArtwork(
-                foreground: titleColor,
-                background: titleColor.opacity(0.08),
-                isFocused: isFocused,
-                iconSize: PosterCardPresentation.folderIconSize(for: style)
-            )
+            folderArtwork
         } else if showsSeriesArtwork {
             seriesArtwork
         } else if showsSpoilerSafePoster {
@@ -694,6 +698,32 @@ public struct PosterCardView: View {
         } else {
             realArtwork
         }
+    }
+
+    @ViewBuilder
+    private var folderArtwork: some View {
+        if artworkReferences.isEmpty {
+            folderPlaceholderArtwork
+        } else {
+            realArtwork
+                .overlay(alignment: .topTrailing) {
+                    FolderNavigationBadge(size: metrics.watchedBadgeSize)
+                        .padding(folderBadgeInset)
+                }
+        }
+    }
+
+    private var folderPlaceholderArtwork: some View {
+        FolderPlaceholderArtwork(
+            foreground: titleColor,
+            background: titleColor.opacity(0.08),
+            isFocused: isFocused,
+            iconSize: PosterCardPresentation.folderIconSize(for: style)
+        )
+    }
+
+    private var folderBadgeInset: CGFloat {
+        cardStyle == .borderless ? borderlessBadgeInset : 8
     }
 
     private var realArtwork: some View {
@@ -901,7 +931,10 @@ public struct PosterCardView: View {
     /// `MediaArtworkPlaceholder` so every surface looks identical, tinted with
     /// the caption colour so it flips on focus and respects reduced-transparency.
     private var neutralPlaceholder: some View {
-        MediaArtworkPlaceholder(tint: subtitleColor)
+        let radius = cardStyle == .framed
+            ? (style == .poster ? PlozzTheme.Metrics.posterArtCornerRadius : PlozzTheme.Metrics.mediumMediaCornerRadius)
+            : borderlessCornerRadius
+        return MediaArtworkPlaceholder(tint: subtitleColor, symbol: .init(for: item), cornerRadius: radius)
     }
 
     // MARK: Series-identified artwork (Continue Watching)
@@ -1331,6 +1364,27 @@ private struct FolderPlaceholderArtwork: View {
                     )
                 )
         }
+    }
+}
+
+/// Small navigation cue over recognized folder artwork. Its geometry mirrors the
+/// existing watched badge, but keeps a neutral scrim so it cannot be mistaken for
+/// playback state.
+private struct FolderNavigationBadge: View {
+    let size: CGFloat
+
+    var body: some View {
+        Image(systemName: "folder.fill")
+            .font(.system(size: size * 0.48, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(.black.opacity(0.72), in: Circle())
+            .overlay {
+                Circle()
+                    .strokeBorder(.white.opacity(0.4), lineWidth: max(1.5, size * 0.04))
+            }
+            .shadow(color: .black.opacity(0.4), radius: size * 0.08, y: size * 0.026)
+            .accessibilityHidden(true)
     }
 }
 

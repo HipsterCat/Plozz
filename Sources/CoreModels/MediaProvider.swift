@@ -271,6 +271,23 @@ public protocol MediaProvider: Sendable {
     var connectionLocality: SourceLocality { get }
 }
 
+/// Additive capability for providers whose indexed library also has a distinct
+/// file-tree view. Feature layers can offer a provider-neutral "Browse Files"
+/// action without assuming a provider kind or a synthetic container id.
+public protocol MediaFileBrowsing: Sendable {
+    var fileBrowserLibrary: MediaLibrary { get }
+}
+
+/// Additive capability for providers or container types that support only a
+/// subset of the app-wide sort menu. Feature layers fall back to every
+/// `SortField` when this capability is absent.
+public protocol MediaSortFieldProviding: Sendable {
+    func supportedSortFields(
+        in containerID: String,
+        kind: MediaItemKind
+    ) -> [SortField]
+}
+
 /// Optional provider capability used by UI surfaces to report genuine user
 /// browsing. Background indexers/fan-out never call this protocol, so providers
 /// can prioritize interactive work without mistaking internal requests for user

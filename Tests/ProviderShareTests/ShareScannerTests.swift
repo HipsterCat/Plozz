@@ -264,11 +264,18 @@ final class ShareScannerTests: XCTestCase {
         store: ShareCatalogStore,
         fake: FakeShare,
         concurrency: Int = 4,
-        pacer: ShareScanPacer = ShareScanPacer()
+        pacer: ShareScanPacer = ShareScanPacer(),
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> ShareScanner {
-        ShareScanner(store: store, concurrency: concurrency, pacer: pacer, makeLister: {
-            ShareScanner.ScanLister(list: { await fake.list($0) }, close: {})
-        })
+        ShareScanner(
+            store: store,
+            concurrency: concurrency,
+            pacer: pacer,
+            libraryConfiguration: libraryConfiguration,
+            makeLister: {
+                ShareScanner.ScanLister(list: { await fake.list($0) }, close: {})
+            }
+        )
     }
 
     func testScanWaitsForEveryListerToClose() async {
@@ -432,6 +439,211 @@ final class ShareScannerTests: XCTestCase {
         // Naruto must NOT also appear under TV.
         let tv = await store.series(in: .tv, offset: 0, limit: 10)
         XCTAssertFalse(tv.contains { $0.title == "Naruto" })
+    }
+
+    func testExplicitTVConfigurationOverridesAnimeFolderHeuristic() async {
+        let store = ShareCatalogStore(accountKey: "configured-tv-anime-folder", directory: tempDir())
+        let scanner = makeScanner(
+            store: store,
+            fake: FakeShare(standardTree()),
+            libraryConfiguration: MediaShareLibraryConfiguration(
+                name: "TV Shows",
+                contentType: .tvShows,
+                isAnime: false
+            )
+        )
+
+        await scanner.scan()
+
+        let tv = await store.series(in: .tv, offset: 0, limit: 100)
+        let anime = await store.series(in: .anime, offset: 0, limit: 100)
+        XCTAssertTrue(tv.contains { $0.title == "Naruto" })
+        XCTAssertTrue(anime.isEmpty)
+    }
+
+    func testConfiguredAnimeRootKeepsContextAfterPathBecomesRelative() async {
+        let store = ShareCatalogStore(accountKey: "configured-anime", directory: tempDir())
+        let tree: [String: [RemoteFileEntry]] = [
+            "": [dir("Sword Art Online II")],
+            "Sword Art Online II": [file("Sword Art Online II - 18.mkv")],
+        ]
+        let scanner = makeScanner(
+            store: store,
+            fake: FakeShare(tree),
+            libraryConfiguration: MediaShareLibraryConfiguration(
+                name: "Anime",
+                contentType: .automatic,
+                isAnime: true
+            )
+        )
+
+        await scanner.scan()
+
+        let counts = await store.libraryCounts()
+        XCTAssertEqual(counts.movies, 0)
+        XCTAssertEqual(counts.animeSeries, 1)
+    }
+
+    func testConfiguredAnimeMoviesRemainMovies() async {
+        let store = ShareCatalogStore(accountKey: "configured-anime-films", directory: tempDir())
+        let tree: [String: [RemoteFileEntry]] = [
+            "": [file("Frieren S01E01.mkv")],
+        ]
+        let scanner = makeScanner(
+            store: store,
+            fake: FakeShare(tree),
+            libraryConfiguration: MediaShareLibraryConfiguration(
+                name: "Anime Films",
+                contentType: .movies,
+                isAnime: true
+            )
+        )
+
+        await scanner.scan()
+
+        let counts = await store.libraryCounts()
+        XCTAssertEqual(counts.movies, 1)
+        XCTAssertEqual(counts.tvSeries, 0)
+        XCTAssertEqual(counts.animeSeries, 0)
+    }
+
+    func testConfiguredTVRootIndexesOnlyFilesWithEpisodeEvidence() async {
+        let store = ShareCatalogStore(accountKey: "configured-tv", directory: tempDir())
+        let tree: [String: [RemoteFileEntry]] = [
+            "": [
+                file("Show Name S01E02.mkv"),
+                file("Unmatched Home Video.mkv"),
+            ],
+        ]
+        let scanner = makeScanner(
+            store: store,
+            fake: FakeShare(tree),
+            libraryConfiguration: MediaShareLibraryConfiguration(
+                name: "Television",
+                contentType: .tvShows
+            )
+        )
+
+        await scanner.scan()
+
+        let counts = await store.libraryCounts()
+        XCTAssertEqual(counts.movies, 0)
+        XCTAssertEqual(counts.tvSeries, 1)
+    }
+
+    func testConfiguredTVInventoryPreventsFolderPromotionFromHidingUnmatchedVideo() async {
+        let store = ShareCatalogStore(
+            accountKey: "configured-tv-unmatched-inventory",
+            directory: tempDir()
+        )
+        let scanner = makeScanner(
+            store: store,
+            fake: FakeShare([
+                "": [dir("Show")],
+                "Show": [
+                    file("Show S01E02.mkv"),
+                    file("Unmatched Home Video.mkv"),
+                ],
+            ]),
+            libraryConfiguration: MediaShareLibraryConfiguration(
+                name: "Television",
+                contentType: .tvShows
+            )
+        )
+
+        await scanner.scan()
+        let projected = await store.browseItems([
+            MediaItem(id: "d:Show", title: "Show", kind: .folder),
+        ])
+
+        XCTAssertEqual(projected.map(\.id), ["d:Show"])
+    }
+
+    func testPersonalVideosStayOutOfMatchedCatalog() async {
+        let store = ShareCatalogStore(accountKey: "personal-videos", directory: tempDir())
+        let tree: [String: [RemoteFileEntry]] = [
+            "": [file("Birthday 2026.mkv"), file("Trip S01E02.mp4")],
+        ]
+        let scanner = makeScanner(
+            store: store,
+            fake: FakeShare(tree),
+            libraryConfiguration: MediaShareLibraryConfiguration(
+                name: "Family Videos",
+                contentType: .personalVideos
+            )
+        )
+
+        await scanner.scan()
+
+        let counts = await store.libraryCounts()
+        XCTAssertEqual(counts.movies, 0)
+        XCTAssertEqual(counts.tvSeries, 0)
+        XCTAssertEqual(counts.animeSeries, 0)
+    }
+
+    func testChangingToPersonalVideosRetainsOnlyInternalWatchAliasesWithoutRewalking() async {
+        let store = ShareCatalogStore(accountKey: "personal-video-watch-aliases", directory: tempDir())
+        let fake = FakeShare([
+            "": [file("Birthday (2026).mkv")],
+        ])
+        await makeScanner(store: store, fake: fake).scan()
+        let initialCounts = await store.libraryCounts()
+        XCTAssertEqual(initialCounts.movies, 1)
+        let listingsBeforeReconfiguration = await fake.listCount
+
+        let personalScanner = makeScanner(
+            store: store,
+            fake: fake,
+            libraryConfiguration: MediaShareLibraryConfiguration(
+                name: "Family Videos",
+                contentType: .personalVideos
+            )
+        )
+        await personalScanner.scan()
+
+        let listingsAfterReconfiguration = await fake.listCount
+        let retainedCounts = await store.libraryCounts()
+        let storedConfiguration = await store.meta("library_configuration")
+        XCTAssertEqual(listingsAfterReconfiguration, listingsBeforeReconfiguration)
+        XCTAssertEqual(retainedCounts.movies, 1)
+        XCTAssertEqual(storedConfiguration, "personalVideos:standard")
+    }
+
+    func testConfigurationChangeForcesRewalkAndPersistsAnimeContext() async {
+        let store = ShareCatalogStore(accountKey: "configuration-change", directory: tempDir())
+        let fake = FakeShare([
+            "": [file("Your Name (2016).mkv")],
+        ])
+        let initial = makeScanner(
+            store: store,
+            fake: fake,
+            libraryConfiguration: MediaShareLibraryConfiguration(
+                name: "Anime",
+                contentType: .automatic
+            )
+        )
+        await initial.scan()
+        let afterInitial = await fake.listCount
+
+        let updated = makeScanner(
+            store: store,
+            fake: fake,
+            libraryConfiguration: MediaShareLibraryConfiguration(
+                name: "Anime",
+                contentType: .automatic,
+                isAnime: true
+            )
+        )
+        await updated.scanIfStale(minInterval: 600)
+
+        let afterUpdate = await fake.listCount
+        let fingerprint = await store.meta("library_configuration")
+        let animeContext = await store.libraryAnimeContext()
+        XCTAssertGreaterThan(afterUpdate, afterInitial)
+        XCTAssertEqual(fingerprint, "automatic:anime")
+        XCTAssertTrue(animeContext)
+        let counts = await store.libraryCounts()
+        XCTAssertEqual(counts.movies, 1, "anime metadata context must not turn a film into a series")
     }
 
     /// Bare-numbered anime (no `SxxEyy` marker) grouped under one series by the

@@ -71,6 +71,16 @@ presents them as a single library rather than a set of tabs you switch between.
   second-tier afterthought bolted on later.
 - **Network shares too** — SMB, NFS, WebDAV, SFTP, and FTP. A bare folder of
   files becomes a real library with artwork, descriptions, ratings, and cast.
+  Browse folders as grids on both iOS and tvOS, with recognized movies and
+  shows opening their usual details, seasons, and episodes.
+  Recognized titles stay in detail navigation during library scans. Choose
+  **More actions > Browse Files** on a title to inspect its original folders
+  and individual files; unknown or mixed folders remain browsable grids.
+  Choose movie, TV, mixed, or personal-video content, with a separate anime
+  option. Personal videos stay as files without movie or TV matching.
+  Library scans run while the app is active: normal passes skip unchanged
+  folders, while a daily deep pass (or **Scan now**) rechecks all contents,
+  including changes a server's folder timestamps cannot reveal.
   (Shares are supported, but still the newest and roughest part.)
 - **One merged library** — connect several servers and see one set of rows
   instead of picking a server first.
@@ -122,6 +132,18 @@ presents them as a single library rather than a set of tabs you switch between.
 - **Trackers** — Trakt, AniList, MyAnimeList, Simkl, and Last.fm, across movies,
   TV, anime, and music.
 - **Seerr** — request something you don't have without leaving search.
+
+Seerr profile links belong to the server where you chose that user. Reconnecting
+to the same address, including after an API-key change, keeps those links.
+Switching servers requires relinking in Settings; requests never fall back to
+the administrator because a link is stale. Links saved by older versions need
+one confirmation. After replacing a Seerr database at the same address, relink
+profiles manually.
+
+TV requests track each season separately. The request button summarizes pending
+or processing seasons, while its menu shows individual season states and offers
+only missing, unrequested seasons. Requesting one season never marks the whole
+series as requested; failed requests remain visible for attention in Seerr.
 
 ## Getting started
 

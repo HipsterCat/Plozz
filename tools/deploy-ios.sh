@@ -35,6 +35,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+ROOT="$(pwd)"
 
 PROJECT="Plozz.xcodeproj"
 SCHEME="PlozziOS"
@@ -83,6 +84,9 @@ export GIT_CONFIG_PARAMETERS="${GIT_CONFIG_PARAMETERS-'safe.bareRepository=all'}
 
 source tools/lib/apple-build-lease.sh
 acquire_apple_build_shared_lease "plozz/deploy-ios"
+source tools/lib/swift-package-storage.sh
+PLOZZ_IOS_CLONED_SOURCE_PACKAGES="${PLOZZ_IOS_CLONED_SOURCE_PACKAGES:-$ROOT/.build/package-workspaces/deploy-ios}"
+configure_plozz_package_resolution "$PLOZZ_IOS_CLONED_SOURCE_PACKAGES"
 APPLE_BUILD_LEASE_SIGNALLED=0
 RESTORE_CANONICAL=0
 cleanup_deploy_ios() {
@@ -225,6 +229,7 @@ PREBUILD_APP_PATH="$(
     -scheme "$SCHEME" \
     -configuration "$CONFIG" \
     -destination "$BUILD_DESTINATION" \
+    "${PACKAGE_RESOLUTION_ARGS[@]}" \
     ${BUILD_SETTING_OVERRIDES[@]+"${BUILD_SETTING_OVERRIDES[@]}"} \
     -showBuildSettings 2>/dev/null \
     | awk -F' = ' '/ CODESIGNING_FOLDER_PATH / { print $2; exit }'
@@ -241,6 +246,7 @@ if [[ "$NO_BUILD" != "1" ]]; then
     -scheme "$SCHEME" \
     -configuration "$CONFIG" \
     -destination "$BUILD_DESTINATION" \
+    "${PACKAGE_RESOLUTION_ARGS[@]}" \
     -allowProvisioningUpdates \
     ${AUTH_FLAGS[@]+"${AUTH_FLAGS[@]}"} \
     ${BUILD_SETTING_OVERRIDES[@]+"${BUILD_SETTING_OVERRIDES[@]}"} \
@@ -263,6 +269,7 @@ if [[ -z "$APP_PATH" ]]; then
       -scheme "$SCHEME" \
       -configuration "$CONFIG" \
       -destination "$BUILD_DESTINATION" \
+      "${PACKAGE_RESOLUTION_ARGS[@]}" \
       ${BUILD_SETTING_OVERRIDES[@]+"${BUILD_SETTING_OVERRIDES[@]}"} \
       -showBuildSettings 2>/dev/null \
       | awk -F' = ' '/ CODESIGNING_FOLDER_PATH / { print $2; exit }'

@@ -100,6 +100,10 @@ public enum MediaItemActionCatalog {
         if canGoToEpisode(item, in: context) {
             actions.append(.goToEpisode)
         }
+        if item.kind != .folder, let containerID = item.fileBrowserContainerID,
+           !containerID.isEmpty {
+            actions.append(.browseFiles)
+        }
 
         // Refresh Metadata: a server-side maintenance task, offered last for any
         // refreshable content item when the provider supports it.

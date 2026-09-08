@@ -67,6 +67,9 @@ final class ShareCatalogRuntime {
     /// True while `rescan` is tearing down the prior pass before starting a fresh one,
     /// so `ensureScanning` doesn't spawn a competing walk in the gap.
     var restarting = false
+    /// Reserves the gap before an admitted scan has a task. Concurrent catalog
+    /// reads must not acquire replacement leases during those actor suspensions.
+    var scanAdmission: ShareScanStartGate?
 
     // MARK: Invalidation
 

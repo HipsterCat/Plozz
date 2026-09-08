@@ -102,6 +102,9 @@ actor ShareScanner {
         let scanGeneration: UUID
         let scanID: Int64
         let frontier: [FrontierEntry]
+        let deep: Bool
+        let startedAt: TimeInterval
+        let hasFailures: Bool
     }
 
     private actor ScanListerCloser {
@@ -133,7 +136,8 @@ actor ShareScanner {
     private let concurrency: Int
     private let pacer: ShareScanPacer
     private let shareID: String
-    private let name: String
+    private var name: String
+    nonisolated let libraryConfiguration: MediaShareLibraryConfiguration?
     private var reporter: ShareScanReporter
     private var isRunning = false
     private var isInvalidated = false
@@ -151,6 +155,7 @@ actor ShareScanner {
 
     init(store: ShareCatalogStore, shareID: String = "", name: String = "",
          reporter: ShareScanReporter = .noop, concurrency: Int = 4,
+         libraryConfiguration: MediaShareLibraryConfiguration? = nil,
          makeLister: @escaping @Sendable () -> ScanLister) {
         self.init(
             store: store,
@@ -159,6 +164,7 @@ actor ShareScanner {
             reporter: reporter,
             concurrency: concurrency,
             pacer: ShareScanPacer(),
+            libraryConfiguration: libraryConfiguration,
             makeLister: makeLister
         )
     }
@@ -168,6 +174,7 @@ actor ShareScanner {
     init(store: ShareCatalogStore, shareID: String = "", name: String = "",
          reporter: ShareScanReporter = .noop, concurrency: Int = 4,
          pacer: ShareScanPacer,
+         libraryConfiguration: MediaShareLibraryConfiguration? = nil,
          makeLister: @escaping @Sendable () -> ScanLister) {
         self.store = store
         self.shareID = shareID
@@ -175,6 +182,7 @@ actor ShareScanner {
         self.reporter = reporter
         self.concurrency = max(1, concurrency)
         self.pacer = pacer
+        self.libraryConfiguration = libraryConfiguration
         self.makeLister = makeLister
     }
 
@@ -186,6 +194,10 @@ actor ShareScanner {
     func setReporter(_ reporter: ShareScanReporter) {
         self.reporter = reporter
         if isRunning { reporter.scanStarted(shareID, name) }
+    }
+
+    func setName(_ name: String) {
+        self.name = name
     }
 
     func invalidate() {
@@ -272,8 +284,10 @@ actor ShareScanner {
         // external re-enrichment (no `enrich_version`/`ShareEnricher` touch).
         let localInventoryCurrent = String(ShareMediaParser.localInventoryVersion)
         let localInventoryStored = await store.meta("local_inventory_version")
+        let configurationStored = await store.meta("library_configuration")
         let requiresCompleteRewalk = parserStored != parserCurrent
             || localInventoryStored != localInventoryCurrent
+            || configurationStored != classificationFingerprint
         if requiresCompleteRewalk {
             // A version bump changes what an unchanged directory listing means.
             // Invalidate the completed-mtime stamp so leaf directories cannot take
@@ -282,14 +296,16 @@ actor ShareScanner {
         }
         if parserStored == parserCurrent,
            localInventoryStored == localInventoryCurrent,
+           configurationStored == classificationFingerprint,
            let last = await store.meta("last_full_scan_at"),
            let ts = TimeInterval(last),
            Date().timeIntervalSince1970 - ts < minInterval {
             return .freshNoOp
         }
-        // Sidecar/artwork folders are re-verified on a long cadence rather than
-        // every pass — see `directoriesNeedingRelist`. A share that has never
-        // completed one is treated as due, so the first pass after upgrading is
+        // All folders are re-verified on a long cadence rather than every pass.
+        // Directory mtimes cannot reveal in-place file edits, and some servers
+        // do not update them reliably even when children change. A share that
+        // has never completed one is due, so the first pass after upgrading is
         // deep and the incremental state it leaves behind is complete.
         let lastDeep = await store.meta("last_deep_scan_at").flatMap(TimeInterval.init)
         let dueForDeep = lastDeep.map {
@@ -298,7 +314,7 @@ actor ShareScanner {
         return await scan(deep: ShareScanDebug.forceDeep ?? dueForDeep, scanGeneration: scanGeneration)
     }
 
-    /// How often the sidecar/artwork re-verification pass runs.
+    /// How often all directory contents are re-verified without trusting mtimes.
     ///
     /// This is the cadence at which an NFO edited in place, or a poster deleted
     /// without its folder's mtime moving, is noticed. Daily rather than every ten
@@ -356,13 +372,27 @@ actor ShareScanner {
         await store.activateScanGeneration(scanGeneration)
         let storedParserVersion = await store.meta("parser_version")
         let storedInventoryVersion = await store.meta("local_inventory_version")
+        let storedConfiguration = await store.meta("library_configuration")
+        let configurationChanged = storedConfiguration != classificationFingerprint
+        let externalContextChanged = configurationChanged
+            && (storedConfiguration != nil || libraryConfiguration != nil)
         let rulesChanged = storedParserVersion != String(ShareMediaParser.classifierVersion)
             || storedInventoryVersion != String(ShareMediaParser.localInventoryVersion)
+            || configurationChanged
+        // An interrupted pass can leave newly discovered rows unreconciled even
+        // when its checkpoint is unusable and the next walk finds the same count.
+        let completedScan = await store.meta(ShareCatalogStore.completedDirectoryStateScanKey)
+        let hasCompletedBaseline = Int64(completedScan ?? "") != nil
+        // Snapshot the previous clean pass's incremental state before invalidating
+        // the completion proof used by the next scanner.
+        let storedDirectoryMTimes = rulesChanged ? [:] : await store.directoryModifiedSeconds()
+        let recordedDirectoryPaths = await store.recordedDirectoryPaths()
+        let directoriesWithRecordedFiles = await store.directoriesWithRecordedFiles()
+        await store.invalidateCompletedDirectoryState()
         if rulesChanged {
             // Manual scans must receive the same one-time full rewalk as the stale
             // scheduler. Old resume/frontier and completed-leaf stamps describe the
             // previous classifier and cannot safely skip directories under new rules.
-            await store.invalidateCompletedDirectoryState()
             await Self.clearResumeState(store: store, scanGeneration: scanGeneration)
         }
         let started = Date()
@@ -371,6 +401,51 @@ actor ShareScanner {
         guard !Task.isCancelled, backgroundWorkAllowed, !isInvalidated else {
             await finishScan(listers: [])
             return isInvalidated ? .invalidated : .cancelled(scanGeneration: scanGeneration)
+        }
+
+        if libraryConfiguration?.contentType == .personalVideos {
+            // Personal Videos use the live file tree directly. Do not walk the
+            // share or build movie/show assets, and retain any prior path aliases
+            // long enough to carry existing watch progress onto raw file ids.
+            // All provider read/enrichment paths are independently gated off for
+            // this configuration, so retained rows are never presented as media.
+            await Self.clearResumeState(store: store, scanGeneration: scanGeneration)
+            let now = String(Date().timeIntervalSince1970)
+            await store.setMeta("last_full_scan_at", now, scanGeneration: scanGeneration)
+            if deep {
+                await store.setMeta("last_deep_scan_at", now, scanGeneration: scanGeneration)
+            }
+            await store.setMeta(
+                "parser_version",
+                String(ShareMediaParser.classifierVersion),
+                scanGeneration: scanGeneration
+            )
+            await store.setMeta(
+                "local_inventory_version",
+                String(ShareMediaParser.localInventoryVersion),
+                scanGeneration: scanGeneration
+            )
+            let configurationApplied: Bool
+            if externalContextChanged {
+                configurationApplied = await store.resetExternalEnrichment(
+                    scanGeneration: scanGeneration
+                )
+            } else {
+                configurationApplied = true
+            }
+            if configurationApplied {
+                await store.setMeta(
+                    "library_configuration",
+                    classificationFingerprint,
+                    scanGeneration: scanGeneration
+                )
+                await store.setLibraryAnimeContext(false, scanGeneration: scanGeneration)
+            }
+            PlozzLog.boot(
+                "share.scan personal-videos live-tree-only elapsed=\(Int(Date().timeIntervalSince(started) * 1_000))ms"
+            )
+            await finishScan(listers: [])
+            return configurationApplied ? .completedClean : .completedPartial
         }
 
         // Pre-build the pool of independent listers (each its own SMB connection).
@@ -394,7 +469,8 @@ actor ShareScanner {
         // completed portion look vanished and delete it. Reusing the id also makes
         // the union of both passes a complete walk, which is exactly what the
         // prune requires to be correct.
-        let resumeState = await Self.loadResumeState(store: store)
+        let resumeState = await Self.loadResumeState(store: store, deep: deep)
+        let snapshotStartedAt = resumeState?.startedAt ?? started.timeIntervalSince1970
         let scanID: Int64
         var frontier: [FrontierEntry]
         if let resumeState {
@@ -421,23 +497,26 @@ actor ShareScanner {
         activeResumeState = ActiveResumeState(
             scanGeneration: scanGeneration,
             scanID: scanID,
-            frontier: frontier
+            frontier: frontier,
+            deep: deep,
+            startedAt: snapshotStartedAt,
+            hasFailures: false
         )
         guard !Task.isCancelled, backgroundWorkAllowed, !isInvalidated else {
             await Self.saveResumeState(
                 store: store,
                 scanID: scanID,
                 frontier: frontier,
-                scanGeneration: scanGeneration
+                scanGeneration: scanGeneration,
+                deep: deep,
+                startedAt: snapshotStartedAt,
+                hasFailures: false
             )
             await finishScan(listers: pool)
             return isInvalidated
                 ? .invalidated
                 : .cancelled(scanGeneration: scanGeneration)
         }
-        // Incremental scan state: a directory whose mtime is unchanged since the
-        // last scan doesn't need listing. Loaded once for the whole walk.
-        let storedDirectoryMTimes = await store.directoryModifiedSeconds()
         // Directories known to CONTAIN a subdirectory, derived from the recorded
         // paths rather than queried per-child.
         //
@@ -453,7 +532,7 @@ actor ShareScanner {
         // deriving shape from those keys made its parent look childless and
         // therefore skippable — orphaning the child and pruning its media.
         let directoriesWithSubdirectories =
-            Self.parentPaths(of: await store.recordedDirectoryPaths())
+            Self.parentPaths(of: recordedDirectoryPaths)
         // Directories we have actually indexed files for. Being recorded in
         // `dir_state` only says a listing once succeeded, NOT that the subtree was
         // walked — a scan interrupted between recording a folder and reaching its
@@ -462,17 +541,6 @@ actor ShareScanner {
         // re-skips it on every later pass and its media stays invisible forever.
         // Requiring positive evidence makes the skip an assertion about content we
         // have, rather than an assumption from content we don't.
-        let directoriesWithRecordedFiles = await store.directoriesWithRecordedFiles()
-        // Sidecar/artwork folders are re-listed on a DEEP pass only.
-        //
-        // They can't be skipped on mtime alone (an NFO edited in place doesn't
-        // move its directory's mtime, and a deleted poster is only observable by
-        // listing), but that guarantee was being bought on every ordinary pass —
-        // and since a well-kept library has a poster or NFO in essentially every
-        // leaf folder, it exempted exactly the folders the skip exists for. The
-        // guarantee is kept, just paid for once a day instead of every ten
-        // minutes.
-        let directoriesNeedingRelist = deep ? await store.directoriesRequiringRelist() : []
         // mtime each directory was reported with by its parent's listing, so the
         // value recorded for a folder is the one a later scan will compare against.
         var listedDirectoryMTimes: [String: Date?] = [:]
@@ -480,14 +548,13 @@ actor ShareScanner {
         var dirsSkipped = 0
         var filesFound = 0
         var extrasFound = 0
-        // TEMPORARY instrumentation: how much of the walk is spent in the store,
-        // and how much of THAT is the skip path's per-child round trips.
+        // Split local bookkeeping from network wait in the scan diagnostics.
         var storeNanos: UInt64 = 0
         var skipStoreNanos: UInt64 = 0
         var listWaitNanos: UInt64 = 0
         var unchangedPass = false
-        // Directories skipped this pass, stamped in one batch once the walk ends.
-        var skippedDirectories: [String] = []
+        // Skipped paths are stamped together before each level's checkpoint.
+        var skippedDirectories: [FrontierEntry] = []
         // Catalog size before the walk, so an unchanged pass can be recognised
         // and skip the clean-scan reconciliation entirely.
         let priorAssetCount = await store.assetDiscoveryStats(newerThan: 0).total
@@ -510,12 +577,16 @@ actor ShareScanner {
             activeResumeState = ActiveResumeState(
                 scanGeneration: scanGeneration,
                 scanID: scanID,
-                frontier: frontier
+                frontier: frontier,
+                deep: deep,
+                startedAt: snapshotStartedAt,
+                hasFailures: anyListingFailed
             )
             if Task.isCancelled || !backgroundWorkAllowed {
                 await Self.saveResumeState(
                     store: store, scanID: scanID, frontier: frontier,
-                    scanGeneration: scanGeneration
+                    scanGeneration: scanGeneration, deep: deep,
+                    startedAt: snapshotStartedAt, hasFailures: anyListingFailed
                 )
                 PlozzLog.boot(
                     "share.scan cancelled after \(dirsWalked) dirs, \(filesFound) files — "
@@ -525,6 +596,7 @@ actor ShareScanner {
                 return .cancelled(scanGeneration: scanGeneration)
             }
             var nextFrontier: [FrontierEntry] = []
+            var completedDirectories: Set<String> = []
             var index = 0                         // next directory in `frontier` to dispatch
 
             await withTaskGroup(of: DirResult.self) { group in
@@ -532,7 +604,14 @@ actor ShareScanner {
                     guard index < frontier.count, let lister = free.popLast() else { return }
                     let entry = frontier[index]
                     index += 1
-                    group.addTask { await Self.processDirectory(entry, using: lister) }
+                    let configuration = libraryConfiguration
+                    group.addTask {
+                        await Self.processDirectory(
+                            entry,
+                            using: lister,
+                            libraryConfiguration: configuration
+                        )
+                    }
                 }
                 // Fill the pool.
                 for _ in 0..<concurrency { spawnNext() }
@@ -571,7 +650,8 @@ actor ShareScanner {
                         await store.recordDirectory(
                             relPath: result.dir,
                             modifiedAt: Self.trustworthyMTime(
-                                listedDirectoryMTimes[result.dir] ?? nil
+                                listedDirectoryMTimes[result.dir] ?? nil,
+                                now: started
                             ),
                             scanID: scanID,
                             scanGeneration: scanGeneration
@@ -584,7 +664,8 @@ actor ShareScanner {
                     for child in result.subdirectories {
                         let childPath = child.frontier.relPath
                         listedDirectoryMTimes[childPath] = child.modifiedAt
-                        if let mtime = child.modifiedAt,
+                        if !deep,
+                           let mtime = child.modifiedAt,
                            let known = storedDirectoryMTimes[childPath],
                            // Compared as raw seconds, the form persisted, so both
                            // sides take the identical conversion — see
@@ -600,14 +681,13 @@ actor ShareScanner {
                            // subdirectories is not a finished leaf, it is one we
                            // know nothing about — see
                            // `directoriesWithRecordedFiles`.
-                           directoriesWithRecordedFiles.contains(childPath),
-                           !directoriesNeedingRelist.contains(childPath) {
+                           directoriesWithRecordedFiles.contains(childPath) {
                             dirsSkipped += 1
                             // Collected, not stamped here. Stamping per directory
                             // cost five statements each and dominated the whole
                             // scan; one batched pass at the end does the same work
                             // in four. See `touchDirectoryContents(relPaths:)`.
-                            skippedDirectories.append(childPath)
+                            skippedDirectories.append(child.frontier)
                             // No `recordedSubdirectories` lookup: the skip
                             // condition above requires this directory to have no
                             // recorded subdirectories, so that query is provably
@@ -622,8 +702,22 @@ actor ShareScanner {
                         await store.upsert(
                             result.assets,
                             scanID: scanID,
+                            scanGeneration: scanGeneration,
+                            recordPlayableInventory: false
+                        )
+                    }
+                    if !result.playablePaths.isEmpty {
+                        let persisted = await store.upsertPlayablePaths(
+                            result.playablePaths,
+                            scanID: scanID,
                             scanGeneration: scanGeneration
                         )
+                        if !persisted {
+                            // Without complete playable inventory, folder promotion
+                            // could hide an intentionally unclassified file. Treat
+                            // this pass as partial and retain the previous catalog.
+                            anyListingFailed = true
+                        }
                     }
                     if !result.sidecars.isEmpty {
                         await store.upsertSidecars(
@@ -644,7 +738,8 @@ actor ShareScanner {
                         await store.upsertExtras(
                             result.extras,
                             scanID: scanID,
-                            scanGeneration: scanGeneration
+                            scanGeneration: scanGeneration,
+                            recordPlayableInventory: false
                         )
                     }
                     storeNanos += DispatchTime.now().uptimeNanoseconds - storeStart
@@ -662,7 +757,11 @@ actor ShareScanner {
                         )
                         lastProgressReport = now
                     }
-                    if Task.isCancelled { continue }   // stop dispatching; let in-flight drain
+                    guard !Task.isCancelled, backgroundWorkAllowed, !isInvalidated else {
+                        group.cancelAll()
+                        continue
+                    }
+                    completedDirectories.insert(result.dir)
                     // Never pause for browsing (which could starve a scan forever).
                     // Instead, admit replacement directory requests at a bounded
                     // slower rate while the user is actively navigating the share.
@@ -674,14 +773,34 @@ actor ShareScanner {
                 }
             }
 
+            // Never force a stamp transaction through cancellation. Unstamped
+            // leaves keep their traversal context and are queued for the resume.
+            if !skippedDirectories.isEmpty, !Task.isCancelled, backgroundWorkAllowed, !isInvalidated {
+                let flushStart = DispatchTime.now().uptimeNanoseconds
+                let stamped = await store.touchDirectoryContents(
+                    relPaths: skippedDirectories.map(\.relPath),
+                    scanID: scanID,
+                    scanGeneration: scanGeneration
+                )
+                if stamped {
+                    skippedDirectories.removeAll(keepingCapacity: true)
+                } else if !Task.isCancelled, backgroundWorkAllowed, !isInvalidated {
+                    anyListingFailed = true
+                    skippedDirectories.removeAll(keepingCapacity: true)
+                }
+                skipStoreNanos += DispatchTime.now().uptimeNanoseconds - flushStart
+            }
             if Task.isCancelled || !backgroundWorkAllowed || isInvalidated {
-                // Everything still unwalked: this level's undispatched tail plus the
-                // children discovered so far. Directories already listed keep their
-                // rows stamped with `scanID`, so they simply aren't revisited.
-                let pending = Array(frontier[min(index, frontier.count)...]) + nextFrontier
+                // Dispatch is not completion: cancelled in-flight results have not
+                // been applied. A retried parent will rediscover its own children.
+                let pending = frontier.filter { !completedDirectories.contains($0.relPath) }
+                    + (nextFrontier + skippedDirectories).filter {
+                        completedDirectories.contains(($0.relPath as NSString).deletingLastPathComponent)
+                    }
                 await Self.saveResumeState(
                     store: store, scanID: scanID, frontier: pending,
-                    scanGeneration: scanGeneration
+                    scanGeneration: scanGeneration, deep: deep,
+                    startedAt: snapshotStartedAt, hasFailures: anyListingFailed
                 )
                 PlozzLog.boot(
                     "share.scan cancelled after \(dirsWalked) dirs, \(filesFound) files — "
@@ -690,29 +809,15 @@ actor ShareScanner {
                 await finishScan(listers: pool)
                 return isInvalidated ? .invalidated : .cancelled(scanGeneration: scanGeneration)
             }
-            // Stamp this level's skipped directories NOW, not at the end of the
-            // walk. A cancelled scan saves its frontier and resumes under the SAME
-            // scan id, but the in-memory list does not survive — so anything
-            // skipped before the interruption would never be stamped, and the
-            // resumed pass's prune would delete its media as though it had
-            // vanished from the share. Flushing per level bounds that to nothing,
-            // and bounds the list's memory too.
-            if !skippedDirectories.isEmpty {
-                let flushStart = DispatchTime.now().uptimeNanoseconds
-                await store.touchDirectoryContents(
-                    relPaths: skippedDirectories,
-                    scanID: scanID,
-                    scanGeneration: scanGeneration
-                )
-                skipStoreNanos += DispatchTime.now().uptimeNanoseconds - flushStart
-                skippedDirectories.removeAll(keepingCapacity: true)
-            }
             frontier = nextFrontier
             if !frontier.isEmpty {
                 activeResumeState = ActiveResumeState(
                     scanGeneration: scanGeneration,
                     scanID: scanID,
-                    frontier: frontier
+                    frontier: frontier,
+                    deep: deep,
+                    startedAt: snapshotStartedAt,
+                    hasFailures: anyListingFailed
                 )
             }
             // Checkpoint at every level boundary, not only on graceful
@@ -722,22 +827,11 @@ actor ShareScanner {
             // level is cheap against a walk measured in minutes.
             await Self.saveResumeState(
                 store: store, scanID: scanID, frontier: frontier,
-                scanGeneration: scanGeneration
+                scanGeneration: scanGeneration, deep: deep,
+                startedAt: snapshotStartedAt, hasFailures: anyListingFailed
             )
         }
         reporter.scanFrontierProgress(shareID, dirsWalked, 0, filesFound)
-
-        // Stamp every skipped directory's contents in one batch, BEFORE the prune
-        // below — the prune deletes rows whose `last_scan` isn't this pass, so a
-        // skipped directory's files must be stamped first or they are deleted as
-        // if they had vanished from the share.
-        let skipStampStart = DispatchTime.now().uptimeNanoseconds
-        await store.touchDirectoryContents(
-            relPaths: skippedDirectories,
-            scanID: scanID,
-            scanGeneration: scanGeneration
-        )
-        skipStoreNanos += DispatchTime.now().uptimeNanoseconds - skipStampStart
 
         // Completed a full pass. Only prune (drop assets no longer on the share) when
         // EVERY directory listed cleanly — a partial walk (some listing failed) must
@@ -759,18 +853,13 @@ actor ShareScanner {
             await store.pruneDirectoryStateNotSeen(
                 inScan: scanID, scanGeneration: scanGeneration
             )
-            // Only NOW is this scan's directory state safe to skip against: the
-            // pass completed, so every recorded directory had its full subtree
-            // walked. A partial pass's rows are never trusted.
-            await store.markDirectoryStateComplete(
-                scanID: scanID, scanGeneration: scanGeneration
-            )
             // Nothing arrived and nothing vanished: the reconciliation below can
-            // only reproduce what is already stored, so skip it. Directory state
-            // is still marked complete above, which is what keeps the next pass
-            // able to skip — the saving is the reconciliation, never the
-            // bookkeeping that makes incremental scanning work.
-            if rulesChanged {
+            // only reproduce what is already stored, so skip it. Completion
+            // markers are still committed below; the saving is the reconciliation,
+            // never the bookkeeping that makes incremental scanning work.
+            if rulesChanged || resumeState != nil || !hasCompletedBaseline {
+                // Resume-time counts include discoveries from the earlier half,
+                // which may not have been reconciled, even if its frontier expired.
                 unchangedPass = false
             } else {
                 unchangedPass = await store.isMateriallyUnchanged(
@@ -794,6 +883,22 @@ actor ShareScanner {
                 // current; orphan cleanup is deferred to the next clean pass.
                 await store.materializeFilenameProviderIDs(scanGeneration: scanGeneration)
                 await store.resolveExtraOwners(scanGeneration: scanGeneration)
+                anyListingFailed = true
+            } else {
+                // Commit playable coverage only after asset/extra reconciliation
+                // and owner resolution, before publishing a clean scan baseline.
+                let inventoryFinalized = await store.finalizePlayableInventory(
+                    inScan: scanID,
+                    scanGeneration: scanGeneration
+                )
+                if inventoryFinalized {
+                    await store.markDirectoryStateComplete(
+                        scanID: scanID,
+                        scanGeneration: scanGeneration
+                    )
+                } else {
+                    anyListingFailed = true
+                }
             }
         } else {
             // Partial walk: never prune/reconcile. Still refresh pure path-derived
@@ -814,9 +919,8 @@ actor ShareScanner {
             String(Date().timeIntervalSince1970),
             scanGeneration: scanGeneration
         )
-        // Only a deep pass may stamp this: an ordinary pass skipped the sidecar
-        // folders, so it cannot claim to have re-verified them.
-        if deep {
+        // A partial deep pass still owes verification of its failed folders.
+        if deep, !anyListingFailed {
             await store.setMeta(
                 "last_deep_scan_at",
                 String(Date().timeIntervalSince1970),
@@ -835,6 +939,25 @@ actor ShareScanner {
             String(ShareMediaParser.localInventoryVersion),
             scanGeneration: scanGeneration
         )
+        let configurationApplied: Bool
+        if externalContextChanged {
+            configurationApplied = await store.resetExternalEnrichment(
+                scanGeneration: scanGeneration
+            )
+        } else {
+            configurationApplied = true
+        }
+        if configurationApplied {
+            await store.setMeta(
+                "library_configuration",
+                classificationFingerprint,
+                scanGeneration: scanGeneration
+            )
+            await store.setLibraryAnimeContext(
+                libraryConfiguration?.isAnime == true,
+                scanGeneration: scanGeneration
+            )
+        }
         // One-time reread after an NFO PARSER-RULE upgrade (root-gated episode fields,
         // strict date rejection): mark already-processed sidecars whose stored
         // parser_version predates the current parser as pending so the local enricher
@@ -860,7 +983,7 @@ actor ShareScanner {
                 .map { "\($0.key.rawValue):\($0.value)" }
                 .joined(separator: ",")
         PlozzLog.boot(
-            "share.scan done scanID=\(scanID) deep=\(deep) dirs=\(dirsWalked) skipped=\(dirsSkipped) storeMs=\(storeNanos / 1_000_000) skipStoreMs=\(skipStoreNanos / 1_000_000) listWaitMs=\(listWaitNanos / 1_000_000) interior=\(directoriesWithSubdirectories.count) relistForced=\(directoriesNeedingRelist.count) files=\(filesFound) extras=\(extrasFound) catalog=\(discovery.total) newLastHour=\(discovery.recent) unchanged=\(unchangedPass) pruned=\(!anyListingFailed) failed=\(listFailureCounts.values.reduce(0, +)) failures=[\(failureSummary)] elapsed=\(Int(Date().timeIntervalSince(started) * 1_000))ms"
+            "share.scan done scanID=\(scanID) deep=\(deep) dirs=\(dirsWalked) skipped=\(dirsSkipped) storeMs=\(storeNanos / 1_000_000) skipStoreMs=\(skipStoreNanos / 1_000_000) listWaitMs=\(listWaitNanos / 1_000_000) interior=\(directoriesWithSubdirectories.count) files=\(filesFound) extras=\(extrasFound) catalog=\(discovery.total) newLastHour=\(discovery.recent) unchanged=\(unchangedPass) pruned=\(!anyListingFailed) failed=\(listFailureCounts.values.reduce(0, +)) failures=[\(failureSummary)] elapsed=\(Int(Date().timeIntervalSince(started) * 1_000))ms"
         )
         activeResumeState = nil
         await finishScan(listers: pool)
@@ -902,6 +1025,9 @@ actor ShareScanner {
         let lister: ScanLister
         let dir: String
         let subdirectories: [ScannedSubdirectory]
+        /// Every supported playable file observed in this successful listing,
+        /// including samples, extras, and files intentionally left unclassified.
+        let playablePaths: [String]
         let assets: [CatalogAsset]
         let extras: [CatalogExtraCandidate]
         let sidecars: [LocalSidecarCandidate]
@@ -919,7 +1045,8 @@ actor ShareScanner {
     /// is flagged `ok: false` so the caller can skip the global prune.
     static func processDirectory(
         _ frontier: FrontierEntry,
-        using lister: ScanLister
+        using lister: ScanLister,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) async -> DirResult {
         let dir = frontier.relPath
         let entries: [RemoteFileEntry]
@@ -929,7 +1056,8 @@ actor ShareScanner {
             entries = try await lister.list(dir)
         } catch {
             return DirResult(
-                lister: lister, dir: dir, subdirectories: [], assets: [], extras: [],
+                lister: lister, dir: dir, subdirectories: [], playablePaths: [],
+                assets: [], extras: [],
                 sidecars: [], artwork: [], ok: false,
                 failureCategory: ShareScanListFailureCategory(error)
             )
@@ -944,6 +1072,7 @@ actor ShareScanner {
         }
 
         var subdirs: [ScannedSubdirectory] = []
+        var playablePaths: [String] = []
         var assets: [CatalogAsset] = []
         var extras: [CatalogExtraCandidate] = []
         var movieStemsLower: Set<String> = []
@@ -958,6 +1087,9 @@ actor ShareScanner {
 
         for entry in entries {
             let childPath = dir.isEmpty ? entry.name : "\(dir)/\(entry.name)"
+            if entry.kind != .directory, ShareMediaParser.isVideoFile(entry.name) {
+                playablePaths.append(childPath)
+            }
             if entry.kind != .directory,
                ShareMediaParser.isVideoFile(entry.name),
                isSampleFile(entry.name),
@@ -968,7 +1100,13 @@ actor ShareScanner {
                let suffix = ShareExtraDiscoveryPolicy.terminalSuffix(inFileName: entry.name) {
                 suffixVideos.append((entry, childPath, suffix))
             } else if entry.kind != .directory, ShareMediaParser.isVideoFile(entry.name) {
-                let parsed = asset(relPath: childPath, entry: entry)
+                guard let parsed = asset(
+                    relPath: childPath,
+                    entry: entry,
+                    libraryConfiguration: libraryConfiguration
+                ) else {
+                    continue
+                }
                 let stem = ShareExtraDiscoveryPolicy.stemIdentity(
                     ShareMediaParser.videoStem(entry.name)
                 )
@@ -1062,7 +1200,8 @@ actor ShareScanner {
 
         let artwork = ShareArtworkInventoryPolicy.candidates(entries: entries, parentDir: dir)
         return DirResult(
-            lister: lister, dir: dir, subdirectories: subdirs, assets: assets,
+            lister: lister, dir: dir, subdirectories: subdirs,
+            playablePaths: playablePaths, assets: assets,
             extras: extras, sidecars: sidecars, artwork: artwork, ok: true
         )
     }
@@ -1121,6 +1260,7 @@ actor ShareScanner {
         }
         return DirResult(
             lister: lister, dir: dir, subdirectories: subdirectories,
+            playablePaths: extras.map(\.relPath),
             assets: [], extras: extras, sidecars: [], artwork: [], ok: true
         )
     }
@@ -1160,14 +1300,15 @@ actor ShareScanner {
 
     /// A partial walk's remaining work, persisted so an interruption costs only
     /// what was left rather than the whole share.
-    private struct ResumeState {
+    private struct ResumeState: Codable {
         let scanID: Int64
         let frontier: [FrontierEntry]
+        let deep: Bool
+        let startedAt: TimeInterval
+        let hasFailures: Bool?
     }
 
-    private static let resumeScanIDKey = "resume_scan_id"
-    private static let resumeFrontierKey = "resume_frontier"
-    private static let resumeSavedAtKey = "resume_saved_at"
+    private static let resumeCheckpointKey = "resume_checkpoint"
 
     /// How long a saved frontier stays usable. A resume reuses the interrupted
     /// pass's scanID, so its already-walked half is never revisited — if that half
@@ -1175,52 +1316,51 @@ actor ShareScanner {
     /// stale picture of the share.
     private static let resumeMaxAge: TimeInterval = 6 * 60 * 60
 
-    private static func loadResumeState(store: ShareCatalogStore) async -> ResumeState? {
-        guard let idText = await store.meta(resumeScanIDKey),
-              let scanID = Int64(idText),
-              let savedAtText = await store.meta(resumeSavedAtKey),
-              let savedAt = TimeInterval(savedAtText),
-              let json = await store.meta(resumeFrontierKey),
+    private static func loadResumeState(store: ShareCatalogStore, deep: Bool) async -> ResumeState? {
+        // Legacy multi-key checkpoints had no depth/failure proof. Re-walk them
+        // rather than carrying their potentially incomplete coverage forward.
+        guard let json = await store.meta(resumeCheckpointKey),
               let data = json.data(using: .utf8),
-              let frontier = decodeFrontier(data),
-              !frontier.isEmpty
+              let state = try? JSONDecoder().decode(ResumeState.self, from: data),
+              !state.frontier.isEmpty,
+              state.deep == deep,
+              state.hasFailures != true
         else { return nil }
-        guard Date().timeIntervalSince1970 - savedAt < resumeMaxAge else { return nil }
-        return ResumeState(scanID: scanID, frontier: frontier)
+        let age = Date().timeIntervalSince1970 - state.startedAt
+        guard age >= 0, age < resumeMaxAge else { return nil }
+        return state
     }
 
     private static func saveResumeState(
         store: ShareCatalogStore,
         scanID: Int64,
         frontier: [FrontierEntry],
-        scanGeneration: UUID?
+        scanGeneration: UUID?,
+        deep: Bool,
+        startedAt: TimeInterval,
+        hasFailures: Bool
     ) async {
         guard let scanGeneration,
               let checkpoint = resumeCheckpoint(
                   scanID: scanID,
                   frontier: frontier,
-                  scanGeneration: scanGeneration
+                  scanGeneration: scanGeneration,
+                  deep: deep,
+                  startedAt: startedAt,
+                  hasFailures: hasFailures
               )
         else {
-            // Nothing left to do, or the frontier can't be encoded: drop any stale
-            // state rather than leaving a resume pointing at the wrong work.
             await clearResumeState(store: store, scanGeneration: scanGeneration)
             return
         }
+        // One atomic value prevents a process death from pairing a new scan id
+        // with an old frontier. A failure-bearing checkpoint deliberately replaces
+        // any older clean checkpoint; `loadResumeState` rejects it and restarts at
+        // the root, so a failed subtree cannot disappear from coverage.
         await store.setMeta(
-            resumeScanIDKey,
-            String(checkpoint.scanID),
-            scanGeneration: checkpoint.scanGeneration
-        )
-        await store.setMeta(
-            resumeFrontierKey,
-            checkpoint.frontierJSON,
-            scanGeneration: checkpoint.scanGeneration
-        )
-        await store.setMeta(
-            resumeSavedAtKey,
-            String(checkpoint.savedAt),
-            scanGeneration: checkpoint.scanGeneration
+            resumeCheckpointKey,
+            checkpoint.resumeStateJSON ?? "",
+            scanGeneration: scanGeneration
         )
     }
 
@@ -1230,25 +1370,42 @@ actor ShareScanner {
         resumeCheckpoint(
             scanID: state.scanID,
             frontier: state.frontier,
-            scanGeneration: state.scanGeneration
+            scanGeneration: state.scanGeneration,
+            deep: state.deep,
+            startedAt: state.startedAt,
+            hasFailures: state.hasFailures
         )
     }
 
     private static func resumeCheckpoint(
         scanID: Int64,
         frontier: [FrontierEntry],
-        scanGeneration: UUID
+        scanGeneration: UUID,
+        deep: Bool,
+        startedAt: TimeInterval,
+        hasFailures: Bool
     ) -> ShareScanResumeCheckpoint? {
         guard !frontier.isEmpty,
-              let data = try? JSONEncoder().encode(frontier),
-              let json = String(data: data, encoding: .utf8) else {
+              let frontierData = try? JSONEncoder().encode(frontier),
+              let frontierJSON = String(data: frontierData, encoding: .utf8),
+              let stateData = try? JSONEncoder().encode(
+                  ResumeState(
+                      scanID: scanID,
+                      frontier: frontier,
+                      deep: deep,
+                      startedAt: startedAt,
+                      hasFailures: hasFailures
+                  )
+              ),
+              let resumeStateJSON = String(data: stateData, encoding: .utf8) else {
             return nil
         }
         return ShareScanResumeCheckpoint(
             scanGeneration: scanGeneration,
             scanID: scanID,
-            frontierJSON: json,
-            savedAt: Date().timeIntervalSince1970
+            frontierJSON: frontierJSON,
+            savedAt: startedAt,
+            resumeStateJSON: resumeStateJSON
         )
     }
 
@@ -1263,7 +1420,7 @@ actor ShareScanner {
     }
 
     private static func clearResumeState(store: ShareCatalogStore, scanGeneration: UUID?) async {
-        for key in [resumeScanIDKey, resumeFrontierKey, resumeSavedAtKey] {
+        for key in [resumeCheckpointKey, "resume_scan_id", "resume_frontier", "resume_saved_at"] {
             await store.setMeta(key, "", scanGeneration: scanGeneration)
         }
     }
@@ -1276,9 +1433,27 @@ actor ShareScanner {
     // MARK: - Parse one file into a catalog asset
 
     static func asset(relPath: String, entry: RemoteFileEntry) -> CatalogAsset {
+        asset(
+            relPath: relPath,
+            entry: entry,
+            libraryConfiguration: nil
+        )!
+    }
+
+    static func asset(
+        relPath: String,
+        entry: RemoteFileEntry,
+        libraryConfiguration: MediaShareLibraryConfiguration?
+    ) -> CatalogAsset? {
         let name = entry.name
         let explicitIDs = ShareMediaParser.embeddedProviderIDs(relPath: relPath)
-        switch ShareMediaParser.classify(relPath: relPath) {
+        guard let classification = ShareMediaParser.classify(
+            relPath: relPath,
+            configuration: libraryConfiguration
+        ) else {
+            return nil
+        }
+        switch classification {
         case .movie(let movie):
             let title = movie.title.isEmpty ? displayTitle(forFileName: name) : movie.title
             let g = ShareMediaParser.movieGrouping(relPath: relPath, parsedTitle: title, parsedYear: movie.year)
@@ -1297,7 +1472,10 @@ actor ShareScanner {
                 explicitProviderIDs: explicitIDs, metadataRoot: nil
             )
         case .episode(let ep):
-            let library: CatalogLibrary = isAnimePath(relPath) ? .anime : .tv
+            let anime = libraryConfiguration?.contentType == .tvShows
+                ? libraryConfiguration?.isAnime == true
+                : libraryConfiguration?.isAnime == true || isAnimePath(relPath)
+            let library: CatalogLibrary = anime ? .anime : .tv
             let fallback = "S\(ep.season)·E\(String(format: "%02d", ep.episode))"
             return CatalogAsset(
                 relPath: relPath, basename: name, size: entry.size ?? 0,
@@ -1307,7 +1485,11 @@ actor ShareScanner {
                 seriesKey: ShareCatalogID.seriesKey(fromTitle: ep.series, providerTag: ep.providerTag),
                 season: ep.season, episode: ep.episode,
                 movieKey: nil, movieTitleKey: nil,
-                explicitProviderIDs: explicitIDs, metadataRoot: seriesMetadataRoot(relPath: relPath)
+                explicitProviderIDs: explicitIDs,
+                metadataRoot: seriesMetadataRoot(
+                    relPath: relPath,
+                    libraryConfiguration: libraryConfiguration
+                )
             )
         }
     }
@@ -1317,13 +1499,25 @@ actor ShareScanner {
     /// names the series) — where a `tvshow.nfo` sidecar would live. `nil` when the
     /// folder tree doesn't prove a show folder (mirrors `authoritativeShowFolder`,
     /// so this stays consistent with which folder GROUPING already trusts).
-    static func seriesMetadataRoot(relPath: String) -> String? {
+    static func seriesMetadataRoot(
+        relPath: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
+    ) -> String? {
         let comps = relPath.split(separator: "/").map(String.init)
         guard comps.count > 1 else { return nil }
         let ancestors = Array(comps.dropLast())
-        guard let showFolder = ShareMediaParser.authoritativeShowFolder(fromAncestors: ancestors),
-              let idx = ancestors.lastIndex(of: showFolder) else { return nil }
-        return ancestors[0...idx].joined(separator: "/")
+        if let showFolder = ShareMediaParser.authoritativeShowFolder(fromAncestors: ancestors),
+           let idx = ancestors.lastIndex(of: showFolder) {
+            return ancestors[0...idx].joined(separator: "/")
+        }
+        guard libraryConfiguration?.contentType == .tvShows
+                || (libraryConfiguration?.contentType == .automatic
+                    && libraryConfiguration?.isAnime == true),
+              let first = ancestors.first,
+              !ShareMediaParser.isSeasonFolder(first) else {
+            return nil
+        }
+        return first
     }
 
     // MARK: - Heuristics
@@ -1341,6 +1535,14 @@ actor ShareScanner {
     static func isSampleFile(_ name: String) -> Bool {
         let stem = (name as NSString).deletingPathExtension.lowercased()
         return stem == "sample" || stem.hasSuffix("-sample") || stem.hasSuffix(".sample") || stem.hasSuffix(" sample")
+    }
+
+    private var classificationFingerprint: String {
+        guard let libraryConfiguration else { return "legacy" }
+        return [
+            libraryConfiguration.contentType.rawValue,
+            libraryConfiguration.isAnime ? "anime" : "standard",
+        ].joined(separator: ":")
     }
 
     private static func displayTitle(forFileName name: String) -> String {

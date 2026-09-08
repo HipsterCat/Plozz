@@ -254,6 +254,46 @@ final class UnifiedAddShareModelTests: XCTestCase {
         XCTAssertEqual(config.displayName, "Movies")
     }
 
+    func testChosenFolderCarriesExplicitLibraryConfiguration() async {
+        let model = UnifiedAddShareModel(
+            nfsProbe: StubNFSProbe(
+                exports: .success([
+                    NFSDirectoryItem(name: "/volume1/Anime", path: "/volume1/Anime"),
+                ])
+            )
+        )
+        var result: MediaShareOnboardingResult?
+        model.onMediaShareConfigured = { result = $0 }
+        model.openManualConnect()
+        model.applyTransport(.nfs)
+        model.address = "nas.local"
+        model.connect()
+        for _ in 0..<50 {
+            if model.locationLoad == .loaded { break }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        model.chooseNFSExport("/volume1/Anime")
+        for _ in 0..<50 {
+            if model.currentPath == "/volume1/Anime" { break }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        model.displayName = "Anime Films"
+        model.libraryContentType = .movies
+        model.chooseFilesystemRoot()
+
+        guard case let .nfs(configuration) = result else {
+            return XCTFail("expected NFS result")
+        }
+        XCTAssertEqual(
+            configuration.libraryConfiguration,
+            MediaShareLibraryConfiguration(
+                name: "Anime Films",
+                contentType: .movies,
+                isAnime: true
+            )
+        )
+    }
+
     func testNFSExportCanDrillIntoNestedFolderWithoutChangingMountRoot() async {
         let probe = StubNFSProbe(
             exports: .success([

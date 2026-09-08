@@ -1,5 +1,6 @@
 import Foundation
 import AppRuntime
+import CoreModels
 import FeatureAuthCore
 
 // Completed add-a-share configurations handed back from the unified onboarding
@@ -15,6 +16,7 @@ public struct ShareDraft: Equatable {
     public var username: String
     public var password: String
     public var displayName: String
+    public var libraryConfiguration: MediaShareLibraryConfiguration?
 
     public init(
         host: String,
@@ -23,7 +25,8 @@ public struct ShareDraft: Equatable {
         username: String,
         password: String,
         displayName: String,
-        subpath: String = ""
+        subpath: String = "",
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) {
         self.host = host
         self.port = port
@@ -32,6 +35,7 @@ public struct ShareDraft: Equatable {
         self.username = username
         self.password = password
         self.displayName = displayName
+        self.libraryConfiguration = libraryConfiguration
     }
 }
 
@@ -41,16 +45,19 @@ public struct WebDAVShareConfiguration: Equatable {
     public let auth: MediaShareWebDAVAuth
     public let trustPin: SHA256Fingerprint?
     public let displayName: String
+    public let libraryConfiguration: MediaShareLibraryConfiguration?
 
     public init(
         baseURL: URL,
         auth: MediaShareWebDAVAuth,
         trustPin: SHA256Fingerprint?,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) {
         self.baseURL = baseURL
         self.auth = auth
         self.trustPin = trustPin
         self.displayName = displayName
+        self.libraryConfiguration = libraryConfiguration
     }
 }

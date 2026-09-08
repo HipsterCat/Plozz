@@ -55,6 +55,7 @@ export GIT_CONFIG_PARAMETERS="${GIT_CONFIG_PARAMETERS-'safe.bareRepository=all'}
 source tools/lib/apple-build-lease.sh
 acquire_apple_build_shared_lease "plozz/run-tests"
 install_apple_build_lease_traps
+source tools/lib/swift-package-storage.sh
 
 PARALLEL="${PLOZZ_PARALLEL:-NO}"
 
@@ -89,6 +90,8 @@ fi
 #      PLOZZ_HANG_SECS, the xcodebuild process tree is killed, this worktree's
 #      DerivedData is cleared, and the invocation is retried ONCE from clean.
 PLOZZ_DERIVED_DATA="${PLOZZ_DERIVED_DATA:-$PWD/.build/test-derived-data}"
+PLOZZ_CLONED_SOURCE_PACKAGES="${PLOZZ_CLONED_SOURCE_PACKAGES:-$PLOZZ_DERIVED_DATA/SourcePackages}"
+configure_plozz_package_resolution "$PLOZZ_CLONED_SOURCE_PACKAGES"
 PLOZZ_HANG_SECS="${PLOZZ_HANG_SECS:-180}"
 # How long to let xcodebuild wind down AFTER every test bundle has reported its
 # result. Past that point the run is logically over and everything else is
@@ -180,7 +183,7 @@ echo "Using tvOS Simulator: $PLOZZ_SIM_ID"
 
 # --- Scheme resolution + self-heal -------------------------------------------
 list_schemes() {
-  xcodebuild -list -json 2>/dev/null | python3 -c '
+  xcodebuild "${PACKAGE_RESOLUTION_ARGS[@]}" -list -json 2>/dev/null | python3 -c '
 import json,sys
 try:
     d=json.load(sys.stdin)
@@ -348,6 +351,7 @@ _xcb_once() {
     -destination "platform=tvOS Simulator,id=$PLOZZ_SIM_ID" \
     -parallel-testing-enabled "$PARALLEL" \
     -derivedDataPath "$PLOZZ_DERIVED_DATA" \
+    "${PACKAGE_RESOLUTION_ARGS[@]}" \
     "${LEAN_SETTINGS[@]}" \
     CODE_SIGNING_ALLOWED=NO > "$log" 2>&1 &
   local xcb_pid=$!

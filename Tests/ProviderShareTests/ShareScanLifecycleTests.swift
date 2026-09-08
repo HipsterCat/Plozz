@@ -253,6 +253,83 @@ final class ShareScanLifecycleTests: XCTestCase {
 
     // MARK: - A5: completion gating and owner attribution
 
+    func testReopenedFreshCatalogKeepsOriginalCompletionDeadline() async throws {
+        let accountID = "fresh-deadline-\(UUID().uuidString)"
+        let revision = CredentialRevision()
+        let diagnostics = ScanDiagnosticsSpy()
+        let controller = LifecycleListController(blocksRoot: false)
+        let factory = makeSessionFactory(accountID: accountID, revision: revision, controller: controller)
+        let original = makeCoordinator(diagnostics: diagnostics)
+        let store = await original.store(
+            accountKey: accountID, displayName: "NAS",
+            credentialRevision: revision, sessionFactory: factory
+        )
+        let completed = await poll { await original.backgroundScanCompletedAt(accountID) != nil }
+        XCTAssertTrue(completed)
+        await original.invalidate(accountKey: accountID)
+        let lastScan = Date().addingTimeInterval(-170)
+        await store.setMeta("last_full_scan_at", String(lastScan.timeIntervalSince1970))
+        let reopened = makeCoordinator(diagnostics: diagnostics)
+        _ = await reopened.store(
+            accountKey: accountID, displayName: "NAS",
+            credentialRevision: revision, sessionFactory: factory
+        )
+        let coalesced = await poll { await reopened.backgroundScanCompletedAt(accountID) != nil }
+        XCTAssertTrue(coalesced)
+        let completion = await reopened.backgroundScanCompletedAt(accountID)
+        XCTAssertEqual(try XCTUnwrap(completion).timeIntervalSince1970,
+                       lastScan.timeIntervalSince1970, accuracy: 0.001,
+                       "a no-op must not buy another three minutes from the current time")
+        XCTAssertEqual(controller.rootLists, 1)
+        await reopened.invalidate(accountKey: accountID)
+    }
+
+    func testConcurrentCatalogAccessDoesNotSupersedeItsOwnScanAdmission() async throws {
+        let accountID = "admission-burst-\(UUID().uuidString)"
+        let revision = CredentialRevision()
+        let diagnostics = ScanDiagnosticsSpy()
+        let controller = LifecycleListController(blocksRoot: true)
+        let factory = makeSessionFactory(accountID: accountID, revision: revision, controller: controller)
+        let coordinator = makeCoordinator(diagnostics: diagnostics)
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<32 {
+                group.addTask {
+                    _ = await coordinator.store(
+                        accountKey: accountID, displayName: "NAS",
+                        credentialRevision: revision, sessionFactory: factory
+                    )
+                }
+            }
+        }
+        await controller.waitUntilListing()
+        XCTAssertEqual(controller.rootLists, 1)
+        XCTAssertTrue(diagnostics.records.isEmpty,
+                      "passive reads must not cancel competing admissions for the same scan")
+        await coordinator.invalidate(accountKey: accountID)
+    }
+
+    func testPersonalVideoConfigurationCompletesWithoutListingOrMetadataPipeline() async throws {
+        let accountID = "personal-scan-\(UUID().uuidString)"
+        let revision = CredentialRevision()
+        let diagnostics = ScanDiagnosticsSpy()
+        let controller = LifecycleListController(blocksRoot: false)
+        let pipeline = PipelineFactorySpy(resolver: MetadataResolverSpy())
+        let coordinator = ShareCatalogCoordinator(diagnostics: diagnostics, pipelineFactory: pipeline)
+        let store = await coordinator.store(
+            accountKey: accountID, displayName: "Videos",
+            credentialRevision: revision,
+            libraryConfiguration: MediaShareLibraryConfiguration(name: "Videos", contentType: .personalVideos),
+            sessionFactory: makeSessionFactory(accountID: accountID, revision: revision, controller: controller)
+        )
+        let completed = await poll { await coordinator.backgroundScanCompletedAt(accountID) != nil }
+        XCTAssertTrue(completed, "live-only configuration maintenance must not remain pending forever")
+        let configuration = await store.meta("library_configuration")
+        XCTAssertEqual(configuration, "personalVideos:standard")
+        XCTAssertEqual(controller.rootLists, 0)
+        XCTAssertEqual(pipeline.makeCount, 0)
+        await coordinator.invalidate(accountKey: accountID)
+    }
+
     /// A clean pass stamps completion, and a subsequent access within the coalesce
     /// window spawns no additional walk (fresh no-op). No non-completion record.
     func testCleanScanStampsCompletionAndCoalesces() async throws {
@@ -533,11 +610,16 @@ final class ShareScanLifecycleTests: XCTestCase {
         )
         let checkpointScanID = await store.meta("resume_scan_id")
         let checkpointFrontier = await store.meta("resume_frontier")
+        let checkpointState = await store.meta("resume_checkpoint")
         XCTAssertNotNil(
             checkpointScanID,
             "foreground resume must flush the scanner-owned checkpoint first"
         )
         XCTAssertFalse(checkpointFrontier?.isEmpty ?? true)
+        XCTAssertFalse(
+            checkpointState?.isEmpty ?? true,
+            "suspension handoff must preserve the atomic depth/failure-aware checkpoint"
+        )
         let listsBeforeDrain = controller.rootLists
         try? await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertEqual(

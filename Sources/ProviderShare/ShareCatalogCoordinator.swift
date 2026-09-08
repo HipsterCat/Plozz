@@ -12,6 +12,7 @@ public protocol ShareCatalogCoordinating: Sendable {
         accountKey: String,
         displayName: String,
         credentialRevision: CredentialRevision,
+        libraryConfiguration: MediaShareLibraryConfiguration?,
         sessionFactory: @escaping ShareTransportSessionFactory
     ) async -> any ShareCatalogReading
     func rescan(accountKey: String) async
@@ -579,12 +580,14 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         accountKey: String,
         displayName: String,
         credentialRevision: CredentialRevision,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil,
         sessionFactory: @escaping ShareTransportSessionFactory
     ) async -> any ShareCatalogReading {
         await store(
             accountKey: accountKey,
             displayName: displayName,
             credentialRevision: credentialRevision,
+            libraryConfiguration: libraryConfiguration,
             sessionFactory: sessionFactory
         )
     }
@@ -597,6 +600,7 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         accountKey: String,
         displayName: String,
         credentialRevision: CredentialRevision,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil,
         sessionFactory: @escaping ShareTransportSessionFactory
     ) async -> ShareCatalogStore {
         while true {
@@ -667,6 +671,32 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
                 accountID: accountKey,
                 credentialRevision: credentialRevision
             )
+            await runtime.scanner?.setName(displayName)
+
+            if let scanner = runtime.scanner,
+               (
+                   scanner.libraryConfiguration?.contentType
+                       != libraryConfiguration?.contentType
+                       || scanner.libraryConfiguration?.isAnime
+                       != libraryConfiguration?.isAnime
+               ) {
+                if libraryConfiguration?.contentType == .personalVideos {
+                    let staleLocalEnricher = runtime.localEnricher
+                    let staleArtworkProbeWorker = runtime.artworkProbeWorker
+                    runtime.localEnricher = nil
+                    runtime.artworkProbeWorker = nil
+                    runtime.enricher = nil
+                    await metadataScheduler.remove(accountKey: accountKey)
+                    await staleLocalEnricher?.close()
+                    await staleArtworkProbeWorker?.close()
+                }
+                await invalidateScanner(
+                    accountKey: accountKey,
+                    runtime: runtime,
+                    releaseRuntimeState: false
+                )
+                continue
+            }
 
             if let activeRevision = runtime.scannerRevision,
                activeRevision != credentialRevision {
@@ -717,7 +747,9 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
                 }
                 runtime.scanner = ShareScanner(
                     store: store, shareID: accountKey, name: displayName,
-                    reporter: reporter, pacer: runtime.pacer, makeLister: makeLister
+                    reporter: reporter, pacer: runtime.pacer,
+                    libraryConfiguration: libraryConfiguration,
+                    makeLister: makeLister
                 )
                 runtime.scannerID = UUID()
                 runtime.scannerRevision = credentialRevision
@@ -726,7 +758,8 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
                     revision: backgroundWorkRevision
                 )
             }
-            if runtime.enricher == nil {
+            if runtime.enricher == nil,
+               libraryConfiguration?.contentType != .personalVideos {
                 // Pipeline construction is injected for deterministic lifecycle tests.
                 // The production factory preserves the existing TVDB-when-configured,
                 // keyless-otherwise selection and builds both workers.
@@ -822,8 +855,14 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
             markScanPendingForeground(accountKey, force: true)
             return
         }
-        while let invalidationTask = runtimes[accountKey]?.invalidationTask {
-            await invalidationTask.value
+        while true {
+            if let invalidationTask = runtimes[accountKey]?.invalidationTask {
+                await invalidationTask.value
+            } else if let admission = runtimes[accountKey]?.scanAdmission {
+                await admission.wait()
+            } else {
+                break
+            }
         }
         guard let runtime = runtimes[accountKey],
               let scanner = runtime.scanner,
@@ -1073,6 +1112,8 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         }
         guard
               !runtime.hasActiveScanTasks,
+              runtime.scanAdmission == nil,
+              runtime.isActive,
               !runtime.restarting,
               let scanner = runtime.scanner else { return }
         // The developer override opens this gate too. Both gates have to yield or
@@ -1116,11 +1157,20 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         scanner: ShareScanner,
         force: Bool
     ) async {
-        guard backgroundWorkAllowed, runtime.enricher != nil else {
+        guard backgroundWorkAllowed else {
             markScanPendingForeground(accountKey, force: force)
             return
         }
+        guard runtime.isActive, runtime.scanner === scanner,
+              runtime.scanAdmission == nil else { return }
+        let admission = ShareScanStartGate()
+        runtime.scanAdmission = admission
+        defer {
+            runtime.scanAdmission = nil
+            Task { await admission.open() }
+        }
         let store = runtime.store
+        let shouldEnrich = runtime.enricher != nil
         // Capture the scanner/credential generation this walk is bound to, so
         // completion is only stamped if the SAME generation is still current when the
         // walk returns (a superseded scanner/credential must not stamp its replacement).
@@ -1128,7 +1178,19 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         let credentialRevision = runtime.scannerRevision
         let lifecycleRevision = backgroundWorkRevision
         let scanGeneration = UUID()
-        await metadataScheduler.suspend(accountKey: accountKey)
+        if shouldEnrich { await metadataScheduler.suspend(accountKey: accountKey) }
+        guard backgroundWorkAllowed,
+              lifecycleRevision == backgroundWorkRevision,
+              runtime.isActive,
+              runtime.scanner === scanner,
+              runtime.scannerID == scannerID,
+              runtime.scannerRevision == credentialRevision else {
+            if shouldEnrich { await metadataScheduler.resume(accountKey: accountKey) }
+            if !backgroundWorkAllowed || lifecycleRevision != backgroundWorkRevision {
+                markScanPendingForeground(accountKey, force: force)
+            }
+            return
+        }
         let resource = ShareScannerResource(
             scanner: scanner,
             store: store,
@@ -1139,13 +1201,19 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         do {
             scannerLease = try await runtime.arbiter.acquireScanner(resource: resource)
         } catch {
-            await metadataScheduler.resume(accountKey: accountKey)
+            if shouldEnrich { await metadataScheduler.resume(accountKey: accountKey) }
             return
         }
-        await metadataScheduler.resume(accountKey: accountKey)
+        if shouldEnrich { await metadataScheduler.resume(accountKey: accountKey) }
         guard backgroundWorkAllowed,
-              lifecycleRevision == backgroundWorkRevision else {
-            markScanPendingForeground(accountKey, force: force)
+              lifecycleRevision == backgroundWorkRevision,
+              runtime.isActive,
+              runtime.scanner === scanner,
+              runtime.scannerID == scannerID,
+              runtime.scannerRevision == credentialRevision else {
+            if !backgroundWorkAllowed || lifecycleRevision != backgroundWorkRevision {
+                markScanPendingForeground(accountKey, force: force)
+            }
             resource.markDrained()
             await scannerLease.finishAndWait()
             if backgroundWorkAllowed {
@@ -1185,8 +1253,16 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
             BrowseDiagnostics.event("scan- \(accountKey)")
             resource.markDrained()
             await scannerLease.finishAndWait()
-            if !Task.isCancelled {
+            if shouldEnrich, !Task.isCancelled {
                 await self?.metadataScheduler.enqueueBacklog(accountKey: accountKey)
+            }
+            let completedAt: Date?
+            if outcome.earnsCompletionStamp,
+               let stamp = await store.meta("last_full_scan_at"),
+               let seconds = TimeInterval(stamp) {
+                completedAt = Date(timeIntervalSince1970: seconds)
+            } else {
+                completedAt = nil
             }
             // Record scan completion so `ensureScanning` coalesces the frequent
             // per-render re-triggers into at most one cycle per window — but ONLY when
@@ -1201,7 +1277,8 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
                 scannerID: scannerID,
                 credentialRevision: credentialRevision,
                 outcome: outcome,
-                taskCancelled: Task.isCancelled
+                taskCancelled: Task.isCancelled,
+                completedAt: completedAt
             )
             await self?.clearScanTask(accountKey, taskID: taskID)
         }
@@ -1237,7 +1314,8 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         scannerID: UUID?,
         credentialRevision: CredentialRevision?,
         outcome: ShareScanOutcome,
-        taskCancelled: Bool
+        taskCancelled: Bool,
+        completedAt: Date? = nil
     ) {
         // The runtime is present here on every real path: a full invalidation awaits
         // each scan task (which calls this) before removing the runtime, and a
@@ -1250,7 +1328,9 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
             credentialRevision: credentialRevision
         )
         if outcome.earnsCompletionStamp && !taskCancelled && generationCurrent {
-            runtime.lastBackgroundScanCompletedAt = Date()
+            // A reopened catalog can return a no-op just before its durable
+            // deadline. Preserve that deadline instead of restarting the timer.
+            runtime.lastBackgroundScanCompletedAt = completedAt
             return
         }
         let owner = cancellationOwner(
@@ -1398,7 +1478,7 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
 }
 
 
-private actor ShareScanStartGate {
+actor ShareScanStartGate {
     private var isOpen = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 

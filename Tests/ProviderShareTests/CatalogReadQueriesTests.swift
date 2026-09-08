@@ -32,14 +32,22 @@ final class CatalogReadQueriesTests: XCTestCase {
         )
     }
 
-    private func seedMovie(_ conn: CatalogConnection, relPath: String, title: String, firstSeen: Double = 1, movieKey: String? = nil) {
+    private func seedMovie(
+        _ conn: CatalogConnection,
+        relPath: String,
+        title: String,
+        firstSeen: Double = 1,
+        year: Int? = 2020,
+        movieKey: String? = nil
+    ) {
         let key = movieKey ?? title.lowercased()
+        let yearSQL = year.map(String.init) ?? "NULL"
         XCTAssertTrue(conn.exec("""
             INSERT INTO assets(
               rel_path, basename, size, modified_at, first_seen_at, last_scan,
               kind, library, title, sort_title, year, movie_key)
             VALUES('\(relPath)', 'base', 10, 0, \(firstSeen), 1,
-              'movie', 'movies', '\(title)', '\(title.lowercased())', 2020, '\(key)');
+              'movie', 'movies', '\(title)', '\(title.lowercased())', \(yearSQL), '\(key)');
             """))
     }
 
@@ -51,6 +59,50 @@ final class CatalogReadQueriesTests: XCTestCase {
             VALUES('\(relPath)', 'base', 10, 0, \(firstSeen), 1,
               'episode', 'tv', 'Ep \(episode)', 'ep \(episode)', '\(seriesTitle)',
               '\(seriesKey)', \(season), \(episode));
+            """))
+    }
+
+    private func seedSeries(
+        _ conn: CatalogConnection,
+        key: String,
+        title: String,
+        firstSeen: Double,
+        year: Int?
+    ) {
+        let yearSQL = year.map(String.init) ?? "NULL"
+        XCTAssertTrue(conn.exec("""
+            INSERT INTO assets(
+              rel_path, basename, size, modified_at, first_seen_at, last_scan,
+              kind, library, title, sort_title, year, series_title, series_key, season, episode)
+            VALUES('TV/\(key)/S01E01.mkv', 'base', 10, 0, \(firstSeen), 1,
+              'episode', 'tv', 'Episode 1', 'episode 1', \(yearSQL), '\(title)',
+              '\(key)', 1, 1);
+            """))
+    }
+
+    private func seedLocalField(
+        _ conn: CatalogConnection,
+        itemID: String,
+        field: MetadataField,
+        valueJSON: String
+    ) {
+        let escapedID = itemID.replacingOccurrences(of: "'", with: "''")
+        let escapedValue = valueJSON.replacingOccurrences(of: "'", with: "''")
+        XCTAssertTrue(conn.exec("""
+            INSERT INTO metadata_values(item_id, field, source, value_json)
+            VALUES('\(escapedID)', '\(field.rawValue)', 'localNFO', '\(escapedValue)');
+            """))
+    }
+
+    private func seedEnrichmentRuntime(
+        _ conn: CatalogConnection,
+        itemID: String,
+        runtime: TimeInterval
+    ) {
+        let escapedID = itemID.replacingOccurrences(of: "'", with: "''")
+        XCTAssertTrue(conn.exec("""
+            INSERT INTO enrichment(item_id, runtime, enriched_at, enrich_version)
+            VALUES('\(escapedID)', \(runtime), 1, 1);
             """))
     }
 
@@ -201,6 +253,163 @@ final class CatalogReadQueriesTests: XCTestCase {
         XCTAssertEqual(seasons.count, 1)
         let eps = q.episodes(seriesKey: "show", season: 1)
         XCTAssertEqual(eps.count, 2)
+    }
+
+    func testMovieGridHonorsEverySortWithStablePaging() {
+        let (conn, _) = openConnection()
+        seedMovie(conn, relPath: "Movies/Alpha.mkv", title: "Alpha", firstSeen: 30, year: 2001)
+        seedMovie(conn, relPath: "Movies/Beta.mkv", title: "Beta", firstSeen: 10, year: 2003)
+        seedMovie(conn, relPath: "Movies/Gamma.mkv", title: "Gamma", firstSeen: 20, year: 2002)
+        seedMovie(conn, relPath: "Movies/Delta.mkv", title: "Delta", firstSeen: 40, year: nil)
+
+        let alpha = ShareCatalogID.file("Movies/Alpha.mkv")
+        let beta = ShareCatalogID.file("Movies/Beta.mkv")
+        let gamma = ShareCatalogID.file("Movies/Gamma.mkv")
+        seedLocalField(conn, itemID: alpha, field: .sortTitle, valueJSON: #""zulu""#)
+        seedLocalField(conn, itemID: alpha, field: .premiereDate, valueJSON: #""2010-01-01""#)
+        seedLocalField(conn, itemID: alpha, field: .runtime, valueJSON: "100")
+        seedEnrichmentRuntime(conn, itemID: beta, runtime: 300)
+        seedLocalField(conn, itemID: gamma, field: .runtime, valueJSON: "200")
+        seedLocalField(conn, itemID: alpha, field: .ratings, valueJSON: ratingsJSON(8))
+        seedLocalField(conn, itemID: beta, field: .ratings, valueJSON: ratingsJSON(6))
+        seedLocalField(conn, itemID: gamma, field: .ratings, valueJSON: ratingsJSON(9))
+
+        let queries = makeQueries(conn)
+        XCTAssertEqual(
+            movieTitles(queries, field: .name, direction: .ascending),
+            ["Beta", "Delta", "Gamma", "Alpha"]
+        )
+        XCTAssertEqual(
+            movieTitles(queries, field: .name, direction: .descending),
+            ["Alpha", "Gamma", "Delta", "Beta"]
+        )
+        XCTAssertEqual(
+            movieTitles(queries, field: .dateAdded, direction: .descending),
+            ["Delta", "Alpha", "Gamma", "Beta"]
+        )
+        XCTAssertEqual(
+            movieTitles(queries, field: .dateAdded, direction: .ascending),
+            ["Beta", "Gamma", "Alpha", "Delta"]
+        )
+        XCTAssertEqual(
+            movieTitles(queries, field: .releaseDate, direction: .descending),
+            ["Alpha", "Beta", "Gamma", "Delta"]
+        )
+        XCTAssertEqual(
+            movieTitles(queries, field: .releaseDate, direction: .ascending),
+            ["Gamma", "Beta", "Alpha", "Delta"]
+        )
+        XCTAssertEqual(
+            movieTitles(queries, field: .communityRating, direction: .descending),
+            ["Gamma", "Alpha", "Beta", "Delta"]
+        )
+        XCTAssertEqual(
+            movieTitles(queries, field: .communityRating, direction: .ascending),
+            ["Beta", "Alpha", "Gamma", "Delta"]
+        )
+        XCTAssertEqual(
+            movieTitles(queries, field: .runtime, direction: .descending),
+            ["Beta", "Gamma", "Alpha", "Delta"]
+        )
+        XCTAssertEqual(
+            movieTitles(queries, field: .runtime, direction: .ascending),
+            ["Alpha", "Gamma", "Beta", "Delta"]
+        )
+        XCTAssertEqual(
+            queries.movies(offset: 0, limit: 20).map(\.id),
+            queries.movies(offset: 0, limit: 20, sort: .default).map(\.id)
+        )
+
+        let random = CoreModels.SortDescriptor(field: .random, direction: .descending)
+        let first = queries.movies(offset: 0, limit: 20, sort: random).map(\.id)
+        let second = queries.movies(offset: 0, limit: 20, sort: random).map(\.id)
+        let paged = stride(from: 0, to: 4, by: 2).flatMap {
+            queries.movies(offset: $0, limit: 2, sort: random).map(\.id)
+        }
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(paged, first)
+        XCTAssertEqual(Set(first).count, 4)
+    }
+
+    func testSeriesGridHonorsStoredSortFields() {
+        let (conn, _) = openConnection()
+        seedSeries(conn, key: "alpha", title: "Alpha", firstSeen: 30, year: 2001)
+        seedSeries(conn, key: "beta", title: "Beta", firstSeen: 10, year: 2003)
+        seedSeries(conn, key: "gamma", title: "Gamma", firstSeen: 20, year: 2002)
+        seedSeries(conn, key: "delta", title: "Delta", firstSeen: 40, year: nil)
+
+        let alpha = ShareCatalogID.series("alpha")
+        let beta = ShareCatalogID.series("beta")
+        let gamma = ShareCatalogID.series("gamma")
+        seedLocalField(conn, itemID: alpha, field: .sortTitle, valueJSON: #""zulu""#)
+        seedLocalField(conn, itemID: alpha, field: .premiereDate, valueJSON: #""2010-01-01""#)
+        seedLocalField(conn, itemID: alpha, field: .runtime, valueJSON: "100")
+        seedEnrichmentRuntime(conn, itemID: beta, runtime: 300)
+        seedLocalField(conn, itemID: gamma, field: .runtime, valueJSON: "200")
+        seedLocalField(conn, itemID: alpha, field: .ratings, valueJSON: ratingsJSON(8))
+        seedLocalField(conn, itemID: beta, field: .ratings, valueJSON: ratingsJSON(6))
+        seedLocalField(conn, itemID: gamma, field: .ratings, valueJSON: ratingsJSON(9))
+
+        let queries = makeQueries(conn)
+        XCTAssertEqual(
+            seriesTitles(queries, field: .name, direction: .ascending),
+            ["Beta", "Delta", "Gamma", "Alpha"]
+        )
+        XCTAssertEqual(
+            seriesTitles(queries, field: .dateAdded, direction: .descending),
+            ["Delta", "Alpha", "Gamma", "Beta"]
+        )
+        XCTAssertEqual(
+            seriesTitles(queries, field: .releaseDate, direction: .descending),
+            ["Alpha", "Beta", "Gamma", "Delta"]
+        )
+        XCTAssertEqual(
+            seriesTitles(queries, field: .communityRating, direction: .descending),
+            ["Gamma", "Alpha", "Beta", "Delta"]
+        )
+        XCTAssertEqual(
+            seriesTitles(queries, field: .runtime, direction: .descending),
+            ["Beta", "Gamma", "Alpha", "Delta"]
+        )
+
+        let random = CoreModels.SortDescriptor(field: .random, direction: .ascending)
+        let full = queries.series(in: .tv, offset: 0, limit: 20, sort: random).map(\.id)
+        let paged = stride(from: 0, to: 4, by: 2).flatMap {
+            queries.series(in: .tv, offset: $0, limit: 2, sort: random).map(\.id)
+        }
+        XCTAssertEqual(paged, full)
+        XCTAssertEqual(Set(full).count, 4)
+    }
+
+    private func movieTitles(
+        _ queries: CatalogReadQueries,
+        field: SortField,
+        direction: SortDirection
+    ) -> [String] {
+        queries.movies(
+            offset: 0,
+            limit: 20,
+            sort: CoreModels.SortDescriptor(field: field, direction: direction)
+        ).map(\.title)
+    }
+
+    private func seriesTitles(
+        _ queries: CatalogReadQueries,
+        field: SortField,
+        direction: SortDirection
+    ) -> [String] {
+        queries.series(
+            in: .tv,
+            offset: 0,
+            limit: 20,
+            sort: CoreModels.SortDescriptor(field: field, direction: direction)
+        ).map(\.title)
+    }
+
+    private func ratingsJSON(_ value: Double) -> String {
+        """
+        [{"source":"imdb","value":\(value),"max":10,"votes":100,"isDefault":true}]
+        """
     }
 
     func testSearchAndLatest() {

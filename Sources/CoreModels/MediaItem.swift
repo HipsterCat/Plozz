@@ -137,6 +137,9 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// Stable Plozz identity used only for durable Watchlist presentation/focus.
     /// Provider addressing continues to use `id` and `sources`.
     public var watchlistAliasID: MediaAliasID?
+    /// Provider-owned folder route for inspecting this title's original files.
+    /// Addressed on `sourceAccountID`, independently of playback source selection.
+    public var fileBrowserContainerID: String?
     public var stablePresentationID: String {
         if let watchlistAliasID {
             return "watchlist:\(watchlistAliasID)"
@@ -160,6 +163,8 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     public var parentTitle: String?
     public var seasonNumber: Int?
     public var episodeNumber: Int?
+    /// Inclusive final episode when the server explicitly identifies a combined file.
+    public var episodeNumberEnd: Int?
     public var productionYear: Int?
 
     /// The day the title was first released — a movie's premiere or an episode's
@@ -252,6 +257,12 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// External database identifiers (e.g. `["Imdb": "tt0111161", "Tmdb": "278"]`),
     /// used by enrichment services to look up additional ratings/metadata.
     public var providerIDs: [String: String]
+    /// Whether metadata services may identify this item by a fuzzy title search.
+    ///
+    /// Exact provider-id lookups remain allowed. Direct-share folders and
+    /// Personal Videos disable title matching so a folder or home video cannot
+    /// silently acquire a similarly named film/show's artwork and metadata.
+    public var allowsTitleBasedMetadataMatching: Bool
     /// Field-level origin and optional attribution URL for metadata values.
     public var metadataProvenance: MetadataProvenance
     /// Presentation-aware artwork references. Direct-share local artwork lives here
@@ -420,10 +431,12 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         originalTitle: String? = nil,
         kind: MediaItemKind,
         watchlistAliasID: MediaAliasID? = nil,
+        fileBrowserContainerID: String? = nil,
         overview: String? = nil,
         parentTitle: String? = nil,
         seasonNumber: Int? = nil,
         episodeNumber: Int? = nil,
+        episodeNumberEnd: Int? = nil,
         productionYear: Int? = nil,
         releaseDate: Date? = nil,
         officialRating: String? = nil,
@@ -447,6 +460,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         logoURL: URL? = nil,
         ratings: [ExternalRating] = [],
         providerIDs: [String: String] = [:],
+        allowsTitleBasedMetadataMatching: Bool = true,
         metadataProvenance: MetadataProvenance = MetadataProvenance(),
         artworkSelections: [ArtworkSelection] = [],
         availability: MediaAvailabilityStatus? = nil,
@@ -474,6 +488,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.showsScheduledReleaseTime = showsScheduledReleaseTime
         self.id = id
         self.watchlistAliasID = watchlistAliasID
+        self.fileBrowserContainerID = fileBrowserContainerID
         self.title = title
         self.originalTitle = originalTitle
         self.kind = kind
@@ -481,6 +496,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.parentTitle = parentTitle
         self.seasonNumber = seasonNumber
         self.episodeNumber = episodeNumber
+        self.episodeNumberEnd = episodeNumberEnd
         self.productionYear = productionYear
         self.releaseDate = releaseDate
         self.officialRating = officialRating
@@ -504,6 +520,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.logoURL = logoURL
         self.ratings = ratings
         self.providerIDs = providerIDs
+        self.allowsTitleBasedMetadataMatching = allowsTitleBasedMetadataMatching
         self.metadataProvenance = metadataProvenance
         self.artworkSelections = artworkSelections
         self.availability = availability
@@ -539,12 +556,14 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// about the title. Listing the keys explicitly keeps `Encodable` synthesis
     /// in sync with the custom `init(from:)` below.
     private enum CodingKeys: String, CodingKey {
-        case id, watchlistAliasID, title, kind, overview, parentTitle, seasonNumber, episodeNumber
+        case id, watchlistAliasID, title, kind, overview, parentTitle, seasonNumber, episodeNumber, episodeNumberEnd
+        case fileBrowserContainerID
         case originalTitle
         case productionYear, releaseDate, officialRating, genres, people, studios, tags, taglines
         case seriesID, seasonID, runtime, resumePosition, playedPercentage, isPlayed, hasBeenPlayed
         case posterURL, seriesPosterURL, backdropURL, heroBackdropURL
         case fallbackArtworkURL, logoURL, ratings, providerIDs, metadataProvenance
+        case allowsTitleBasedMetadataMatching
         case artworkSelections, mediaInfo
         case availability, locallyValidatedPlayableSource
         case downloadProgress
@@ -564,6 +583,10 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
             MediaAliasID.self,
             forKey: .watchlistAliasID
         )
+        fileBrowserContainerID = try container.decodeIfPresent(
+            String.self,
+            forKey: .fileBrowserContainerID
+        )
         title = try container.decode(String.self, forKey: .title)
         originalTitle = try container.decodeIfPresent(String.self, forKey: .originalTitle)
         kind = try container.decode(MediaItemKind.self, forKey: .kind)
@@ -571,6 +594,7 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         parentTitle = try container.decodeIfPresent(String.self, forKey: .parentTitle)
         seasonNumber = try container.decodeIfPresent(Int.self, forKey: .seasonNumber)
         episodeNumber = try container.decodeIfPresent(Int.self, forKey: .episodeNumber)
+        episodeNumberEnd = try container.decodeIfPresent(Int.self, forKey: .episodeNumberEnd)
         productionYear = try container.decodeIfPresent(Int.self, forKey: .productionYear)
         releaseDate = try container.decodeIfPresent(Date.self, forKey: .releaseDate)
         officialRating = try container.decodeIfPresent(String.self, forKey: .officialRating)
@@ -594,6 +618,10 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         logoURL = try container.decodeIfPresent(URL.self, forKey: .logoURL)
         ratings = try container.decodeIfPresent([ExternalRating].self, forKey: .ratings) ?? []
         providerIDs = try container.decodeIfPresent([String: String].self, forKey: .providerIDs) ?? [:]
+        allowsTitleBasedMetadataMatching = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .allowsTitleBasedMetadataMatching
+        ) ?? true
         // Home snapshots written before anime title-search validation may carry
         // the same poisoned ids as the durable alias ledger. Repair both stores:
         // cleaning only the ledger still leaves an offline/first-frame card able
@@ -1162,13 +1190,14 @@ public struct MediaLibrary: Codable, Hashable, Identifiable, Sendable {
     /// something to persist. The enum stores which library it is; the wording
     /// stays in the catalog and is resolved at render time.
     public enum SynthesizedName: String, Codable, Hashable, Sendable {
-        case movies, tvShows, anime, generic
+        case movies, tvShows, anime, browseFiles, generic
 
         public var title: LocalizedStringResource {
             switch self {
             case .movies:  return "Movies"
             case .tvShows: return "TV Shows"
             case .anime:   return "Anime"
+            case .browseFiles: return "Browse Files"
             case .generic: return "Library"
             }
         }

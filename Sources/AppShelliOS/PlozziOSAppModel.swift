@@ -196,7 +196,8 @@ final class PlozziOSAppModel {
                 expected += 1
                 let server = MediaServer(id: desc.serverID, name: desc.serverName, baseURL: baseURL,
                                          provider: .mediaShare,
-                                         connectionURLs: desc.candidateBaseURLs.isEmpty ? nil : desc.candidateBaseURLs)
+                                         connectionURLs: desc.candidateBaseURLs.isEmpty ? nil : desc.candidateBaseURLs,
+                                         mediaShareLibraryConfiguration: desc.mediaShareLibraryConfiguration)
                 let account = Account(id: desc.id, server: server, userID: desc.userID, userName: desc.userName,
                                       avatarURL: desc.avatarURL, deviceID: accountStore.deviceID())
                 do {
@@ -762,6 +763,7 @@ final class PlozziOSAppModel {
         }
         prepareMediaAliasLedger()
         startCloudSyncIfEnabled()
+        observeApplicationScenes()
     }
 
     var accounts: [Account] {
@@ -793,7 +795,6 @@ final class PlozziOSAppModel {
         heroTrailerCache.removeAll()
         accountsProviders.reloadAccounts()
         applyCrashReportingPreference()
-        observeApplicationScenes()
     }
 
     func provider(for item: MediaItem) -> (any MediaProvider)? {
@@ -851,6 +852,7 @@ final class PlozziOSAppModel {
     }
 
     private func observeApplicationScenes() {
+        guard sceneNotificationTokens.isEmpty else { return }
         for name in [
             UIScene.didActivateNotification,
             UIScene.willDeactivateNotification,
@@ -2102,32 +2104,47 @@ final class PlozziOSAppModel {
         Task { await seerService.setActiveProfile(namespace: profiles.activeNamespace) }
     }
 
-    var activeSeerrUserID: Int? {
-        profiles.activeProfile.seerrUserID
+    var activeSeerrRequestIdentity: SeerRequestIdentity {
+        profiles.activeProfile.seerrRequestIdentity
     }
 
-    var activeSeerrUserName: String? {
-        profiles.activeProfile.seerrUserName
+    var activeSeerrRequestActingName: String? {
+        let identity = activeSeerrRequestIdentity
+        guard identity.userID != nil,
+              !identity.requiresRelink(to: seerService.serverIdentity) else {
+            return nil
+        }
+        return profiles.activeProfile.seerrUserName
     }
 
     func setSeerrUser(_ user: SeerUser?, for profileID: String) {
-        guard var profile = profiles.profiles.first(where: { $0.id == profileID }) else {
+        guard let profile = profiles.profiles.first(where: { $0.id == profileID }) else {
             return
         }
-        profile.seerrUserID = user?.id
-        profile.seerrUserName = user?.name
-        profile.seerrUserAvatarURL = user?.avatarURL?.absoluteString
-        profiles.update(profile)
+        if let user {
+            guard let userServer = user.serverIdentity,
+                  let currentServer = seerService.serverIdentity,
+                  userServer == currentServer else {
+                PlozzLog.auth.error(
+                    "Rejected Seerr profile mapping without matching server provenance"
+                )
+                return
+            }
+        }
+        profiles.update(
+            profile.settingSeerrUser(
+                id: user?.id,
+                name: user?.name,
+                avatarURL: user?.avatarURL?.absoluteString,
+                serverIdentity: user?.serverIdentity
+            )
+        )
     }
 
     func disconnectSeerr() {
+        // Keep server-bound profile mappings so reconnecting the same endpoint
+        // restores them. A different endpoint is blocked until each is relinked.
         seerService.disconnect()
-        for var profile in profiles.profiles where profile.seerrUserID != nil {
-            profile.seerrUserID = nil
-            profile.seerrUserName = nil
-            profile.seerrUserAvatarURL = nil
-            profiles.update(profile)
-        }
     }
 
     func activeAccountIDs(for profileID: String) -> Set<String> {
@@ -2445,7 +2462,8 @@ final class PlozziOSAppModel {
         port: Int?,
         exportPath: String,
         subpath: String = "",
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveNFS(
@@ -2453,7 +2471,8 @@ final class PlozziOSAppModel {
                 port: port,
                 exportPath: exportPath,
                 subpath: subpath,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2474,7 +2493,8 @@ final class PlozziOSAppModel {
         username: String,
         password: String,
         displayName: String,
-        subpath: String = ""
+        subpath: String = "",
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveSMB(
@@ -2484,7 +2504,8 @@ final class PlozziOSAppModel {
                 username: username,
                 password: password,
                 displayName: displayName,
-                subpath: subpath
+                subpath: subpath,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2502,14 +2523,16 @@ final class PlozziOSAppModel {
         baseURL: URL,
         auth: MediaShareWebDAVAuth,
         trustPin: SHA256Fingerprint?,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveWebDAV(
                 baseURL: baseURL,
                 auth: auth,
                 trustPin: trustPin,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2530,7 +2553,8 @@ final class PlozziOSAppModel {
         username: String,
         password: String,
         hostKeyPin: SHA256Fingerprint,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveSFTP(
@@ -2540,7 +2564,8 @@ final class PlozziOSAppModel {
                 username: username,
                 password: password,
                 hostKeyPin: hostKeyPin,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2557,13 +2582,15 @@ final class PlozziOSAppModel {
     func addFTPShare(
         baseURL: URL,
         auth: MediaShareFTPAuth,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveFTP(
                 baseURL: baseURL,
                 auth: auth,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()

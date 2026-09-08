@@ -3,7 +3,7 @@ import CoreModels
 import SwiftUI
 
 public struct MediaCardPlaybackIndicators: View {
-    /// Only the four `MediaItem` fields this view actually renders.
+    /// Only the playback and request facts this view actually renders.
     ///
     /// SwiftUI compares a view's stored inputs field-by-field to decide whether
     /// to re-run its body, and `MediaItem` has 56 stored properties including
@@ -121,7 +121,7 @@ public struct MediaCardPlaybackIndicators: View {
         }
     }
 
-    /// The not-in-library / requestable mark for this card, if it needs one.
+    /// The absent, requestable, or requested mark for this card, if it needs one.
     /// Suppressed while the artwork is spoiler-hidden, for the same reason watch
     /// state is: chrome on a masked poster gives away what the mask is hiding.
     private var libraryMark: MediaLibraryMark? {
@@ -262,7 +262,7 @@ public struct MediaCardPlaybackIndicators: View {
     }
 }
 
-/// The watch-state facts a card's indicators draw from — four values lifted out
+/// The playback and request facts a card's indicators draw from — scalars lifted out
 /// of `MediaItem` so a card's comparison surface is bounded by what it shows.
 /// See ``MediaCardPlaybackIndicators``'s stored property for the measurements.
 public struct MediaPlaybackIndicatorState: Equatable, Sendable {
@@ -270,12 +270,10 @@ public struct MediaPlaybackIndicatorState: Equatable, Sendable {
     public let isPlayed: Bool
     public let playedPercentage: Double?
     public let resumePosition: Double?
-    /// Whether this title is a discovery entry the viewer doesn't own. Stored as
-    /// the resolved Bool rather than the `MediaAvailabilityStatus` it comes from,
-    /// keeping this struct's comparison surface to plain scalars — the whole
-    /// point of narrowing `MediaItem` here (see the note on the stored property
-    /// in `MediaCardPlaybackIndicators`).
+    /// Ownership and request availability are separate: a pending request is
+    /// still unowned, but must invalidate the snapshot to replace the plus.
     public let isNotInLibrary: Bool
+    private let availability: MediaAvailabilityStatus?
 
     public init(_ item: MediaItem) {
         kind = item.kind
@@ -286,13 +284,17 @@ public struct MediaPlaybackIndicatorState: Equatable, Sendable {
         // and its page can't disagree. Cards judge the item alone (no index work in
         // a card path), which is exactly `identitySources: []`.
         isNotInLibrary = TitleClassifier.isNotOwnedForBadge(item)
+        availability = item.availability
     }
 
-    /// The corner mark this card should wear, if any. Mirrors
+    /// The corner mark this card should wear, if any. Shares
     /// ``MediaLibraryMark/mark(for:seerConnected:)`` without needing the full item.
     func libraryMark(seerConnected: Bool) -> MediaLibraryMark? {
-        guard isNotInLibrary else { return nil }
-        return seerConnected ? .requestable : .notInLibrary
+        MediaLibraryMark.mark(
+            isNotInLibrary: isNotInLibrary,
+            availability: availability,
+            seerConnected: seerConnected
+        )
     }
 }
 
