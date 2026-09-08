@@ -219,6 +219,61 @@ retired compiler files or clean compiler-only subtrees. This adapter does not
 solve shared dependency retention, absent-owner/orphan recovery, or release
 artifact retention by widening the deletion policy.
 
+### Supported limits and scaling
+
+The adapter deliberately accepts only **256 exact targets** per manifest or
+owner release record, at most 256 supplied release records, and **4,096 total
+filesystem entries** (including directories) across a manifest. The existing
+**4 MiB per-document** limit remains unchanged for manifests, releases and
+companion/evidence inputs. These are refusal ceilings, not measured capacity
+or a promise to finish within a maintenance window. There are no override or
+automatic splitting/batching options; an oversized request must be narrowed
+and reviewed rather than silently turned into new approvals.
+
+Manifest target/advertised-entry bounds are checked before tree inspection.
+Inventory also enforces the actual aggregate entry budget while traversing,
+with bounded directory enumeration rather than materializing an unlimited
+directory listing. An incrementally encoded manifest must fit the document
+limit before stdout or an output file receives it. An 85,000-file request is
+**not supported**, even if bundled into a small number of manifest targets.
+
+Overlap checks use sorted component paths and adjacent-prefix checks; evidence
+containment uses a binary-search index and unique reference paths. Each owner
+release is parsed/indexed once per inspection, not once per nominated file.
+All collected reference bytes are freshly SHA-validated at the inspection
+boundary, so a late change cannot hide behind the parsed snapshot. Directory
+child lists are indexed once rather than rescanning the entire target's entry
+map for every directory.
+
+During apply, each removal revalidates the **current target's** eligibility and
+owner identity, rather than running Git and eligibility checks for every other
+target. Structural membership/protected-reference checks are reused only while
+the manifest is pinned and the exact companion digest is freshly verified.
+This is not a cache of mutable authorization: the existing full `policy.check`
+still runs at both per-removal guard points, rereading current approval,
+attestation, evidence, writer fingerprints, root identities and Git registries.
+Every unique target-release/evidence reference is also reread and SHA-checked
+at each guard, including references for future or already processed targets.
+Thus changed evidence for another target still stops the current operation.
+
+**Residual cost is intentionally explicit.** For `R` removals and `T` targets,
+there are `2R + 2` full companion checks (including construction/start) and
+`2R + T` full open-file scans. Each companion check still rereads/canonicalizes
+the complete bounded manifest and inspects all approved writer/registry
+inputs; each guard rereads all unique release/evidence bytes. Therefore runtime
+still includes work proportional to removals times those global input sizes.
+Only the redundant all-target eligibility/Git traversal, release reparsing,
+containment and child-list loops have been removed. This does **not** claim
+linear total wall time as the authorization package grows.
+
+Removing that remaining global cost safely would require a separately reviewed
+authorization/invalidation design with equivalent detection of mutable
+evidence, registry and open-use changes. Neither a metadata-only freshness
+guess, a timed cache, nor omission of global checks is adopted here. Keep
+manifests small and preserve per-unlink expiry/partial-journal behavior;
+substantial landscape-scale reclamation still needs separate design and
+performance work, as does historical-owner support for deleted worktrees.
+
 Each manifest target has exactly `kind`, `path`, `owner`, `session_id`,
 `worktree`, `released_at`, `release_record`, `release_evidence`, `observed_at`,
 `retention`, `root`, and `tree`. `release_record` and `release_evidence` are

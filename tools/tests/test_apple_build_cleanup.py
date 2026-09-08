@@ -291,7 +291,7 @@ class AppleBuildCleanupTests(unittest.TestCase):
         authorization = self.authorization()
         authorization["expires_at"] = cleanup.utc(self.future - dt.timedelta(seconds=1))
         with mock.patch.object(cleanup.policy, "check", return_value=authorization):
-            guard = cleanup.RuntimeGuard({}, pinned, authorization["window_id"], lambda: self.future)
+            guard = cleanup.RuntimeGuard({"targets": []}, pinned, authorization["window_id"], lambda: self.future)
             with self.assertRaisesRegex(lease.LeaseError, "expired"):
                 guard.check()
         pinned.validate.assert_not_called()
@@ -664,6 +664,161 @@ class AppleBuildCleanupTests(unittest.TestCase):
             self.assertIn("retired", result.stderr)
         self.assertFalse((self.home / "Library/Logs").exists())
 
+    def file_targets(self, count):
+        paths = [self.build / f"part-{i}.o" for i in range(count)]
+        for path in paths:
+            path.write_bytes(b"small fixture")
+        self.write_release(target=paths[0])
+        release = json.loads(self.release.read_text())
+        release["targets"] = [
+            {"identity": cleanup.identity_document(path), "kind": "worktree-apple-build"}
+            for path in paths
+        ]
+        self.write_json(self.release, release)
+        return paths
+
+    def test_release_parsing_and_location_work_scale_linearly(self):
+        for count in (3, 6):
+            with self.subTest(count=count):
+                self.file_targets(count)
+                with mock.patch.object(cleanup, "parse_release_record", wraps=cleanup.parse_release_record) as parses:
+                    manifest = cleanup.inventory([self.release], current_time=self.future)
+                self.assertEqual(parses.call_count, 1)
+                self.write_json(self.manifest, manifest)
+                with mock.patch.object(cleanup, "parse_release_record", wraps=cleanup.parse_release_record) as parses, \
+                     mock.patch.object(cleanup, "validate_target_location", wraps=cleanup.validate_target_location) as locations, \
+                     mock.patch.object(cleanup.policy, "reference", wraps=cleanup.policy.reference) as references:
+                    cleanup.validate_manifest(self.manifest, current_time=self.future)
+                self.assertEqual(parses.call_count, 1)
+                self.assertEqual(locations.call_count, 2 * count)
+                # Shared evidence and the shared release are freshly read once
+                # at the inspection boundary, not once per target.
+                self.assertEqual(references.call_count, 2)
+
+    def test_indexed_evidence_membership_deduplicates_shared_references(self):
+        for count in (4, 12):
+            self.file_targets(count)
+            manifest = cleanup.inventory([self.release], current_time=self.future)
+            original = cleanup.TargetIndex.contains
+            calls = []
+            def contains(index, path):
+                calls.append(path)
+                return original(index, path)
+            with mock.patch.object(cleanup.TargetIndex, "contains", contains):
+                cleanup.validate_disjoint_targets(manifest["targets"])
+            self.assertEqual(len(calls), 2)
+        index = cleanup.TargetIndex([Path("/cache/b"), Path("/cache/ab")])
+        self.assertTrue(index.contains(Path("/cache/ab/child")))
+        self.assertTrue(index.contains(Path("/cache/b")))
+        self.assertFalse(index.contains(Path("/cache/abc")))
+        self.assertFalse(index.contains(Path("/cache/a")))
+        for roots in (
+            [Path("/cache/ab/child"), Path("/cache/ab")],
+            [Path("/cache/b"), Path("/cache/b")],
+        ):
+            with self.assertRaisesRegex(lease.LeaseError, "overlapping"):
+                cleanup.TargetIndex(roots)
+
+    def test_shared_release_change_during_inspection_is_not_memoized_away(self):
+        self.file_targets(3)
+        original = cleanup.scan_tree
+        calls = 0
+        def scan(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            result = original(*args, **kwargs)
+            if calls == 2:
+                self.release.write_text(self.release.read_text() + "\n")
+            return result
+        with mock.patch.object(cleanup, "scan_tree", side_effect=scan):
+            with self.assertRaisesRegex(lease.LeaseError, "changed evidence"):
+                cleanup.inventory([self.release], current_time=self.future)
+        self.assertFalse(self.manifest.exists())
+
+    def test_reference_index_rechecks_bytes_and_rejects_conflicting_digests(self):
+        index = cleanup.ReferenceIndex()
+        ref = self.evidence_ref()
+        index.add(ref, "fixture")
+        index.add(ref, "fixture")
+        with mock.patch.object(cleanup.policy, "reference", wraps=cleanup.policy.reference) as reads:
+            index.validate()
+            index.validate()
+        self.assertEqual(reads.call_count, 2)
+        with self.assertRaisesRegex(lease.LeaseError, "conflicting"):
+            index.add({**ref, "sha256": "0" * 64}, "fixture")
+        self.evidence.write_text("late replacement")
+        with self.assertRaisesRegex(lease.LeaseError, "changed evidence"):
+            index.validate()
+
+    def test_target_and_declared_entry_limits_fail_before_tree_inspection(self):
+        manifest = self.make_manifest()
+        manifest["targets"] *= 3
+        self.write_json(self.manifest, manifest)
+        with mock.patch.object(cleanup, "MAX_TARGETS", 2), \
+             mock.patch.object(cleanup, "scan_tree") as scan:
+            with self.assertRaisesRegex(lease.LeaseError, "target limit"):
+                cleanup.validate_manifest(self.manifest, current_time=self.future)
+            scan.assert_not_called()
+            with mock.patch.object(cleanup, "read_private_document") as read:
+                with self.assertRaisesRegex(lease.LeaseError, "target limit"):
+                    cleanup.inventory([self.release] * 3, current_time=self.future)
+                read.assert_not_called()
+        manifest["targets"] = manifest["targets"][:1]
+        self.write_json(self.manifest, manifest)
+        with mock.patch.object(cleanup, "MAX_TREE_ENTRIES", 1), \
+             mock.patch.object(cleanup, "scan_tree") as scan:
+            with self.assertRaisesRegex(lease.LeaseError, "aggregate entry limit"):
+                cleanup.validate_manifest(self.manifest, current_time=self.future)
+            scan.assert_not_called()
+
+    def test_actual_aggregate_entries_and_encoded_document_are_bounded(self):
+        self.file_targets(3)
+        with mock.patch.object(cleanup, "MAX_TREE_ENTRIES", 2):
+            with self.assertRaisesRegex(lease.LeaseError, "aggregate entry limit"):
+                cleanup.inventory([self.release], current_time=self.future)
+        with mock.patch.object(cleanup.policy, "MAX_DOCUMENT_BYTES", 128):
+            with self.assertRaisesRegex(lease.LeaseError, "document limit"):
+                cleanup.encode_manifest({"targets": [{"path": "x" * 180}]})
+        self.assertFalse(self.manifest.exists())
+        self.assertFalse(self.journal.exists())
+
+    def test_directory_entry_limit_stops_enumeration_early(self):
+        observed = []
+        def children():
+            for i in range(12):
+                observed.append(i)
+                yield argparse.Namespace(name=str(i))
+        @contextlib.contextmanager
+        def scan(_fd):
+            yield children()
+        with mock.patch.object(cleanup.os, "scandir", scan):
+            with self.assertRaisesRegex(lease.LeaseError, "fixture bound"):
+                cleanup.bounded_names(0, 2, "fixture bound")
+        self.assertEqual(observed, [0, 1, 2])
+
+    def test_directory_removal_uses_preindexed_children(self):
+        for i in range(4):
+            directory = self.build / f"nested-{i}"
+            directory.mkdir()
+            (directory / "part.o").write_bytes(b"fixture")
+        target = self.make_manifest()["targets"][0]
+        _, entries = cleanup.scan_tree(self.build, minimum_seconds=72 * 3600, current_time=self.future)
+        journal = cleanup.DurableJournal(self.journal, {"fixture": True})
+        guard = mock.Mock(clock=lambda: self.future)
+        removal = cleanup.TargetRemoval(target, entries, guard, journal, self.open_inventory)
+        class CountedDict(dict):
+            iterations = 0
+            def __iter__(self):
+                self.iterations += 1
+                return super().__iter__()
+        removal.expected = CountedDict(removal.expected)
+        try:
+            removal.run()
+        finally:
+            journal.close()
+        self.assertEqual(removal.expected.iterations, 0)
+        self.assertFalse(self.build.exists())
+
 
 class CleanupAuthorizationTests(unittest.TestCase):
     """Use the real companion validator, frozen wrapper and kernel locks."""
@@ -679,13 +834,16 @@ class CleanupAuthorizationTests(unittest.TestCase):
         (self.build / "compiled.o").write_bytes(b"fixture")
         self.journal = f.home / "journal.jsonl"
         self.release = f.home / "release.json"
+        self.release_evidence = f.home / "release-evidence.txt"
+        self.release_evidence.write_text("Separate fixture output release evidence.\n")
+        self.release_evidence.chmod(0o600)
         now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
         f.write_json(self.release, {
             "schema": 1, "scope": cleanup.SCOPE, "owner": "fixture-owner",
             "session_id": "00000000-0000-0000-0000-000000000001",
             "released_at": cleanup.utc(now - dt.timedelta(days=5)),
             "worktree": cleanup.identity_document(f.repo),
-            "evidence": [f.ref(f.evidence)],
+            "evidence": [f.ref(self.release_evidence)],
             "targets": [{"kind": "worktree-apple-build", "identity": cleanup.identity_document(self.build)}],
         })
         original = cleanup.entry_record
@@ -694,6 +852,7 @@ class CleanupAuthorizationTests(unittest.TestCase):
             for key in ("mtime_ns", "ctime_ns", "birthtime_ns"):
                 value[key] -= 4 * 86400 * 1_000_000_000
             return value
+        self.aged = aged
         with mock.patch.object(cleanup, "entry_record", side_effect=aged):
             manifest = cleanup.inventory([self.release], current_time=now)
         f.write_json(f.manifest, manifest)
@@ -719,7 +878,7 @@ class CleanupAuthorizationTests(unittest.TestCase):
     def run_apply(self, fault=""):
         f = self.fixture
         code = """
-import sys
+import sys, json
 from pathlib import Path
 from unittest import mock
 sys.path.insert(0, str(Path(sys.argv[1]) / 'tools/lib'))
@@ -743,11 +902,40 @@ def opened(_ignored=frozenset()):
         elif sys.argv[5] == 'unlock':
             fd = cleanup.policy.inherited_exclusive().lock_fd
             lease.fcntl.flock(fd, lease.fcntl.LOCK_UN)
+        elif sys.argv[5] in {'release', 'release-evidence', 'future-evidence', 'approval', 'attestation', 'companion', 'manifest', 'rollout'}:
+            home = Path(sys.argv[1]).parent
+            paths = {
+                'release': home / 'release.json',
+                'release-evidence': home / 'release-evidence.txt',
+                'future-evidence': home / 'other-release-evidence.txt',
+                'approval': home / 'approval.json',
+                'attestation': home / 'plozz-current-writers.json',
+                'companion': lease.paths()['root'] / cleanup.policy.POLICY_NAME,
+                'manifest': Path(sys.argv[2]),
+                'rollout': lease.paths()['rollout'],
+            }
+            path = paths[sys.argv[5]]
+            path.write_bytes(path.read_bytes() + b'\\n')
+        elif sys.argv[5] == 'writer':
+            (Path(sys.argv[1]) / 'writer.sh').write_text('changed fixture writer')
+        elif sys.argv[5] == 'registry':
+            (Path(sys.argv[1]) / '.git/HEAD').write_text('ref: refs/heads/changed-fixture\\n')
+        elif sys.argv[5] == 'suspended':
+            (lease.paths()['root'].parent / 'SUSPENDED').touch(mode=0o600)
+        elif sys.argv[5] == 'owner-root':
+            Path(sys.argv[1]).rename(Path(sys.argv[1]).with_name('moved-fixture'))
     return (('/unrelated/file',), frozenset({(999,999)}))
 with mock.patch.object(cleanup, 'entry_record', side_effect=aged), \
-     mock.patch.object(cleanup, 'require_no_build_activity'):
+     mock.patch.object(cleanup, 'require_no_build_activity'), \
+     mock.patch.object(cleanup, 'validate_target_location', wraps=cleanup.validate_target_location) as locations, \
+     mock.patch.object(cleanup, 'validate_runtime_scope', wraps=cleanup.validate_runtime_scope) as scopes, \
+     mock.patch.object(cleanup, 'parse_release_record', wraps=cleanup.parse_release_record) as releases, \
+     mock.patch.object(cleanup.policy, 'check', wraps=cleanup.policy.check) as policies:
     cleanup.apply_manifest(Path(sys.argv[2]), window_id=sys.argv[3],
                            journal_path=Path(sys.argv[4]), open_inventory=opened)
+    print(json.dumps({'locations': locations.call_count, 'scopes': scopes.call_count,
+                      'releases': releases.call_count, 'policies': policies.call_count,
+                      'open_scans': calls}))
 """
         result = subprocess.run([
             str(ROOT / "tools/with-apple-build-lease.sh"), "--exclusive", "test/cleanup",
@@ -803,6 +991,111 @@ with mock.patch.object(cleanup, 'entry_record', side_effect=aged), \
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("exclusive kernel lock is not held", result.stderr)
         self.assertTrue((self.build / "compiled.o").exists())
+
+    def replace_manifest(self, releases):
+        f = self.fixture
+        installed = cleanup.policy.digest((f.namespace / cleanup.policy.POLICY_NAME).read_bytes())
+        with mock.patch.object(cleanup, "entry_record", side_effect=self.aged):
+            manifest = cleanup.inventory(releases)
+        f.write_json(f.manifest, manifest)
+        f.package["window"]["manifest_sha256"] = cleanup.policy.digest(cleanup.policy.canonical(manifest))
+        f.approve()
+        f.install(installed)
+
+    def assert_runtime_counts(self, count):
+        f = self.fixture
+        record = json.loads(self.release.read_text())
+        files = [self.build / "compiled.o"]
+        for i in range(count - 1):
+            path = self.build / f"part-{i}.o"
+            path.write_bytes(b"fixture")
+            files.append(path)
+        record["targets"] = [
+            {"identity": cleanup.identity_document(path), "kind": "worktree-apple-build"}
+            for path in files
+        ]
+        f.write_json(self.release, record)
+        self.replace_manifest([self.release])
+        result = self.run_apply()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        counts = json.loads(result.stdout)
+        self.assertEqual(counts, {
+            "locations": 4 * count, "scopes": 1, "releases": 1,
+            "policies": 2 + 2 * count, "open_scans": 3 * count,
+        })
+        self.assertTrue(all(not path.exists() for path in files))
+        import time
+        for _ in range(100):
+            if not list((f.namespace / "leases").iterdir()):
+                return
+            time.sleep(0.02)
+        self.fail("fixture finalizer did not finish")
+
+    def test_two_target_runtime_counts_are_linear(self):
+        self.assert_runtime_counts(2)
+
+    def test_four_target_runtime_counts_are_linear(self):
+        self.assert_runtime_counts(4)
+
+    def assert_late_refusal(self, fault, message=None):
+        result = self.run_apply(fault)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        if message:
+            self.assertIn(message, result.stderr)
+        self.assertTrue((self.build / "compiled.o").exists())
+        self.assertIn('"event": "stopped"', self.journal.read_text())
+
+    def test_release_bytes_remain_fresh_after_initial_parse(self):
+        self.assert_late_refusal("release", "changed evidence")
+
+    def test_release_evidence_remains_fresh_after_initial_parse(self):
+        self.assert_late_refusal("release-evidence", "changed evidence")
+
+    def test_approval_change_is_not_hidden_by_structural_scope_reuse(self):
+        self.assert_late_refusal("approval", "changed evidence")
+
+    def test_attestation_change_is_not_hidden_by_structural_scope_reuse(self):
+        self.assert_late_refusal("attestation", "changed evidence")
+
+    def test_companion_change_is_not_hidden_by_structural_scope_reuse(self):
+        self.assert_late_refusal("companion", "authorization changed")
+
+    def test_writer_change_is_not_hidden_by_structural_scope_reuse(self):
+        self.assert_late_refusal("writer", "writer changed")
+
+    def test_registry_change_is_not_hidden_by_structural_scope_reuse(self):
+        self.assert_late_refusal("registry", "registered roots/HEADs changed")
+
+    def test_manifest_change_is_not_hidden_by_structural_scope_reuse(self):
+        self.assert_late_refusal("manifest", "manifest changed")
+
+    def test_suspension_is_still_checked_for_every_removal(self):
+        self.assert_late_refusal("suspended", "suspended")
+
+    def test_rollout_change_is_still_checked_for_every_removal(self):
+        self.assert_late_refusal("rollout")
+
+    def test_owner_root_replacement_is_still_checked_globally(self):
+        result = self.run_apply("owner-root")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.fixture.home / "moved-fixture/.build/objects/compiled.o").exists())
+        self.assertIn('"event": "stopped"', self.journal.read_text())
+
+    def test_future_target_evidence_change_stops_the_current_target_too(self):
+        f = self.fixture
+        other = f.repo / ".build/other.o"
+        other.write_bytes(b"preserved future target")
+        evidence = f.home / "other-release-evidence.txt"
+        evidence.write_text("Separate future-target evidence.\n")
+        evidence.chmod(0o600)
+        release = json.loads(self.release.read_text())
+        release["evidence"] = [f.ref(evidence)]
+        release["targets"] = [{"identity": cleanup.identity_document(other), "kind": "worktree-apple-build"}]
+        other_release = f.home / "other-release.json"
+        f.write_json(other_release, release)
+        self.replace_manifest([self.release, other_release])
+        self.assert_late_refusal("future-evidence", "changed evidence")
+        self.assertTrue(other.exists())
 
     def test_cli_does_not_write_bytecode_or_activate_anything(self):
         f = self.fixture
