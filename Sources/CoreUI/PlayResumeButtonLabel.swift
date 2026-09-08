@@ -139,6 +139,7 @@ public struct PlayResumeButtonLabel: View {
     public var resumeTrailingStyle: ResumeTrailingStyle
     public var isPlaceholder: Bool
     public var separatesEpisodeText: Bool
+    public var wrapsText: Bool
 
     /// Supplies the default bar height, which tracks the reader's text size.
     @Environment(\.plozzMetrics) private var metrics
@@ -154,7 +155,8 @@ public struct PlayResumeButtonLabel: View {
         barHeight: CGFloat? = nil,
         resumeTrailingStyle: ResumeTrailingStyle = .full,
         isPlaceholder: Bool = false,
-        separatesEpisodeText: Bool = false
+        separatesEpisodeText: Bool = false,
+        wrapsText: Bool = false
     ) {
         self.title = title
         self.progress = progress
@@ -167,6 +169,7 @@ public struct PlayResumeButtonLabel: View {
         self.resumeTrailingStyle = resumeTrailingStyle
         self.isPlaceholder = isPlaceholder
         self.separatesEpisodeText = separatesEpisodeText
+        self.wrapsText = wrapsText
     }
 
     /// The in-progress fraction that switches the label to the resume form: a
@@ -242,15 +245,19 @@ public struct PlayResumeButtonLabel: View {
                     progress: resumeProgress,
                     onLight: onLight,
                     width: capsuleWidth,
-                    height: barHeight ?? metrics.heroProgressBarHeight
+                    height: barHeight ?? metrics.heroProgressBarHeight,
+                    flexesToFitRow: wrapsText
                 )
                 if let resumeTrailing {
                     Text(resumeTrailing)
-                        .lineLimit(1)
+                        .lineLimit(wrapsText ? nil : 1)
+                        .fixedSize(horizontal: false, vertical: wrapsText)
+                        .layoutPriority(wrapsText ? 1 : 0)
                 }
             } else {
                 plainTitle
-                    .lineLimit(1)
+                    .lineLimit(wrapsText ? nil : 1)
+                    .fixedSize(horizontal: false, vertical: wrapsText)
             }
         }
     }

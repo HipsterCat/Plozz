@@ -257,6 +257,37 @@ enum ShareMediaParser {
         return .movie(parseMovie(stem: stem, parentFolder: ancestors.last))
     }
 
+    /// Classifies using the user's explicit root intent while preserving the
+    /// share-relative path as the item's identity. A synthetic root component is
+    /// used only as parser context, so selecting `/Anime` as the transport root
+    /// does not lose the anime/series signal when transport paths become relative.
+    static func classify(
+        relPath: String,
+        configuration: MediaShareLibraryConfiguration?
+    ) -> Kind? {
+        guard let configuration else { return classify(relPath: relPath) }
+        switch configuration.contentType {
+        case .personalVideos:
+            return nil
+        case .movies:
+            let components = relPath.split(separator: "/").map(String.init)
+            guard let fileName = components.last else { return nil }
+            let stem = (fileName as NSString).deletingPathExtension
+            return .movie(parseMovie(stem: stem, parentFolder: components.dropLast().last))
+        case .tvShows:
+            let contextual = "TV Shows/\(relPath)"
+            guard case .episode(let episode) = classify(relPath: contextual) else {
+                return nil
+            }
+            return .episode(episode)
+        case .automatic:
+            if configuration.isAnime {
+                return classify(relPath: "Anime/\(relPath)")
+            }
+            return classify(relPath: relPath)
+        }
+    }
+
     /// Recognized explicit-id namespaces, most-authoritative first (the order
     /// `embeddedProviderTag` uses to pick ONE strongest tag for series grouping).
     static let embeddedProviderSources = ["tvdb", "tmdb", "imdb", "anidb", "tvmaze", "anilist"]

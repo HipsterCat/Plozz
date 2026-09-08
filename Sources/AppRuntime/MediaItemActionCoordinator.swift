@@ -291,7 +291,7 @@ public final class MediaItemActionCoordinator: MediaItemActionHandling {
             performRemoveFromContinueWatching(on: item)
         case .startDownload, .pauseDownload, .resumeDownload, .removeDownload:
             performDownloadAction(action, item)
-        case .goToSeason, .goToMovie, .goToEpisode:
+        case .goToSeason, .goToMovie, .goToEpisode, .browseFiles:
             // Navigation is handled in the view layer, never here.
             break
         }

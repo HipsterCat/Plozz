@@ -715,7 +715,8 @@ public final class AppState {
                 expected += 1
                 let server = MediaServer(id: desc.serverID, name: desc.serverName, baseURL: baseURL,
                                          provider: .mediaShare,
-                                         connectionURLs: desc.candidateBaseURLs.isEmpty ? nil : desc.candidateBaseURLs)
+                                         connectionURLs: desc.candidateBaseURLs.isEmpty ? nil : desc.candidateBaseURLs,
+                                         mediaShareLibraryConfiguration: desc.mediaShareLibraryConfiguration)
                 let account = Account(id: desc.id, server: server, userID: desc.userID, userName: desc.userName,
                                       avatarURL: desc.avatarURL, deviceID: store.deviceID())
                 do { try store.addMediaShare(account, credential: envelope, generatedPrivateKey: nil); added += 1 }
@@ -1326,10 +1327,21 @@ public final class AppState {
     /// profile, so a mapping change takes effect on the next request.
     public func setSeerrUserForProfile(profileID: String, user: SeerUser?) {
         guard let profile = profilesModel.profiles.first(where: { $0.id == profileID }) else { return }
+        if let user {
+            guard let userServer = user.serverIdentity,
+                  let currentServer = seerService.serverIdentity,
+                  userServer == currentServer else {
+                PlozzLog.auth.error(
+                    "Rejected Seerr profile mapping without matching server provenance"
+                )
+                return
+            }
+        }
         let updated = profile.settingSeerrUser(
             id: user?.id,
             name: user?.name,
-            avatarURL: user?.avatarURL?.absoluteString
+            avatarURL: user?.avatarURL?.absoluteString,
+            serverIdentity: user?.serverIdentity
         )
         profilesModel.update(updated)
     }
@@ -1774,7 +1786,8 @@ public final class AppState {
         username: String,
         password: String,
         displayName: String,
-        subpath: String = ""
+        subpath: String = "",
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) {
         let service = MediaShareAccountConfigurationService(
             accountStore: accountsProviders.accountStore
@@ -1788,7 +1801,8 @@ public final class AppState {
                 username: username,
                 password: password,
                 displayName: displayName,
-                subpath: subpath
+                subpath: subpath,
+                libraryConfiguration: libraryConfiguration
             )
         } catch {
             apply(.authenticationFailed(.unknown("Invalid share address")))
@@ -1917,7 +1931,8 @@ public final class AppState {
         baseURL: URL,
         auth: WebDAVShareAuth,
         trustPin: SHA256Fingerprint? = nil,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) {
         if trustPin != nil, baseURL.scheme?.lowercased() != "https" {
             apply(.authenticationFailed(.unknown("A certificate pin requires HTTPS")))
@@ -1932,7 +1947,8 @@ public final class AppState {
                 baseURL: baseURL,
                 auth: auth,
                 trustPin: trustPin,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
         } catch is MediaShareAccountConfigurationError {
             apply(.authenticationFailed(.unknown("Invalid WebDAV address")))
@@ -2009,7 +2025,8 @@ public final class AppState {
         port: Int?,
         exportPath: String,
         subpath: String = "",
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) {
         let service = MediaShareAccountConfigurationService(
             accountStore: accountsProviders.accountStore
@@ -2021,7 +2038,8 @@ public final class AppState {
                 port: port,
                 exportPath: exportPath,
                 subpath: subpath,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
         } catch {
             apply(.authenticationFailed(.unknown("Invalid NFS address")))
@@ -2059,7 +2077,8 @@ public final class AppState {
         username: String,
         password: String,
         hostKeyPin: SHA256Fingerprint,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) {
         let service = MediaShareAccountConfigurationService(
             accountStore: accountsProviders.accountStore
@@ -2073,7 +2092,8 @@ public final class AppState {
                 username: username,
                 password: password,
                 hostKeyPin: hostKeyPin,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
         } catch {
             apply(.authenticationFailed(.unknown("Invalid SFTP address or credentials")))
@@ -2108,7 +2128,8 @@ public final class AppState {
         baseURL: URL,
         auth: MediaShareFTPAuth,
         trustPin: SHA256Fingerprint? = nil,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) {
         let service = MediaShareAccountConfigurationService(
             accountStore: accountsProviders.accountStore
@@ -2119,7 +2140,8 @@ public final class AppState {
                 baseURL: baseURL,
                 auth: auth,
                 trustPin: trustPin,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
         } catch {
             apply(.authenticationFailed(.unknown("Invalid FTP address or credentials")))

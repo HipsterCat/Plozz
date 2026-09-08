@@ -1682,6 +1682,7 @@ public struct JellyfinProvider: MediaProvider {
             // instead of collapsing to the first season.
             seasonNumber: kind == .season ? dto.IndexNumber : dto.ParentIndexNumber,
             episodeNumber: dto.IndexNumber,
+            episodeNumberEnd: kind == .episode ? dto.IndexNumberEnd : nil,
             productionYear: dto.ProductionYear,
             // Snapped, not taken at face value: Jellyfin transmits a bare premiere
             // DAY as an instant already shifted by the server's own zone, so an
@@ -1716,6 +1717,7 @@ public struct JellyfinProvider: MediaProvider {
             ratings: Self.ratings(from: dto),
             providerIDs: dto.ProviderIds ?? [:],
             artworkSelections: Self.heroArtworkSelections(for: dto, client: client),
+            locallyValidatedPlayableSource: dto.LocationType?.caseInsensitiveCompare("Virtual") != .orderedSame,
             mediaInfo: Self.sourceMetadata(
                 container: dto.MediaSources?.first?.Container,
                 streams: dto.MediaStreams ?? dto.MediaSources?.first?.MediaStreams ?? [],

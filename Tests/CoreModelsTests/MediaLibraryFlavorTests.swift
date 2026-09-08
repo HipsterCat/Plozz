@@ -34,6 +34,17 @@ final class MediaLibraryFlavorTests: XCTestCase {
         )
     }
 
+    func testBrowseFilesSynthesizedNameAlwaysUsesMixedFlavor() {
+        XCTAssertEqual(
+            library(
+                title: "Browse Files — Anime Movies",
+                kind: .folder,
+                synthesized: .browseFiles
+            ).flavor,
+            .mixed
+        )
+    }
+
     func testMusicBeatsKind() {
         XCTAssertEqual(library(title: "Tunes", kind: .movie, isMusic: true).flavor, .music)
     }

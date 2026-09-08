@@ -10,7 +10,12 @@ set -euo pipefail
 export GIT_CONFIG_PARAMETERS="'safe.bareRepository=all'"
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$DIR/../../.." && pwd)"
 cd "$DIR"
+
+source "$REPO_ROOT/tools/lib/apple-build-lease.sh"
+acquire_apple_build_shared_lease "plozz/experiment/pair-probe"
+install_apple_build_lease_traps
 
 # Devices (Brandon's environment):
 TV_DEVICECTL="DE913871-CC2D-5F75-B4F2-0D6F44AA30DE"      # Brando TV

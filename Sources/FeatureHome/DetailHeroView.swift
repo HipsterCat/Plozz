@@ -470,6 +470,7 @@ struct DetailHeroView: View, Equatable {
     /// this page can't otherwise reach, and only when something can route it.
     private func offersHeroAction(_ action: MediaItemAction) -> Bool {
         guard action.isNavigation else { return true }
+        if action == .browseFiles { return navigator != nil }
         return offersParentNavigation && !action.navigatesToSelf && navigator != nil
     }
 
@@ -484,7 +485,7 @@ struct DetailHeroView: View, Equatable {
     private var heroParentNavigationAction: MediaItemAction? {
         guard offersParentNavigation, navigator != nil else { return nil }
         return (actionHandler?.actions(for: backdrop, context: actionContext) ?? [])
-            .first { $0.isNavigation && !$0.navigatesToSelf }
+            .first { $0 == .goToSeason }
     }
 
     /// The air-schedule badge above the title, e.g. "New episodes Fridays".
@@ -607,7 +608,9 @@ struct DetailHeroView: View, Equatable {
     /// whole series.
     private func performHeroAction(_ action: MediaItemAction) {
         if action.isNavigation {
-            if let navigator, let target = item.navigationTarget(for: action) {
+            let subject = action == .browseFiles && backdrop.fileBrowserContainerID != nil
+                ? backdrop : item
+            if let navigator, let target = subject.navigationTarget(for: action) {
                 navigator(target)
             }
             return
@@ -1127,7 +1130,9 @@ struct DetailHeroView: View, Equatable {
             asyncFallbackURL: episodeStillFallback,
             pinIdentity: item.stablePresentationID
         ) {
-            MediaArtworkPlaceholder()
+            MediaArtworkPlaceholder(
+                symbol: .init(for: item), cornerRadius: PlozzMetrics.standard.landscapeCardCornerRadius
+            )
         }
         .blur(radius: spoilerSettings.shouldHideThumbnail(for: item) ? 28 : 0)
         .frame(width: width, height: width * 9 / 16)
@@ -1259,24 +1264,33 @@ struct DetailHeroView: View, Equatable {
 
     @ViewBuilder
     private func seriesRequestPill() -> some View {
-        if let seasonRequestAvailability, seasonRequestAvailability.hasSeasonRequestContent {
-            let hasRequestable = !seasonRequestAvailability.requestableSeasonNumbers.isEmpty
-            let label = isRequestingSeasons
-                ? "Requesting…"
-                : (hasRequestable ? "Request Seasons" : "Season Requests")
+        if let seasonRequestAvailability, !seasonRequestAvailability.seasons.isEmpty {
+            let hasRequestable = !seasonRequestAvailability.requestableMissingSeasonNumbers.isEmpty
+            let presentation = SeasonRequestPresentation(
+                availability: seasonRequestAvailability,
+                isSubmitting: isRequestingSeasons
+            )
             SeasonRequestMenu(
                 availability: seasonRequestAvailability,
                 requestAllTitle: "Request All Seasons",
+                isSubmitting: isRequestingSeasons,
+                refreshFailed: seasonRequestAvailabilityFailed,
+                onRefresh: onRetrySeasonRequestAvailability,
                 onRequest: { onRequestSeasons?($0) }
             ) {
-                Label(label, systemImage: "plus.circle")
+                Label(presentation.title, systemImage: presentation.systemImage)
             }
             .menuStyle(.button)
             .modifier(HeroActionButtonStyle(prominent: hasRequestable))
             .prefersDefaultFocus(true, in: heroActionsScope)
             .focused($heroActionRowFocus, equals: .request)
-            .disabled(onRequestSeasons == nil || isRequestingSeasons)
-            .accessibilityLabel(requestActingName.map { "\(label) as \($0)" } ?? label)
+            .disabled(onRequestSeasons == nil)
+            .accessibilityLabel(
+                requestActingName.map { Text("\(Text(presentation.title)) as \($0)") }
+                    ?? Text(presentation.title)
+            )
+            .accessibilityValue(presentation.detail.map { Text($0) } ?? Text(verbatim: ""))
+            .accessibilityHint("View season statuses or request missing seasons")
         } else if seasonRequestAvailabilityFailed {
             Button { onRetrySeasonRequestAvailability?() } label: {
                 Label("Retry Seasons", systemImage: "arrow.clockwise")
@@ -1377,6 +1391,7 @@ struct DetailHeroView: View, Equatable {
     private var showsMoreMenu: Bool {
         (serverChoices.count > 1 && onSelectSource != nil)
             || (versions.count > 1 && onSelectVersion != nil)
+            || heroMenuActions.contains(.browseFiles)
     }
 
     /// A single subtle trailing "…" menu that folds BOTH the cross-server picker
@@ -1405,12 +1420,20 @@ struct DetailHeroView: View, Equatable {
             offlineSourceAccountIDs: offlineSourceAccountIDs,
             versions: versions,
             selectedVersionID: selectedVersionID,
+            actions: heroMenuActions.filter { $0 == .browseFiles }.map {
+                PlaybackSourceMenuAction(id: $0.rawValue, title: $0.title, systemImage: $0.systemImage)
+            },
             onSelectSource: { accountID in
                 userInitiatedSourceSwitch = true
                 onSelectSource?(accountID)
             },
             onSelectVersion: { versionID in
                 onSelectVersion?(versionID)
+            },
+            onPerformAction: { id in
+                if id == MediaItemAction.browseFiles.rawValue {
+                    performHeroAction(.browseFiles)
+                }
             },
             onDismiss: {
                 heroActionRowFocus = .more

@@ -10,9 +10,9 @@ public enum MediaShareAccountConfigurationError: LocalizedError, Equatable {
     public var errorDescription: LocalizedStringResource? {
         switch self {
         case .invalidAddress:
-            "Invalid network-share address."
+            return LocalizedStringResource("Invalid network-share address.")
         case .invalidShare:
-            "Invalid network-share configuration."
+            return LocalizedStringResource("Invalid network-share configuration.")
         }
     }
 }
@@ -100,7 +100,8 @@ public struct MediaShareAccountConfigurationService: Sendable {
         username: String,
         password: String,
         displayName: String,
-        subpath: String = ""
+        subpath: String = "",
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) throws -> PreparedMediaShareAccount {
         let trimmedHost = host.trimmingCharacters(in: .whitespaces)
         let trimmedUsername = username.trimmingCharacters(in: .whitespaces)
@@ -194,7 +195,8 @@ public struct MediaShareAccountConfigurationService: Sendable {
                 )
                 : trimmedName,
             baseURL: baseURL,
-            provider: .mediaShare
+            provider: .mediaShare,
+            mediaShareLibraryConfiguration: libraryConfiguration
         )
         let session = UserSession(
             server: server,
@@ -203,7 +205,11 @@ public struct MediaShareAccountConfigurationService: Sendable {
             deviceID: accountStore.deviceID(),
             accessToken: ""
         )
-        let account = Account(id: server.id, from: session)
+        let account = Account(
+            id: server.id,
+            from: session,
+            addedAt: existingAccount?.addedAt ?? Date()
+        )
         return PreparedMediaShareAccount(
             session: session,
             account: account,
@@ -219,7 +225,8 @@ public struct MediaShareAccountConfigurationService: Sendable {
         username: String,
         password: String,
         displayName: String,
-        subpath: String = ""
+        subpath: String = "",
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) throws -> PreparedMediaShareAccount {
         let prepared = try prepareSMB(
             host: host,
@@ -228,7 +235,8 @@ public struct MediaShareAccountConfigurationService: Sendable {
             username: username,
             password: password,
             displayName: displayName,
-            subpath: subpath
+            subpath: subpath,
+            libraryConfiguration: libraryConfiguration
         )
         try persist(prepared)
         return prepared
@@ -238,7 +246,8 @@ public struct MediaShareAccountConfigurationService: Sendable {
         baseURL: URL,
         auth: MediaShareWebDAVAuth,
         trustPin: SHA256Fingerprint?,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) throws -> PreparedMediaShareAccount {
         guard let components = URLComponents(
             url: baseURL,
@@ -283,6 +292,7 @@ public struct MediaShareAccountConfigurationService: Sendable {
             path: path,
             principal: auth.principal
         )
+        let existingAccount = accountStore.loadAccounts().first { $0.id == serverID }
         let trimmedName = displayName.trimmingCharacters(in: .whitespaces)
         let server = MediaServer(
             id: serverID,
@@ -290,7 +300,8 @@ public struct MediaShareAccountConfigurationService: Sendable {
                 ? Self.defaultShareName(path: path, host: host, transport: .webDAV)
                 : trimmedName,
             baseURL: baseURL,
-            provider: .mediaShare
+            provider: .mediaShare,
+            mediaShareLibraryConfiguration: libraryConfiguration
         )
         let session = UserSession(
             server: server,
@@ -299,11 +310,15 @@ public struct MediaShareAccountConfigurationService: Sendable {
             deviceID: accountStore.deviceID(),
             accessToken: ""
         )
-        let account = Account(id: server.id, from: session)
+        let account = Account(
+            id: server.id,
+            from: session,
+            addedAt: existingAccount?.addedAt ?? Date()
+        )
         return PreparedMediaShareAccount(
             session: session,
             account: account,
-            previousAccount: accountStore.loadAccounts().first { $0.id == account.id },
+            previousAccount: existingAccount,
             credential: credential
         )
     }
@@ -312,13 +327,15 @@ public struct MediaShareAccountConfigurationService: Sendable {
         baseURL: URL,
         auth: MediaShareWebDAVAuth,
         trustPin: SHA256Fingerprint?,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) throws -> PreparedMediaShareAccount {
         let prepared = try prepareWebDAV(
             baseURL: baseURL,
             auth: auth,
             trustPin: trustPin,
-            displayName: displayName
+            displayName: displayName,
+            libraryConfiguration: libraryConfiguration
         )
         try persist(prepared)
         return prepared
@@ -331,7 +348,8 @@ public struct MediaShareAccountConfigurationService: Sendable {
         username: String,
         password: String,
         hostKeyPin: SHA256Fingerprint,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) throws -> PreparedMediaShareAccount {
         let trimmedHost = host.trimmingCharacters(in: .whitespaces)
         let trimmedUser = username.trimmingCharacters(in: .whitespaces)
@@ -372,6 +390,7 @@ public struct MediaShareAccountConfigurationService: Sendable {
             path: normalizedPath,
             principal: trimmedUser
         )
+        let existingAccount = accountStore.loadAccounts().first { $0.id == serverID }
         let trimmedName = displayName.trimmingCharacters(in: .whitespaces)
         let server = MediaServer(
             id: serverID,
@@ -383,7 +402,8 @@ public struct MediaShareAccountConfigurationService: Sendable {
                 )
                 : trimmedName,
             baseURL: baseURL,
-            provider: .mediaShare
+            provider: .mediaShare,
+            mediaShareLibraryConfiguration: libraryConfiguration
         )
         let session = UserSession(
             server: server,
@@ -392,11 +412,15 @@ public struct MediaShareAccountConfigurationService: Sendable {
             deviceID: accountStore.deviceID(),
             accessToken: ""
         )
-        let account = Account(id: server.id, from: session)
+        let account = Account(
+            id: server.id,
+            from: session,
+            addedAt: existingAccount?.addedAt ?? Date()
+        )
         return PreparedMediaShareAccount(
             session: session,
             account: account,
-            previousAccount: accountStore.loadAccounts().first { $0.id == account.id },
+            previousAccount: existingAccount,
             credential: credential
         )
     }
@@ -408,7 +432,8 @@ public struct MediaShareAccountConfigurationService: Sendable {
         username: String,
         password: String,
         hostKeyPin: SHA256Fingerprint,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) throws -> PreparedMediaShareAccount {
         let prepared = try prepareSFTP(
             host: host,
@@ -417,7 +442,8 @@ public struct MediaShareAccountConfigurationService: Sendable {
             username: username,
             password: password,
             hostKeyPin: hostKeyPin,
-            displayName: displayName
+            displayName: displayName,
+            libraryConfiguration: libraryConfiguration
         )
         try persist(prepared)
         return prepared
@@ -427,7 +453,8 @@ public struct MediaShareAccountConfigurationService: Sendable {
         baseURL: URL,
         auth: MediaShareFTPAuth,
         trustPin: SHA256Fingerprint? = nil,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) throws -> PreparedMediaShareAccount {
         guard var components = URLComponents(
             url: baseURL,
@@ -480,6 +507,7 @@ public struct MediaShareAccountConfigurationService: Sendable {
             path: normalizedPath,
             principal: auth.principal
         )
+        let existingAccount = accountStore.loadAccounts().first { $0.id == serverID }
         let trimmedName = displayName.trimmingCharacters(in: .whitespaces)
         let server = MediaServer(
             id: serverID,
@@ -491,7 +519,8 @@ public struct MediaShareAccountConfigurationService: Sendable {
                 )
                 : trimmedName,
             baseURL: normalizedURL,
-            provider: .mediaShare
+            provider: .mediaShare,
+            mediaShareLibraryConfiguration: libraryConfiguration
         )
         let session = UserSession(
             server: server,
@@ -500,11 +529,15 @@ public struct MediaShareAccountConfigurationService: Sendable {
             deviceID: accountStore.deviceID(),
             accessToken: ""
         )
-        let account = Account(id: server.id, from: session)
+        let account = Account(
+            id: server.id,
+            from: session,
+            addedAt: existingAccount?.addedAt ?? Date()
+        )
         return PreparedMediaShareAccount(
             session: session,
             account: account,
-            previousAccount: accountStore.loadAccounts().first { $0.id == account.id },
+            previousAccount: existingAccount,
             credential: credential
         )
     }
@@ -513,13 +546,15 @@ public struct MediaShareAccountConfigurationService: Sendable {
         baseURL: URL,
         auth: MediaShareFTPAuth,
         trustPin: SHA256Fingerprint? = nil,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) throws -> PreparedMediaShareAccount {
         let prepared = try prepareFTP(
             baseURL: baseURL,
             auth: auth,
             trustPin: trustPin,
-            displayName: displayName
+            displayName: displayName,
+            libraryConfiguration: libraryConfiguration
         )
         try persist(prepared)
         return prepared
@@ -530,7 +565,8 @@ public struct MediaShareAccountConfigurationService: Sendable {
         port: Int?,
         exportPath: String,
         subpath: String = "",
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) throws -> PreparedMediaShareAccount {
         let trimmedHost = host.trimmingCharacters(in: .whitespaces)
         guard !trimmedHost.isEmpty,
@@ -602,7 +638,8 @@ public struct MediaShareAccountConfigurationService: Sendable {
                 )
                 : trimmedName,
             baseURL: baseURL,
-            provider: .mediaShare
+            provider: .mediaShare,
+            mediaShareLibraryConfiguration: libraryConfiguration
         )
         let session = UserSession(
             server: server,
@@ -611,7 +648,11 @@ public struct MediaShareAccountConfigurationService: Sendable {
             deviceID: accountStore.deviceID(),
             accessToken: ""
         )
-        let account = Account(id: server.id, from: session)
+        let account = Account(
+            id: server.id,
+            from: session,
+            addedAt: existingAccount?.addedAt ?? Date()
+        )
         return PreparedMediaShareAccount(
             session: session,
             account: account,
@@ -633,14 +674,16 @@ public struct MediaShareAccountConfigurationService: Sendable {
         port: Int?,
         exportPath: String,
         subpath: String = "",
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) throws -> PreparedMediaShareAccount {
         let prepared = try prepareNFS(
             host: host,
             port: port,
             exportPath: exportPath,
             subpath: subpath,
-            displayName: displayName
+            displayName: displayName,
+            libraryConfiguration: libraryConfiguration
         )
         try persist(prepared)
         return prepared

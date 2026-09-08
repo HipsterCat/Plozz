@@ -1,64 +1,182 @@
 # Disk reclaim safety
 
-`tools/reclaim-disk.sh` removes rebuildable Apple build caches across Plozz,
-Mozz, and Twozz. `tools/prune-deriveddata.sh` is its DerivedData-only worker.
-Neither script deletes source, worktrees, commits, uncommitted edits, archives,
-simulator runtimes, or the shared SwiftPM repository cache at
-`~/Library/Caches/org.swift.swiftpm`.
+`tools/reclaim-disk.sh` removes selected rebuildable Apple build caches across
+Plozz, Mozz, and Twozz. `tools/prune-deriveddata.sh` is its DerivedData-only
+worker. Neither tool may run destructively while release/build ownership is
+uncertain.
 
-## Apply-run guards
+## Current rollout status: destructive cleanup disabled
 
-Destructive runs use one shared lock at
-`~/Library/Caches/com.thatcube.reclaim-disk.lock`. The lock prevents app
-workflow, optional launchd, and manual runs from overlapping. macOS `lockf`
-holds a kernel lock on an inherited file descriptor, so crashes release it
-automatically and a leftover lock file carries no stale ownership. Live locks
-fail closed. The orchestrator passes its locked descriptor to the DerivedData
-worker rather than acquiring a second lock.
+Two existing activation gates must remain closed until every owner listed below is
+ported or administratively disabled:
 
-Before the first deletion, the scripts require a continuous interval with no
-Apple build activity. Defaults:
+1. `~/.config/smart-disk-maintenance/SUSPENDED` must be absent.
+2. The exact rollout policy must exist at
+   `~/.config/smart-disk-maintenance/apple-build-interlock-v1/rollout-policy-v1`.
 
-- `APPLE_BUILD_QUIET_SECONDS=120`
-- `APPLE_BUILD_MAX_WAIT_SECONDS=900`
-- `APPLE_BUILD_POLL_SECONDS=1`
+The machine currently uses `SUSPENDED`. This repository does not remove it,
+create the rollout policy, enable a scheduler, or authorize cleanup.
 
-The quiet interval must be at least one second. Setting the maximum wait to zero
-is fail-immediate: the run cannot satisfy a new quiet interval and performs no
-destructive work.
+The legacy rollout file is intentionally all-or-nothing:
 
-Detection covers `xcodebuild`, `SWBBuildService`, `XCBBuildService`, `swiftc`,
-`swift-frontend`, and Xcode/CommandLineTools `clang`, `actool`, and `ibtool`
-processes. Xcode keeps idle build services resident, so a service alone only
-counts when attached to `xcodebuild` or orphaned to PID 1. Compilers are matched
-independently, so a blocked or orphaned compiler still blocks cleanup.
+```text
+protocol=1
+global-cleanup-entrypoints
+manual-xcode-writers-disabled-or-wrapped
+mozz-current-writers
+mozz-legacy-writers
+plozz-current-writers
+plozz-legacy-writers
+twozz-current-writers
+twozz-legacy-writers
+```
 
-Process activity is checked again before every destructive phase and immediately
-before every cache deletion. Individual cache roots also receive a best-effort
-`lsof` open-path snapshot when macOS exposes those handles. A new build
-process, reported open file, unavailable safety tool, or explicit open-path
-inspection error aborts the remaining destructive work. Directory mtime remains
-a secondary skip signal; it is not evidence that a build is idle.
+Each line means the named owner has confirmed every relevant writer uses this
+protocol before its first build-resource write, or cannot run during cleanup.
+Listing an owner without completing that work is not authorization. Missing,
+reordered, extra, unreadable, replaced, symlinked, or writable-by-other policy
+data denies cleanup. There is no environment or command-line bypass.
 
-`--dry-run` does not wait, lock, or delete. It only reports candidates.
+Only `plozz-current-writers` is implemented by this change. Remaining blockers:
 
-## Regression test
+- older Plozz worktrees containing pre-interlock scripts;
+- current and older Mozz writer entrypoints;
+- current and older Twozz writer entrypoints;
+- current and older Hozz writer entrypoints;
+- direct/manual Xcode, raw `xcodebuild`, and third-party build tools;
+- installed global cleanup entrypoints and reviewed owner evidence.
 
-Run `tools/tests/test-disk-reclaim.sh`. It uses temporary HOME/cache roots and
-fake sleeping Apple build executables to cover required process names, active
-build refusal in both scripts, lock overlap, stale lock-file recovery, open-path
-abort, unsafe-root refusal, and successful cleanup after a quiet interval.
+The exact legacy file cannot express Hozz or time-bounded owner holds. Its wire
+format remains frozen for existing readers. **It is not sufficient authorization
+for global cleanup.** The separate [attested maintenance-window policy](apple-maintenance-windows.md)
+adds Hozz, current/legacy inventories, exact release-manifest scope, and explicit
+human approval. Its updater writes only the companion file under the conflicting
+policy lock; it never enables the legacy gate or removes suspension.
+
+Until those owners are coordinated, keep `SUSPENDED`, keep broad schedules
+disabled, and do not create the rollout file. The interlock alone is not a claim
+that cross-app cleanup is ready.
+
+## Shared/exclusive protocol
+
+The same-user host-wide namespace is:
+
+```text
+~/.config/smart-disk-maintenance/apple-build-interlock-v1/
+```
+
+The path is physically resolved from the effective UID's account record, not
+caller `HOME`, so alternate environments or a symlinked home cannot create a
+second production lock domain or weaken protected-path comparisons.
+It is outside DerivedData, SwiftPM caches, worktrees, and every reclaim target.
+The protocol uses Darwin `flock` through the system Python standard library:
+
+- build, test, generation, localization, archive, upload, processing,
+  distribution, and tagging lanes hold a shared lease;
+- several shared leases may coexist;
+- cleanup requests an exclusive lease with `LOCK_NB` and refuses immediately
+  when any shared lease is active;
+- once exclusive ownership exists, a new cooperative build cannot start until
+  cleanup releases it.
+
+Shell and Fastlane callers retain the actual locked file descriptor and export
+its authenticated descriptor identity to descendants. Descendants inherit the
+same open file description, so a parent exit cannot release the kernel lock
+while a child still owns that descriptor. Nested entrypoints validate an
+unlinked proof descriptor plus exact lease id/token, record schema, lock inode,
+owner, and mode. Partial, forged, closed, replaced, or stale inherited state
+fails; it never falls back to a new lease.
+
+Every lease also publishes a durable JSON identity under `leases/`. Normal
+completion authenticates a release request, then a background finalizer waits
+for all inherited shared descriptors to close before removing that record.
+Signals, hard crashes, failed lanes, helper errors, malformed records, unknown
+files, or finalizer failure leave evidence behind. Exclusive cleanup refuses
+every remaining record and never infers safety from PID age, an empty process
+list, or a quiet machine.
+
+Inspect records without changing them:
+
+```bash
+/usr/bin/python3 tools/lib/apple_build_lease.py inspect
+```
+
+There is deliberately no automatic stale-record deletion. Investigate the
+record and its owner while cleanup remains suspended before resolving any exact
+fixture or production record.
+
+## Plozz writer coverage
+
+Current Plozz entrypoints acquire a shared lease before their first relevant
+write:
+
+- Fastlane `generate_project`, `build`, `beta`, and `release`; outer
+  `beta`/`release` ownership spans both platform archives, uploads, processing,
+  external distribution, and GitHub tagging;
+- `tools/generate-project.sh`;
+- `tools/deploy-tv.sh` and `tools/deploy-ios.sh`;
+- `tools/run-tests.sh` and `tools/test-fast.sh`;
+- `tools/l10n-sync.py`, `tools/l10n-guard.sh`, and
+  `tools/l10n-prune-stale-products.sh`;
+- `tools/capture-shots.sh`;
+- the on-device pairing probe under `experiments/sync-feasibility-probes/`;
+- the direct CI simulator build through
+  `tools/with-apple-build-lease.sh`.
+
+The lease is independent of output naming and location. Worktree `.build`
+folders, per-worktree test/localization roots, and multiple Xcode DerivedData
+folders remain distinct real outputs; this change does not merge, rename, or
+reinterpret them.
+
+## Defense in depth
+
+After cleanup acquires exclusive ownership, the previous checks still run:
+
+- a continuous Apple-build quiet interval;
+- process checks before each destructive phase and path;
+- `lsof` open-path inspection when enabled;
+- recent-mtime skips;
+- absolute/resolved cache-container and deletion-target validation;
+- hard refusal for the shared SwiftPM repository cache.
+
+These checks catch uncooperative or unexpected activity, but they do not replace
+the cooperative lease. Process sampling alone has a start-after-check race.
+
+The policy lock is held shared for the whole cleanup lane. Tooling that
+changes `SUSPENDED` or rollout policy must take the conflicting exclusive policy
+lock. Per-delete verification also confirms the marker is still absent and the
+opened policy/coordination files retain the same inode and content. Manual file
+changes that ignore this protocol remain a rollout blocker.
+
+Protected source, Git data, worktrees, archives, IPAs, release dSYMs/evidence,
+SDKs/toolchains, shared SwiftPM dependencies, simulator data, VMs, personal
+data, and Trash are not made eligible by this lease. Target selection and
+release-retention policy remain separate mandatory checks.
+
+`--dry-run` does not acquire exclusive ownership and deletes nothing.
+
+## Regression tests
+
+No app build or real cleanup is required:
+
+```bash
+tools/tests/test-apple-build-interlock.sh
+tools/tests/test-disk-reclaim.sh
+```
+
+Tests use temporary HOME/cache roots only. They cover concurrent readers,
+nonblocking exclusive refusal, writer-to-reader handoff, release-lane gaps,
+nested and exec inheritance, Ruby-to-child descriptor inheritance, children
+outliving parents, written identity, effective-UID and physical-home resolution,
+forged environments, signal/crash orphan evidence, malformed registry state,
+lock replacement, suspension/rollout gates, process checks, open paths, unsafe
+targets, test-root confinement, and fixture-only cleanup. Test mode requires its
+lock namespace and every destructive target to remain under the same private
+system-temporary HOME, and disables cleanup extras.
 
 ## Scheduling
 
-Use one scheduler: either the app workflow **Daily disk-cache reclaim + report**
-or the optional `tools/install-reclaim-agent.sh` LaunchAgent. Both execute the
-same guarded `tools/reclaim-disk.sh`; enabling both adds no safety and creates
-duplicate reports/work.
-
-## Remaining boundary
-
-No process-sampling guard can make the final check and `rm` one atomic operation.
-A build started in the narrow gap after the last process/open-path check can
-still race deletion. Eliminating that gap requires every Apple build entry point
-to acquire the same maintenance lock before starting.
+Broad daily cleanup workflows and the optional LaunchAgent must remain disabled
+while `SUSPENDED` or rollout blockers exist. Enabling multiple schedulers adds
+no safety; every installed/manual scheduler must call the same exclusive-lease
+entrypoint after rollout approval.

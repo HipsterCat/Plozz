@@ -20,7 +20,7 @@ import SeerService
 ///
 /// Unlike the OAuth trackers (device-code flows), Seerr is self-hosted, so this
 /// collects a server URL and an admin API key, then drives
-/// ``SeerService/connect(baseURL:apiKey:userId:)`` and reflects the resulting
+/// ``SeerService/connect(baseURL:apiKey:)`` and reflects the resulting
 /// ``SeerConnectionPhase``.
 struct SeerDetailView: View {
     let seer: SeerService
@@ -190,7 +190,9 @@ struct SeerDetailView: View {
 
                 Button(role: .destructive) {
                     seer.disconnect()
-                    apiKeyText = ""
+                    if !seer.isConfigured {
+                        apiKeyText = ""
+                    }
                 } label: {
                     Label("Disconnect", systemImage: "xmark.circle")
                 }
@@ -220,7 +222,9 @@ struct SeerDetailView: View {
                         Label("Couldn’t load Seerr users.", systemImage: "exclamationmark.triangle.fill")
                             .font(.callout)
                             .foregroundStyle(.orange)
-                        Button { Task { await loadUsers() } } label: {
+                        Button {
+                            Task { await loadUsers(for: seer.connectionRevision) }
+                        } label: {
                             Label("Retry", systemImage: "arrow.clockwise")
                         }
                     }
@@ -234,27 +238,49 @@ struct SeerDetailView: View {
                         }
                     }
                 case .empty:
-                    Text("No Seerr users found.").font(.callout).plozzForeground(.secondary)
+                    VStack(spacing: 14) {
+                        Text("No Seerr users found.")
+                            .font(.callout)
+                            .plozzForeground(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        ForEach(profiles) { profile in
+                            NavigationLink(
+                                value: SettingsRoute.seerUserPicker(profileID: profile.id)
+                            ) {
+                                profileMappingRow(profile: profile, users: [])
+                            }
+                            .buttonStyle(SettingsFocusButtonStyle())
+                        }
+                    }
                 }
             }
-            .task { await loadUsersIfNeeded() }
+            .task(id: seer.connectionRevision) {
+                let revision = seer.connectionRevision
+                users = .idle
+                await loadUsers(for: revision)
+            }
         }
     }
 
     /// A single profile → Seerr-user row: profile name on the left, the mapped
     /// user (or "Admin — unrestricted") on the right.
     private func profileMappingRow(profile: Profile, users: [SeerUser]) -> some View {
-        // Prefer the freshly-loaded user's name (self-heals a stale cached name),
-        // else the cached name, else the neutral admin label.
-        let mappedName: String? = profile.seerrUserID.flatMap { id in
-            users.first(where: { $0.id == id })?.name ?? profile.seerrUserName
-        }
+        let identity = profile.seerrRequestIdentity
+        let mappedUser = currentUser(for: identity, in: users)
+        let needsRelink = identity.userID != nil && mappedUser == nil
         return HStack(spacing: 16) {
             ProfileAvatarView(profile: profile, size: 40)
             Text(profile.name)
             Spacer()
-            mappedName.map { Text(verbatim: $0) } ?? Text("Admin — unrestricted")
-                .foregroundStyle(mappedName == nil ? .secondary : .primary)
+            if needsRelink {
+                Text("Relink required")
+                    .foregroundStyle(.orange)
+            } else if let mappedUser {
+                Text(verbatim: mappedUser.name)
+            } else {
+                Text("Admin — unrestricted")
+                    .plozzForeground(.secondary)
+            }
             Image(systemName: "chevron.forward").font(.caption).plozzForeground(.tertiary)
         }
         .padding(.vertical, 12)
@@ -262,17 +288,31 @@ struct SeerDetailView: View {
         .contentShape(Rectangle())
     }
 
-    private func loadUsersIfNeeded() async {
-        if case .loaded = users { return }
-        await loadUsers()
+    private func currentUser(
+        for identity: SeerRequestIdentity,
+        in users: [SeerUser]
+    ) -> SeerUser? {
+        guard !identity.requiresRelink(to: seer.serverIdentity),
+              let userID = identity.userID,
+              let serverIdentity = seer.serverIdentity else {
+            return nil
+        }
+        return users.first {
+            $0.id == userID && $0.serverIdentity == serverIdentity
+        }
     }
 
-    private func loadUsers() async {
+    private func loadUsers(for revision: UUID? = nil) async {
+        let expectedRevision = revision ?? seer.connectionRevision
         users = .loading
         do {
             let list = try await seer.users()
+            guard seer.connectionRevision == expectedRevision else { return }
             users = list.isEmpty ? .empty : .loaded(list)
+        } catch is CancellationError {
+            return
         } catch {
+            guard seer.connectionRevision == expectedRevision else { return }
             users = .failed((error as? AppError) ?? .unknown(""))
         }
     }
@@ -309,7 +349,6 @@ struct SeerUserPickerView: View {
     @Environment(\.dismiss) private var dismiss
 
     private var profileName: String { profile.name }
-    private var selectedUserID: Int? { profile.seerrUserID }
 
     var body: some View {
         ScrollView {
@@ -322,7 +361,7 @@ struct SeerUserPickerView: View {
                         row(
                             title: Text("Admin — unrestricted"),
                             subtitle: Text("Requests as the admin; no per-user quota or approval."),
-                            isSelected: selectedUserID == nil
+                            isSelected: profile.seerrRequestIdentity == .admin
                         ) {
                             onSelect(nil)
                             dismiss()
@@ -341,13 +380,24 @@ struct SeerUserPickerView: View {
                                 Label("Couldn’t load Seerr users.", systemImage: "exclamationmark.triangle.fill")
                                     .font(.callout)
                                     .foregroundStyle(.orange)
-                                Button { Task { await loadUsers() } } label: {
+                                Button {
+                                    Task { await loadUsers(for: seer.connectionRevision) }
+                                } label: {
                                     Label("Retry", systemImage: "arrow.clockwise")
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.top, 6)
                         case let .loaded(list):
+                            if mappingNeedsRelink(in: list) {
+                                Label(
+                                    "Relink required. Choose a user from this Seerr server.",
+                                    systemImage: "exclamationmark.triangle.fill"
+                                )
+                                .font(.callout)
+                                .foregroundStyle(.orange)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
                             Text("Seerr users")
                                 .font(.caption.weight(.semibold))
                                 .textCase(.uppercase)
@@ -358,18 +408,30 @@ struct SeerUserPickerView: View {
                                 row(
                                     title: Text(verbatim: user.name),
                                     subtitle: user.subtitle.map { Text(verbatim: $0) },
-                                    isSelected: user.id == selectedUserID
+                                    isSelected: isSelected(user)
                                 ) {
+                                    guard isCurrentServerUser(user) else { return }
                                     onSelect(user)
                                     dismiss()
                                 }
+                                .disabled(!isCurrentServerUser(user))
                             }
                         case .empty:
-                            Text("No Seerr users found.")
-                                .font(.callout)
-                                .plozzForeground(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.top, 6)
+                            VStack(alignment: .leading, spacing: 8) {
+                                if mappingNeedsRelink(in: []) {
+                                    Label(
+                                        "Relink required. Choose a user from this Seerr server.",
+                                        systemImage: "exclamationmark.triangle.fill"
+                                    )
+                                    .font(.callout)
+                                    .foregroundStyle(.orange)
+                                }
+                                Text("No Seerr users found.")
+                                    .font(.callout)
+                                    .plozzForeground(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 6)
                         }
                     }
                 }
@@ -380,18 +442,51 @@ struct SeerUserPickerView: View {
             .padding(.vertical, 24)
         }
         .scrollClipDisabled()
-        .task {
-            if case .loaded = users { return }
-            await loadUsers()
+        .task(id: seer.connectionRevision) {
+            let revision = seer.connectionRevision
+            users = .idle
+            await loadUsers(for: revision)
         }
     }
 
-    private func loadUsers() async {
+    private var selectedUserID: Int? {
+        guard !profile.seerrRequestIdentity.requiresRelink(to: seer.serverIdentity) else {
+            return nil
+        }
+        return profile.seerrRequestIdentity.userID
+    }
+
+    private func isCurrentServerUser(_ user: SeerUser) -> Bool {
+        guard let serverIdentity = seer.serverIdentity else { return false }
+        return user.serverIdentity == serverIdentity
+    }
+
+    private func isSelected(_ user: SeerUser) -> Bool {
+        isCurrentServerUser(user) && user.id == selectedUserID
+    }
+
+    private func mappingNeedsRelink(in users: [SeerUser]) -> Bool {
+        let identity = profile.seerrRequestIdentity
+        guard let userID = identity.userID else { return false }
+        guard !identity.requiresRelink(to: seer.serverIdentity),
+              let serverIdentity = seer.serverIdentity else {
+            return true
+        }
+        return !users.contains {
+            $0.id == userID && $0.serverIdentity == serverIdentity
+        }
+    }
+
+    private func loadUsers(for revision: UUID) async {
         users = .loading
         do {
             let list = try await seer.users()
+            guard seer.connectionRevision == revision else { return }
             users = list.isEmpty ? .empty : .loaded(list)
+        } catch is CancellationError {
+            return
         } catch {
+            guard seer.connectionRevision == revision else { return }
             users = .failed((error as? AppError) ?? .unknown(""))
         }
     }

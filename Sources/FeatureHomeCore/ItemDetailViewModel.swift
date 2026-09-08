@@ -103,6 +103,7 @@ public final class ItemDetailViewModel {
             case completed
             case invalidated(generation: UInt64)
             case callerCancelled
+            case superseded(SeasonLoad)
         }
 
         let token: UUID
@@ -152,6 +153,12 @@ public final class ItemDetailViewModel {
         }
 
         @MainActor
+        func supersede(with replacement: SeasonLoad) {
+            resolve(.superseded(replacement))
+            task?.cancel()
+        }
+
+        @MainActor
         private func cancelWaiter(_ waiterID: UUID) {
             waiters.removeValue(forKey: waiterID)?.resume(returning: .callerCancelled)
         }
@@ -176,6 +183,7 @@ public final class ItemDetailViewModel {
     private var lastNonRetrySeasonLoadGeneration: UInt64 = 0
     private var seasonLoadingSuspended = false
     private var seasonLoadingResumeSourceGeneration: UInt64?
+    private let seasonEpisodeRosters = SeasonEpisodeRosterModel()
     /// Full per-item episode facts used by the hero. Deliberately separate from
     /// `seasonEpisodes`: enriching a focused hero must not replace the visible rail.
     @ObservationIgnored private var enrichedEpisodesByID: [String: MediaItem] = [:]
@@ -237,6 +245,11 @@ public final class ItemDetailViewModel {
     /// "Downloading" state instead of the stale "Request" seeded from the search
     /// result. `nil` (or a `nil` result) leaves the seeded state untouched.
     private let discoveryStatusRefresh: (@Sendable (MediaItem) async -> (MediaAvailabilityStatus, Double?)?)?
+    /// Loads a season's complete canonical metadata roster. Kept separate from
+    /// ``seasonEpisodes`` because metadata-only rows are never playable library
+    /// items and must not enter snapshots or download flows.
+    private let seasonEpisodeRosterLoader:
+        (@Sendable (MediaItem, Int) async -> SeasonEpisodeRosterResult)?
     private let externalMetadataResolver:
         @Sendable (MediaItem, String) async -> ExternalTitleMetadata
     private let availabilityRegionCode: String
@@ -345,7 +358,8 @@ public final class ItemDetailViewModel {
     /// Plozz sources prevents offering a season that is already playable elsewhere.
     public func ownedSeasonNumbersAcrossSources() async -> Set<Int> {
         var numbers = Set(state.value?.children.compactMap { child in
-            child.kind == .season || child.kind == .episode ? child.seasonNumber : nil
+            (child.kind == .season || child.kind == .episode) && child.locallyValidatedPlayableSource
+                ? child.seasonNumber : nil
         } ?? [])
         let sourceSnapshot = sources
         for source in sourceSnapshot {
@@ -356,7 +370,8 @@ public final class ItemDetailViewModel {
                   let children = try? await provider.children(of: source.itemID)
             else { continue }
             numbers.formUnion(children.compactMap { child in
-                child.kind == .season || child.kind == .episode ? child.seasonNumber : nil
+                (child.kind == .season || child.kind == .episode) && child.locallyValidatedPlayableSource
+                    ? child.seasonNumber : nil
             })
         }
         return numbers
@@ -461,6 +476,8 @@ public final class ItemDetailViewModel {
         initialResumeEpisode: MediaItem? = nil,
         isDiscoveryItem: Bool = false,
         discoveryStatusRefresh: (@Sendable (MediaItem) async -> (MediaAvailabilityStatus, Double?)?)? = nil,
+        loadSeasonEpisodeRoster:
+            (@Sendable (MediaItem, Int) async -> SeasonEpisodeRosterResult)? = nil,
         externalMetadataResolver: @escaping @Sendable (MediaItem, String) async -> ExternalTitleMetadata = {
             await ExternalTitleMetadataResolver.shared.resolve(
                 item: $0,
@@ -488,6 +505,7 @@ public final class ItemDetailViewModel {
         self.activeItemID = itemID
         self.isDiscoveryItem = isDiscoveryItem
         self.discoveryStatusRefresh = discoveryStatusRefresh
+        self.seasonEpisodeRosterLoader = loadSeasonEpisodeRoster
         self.externalMetadataResolver = externalMetadataResolver
         self.availabilityRegionCode = availabilityRegionCode
         // Fall back to the library-origin account when a direct source tag is
@@ -1070,6 +1088,16 @@ public final class ItemDetailViewModel {
         return .loaded(episodes)
     }
 
+    /// The complete canonical metadata roster state for a numbered season.
+    ///
+    /// This is deliberately independent of ``seasonEpisodes``: roster entries can
+    /// describe missing or unaired episodes and are never playable library items.
+    public func seasonEpisodeRosterState(
+        for seasonNumber: Int
+    ) -> SeasonEpisodeRosterLoadState {
+        seasonEpisodeRosters.state(for: seasonNumber)
+    }
+
     /// Starts the SPECULATIVE off-critical-path enrichment for `item` as
     /// cancellable work: cross-server server-picker discovery and alternate-source
     /// watch-state. Crucially `load()` does NOT await this — so navigating away
@@ -1261,6 +1289,7 @@ public final class ItemDetailViewModel {
         alternateSourceEnrichmentTask?.cancel(); alternateSourceEnrichmentTask = nil
         seasonLoadingSuspended = true
         cancelSeasonLoads()
+        seasonEpisodeRosters.reset()
     }
 
     /// Resumes enrichment for a page returned to (popped back onto) whose work was
@@ -1778,20 +1807,23 @@ public final class ItemDetailViewModel {
         return feed.first { $0.seriesID == item.id }
     }
 
-    /// coalesce onto one request and all await its result. Fetch failures cache an
-    /// empty list so a missing season does not retry on every focus change.
-    public func loadEpisodes(for seasonID: String) async {
+    /// Loads episode children from a season or the active series container.
+    /// Concurrent calls coalesce onto one request and all await its result. Fetch
+    /// failures cache an empty list so a missing season does not retry on every
+    /// focus change.
+    public func loadEpisodes(for seasonID: String, forceRefresh: Bool = false) async {
         let sourceItemID = activeItemID
         let sourceAccountID = activeSourceAccountID
         let loadSourceGeneration = sourceGeneration
+        var needsForcedRefresh = forceRefresh
         while !Task.isCancelled,
               !seasonLoadingSuspended,
               sourceGeneration == loadSourceGeneration,
               activeItemID == sourceItemID,
               activeSourceAccountID == sourceAccountID {
-            guard isCurrentSeasonID(seasonID) else { return }
-            let load: SeasonLoad
-            if let existing = seasonLoads[seasonID] {
+            guard isCurrentEpisodeContainerID(seasonID) else { return }
+            var load: SeasonLoad
+            if let existing = seasonLoads[seasonID], !needsForcedRefresh {
                 load = existing
             } else {
                 // A season whose fetch failed holds a placeholder `[]`, not an
@@ -1801,12 +1833,16 @@ public final class ItemDetailViewModel {
                 // the caller reaches here on discrete events (open, season
                 // change, refresh), not on every focus move.
                 let previousAttemptFailed = seasonLoadFailures.contains(seasonID)
-                if seasonEpisodes[seasonID] != nil, !previousAttemptFailed {
+                if !needsForcedRefresh,
+                   seasonEpisodes[seasonID] != nil,
+                   !previousAttemptFailed {
                     return
                 }
                 let provider = activeProvider
                 let token = UUID()
                 load = SeasonLoad(token: token)
+                let superseded = seasonLoads[seasonID]
+                let isSeriesContainer = seasonID == state.value?.item.id || seasonID == activeItemID
                 load.task = Task { @MainActor [weak self, weak load, provider] in
                     defer {
                         if self?.seasonLoads[seasonID]?.token == token {
@@ -1818,9 +1854,10 @@ public final class ItemDetailViewModel {
                     // "the request failed": both cache `[]` so neither retries on
                     // every focus change, but only the first is an answer.
                     let fetched = try? await provider.children(of: seasonID)
-                    let episodes = fetched ?? []
+                    let episodes = (fetched ?? []).filter { !isSeriesContainer || $0.kind == .episode }
                     guard !Task.isCancelled,
                           let self,
+                          self.seasonLoads[seasonID]?.token == token,
                           self.sourceGeneration == loadSourceGeneration,
                           self.activeItemID == sourceItemID,
                           self.activeSourceAccountID == sourceAccountID else { return }
@@ -1833,16 +1870,62 @@ public final class ItemDetailViewModel {
                     self.persistSnapshot()
                 }
                 seasonLoads[seasonID] = load
+                superseded?.supersede(with: load)
             }
+            needsForcedRefresh = false
+            awaitingLoad: while true {
+                switch await load.wait() {
+                case .completed:
+                    return
+                case let .invalidated(generation):
+                    guard generation > lastNonRetrySeasonLoadGeneration else { return }
+                    break awaitingLoad
+                case .callerCancelled:
+                    return
+                case .superseded(let replacement):
+                    load = replacement
+                }
+            }
+        }
+    }
 
-            switch await load.wait() {
-            case .completed:
-                return
-            case let .invalidated(generation):
-                guard generation > lastNonRetrySeasonLoadGeneration else { return }
-            case .callerCancelled:
-                return
-            }
+    /// Loads the complete canonical episode metadata for one season.
+    ///
+    /// Ordinary calls for the same season coalesce while a request is running.
+    /// `forceRefresh` supersedes an in-flight request so a changed metadata
+    /// connection cannot publish its old answer afterward. Successful, empty,
+    /// unavailable, and failed answers remain view-scoped terminal states.
+    public func loadSeasonEpisodeRoster(
+        for seasonNumber: Int,
+        forceRefresh: Bool = false
+    ) async {
+        guard seasonNumber >= 0,
+              let loader = seasonEpisodeRosterLoader,
+              let item = state.value?.item,
+              item.kind == .series,
+              let seriesTMDbID = seriesTMDbID(for: item), seriesTMDbID > 0 else {
+            seasonEpisodeRosters.markUnavailable(for: seasonNumber)
+            return
+        }
+        guard !seasonLoadingSuspended else { return }
+        let requestSourceGeneration = sourceGeneration
+        let requestItemID = activeItemID
+        let requestDetailItemID = item.id
+        let requestAccountID = activeSourceAccountID
+        await seasonEpisodeRosters.load(
+            item: item, number: seasonNumber, seriesTMDbID: seriesTMDbID,
+            forceRefresh: forceRefresh, loader: loader
+        ) { [weak self] in
+            guard let self,
+                  self.isCurrentSource(
+                    generation: requestSourceGeneration,
+                    itemID: requestItemID,
+                    accountID: requestAccountID
+                  ),
+                  let current = self.state.value?.item,
+                  current.id == requestDetailItemID,
+                  self.seriesTMDbID(for: current) == seriesTMDbID else { return false }
+            return true
         }
     }
 
@@ -1921,8 +2004,15 @@ public final class ItemDetailViewModel {
             && activeSourceAccountID == accountID
     }
 
-    private func isCurrentSeasonID(_ seasonID: String) -> Bool {
-        state.value?.children.contains(where: { $0.id == seasonID }) == true
+    private func isCurrentEpisodeContainerID(_ containerID: String) -> Bool {
+        containerID == activeItemID
+            || containerID == state.value?.item.id
+            || state.value?.children.contains(where: { $0.id == containerID }) == true
+    }
+
+    private func seriesTMDbID(for item: MediaItem) -> Int? {
+        item.providerID(.tmdb).flatMap(Int.init)
+            ?? item.providerID(.seriesTmdb).flatMap(Int.init)
     }
 
     private func invalidateSourceOperations() {
@@ -1937,6 +2027,7 @@ public final class ItemDetailViewModel {
         pendingSnapshotWrite?.cancel()
         pendingSnapshotWrite = nil
         enrichedEpisodesByID.removeAll()
+        seasonEpisodeRosters.reset()
     }
 
     /// Captures the series-level context (TMDb id + anime ids/genre) used to stamp

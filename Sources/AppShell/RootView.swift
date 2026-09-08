@@ -1010,7 +1010,8 @@ private struct OnboardingPageContent: View {
                         username: draft.username,
                         password: draft.password,
                         displayName: draft.displayName,
-                        subpath: draft.subpath
+                        subpath: draft.subpath,
+                        libraryConfiguration: draft.libraryConfiguration
                     )
                 },
                 onWebDAVShareConfigured: { config in
@@ -1018,7 +1019,8 @@ private struct OnboardingPageContent: View {
                         baseURL: config.baseURL,
                         auth: config.auth,
                         trustPin: config.trustPin,
-                        displayName: config.displayName
+                        displayName: config.displayName,
+                        libraryConfiguration: config.libraryConfiguration
                     )
                 },
                 onMediaShareConfigured: { result in
@@ -1029,7 +1031,8 @@ private struct OnboardingPageContent: View {
                             port: config.port,
                             exportPath: config.exportPath,
                             subpath: config.subpath,
-                            displayName: config.displayName
+                            displayName: config.displayName,
+                            libraryConfiguration: config.libraryConfiguration
                         )
                     case let .sftp(config):
                         appState.didConfigureSFTPShare(
@@ -1039,14 +1042,16 @@ private struct OnboardingPageContent: View {
                             username: config.username,
                             password: config.password,
                             hostKeyPin: config.hostKeyPin,
-                            displayName: config.displayName
+                            displayName: config.displayName,
+                            libraryConfiguration: config.libraryConfiguration
                         )
                     case let .ftp(config):
                         appState.didConfigureFTPShare(
                             baseURL: config.baseURL,
                             auth: config.auth,
                             trustPin: config.trustPin,
-                            displayName: config.displayName
+                            displayName: config.displayName,
+                            libraryConfiguration: config.libraryConfiguration
                         )
                     }
 

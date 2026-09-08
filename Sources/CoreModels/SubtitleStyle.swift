@@ -8,13 +8,14 @@ import Foundation
 /// app (Latin glyphs only); the renderer cascades to the tvOS system CJK fonts for
 /// Japanese/Korean/Chinese so mixed-language and dual-subtitle lines still render.
 /// `system` falls back to SF (no bundle). The enum is deliberately small and
-/// additive — more bundled faces (e.g. a neutral grotesque) can be appended.
+/// additive. Avenir uses the face supplied by iOS/tvOS rather than a bundled font.
 public enum SubtitleFontFamily: String, Codable, Sendable, Equatable, CaseIterable {
     case atkinson
     case system
-    case sfRounded
     case roboto
+    case avenir
     case lexend
+    case sfRounded
     case fredoka
     case openDyslexic
 
@@ -27,14 +28,12 @@ public enum SubtitleFontFamily: String, Codable, Sendable, Equatable, CaseIterab
         case .lexend: return "Lexend"
         case .fredoka: return "Fredoka"
         case .openDyslexic: return "OpenDyslexic"
+        case .avenir: return "Avenir"
         }
     }
 
-    /// The PostScript family stem of the bundled face, or `nil` to use the system
-    /// font. The renderer appends the weight/slant suffix (`-Regular`/`-Medium`/
-    /// `-SemiBold`/`-Bold`/`-Italic`/`-BoldItalic`), degrading to a lighter/upright
-    /// face when a family doesn't bundle every combination (e.g. Lexend ships no
-    /// italics). `system` and `sfRounded` render via the system font (no bundle).
+    /// The PostScript family stem of a named face, or `nil` for SF.
+    /// Use `postScriptNameCandidates` to resolve family-specific weight/slant names.
     public var postScriptStem: String? {
         switch self {
         case .atkinson: return "AtkinsonHyperlegible"
@@ -43,11 +42,11 @@ public enum SubtitleFontFamily: String, Codable, Sendable, Equatable, CaseIterab
         case .lexend: return "Lexend"
         case .fredoka: return "Fredoka"
         case .openDyslexic: return "OpenDyslexic"
+        case .avenir: return "Avenir"
         }
     }
 
-    /// True when the family is drawn with the tvOS system font rather than a
-    /// bundled face (SF and SF Rounded).
+    /// True for the default system-font APIs (SF and SF Rounded), not named faces.
     public var usesSystemFont: Bool { postScriptStem == nil }
 
     /// True when the system font should adopt the rounded design (SF Rounded).
@@ -57,14 +56,43 @@ public enum SubtitleFontFamily: String, Codable, Sendable, Equatable, CaseIterab
     /// the nearest of these, so the picker only ever shows real faces: the system
     /// families expose the full range; the static bundled faces (Atkinson,
     /// OpenDyslexic) only Regular/Bold; the variable-derived faces (Lexend,
-    /// Roboto, Fredoka) ship Regular/Medium/SemiBold/Bold.
+    /// Roboto, Fredoka) ship Regular/Medium/SemiBold/Bold. Avenir maps those choices
+    /// to its built-in Roman/Medium/Heavy/Black faces.
     public var availableWeights: [SubtitleFontWeight] {
         switch self {
         case .atkinson, .openDyslexic:
             return [.regular, .bold]
-        case .system, .sfRounded, .roboto, .lexend, .fredoka:
+        case .system, .sfRounded, .roboto, .lexend, .fredoka, .avenir:
             return [.regular, .medium, .semibold, .bold]
         }
+    }
+
+    /// Ordered face names for rendering and picker previews. Unsupported bundled
+    /// italic weights preserve slant first, then fall back to an upright face.
+    public func postScriptNameCandidates(
+        weight: SubtitleFontWeight = .regular, isItalic: Bool = false
+    ) -> [String] {
+        guard let stem = postScriptStem else { return [] }
+        let weight = weight.snapped(to: availableWeights)
+        if self == .avenir {
+            let face: String
+            switch weight {
+            case .regular: face = isItalic ? "Oblique" : "Roman"
+            case .medium: face = isItalic ? "MediumOblique" : "Medium"
+            case .semibold: face = isItalic ? "HeavyOblique" : "Heavy"
+            case .bold: face = isItalic ? "BlackOblique" : "Black"
+            }
+            return ["\(stem)-\(face)"]
+        }
+        var candidates: [String] = []
+        if isItalic {
+            if weight == .bold { candidates.append("\(stem)-BoldItalic") }
+            candidates.append("\(stem)-Italic")
+        }
+        let downChain = availableWeights.filter { $0.value <= weight.value }.sorted { $0.value > $1.value }
+        candidates += downChain.map { "\(stem)-\($0.faceToken)" }
+        if !downChain.contains(.regular) { candidates.append("\(stem)-Regular") }
+        return candidates
     }
 }
 

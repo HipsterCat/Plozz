@@ -34,15 +34,22 @@ struct SearchTab: View {
     /// Seerr discovery service, backing the "Not in Your Library" search section
     /// and the discovery detail page's one-tap Request.
     let seer: SeerService
-    /// The active profile's linked Seerr user (`X-API-User`) for requests, or
-    /// `nil` to request as admin.
-    let activeSeerrUserID: Int?
+    /// The active profile's complete Seerr request identity.
+    let activeSeerrIdentity: SeerRequestIdentity
     /// Display name of the active profile's linked Seerr user, for "Request as
     /// <name>". `nil` when requesting as admin.
     let activeSeerrUserName: String?
     /// Whether an unmapped (admin) request should confirm first (multi-profile).
     let confirmAdminRequest: Bool
     let homeVisibility: HomeLibraryVisibilityModel
+
+    private var requestActingName: String? {
+        guard activeSeerrIdentity.userID != nil,
+              !activeSeerrIdentity.requiresRelink(to: seer.serverIdentity) else {
+            return nil
+        }
+        return activeSeerrUserName
+    }
     let behavior: SubtitleBehavior
     let style: SubtitleStyle
     let playbackSettings: PlaybackSettings
@@ -149,36 +156,50 @@ struct SearchTab: View {
                 onSelect: { open($0) }
             )
             .navigationDestination(for: MediaItem.self) { item in
-                // A discovery (Seerr) result that isn't in the library (id
-                // `seer:<tmdbId>`, requestable/in-flight availability) opens the
-                // request-focused discovery detail page rather than a library
-                // fetch. Search's "Not in Your Library" section only ever surfaces
-                // such titles (owned ones are filtered out).
-                ItemDetailView(
-                    viewModel: detailEnvironment.makeViewModel(for: item, libraryOrigin: nil),
-                    spoilerSettings: spoilerSettings,
-                    onPlay: { requestPlay($0) },
-                    onSelectChild: { open($0) },
-                    onNavigate: { navigateToItem($0) },
-                    onSelectPerson: { person, accountID in
-                        path.append(PersonRoute(person: person, sourceAccountID: accountID))
-                    },
-                    stackDepth: detailStackDepth,
-                    heroTrailerResolver: makeHeroTrailerResolver(),
-                    initialSeasonID: item.seasonID,
-                    seerConnected: seer.isConfigured,
-                    onRequest: { item in
-                        let outcome = await seer.request(item, actingUserID: activeSeerrUserID)
-                        return seerRequestResult(outcome, actingName: activeSeerrUserName)
-                    },
-                    requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
-                    onRequestSeasons: { item, seasons in
-                        let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
-                        return seerRequestResult(outcome, actingName: activeSeerrUserName)
-                    },
-                    requestActingName: activeSeerrUserName,
-                    confirmAdminRequest: confirmAdminRequest
-                )
+                let provider = resolveProvider(item.sourceAccountID, in: accounts)
+                if let library = MediaFolderNavigation.library(
+                    for: item,
+                    providerKind: provider.kind,
+                    sourceAccountID: item.sourceAccountID ?? provider.session.server.id
+                ) {
+                    MediaFolderBrowseView(
+                        library: library,
+                        provider: provider,
+                        spoilerSettings: spoilerSettings,
+                        onSelect: { open($0) }
+                    )
+                } else {
+                    // Discovery titles keep their request-focused detail page.
+                    ItemDetailView(
+                        viewModel: detailEnvironment.makeViewModel(for: item, libraryOrigin: nil),
+                        spoilerSettings: spoilerSettings,
+                        onPlay: { requestPlay($0) },
+                        onSelectChild: { open($0) },
+                        onNavigate: { navigateToItem($0) },
+                        onSelectPerson: { person, accountID in
+                            path.append(PersonRoute(person: person, sourceAccountID: accountID))
+                        },
+                        stackDepth: detailStackDepth,
+                        heroTrailerResolver: makeHeroTrailerResolver(),
+                        initialSeasonID: item.seasonID,
+                        seerConnected: seer.isConfigured,
+                        onRequest: { item in
+                            let outcome = await seer.request(item, identity: activeSeerrIdentity)
+                            return seerRequestResult(outcome, actingName: requestActingName)
+                        },
+                        requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
+                        onRequestSeasons: { item, seasons in
+                            let outcome = await seer.request(
+                                item,
+                                seasons: seasons,
+                                identity: activeSeerrIdentity
+                            )
+                            return seerRequestResult(outcome, actingName: requestActingName)
+                        },
+                        requestActingName: requestActingName,
+                        confirmAdminRequest: confirmAdminRequest
+                    )
+                }
             }
             .onChange(of: pendingTitleRoute) { _, item in
                 guard isActiveTab, let item else { return }
@@ -258,10 +279,14 @@ struct SearchTab: View {
                     seerConnected: seer.isConfigured,
                     requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
                     onRequestSeasons: { item, seasons in
-                        let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
-                        return seerRequestResult(outcome, actingName: activeSeerrUserName)
+                        let outcome = await seer.request(
+                            item,
+                            seasons: seasons,
+                            identity: activeSeerrIdentity
+                        )
+                        return seerRequestResult(outcome, actingName: requestActingName)
                     },
-                    requestActingName: activeSeerrUserName,
+                    requestActingName: requestActingName,
                     confirmAdminRequest: confirmAdminRequest
                 )
             }
@@ -286,10 +311,14 @@ struct SearchTab: View {
                     seerConnected: seer.isConfigured,
                     requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
                     onRequestSeasons: { item, seasons in
-                        let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
-                        return seerRequestResult(outcome, actingName: activeSeerrUserName)
+                        let outcome = await seer.request(
+                            item,
+                            seasons: seasons,
+                            identity: activeSeerrIdentity
+                        )
+                        return seerRequestResult(outcome, actingName: requestActingName)
                     },
-                    requestActingName: activeSeerrUserName,
+                    requestActingName: requestActingName,
                     confirmAdminRequest: confirmAdminRequest
                 )
             }
@@ -331,6 +360,7 @@ struct SearchTab: View {
             continueWatchingSnapshot: continueWatchingSnapshot,
             ratingsProvider: ratingsProvider,
             discoveryStatusRefresh: { await seer.availability(for: $0) },
+            loadSeasonEpisodeRoster: { await seer.seasonEpisodeRoster(for: $0, seasonNumber: $1) },
             makeRelatedTitlesLoader: {
                 makeRelatedTitlesLoader(
                     in: accounts,

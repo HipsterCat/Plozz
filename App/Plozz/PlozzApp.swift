@@ -1,5 +1,6 @@
 import SwiftUI
 import AppShell
+import AppRuntime
 import CoreModels
 import CoreUI
 
@@ -7,6 +8,7 @@ import CoreUI
 @main
 struct PlozzApp: App {
     init() {
+        ProcessSignalPolicy.ignoreBrokenPipe()
         URLCache.shared = URLCache(
             memoryCapacity: 64 * 1024 * 1024,   // 64 MB in memory
             diskCapacity: 512 * 1024 * 1024,    // 512 MB on disk
