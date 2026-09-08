@@ -6,74 +6,30 @@ import UIKit
 @MainActor
 final class TVNavigationExitProtectionTests: XCTestCase {
     private var window: UIWindow!
-    private var tabs: UITabBarController!
     private var selected: UIViewController!
 
     override func setUp() {
         super.setUp()
         window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080))
-        tabs = UITabBarController()
         selected = UIViewController()
-        tabs.viewControllers = [selected, UIViewController()]
-        tabs.selectedIndex = 0
-        window.rootViewController = tabs
+        window.rootViewController = selected
         window.makeKeyAndVisible()
-        tabs.view.layoutIfNeeded()
+        selected.view.layoutIfNeeded()
     }
 
     override func tearDown() {
         window.isHidden = true
         window = nil
-        tabs = nil
         selected = nil
         super.tearDown()
     }
 
-    func testTabBarFocusIsProtected() {
-        let focusedView = UIView()
-        tabs.tabBar.addSubview(focusedView)
-
-        XCTAssertTrue(
-            TVNavigationExitProtectionFocus.isRootNavigationView(focusedView, in: window)
-        )
-    }
-
-    func testSelectedContentFocusIsNotProtected() {
+    func testUnpresentedRootContainsFocusedView() {
         let focusedView = UIView()
         selected.view.addSubview(focusedView)
 
-        XCTAssertFalse(
-            TVNavigationExitProtectionFocus.isRootNavigationView(focusedView, in: window)
-        )
-    }
-
-    func testInactiveTabContentIsNotMistakenForSidebarChrome() {
-        let inactive = tabs.viewControllers![1]
-        tabs.view.addSubview(inactive.view)
-        let focusedView = UIView()
-        inactive.view.addSubview(focusedView)
-
-        XCTAssertFalse(
-            TVNavigationExitProtectionFocus.isRootNavigationView(focusedView, in: window)
-        )
-    }
-
-    func testSidebarControllerFocusIsProtectedWithoutPrivateTypeChecks() {
-        let content = selected!
-        // Native SwiftUI tabs use UITab; legacy addChild registers every child
-        // as tab content, which cannot represent a separate sidebar controller.
-        tabs.tabs = [
-            UITab(title: "Home", image: nil, identifier: "home") { _ in content }
-        ]
-        let sidebar = UIViewController()
-        tabs.addChild(sidebar)
-        tabs.view.addSubview(sidebar.view)
-        sidebar.didMove(toParent: tabs)
-        let focusedView = UIView()
-        sidebar.view.addSubview(focusedView)
-
         XCTAssertTrue(
-            TVNavigationExitProtectionFocus.isRootNavigationView(focusedView, in: window)
+            TVNavigationExitProtectionFocus.isUnpresentedRootView(focusedView, in: window)
         )
     }
 
@@ -82,50 +38,38 @@ final class TVNavigationExitProtectionTests: XCTestCase {
         window.addSubview(overlay)
 
         XCTAssertFalse(
-            TVNavigationExitProtectionFocus.isRootNavigationView(overlay, in: window)
+            TVNavigationExitProtectionFocus.isUnpresentedRootView(overlay, in: window)
         )
     }
 
-    func testTextInputInNavigationChromeIsNotProtected() {
-        let sidebar = UIViewController()
-        tabs.addChild(sidebar)
-        tabs.view.addSubview(sidebar.view)
-        sidebar.didMove(toParent: tabs)
+    func testTextInputAndItsSubviewsAreNotProtected() {
         let searchField = UITextField()
-        sidebar.view.addSubview(searchField)
+        selected.view.addSubview(searchField)
+        let inputSubview = UIView()
+        searchField.addSubview(inputSubview)
 
         XCTAssertFalse(
-            TVNavigationExitProtectionFocus.isRootNavigationView(searchField, in: window)
+            TVNavigationExitProtectionFocus.isUnpresentedRootView(searchField, in: window)
+        )
+        XCTAssertFalse(
+            TVNavigationExitProtectionFocus.isUnpresentedRootView(inputSubview, in: window)
         )
     }
 
-    func testPushedDetailDisablesProtectionEvenWithTabBarFocus() {
-        let root = UIViewController()
-        let navigation = UINavigationController(rootViewController: root)
-        tabs.viewControllers = [navigation]
-        navigation.pushViewController(UIViewController(), animated: false)
-        let focusedView = UIView()
-        tabs.tabBar.addSubview(focusedView)
-
-        XCTAssertFalse(
-            TVNavigationExitProtectionFocus.isRootNavigationView(focusedView, in: window)
-        )
-    }
-
-    func testPresentedControllerDisablesProtectionEvenWithTabBarFocus() {
+    func testPresentedControllerDisablesProtection() {
         let modal = UIViewController()
-        tabs.present(modal, animated: false)
         let focusedView = UIView()
-        tabs.tabBar.addSubview(focusedView)
+        selected.view.addSubview(focusedView)
+        selected.present(modal, animated: false)
 
         XCTAssertFalse(
-            TVNavigationExitProtectionFocus.isRootNavigationView(focusedView, in: window)
+            TVNavigationExitProtectionFocus.isUnpresentedRootView(focusedView, in: window)
         )
     }
 
     func testCoordinatorDetachesWhenMarkerLeavesItsWindow() {
         let coordinator = TVNavigationExitProtection.Coordinator()
-        coordinator.update(isEnabled: true, window: window)
+        coordinator.update(isEnabled: true, navigationHasFocus: true, window: window)
         XCTAssertEqual(exitProtectionRecognizers(in: window).count, 1)
 
         coordinator.move(to: nil)
@@ -135,7 +79,7 @@ final class TVNavigationExitProtectionTests: XCTestCase {
     func testCoordinatorMovesRecognizerBetweenWindows() {
         let secondWindow = UIWindow(frame: window.frame)
         let coordinator = TVNavigationExitProtection.Coordinator()
-        coordinator.update(isEnabled: true, window: window)
+        coordinator.update(isEnabled: true, navigationHasFocus: true, window: window)
 
         coordinator.move(to: secondWindow)
 
@@ -161,7 +105,7 @@ final class TVNavigationExitProtectionTests: XCTestCase {
 
     func testBackPressIsDeferredUntilShortPressRecognitionFinishes() throws {
         let coordinator = TVNavigationExitProtection.Coordinator()
-        coordinator.update(isEnabled: true, window: window)
+        coordinator.update(isEnabled: true, navigationHasFocus: true, window: window)
         let recognizer = try XCTUnwrap(exitProtectionRecognizers(in: window).first)
 
         XCTAssertTrue(recognizer.delaysTouchesBegan)
@@ -173,20 +117,94 @@ final class TVNavigationExitProtectionTests: XCTestCase {
         )
     }
 
-    func testCustomNavigationYieldsToPresentedContentAndTextInput() {
+    func testPresentedDescendantDisablesProtection() {
+        let child = UIViewController()
+        selected.addChild(child)
+        selected.view.addSubview(child.view)
+        child.didMove(toParent: selected)
         let focusedView = UIView()
-        selected.view.addSubview(focusedView)
+        child.view.addSubview(focusedView)
         XCTAssertTrue(
             TVNavigationExitProtectionFocus.isUnpresentedRootView(focusedView, in: window)
         )
-        let textField = UITextField()
-        selected.view.addSubview(textField)
-        XCTAssertFalse(
-            TVNavigationExitProtectionFocus.isUnpresentedRootView(textField, in: window)
-        )
-        selected.present(UIViewController(), animated: false)
+        child.present(UIViewController(), animated: false)
         XCTAssertFalse(
             TVNavigationExitProtectionFocus.isUnpresentedRootView(focusedView, in: window)
+        )
+    }
+
+    func testNonViewFocusEnvironmentResolvesItsContainingView() {
+        let parent = NonViewFocusItem(parent: selected.view)
+        let proxy = NonViewFocusItem(parent: parent)
+
+        XCTAssertTrue(
+            TVNavigationExitProtectionFocus.containingView(of: proxy) === selected.view
+        )
+        XCTAssertTrue(
+            TVNavigationExitProtectionFocus.containingView(of: selected) === selected.view
+        )
+        XCTAssertNil(TVNavigationExitProtectionFocus.containingView(of: NonViewFocusItem(parent: nil)))
+    }
+
+    func testInvalidFocusEnvironmentCycleDoesNotLoop() {
+        let first = NonViewFocusItem(parent: nil)
+        let second = NonViewFocusItem(parent: first)
+        first.parentFocusEnvironment = second
+
+        XCTAssertNil(TVNavigationExitProtectionFocus.containingView(of: first))
+    }
+
+    func testFocusInAnotherWindowIsNotProtected() {
+        let focusedView = UIView()
+        selected.view.addSubview(focusedView)
+        let otherWindow = UIWindow(frame: window.frame)
+        otherWindow.rootViewController = UIViewController()
+        XCTAssertFalse(
+            TVNavigationExitProtectionFocus.isUnpresentedRootView(focusedView, in: otherWindow)
+        )
+    }
+
+    func testUnattachedAndHiddenPresentationsDoNotBlockNavigation() {
+        let focusedView = UIView()
+        selected.view.addSubview(focusedView)
+        let presentation = UIViewController()
+        XCTAssertFalse(
+            TVNavigationExitProtectionFocus.blocksNavigation(
+                presentation, focusedView: focusedView, in: window
+            )
+        )
+
+        selected.view.addSubview(presentation.view)
+        XCTAssertTrue(
+            TVNavigationExitProtectionFocus.blocksNavigation(
+                presentation, focusedView: focusedView, in: window
+            )
+        )
+        presentation.view.isHidden = true
+        XCTAssertFalse(
+            TVNavigationExitProtectionFocus.blocksNavigation(
+                presentation, focusedView: focusedView, in: window
+            )
+        )
+    }
+
+    func testSearchPresentationOnlyBlocksFocusInsideSearch() {
+        let focusedNavigation = UIView()
+        selected.view.addSubview(focusedNavigation)
+        let search = UISearchController(searchResultsController: UIViewController())
+        selected.view.addSubview(search.view)
+        let focusedSearch = UIView()
+        search.view.addSubview(focusedSearch)
+
+        XCTAssertFalse(
+            TVNavigationExitProtectionFocus.blocksNavigation(
+                search, focusedView: focusedNavigation, in: window
+            )
+        )
+        XCTAssertTrue(
+            TVNavigationExitProtectionFocus.blocksNavigation(
+                search, focusedView: focusedSearch, in: window
+            )
         )
     }
 
@@ -195,5 +213,24 @@ final class TVNavigationExitProtectionTests: XCTestCase {
             $0.name == "Plozz navigation exit protection"
         }
     }
+}
+
+@MainActor
+private final class NonViewFocusItem: NSObject, UIFocusItem {
+    weak var parentFocusEnvironment: (any UIFocusEnvironment)?
+    var preferredFocusEnvironments: [any UIFocusEnvironment] { [] }
+    var focusItemContainer: (any UIFocusItemContainer)? { nil }
+    var canBecomeFocused: Bool { true }
+    var frame: CGRect { .zero }
+
+    init(parent: (any UIFocusEnvironment)?) {
+        parentFocusEnvironment = parent
+        super.init()
+    }
+
+    func setNeedsFocusUpdate() {}
+    func updateFocusIfNeeded() {}
+    func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool { true }
+    func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {}
 }
 #endif

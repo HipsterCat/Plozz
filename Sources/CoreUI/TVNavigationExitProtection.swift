@@ -3,15 +3,75 @@ import SwiftUI
 #if os(tvOS) && canImport(UIKit)
 import UIKit
 
+/// Local-only, opt-in tracing for physical-device focus failures.
+@MainActor
+private enum ExitProtectionDiagnostic {
+    static var isEnabled: Bool {
+#if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--trace-navigation-exit")
+#else
+        false
+#endif
+    }
+
+    static func log(_ message: @autoclosure () -> String) {
+        guard isEnabled else { return }
+        let url = URL.cachesDirectory.appendingPathComponent("navigation-exit-trace.log")
+        do {
+            if !FileManager.default.fileExists(atPath: url.path),
+               !FileManager.default.createFile(atPath: url.path, contents: nil) {
+                print("Exit trace: could not create log")
+                return
+            }
+            let handle = try FileHandle(forWritingTo: url)
+            defer {
+                do { try handle.close() }
+                catch { print("Exit trace close failed: \(error)") }
+            }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data("\(Date().timeIntervalSince1970) \(message())\n".utf8))
+        } catch {
+            print("Exit trace write failed: \(error)")
+        }
+    }
+}
+
+private enum TVNavigationExitProtectionFocusKey: FocusedValueKey {
+    typealias Value = Bool
+}
+
+private extension FocusedValues {
+    var plozzNavigationHasFocus: Bool? {
+        get { self[TVNavigationExitProtectionFocusKey.self] }
+        set { self[TVNavigationExitProtectionFocusKey.self] = newValue }
+    }
+}
+
+private struct TVNavigationExitProtectionModifier: ViewModifier {
+    let isEnabled: Bool
+    let navigationHasFocus: Bool?
+    @FocusedValue(\.plozzNavigationHasFocus) private var nativeNavigationHasFocus
+
+    func body(content: Content) -> some View {
+        content
+            .focusedValue(\.plozzNavigationHasFocus, true)
+            .background(
+                TVNavigationExitProtection(
+                    isEnabled: isEnabled,
+                    navigationHasFocus: navigationHasFocus ?? (nativeNavigationHasFocus == true)
+                )
+                .frame(width: 0, height: 0)
+            )
+    }
+}
+
 /// Prevents a short Back press from leaving the app while focus is in
 /// navigation chrome, leaving Home and held Back presses to the system.
 public struct TVNavigationExitProtection: UIViewRepresentable {
     private let isEnabled: Bool
-    private let navigationHasFocus: Bool?
+    private let navigationHasFocus: Bool
 
-    /// Leave `navigationHasFocus` nil for native TabView chrome; custom navigation
-    /// supplies its own focus state.
-    public init(isEnabled: Bool, navigationHasFocus: Bool? = nil) {
+    public init(isEnabled: Bool, navigationHasFocus: Bool) {
         self.isEnabled = isEnabled
         self.navigationHasFocus = navigationHasFocus
     }
@@ -51,14 +111,18 @@ public struct TVNavigationExitProtection: UIViewRepresentable {
     public final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         private weak var guardedWindow: UIWindow?
         private var recognizer: TVShortMenuPressGestureRecognizer?
+        private var diagnosticRecognizer: UITapGestureRecognizer?
         private var isEnabled = false
-        private var navigationHasFocus: Bool?
+        private var navigationHasFocus = false
 
         func update(
             isEnabled: Bool,
-            navigationHasFocus: Bool? = nil,
+            navigationHasFocus: Bool,
             window: UIWindow?
         ) {
+            if self.isEnabled != isEnabled || self.navigationHasFocus != navigationHasFocus {
+                ExitProtectionDiagnostic.log("scope enabled=\(isEnabled) navigation=\(navigationHasFocus)")
+            }
             self.isEnabled = isEnabled
             self.navigationHasFocus = navigationHasFocus
             move(to: window)
@@ -88,12 +152,25 @@ public struct TVNavigationExitProtection: UIViewRepresentable {
 
                 guardedWindow = window
                 self.recognizer = recognizer
+                if ExitProtectionDiagnostic.isEnabled {
+                    let diagnostic = UITapGestureRecognizer()
+                    diagnostic.allowedPressTypes = recognizer.allowedPressTypes
+                    diagnostic.allowedTouchTypes = []
+                    diagnostic.name = "Plozz exit diagnostics"
+                    diagnostic.delegate = self
+                    window.addGestureRecognizer(diagnostic)
+                    diagnosticRecognizer = diagnostic
+                }
             }
 
-            recognizer?.isEnabled = isEnabled && navigationHasFocus != false
+            recognizer?.isEnabled = isEnabled && navigationHasFocus
         }
 
         func detach() {
+            if let diagnosticRecognizer {
+                guardedWindow?.removeGestureRecognizer(diagnosticRecognizer)
+                self.diagnosticRecognizer = nil
+            }
             if let recognizer {
                 guardedWindow?.removeGestureRecognizer(recognizer)
             }
@@ -101,27 +178,32 @@ public struct TVNavigationExitProtection: UIViewRepresentable {
             recognizer = nil
         }
 
-        @objc private func swallowBack() {}
+        @objc private func swallowBack() {
+            ExitProtectionDiagnostic.log("CONSUMED")
+        }
 
         public func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldReceive press: UIPress
         ) -> Bool {
-            press.type == .menu && shouldProtectExit
+            if gestureRecognizer === diagnosticRecognizer {
+                ExitProtectionDiagnostic.log("RAW press=\(press.type.rawValue) navigation=\(navigationHasFocus) enabled=\(isEnabled) focus=\(String(describing: guardedWindow.flatMap { UIFocusSystem.focusSystem(for: $0)?.focusedItem }.map { type(of: $0) }))")
+                return false
+            }
+            let result = press.type == .menu && shouldProtectExit
+            ExitProtectionDiagnostic.log("receive protect=\(result)")
+            return result
         }
 
         public func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            shouldProtectExit
+            let result = shouldProtectExit
+            ExitProtectionDiagnostic.log("shouldBegin protect=\(result)")
+            return result
         }
 
         private var shouldProtectExit: Bool {
-            guard isEnabled, navigationHasFocus != false, let guardedWindow else { return false }
-            if navigationHasFocus == true {
-                return TVNavigationExitProtectionFocus.isFocusedInUnpresentedRoot(of: guardedWindow)
-            }
-            return TVNavigationExitProtectionFocus.isFocusedInRootNavigation(
-                of: guardedWindow
-            )
+            guard isEnabled, navigationHasFocus, let guardedWindow else { return false }
+            return TVNavigationExitProtectionFocus.isFocusedInUnpresentedRoot(of: guardedWindow)
         }
     }
 }
@@ -145,6 +227,7 @@ final class TVShortMenuPressGestureRecognizer: UIGestureRecognizer {
     private var timeout: DispatchWorkItem?
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent) {
+        ExitProtectionDiagnostic.log("began")
         guard state == .possible,
               presses.count == 1,
               let press = presses.first,
@@ -171,6 +254,7 @@ final class TVShortMenuPressGestureRecognizer: UIGestureRecognizer {
     override func pressesChanged(_ presses: Set<UIPress>, with event: UIPressesEvent) {}
 
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent) {
+        ExitProtectionDiagnostic.log("ended state=\(state.rawValue)")
         guard state == .possible,
               let trackedPress,
               presses.contains(where: { $0 === trackedPress }),
@@ -188,6 +272,7 @@ final class TVShortMenuPressGestureRecognizer: UIGestureRecognizer {
     }
 
     override func reset() {
+        ExitProtectionDiagnostic.log("reset")
         timeout?.cancel()
         timeout = nil
         trackedPress = nil
@@ -199,9 +284,23 @@ final class TVShortMenuPressGestureRecognizer: UIGestureRecognizer {
 @MainActor
 enum TVNavigationExitProtectionFocus {
     static func isFocusedInUnpresentedRoot(of window: UIWindow) -> Bool {
-        guard let focusedView = UIFocusSystem.focusSystem(for: window)?.focusedItem as? UIView
+        guard let item = UIFocusSystem.focusSystem(for: window)?.focusedItem,
+              let focusedView = containingView(of: item)
         else { return false }
         return isUnpresentedRootView(focusedView, in: window)
+    }
+
+    /// SwiftUI can focus a non-view proxy. Follow its public focus environment
+    /// rather than assuming every UIFocusItem is a UIView.
+    static func containingView(of item: any UIFocusEnvironment) -> UIView? {
+        var environment: (any UIFocusEnvironment)? = item
+        var visited = Set<ObjectIdentifier>()
+        while let current = environment, visited.insert(ObjectIdentifier(current)).inserted {
+            if let view = current as? UIView { return view }
+            if let controller = current as? UIViewController { return controller.viewIfLoaded }
+            environment = current.parentFocusEnvironment
+        }
+        return nil
     }
 
     static func isUnpresentedRootView(_ focusedView: UIView, in window: UIWindow) -> Bool {
@@ -210,43 +309,31 @@ enum TVNavigationExitProtectionFocus {
               let root = window.rootViewController,
               focusedView.isDescendant(of: root.view)
         else { return false }
-        return !descendants(of: root).contains { $0.presentedViewController != nil }
+        return !descendants(of: root).compactMap(\.presentedViewController).contains {
+            blocksNavigation($0, focusedView: focusedView, in: window)
+        }
     }
 
-    static func isFocusedInRootNavigation(of window: UIWindow) -> Bool {
-        guard let focusedView = UIFocusSystem.focusSystem(for: window)?.focusedItem as? UIView
-        else { return false }
-        return isRootNavigationView(focusedView, in: window)
-    }
-
-    static func isRootNavigationView(_ focusedView: UIView, in window: UIWindow) -> Bool {
-        guard isUnpresentedRootView(focusedView, in: window),
-              let rootViewController = window.rootViewController
-        else { return false }
-
-        let tabControllers = descendants(of: rootViewController)
-            .compactMap { $0 as? UITabBarController }
-
-        for tabController in tabControllers.reversed()
-        where focusedView.isDescendant(of: tabController.view) {
-            guard !selectedContentContains(focusedView, in: tabController),
-                  !selectedContentHasPushedDetail(in: tabController)
-            else { return false }
-
-            if focusedView.isDescendant(of: tabController.tabBar) {
-                return true
-            }
-
-            guard let owner = nearestViewController(of: focusedView),
-                  let navigationChild = directChild(of: tabController, containing: owner),
-                  !(tabController.viewControllers ?? []).contains(where: { $0 === navigationChild }),
-                  focusedView.isDescendant(of: navigationChild.view)
-            else { return false }
-
-            return true
+    static func blocksNavigation(
+        _ presented: UIViewController,
+        focusedView: UIView,
+        in window: UIWindow
+    ) -> Bool {
+        ExitProtectionDiagnostic.log("presentation=\(type(of: presented)) search=\(presented is UISearchController) style=\(presented.modalPresentationStyle.rawValue) inWindow=\(presented.viewIfLoaded?.window === window) fullscreen=\(presented.presentationController?.shouldPresentInFullscreen ?? false)")
+        if !(presented is UISearchController), presented.isBeingPresented { return true }
+        guard let view = presented.viewIfLoaded, view.window === window else { return false }
+        var ancestor: UIView? = view
+        while let current = ancestor {
+            if current.isHidden || current.alpha == 0 { return false }
+            ancestor = current.superview
         }
 
-        return false
+        // Search can be presented within a tab without covering its navigation
+        // chrome. Its keyboard and results retain their own Back handling.
+        if presented is UISearchController {
+            return focusedView.isDescendant(of: view)
+        }
+        return true
     }
 
     private static func isTextInput(_ focusedView: UIView) -> Bool {
@@ -260,70 +347,49 @@ enum TVNavigationExitProtectionFocus {
         return false
     }
 
-    private static func selectedContentContains(
-        _ focusedView: UIView,
-        in tabController: UITabBarController
-    ) -> Bool {
-        guard let selected = tabController.selectedViewController else { return false }
-        return focusedView === selected.view || focusedView.isDescendant(of: selected.view)
-    }
-
-    private static func selectedContentHasPushedDetail(
-        in tabController: UITabBarController
-    ) -> Bool {
-        guard let selected = tabController.selectedViewController else { return false }
-        return descendants(of: selected).contains {
-            ($0 as? UINavigationController)?.viewControllers.count ?? 0 > 1
-        }
-    }
-
-    private static func nearestViewController(of view: UIView) -> UIViewController? {
-        var responder: UIResponder? = view
-        while let current = responder {
-            if let viewController = current as? UIViewController {
-                return viewController
-            }
-            responder = current.next
-        }
-        return nil
-    }
-
-    private static func directChild(
-        of ancestor: UIViewController,
-        containing descendant: UIViewController
-    ) -> UIViewController? {
-        var current = descendant
-        while let parent = current.parent {
-            if parent === ancestor {
-                return current
-            }
-            current = parent
-        }
-        return nil
-    }
-
     private static func descendants(
         of viewController: UIViewController
     ) -> [UIViewController] {
-        [viewController] + viewController.children.flatMap(descendants)
+        var pending = [viewController]
+        var result: [UIViewController] = []
+        var visited = Set<ObjectIdentifier>()
+        while let current = pending.popLast() {
+            guard visited.insert(ObjectIdentifier(current)).inserted else { continue }
+            result.append(current)
+            pending.append(contentsOf: current.children)
+            if let presented = current.presentedViewController {
+                pending.append(presented)
+            }
+        }
+        return result
     }
 }
 #endif
 
 public extension View {
+    /// A tab's content overrides the surrounding navigation focus scope, including
+    /// any detail pages pushed inside it.
+    func tvNavigationExitProtectionContent() -> some View {
+#if os(tvOS) && canImport(UIKit)
+        focusedValue(\.plozzNavigationHasFocus, false)
+#else
+        self
+#endif
+    }
+
     /// Keeps short Back presses in navigation chrome from exiting the app.
-    /// Custom navigation passes its focus state; nil detects native TabView chrome.
+    /// Custom navigation passes its focus state. Native TabView content must use
+    /// `tvNavigationExitProtectionContent()` to distinguish it from the chrome.
     func tvNavigationExitProtection(
         isEnabled: Bool,
         navigationHasFocus: Bool? = nil
     ) -> some View {
 #if os(tvOS) && canImport(UIKit)
-        background(
-            TVNavigationExitProtection(
+        modifier(
+            TVNavigationExitProtectionModifier(
                 isEnabled: isEnabled,
                 navigationHasFocus: navigationHasFocus
             )
-                .frame(width: 0, height: 0)
         )
 #else
         self
