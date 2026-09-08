@@ -16,7 +16,7 @@ struct LiveTVSourceAccessGate<Content: View>: View {
             ContentUnavailableView(
                 "Profile settings unavailable",
                 systemImage: "lock",
-                description: Text("Return to Live TV and reopen Sources. Source settings can't be changed until this profile is available.")
+                description: Text("Return to Live TV and reopen Sources.")
             )
         }
     }

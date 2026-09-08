@@ -17,6 +17,8 @@ struct SearchFixtureApp: App {
                 SearchFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--source-fixture") {
                 SourceOnboardingFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--navigation-fixture") {
+                NavigationRailFixture()
             } else {
                 Color.black.ignoresSafeArea()
             }
@@ -24,7 +26,7 @@ struct SearchFixtureApp: App {
     }
 }
 
-private struct SearchFixture: View {
+struct SearchFixture: View {
     @State private var model: LiveTVPrototypeModel
     @State private var imports = LiveTVPrototypeImportModel()
     @State private var selectedID: String?

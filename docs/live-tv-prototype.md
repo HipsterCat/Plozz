@@ -75,6 +75,12 @@ Search/category state remains session-scoped. Playlist addresses, optional guide
 addresses and their order, source names, and enabled states are stored securely
 per profile. Server sources store an account reference, not duplicate credentials.
 View preferences and source management live in **Settings > Live TV**.
+On Apple TV, Sources shows the actual source controls in the existing detail
+pane, without an intermediate Manage sources page. Enable/disable and removal
+are available there; playlist/guide editing and server renaming open their
+specific editors directly. Hidden-channel restoration also lives in its detail
+pane. Setup and source pages reuse Plozz's shared settings groups, row labels,
+switches, focus/card styles and page heading.
 Earlier prototype builds did not store Favorites or Recents on disk, so there
 is no prior in-memory history to migrate on the first updated launch.
 

@@ -1,5 +1,6 @@
 import CoreModels
 import Foundation
+import FeatureSettings
 import SwiftUI
 @testable import FeatureLiveTV
 
@@ -9,10 +10,18 @@ struct SourceOnboardingFixture: View {
     @State private var profiles = ProfilesModel(store: SourceSmokeProfiles())
     @State private var sources = SourceSmokeStore()
     private let usesTypedNavigation = ProcessInfo.processInfo.arguments.contains("--typed-sources")
+    private let usesSettings = ProcessInfo.processInfo.arguments.contains("--source-settings")
 
     var body: some View {
         NavigationStack(path: $path) {
-            if usesTypedNavigation {
+            if usesSettings {
+                LiveTVSettingsView(
+                    store: SourceSmokeViewSettings(),
+                    preferencesStore: SourceSmokePreferences()
+                ) {
+                    AnyView(LiveTVSourcesView(store: sources, presentation: .settingsPane))
+                }
+            } else if usesTypedNavigation {
                 List {
                     NavigationLink("Sources", value: Destination.sources)
                         .accessibilityIdentifier("fixture-sources")
@@ -58,6 +67,17 @@ private final class SourceSmokeStore: LiveTVSourcesStoring, @unchecked Sendable 
     private var configuration = LiveTVSourcesConfiguration.empty
     private var writes = 0
 
+    init() {
+        if ProcessInfo.processInfo.arguments.contains("--configured-sources") {
+            configuration = LiveTVSourcesConfiguration(playlists: [
+                LiveTVPlaylistSource(
+                    id: "fixture", name: "Fixture IPTV",
+                    playlistURL: URL(string: "https://example.invalid/fixture.m3u")!
+                )
+            ])
+        }
+    }
+
     var sourceCount: Int { lock.withLock { configuration.playlists.count + configuration.servers.count } }
     var writeCount: Int { lock.withLock { writes } }
     func load() throws -> LiveTVSourcesConfiguration { lock.withLock { configuration } }
@@ -68,6 +88,16 @@ private final class SourceSmokeStore: LiveTVSourcesStoring, @unchecked Sendable 
             writes += 1
         }
     }
+}
+
+private struct SourceSmokeViewSettings: LiveTVViewSettingsStoring {
+    func load() -> LiveTVViewSettings { .init() }
+    func save(_ settings: LiveTVViewSettings) {}
+}
+
+private struct SourceSmokePreferences: LiveTVPreferencesStoring {
+    func load() throws -> LiveTVPreferences { .empty }
+    func save(_ preferences: LiveTVPreferences) throws {}
 }
 
 final class SourceSmokeNetworkBlocker: URLProtocol, @unchecked Sendable {

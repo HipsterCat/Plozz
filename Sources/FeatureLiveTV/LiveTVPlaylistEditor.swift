@@ -26,18 +26,14 @@ struct LiveTVPlaylistEditor: View {
 
     var body: some View {
         @Bindable var model = model
-        Form {
-            Section {
+        LiveTVSettingsPage(title: "IPTV source") {
+            SettingsSectionGroup("Playlist") {
                 LiveTVAddressField(title: "M3U playlist URL", text: $model.playlistAddress)
                 TextField("Name (optional)", text: $model.name)
-            } header: {
-                Text("Playlist")
-            } footer: {
-                Text("Paste the full HTTP or HTTPS link from your IPTV provider. Source addresses are stored securely on this device.")
             }
             .disabled(model.isChecking)
 
-            Section {
+            SettingsSectionGroup("Program guide") {
                 ForEach($model.guideAddresses) { $guide in
                     HStack(spacing: 20) {
                         LiveTVAddressField(title: "XMLTV guide URL (optional)", text: $guide.address)
@@ -46,6 +42,7 @@ struct LiveTVPlaylistEditor: View {
                             model.guideAddresses.removeAll { $0.id == id }
                         }
                         .labelStyle(.iconOnly)
+                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                     }
                     .contextMenu {
                         Button("Move guide earlier") { model.moveGuide(guide.id, by: -1) }
@@ -57,16 +54,15 @@ struct LiveTVPlaylistEditor: View {
                 Button("Add another guide", systemImage: "plus") {
                     model.guideAddresses.append(.init())
                 }
-            } header: {
-                Text("Program guide")
+                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
             } footer: {
-                Text("XMLTV and compressed .xml.gz guides are supported. Leave this blank to browse by channel. Equally strong guide matches prefer the source listed earlier. Listings download after setup without delaying your channels.")
+                Text("Optional XMLTV or .xml.gz. List preferred guides first.")
             }
             .disabled(model.isChecking)
 
-            Section {
+            SettingsSectionGroup {
                 if model.usesUnencryptedAddresses {
-                    Text("HTTP links aren't encrypted. Use HTTPS when your provider supports it.")
+                    Text("HTTP is unencrypted. Prefer HTTPS.")
                         .font(.caption)
                 }
                 if model.isChecking {
@@ -98,6 +94,7 @@ struct LiveTVPlaylistEditor: View {
                         Label("Add source", systemImage: "plus")
                     }
                 }
+                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                 .accessibilityIdentifier("live-tv-playlist-action")
                 if let issue = model.issue {
                     Label {
@@ -108,16 +105,9 @@ struct LiveTVPlaylistEditor: View {
                     .fixedSize(horizontal: false, vertical: true)
                 }
             } footer: {
-                Text("This checks the playlist, not every stream. Individual channels may be unavailable or limited to certain regions.")
+                Text("Checks the playlist, not individual streams.")
             }
         }
-        #if os(iOS)
-        .settingsPageSurface()
-        #else
-        .listStyle(.plain)
-        .background { SettingsPageBackground() }
-        #endif
-        .navigationTitle("IPTV source")
         .task(id: checkRequest) {
             guard let request = checkRequest else { return }
             await model.check()
@@ -155,7 +145,7 @@ private struct LiveTVPlaylistReviewSummary: View {
             Label("Found \(channels) channels", systemImage: "checkmark.circle")
                 .font(.headline)
             if skipped > 0 {
-                Text("\(skipped) unsupported or duplicate entries were skipped.")
+                Text("\(skipped) unsupported or duplicate entries skipped.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

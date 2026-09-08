@@ -132,6 +132,7 @@ struct LiveTVShellSourcesDestination: View {
     var body: some View {
         LiveTVSourcesView(
             store: LiveTVSourceStorage.store(namespace: preferencesNamespace),
+            presentation: .settingsPane,
             serverChoices: accountsProviders.liveTVServerChoices,
             serverProviderResolver: accountsProviders.liveTVProviderResolver(),
             connectServer: connectServer,

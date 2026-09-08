@@ -62,6 +62,15 @@ does not regenerate the shipping app project or install the app on an Apple TV.
   return, inspect the no-server state, and navigate a
   typed Sources destination into its child editor and back. They assert zero
   configured sources, writes, and HTTP(S) requests, and no free-channel offers.
+- The actual Live TV Settings split view embeds source management directly.
+  Smokes enter its playlist editor without a Manage sources intermediary, toggle
+  a saved fixture source, and edit it directly. All stores remain isolated; the
+  toggle writes only to the in-memory fixture and causes no network requests.
+- Pinned navigation uses the production shell with 30 synthetic libraries and a
+  selected Settings destination below the fold. Remote tests assert actual focus
+  on entry, return to page controls, collapse, explicit opening and reentry after
+  reordering, plus repeated entry and return around the native Search keyboard.
+  They do not substitute focus-state assignments for remote input.
 
 UI tests terminate their fixture application after each test. They do not access
 real accounts, servers, playlists, production preferences, or playback streams.

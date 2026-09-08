@@ -152,6 +152,7 @@ struct NavigationRailView: View {
     var opensExpanded: Bool = false
     /// Search keeps full menu geometry while its shared surface morphs to a capsule.
     var usesPageButtonSurface: Bool = false
+    var onFocusRequestFailed: (Int) -> Void = { _ in }
 
     @Environment(\.themePalette) private var palette
     @Environment(\.colorScheme) private var colorScheme
@@ -288,6 +289,10 @@ struct NavigationRailView: View {
         }
         .onChange(of: hasFocus) { _, focused in
             isExpandedOutward = focused
+            if !focused {
+                pendingFocusRequest = nil
+                pendingFocusTarget = nil
+            }
         }
         .onDisappear {
             pendingFocusRequest = nil
@@ -399,13 +404,16 @@ struct NavigationRailView: View {
     private func focusRequester(for target: RailFocusTarget) -> some View {
         let requestState = $pendingFocusRequest
         let targetState = $pendingFocusTarget
+        let shellRequest = focusRequestToken
+        let onFailed = onFocusRequestFailed
         return NavigationRowFocusRequester(
             request: isEnabled && !isReleasingFocus && pendingFocusTarget == target
                 ? pendingFocusRequest : nil,
-            onFocused: { request in
+            onCompleted: { request, didFocus in
                 guard requestState.wrappedValue == request else { return }
                 requestState.wrappedValue = nil
                 targetState.wrappedValue = nil
+                if !didFocus { onFailed(shellRequest) }
             }
         )
         .allowsHitTesting(false)

@@ -246,47 +246,6 @@ private struct ConditionalRaisedSurface: ViewModifier {
     }
 }
 
-/// The consistent page-level heading for the top-level "This Apple TV" detail
-/// pages (Servers, Profiles, Seerr). It's a single large title — the heading
-/// for the whole page — with an optional one-line subtitle used ONLY where it
-/// conveys something the title alone doesn't (e.g. that a page's data is shared
-/// device-wide). The small UPPERCASE `SettingsPanel` titles are reserved for
-/// the sub-sections *within* a page; this is the page heading that sits above
-/// them.
-struct SettingsPageHeader: View {
-    /// Pre-built so a page can be headed by either app copy or a provider-supplied
-    /// name (a server, a profile) without the render site knowing which.
-    let title: Text
-    var subtitle: Text?
-
-    /// Page heading that is app COPY.
-    init(_ title: LocalizedStringResource, subtitle: LocalizedStringResource? = nil) {
-        self.title = Text(title)
-        self.subtitle = subtitle.map(Text.init)
-    }
-
-    /// Page heading that is provider CONTENT — a server or profile name, which
-    /// must never be translated.
-    init(verbatim title: String, subtitle: LocalizedStringResource? = nil) {   // l10n:content — server/profile name
-        self.title = Text(verbatim: title)
-        self.subtitle = subtitle.map(Text.init)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            title
-                .font(.largeTitle.bold())
-            if let subtitle {
-                subtitle
-                    .font(.subheadline)
-                    .plozzForeground(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
 /// A `SettingsPanel` that can itself take focus, for panels whose content is
 /// **read-only** (or whose only control is disabled) and would otherwise be
 /// unreachable on tvOS — a non-focusable view never receives focus, so the

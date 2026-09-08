@@ -5,9 +5,10 @@ final class LiveTVSourceNavigationSmokeTests: XCTestCase {
     func testEmptySetupOpensPlaylistFormAndBackWithoutLoadingSources() {
         let app = launchFixture()
         defer { app.terminate() }
-        let welcome = app.staticTexts["Bring your channels to Plozz"]
+        let welcome = app.staticTexts["Add your channels"]
         XCTAssertTrue(welcome.waitForExistence(timeout: 10))
         assertNoPublicChannelOffer(in: app)
+        XCTAssertFalse(app.staticTexts["No guide? No problem."].exists)
         assertNoSourcesOrNetwork(in: app)
 
         guard select(app.buttons.containing(.staticText, identifier: "Add an IPTV playlist").firstMatch, in: app) else { return }
@@ -22,15 +23,52 @@ final class LiveTVSourceNavigationSmokeTests: XCTestCase {
     func testServerSetupExplainsMissingAccountsWithoutOfferingChannels() {
         let app = launchFixture()
         defer { app.terminate() }
-        XCTAssertTrue(app.staticTexts["Bring your channels to Plozz"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Add your channels"].waitForExistence(timeout: 10))
 
         assertNoPublicChannelOffer(in: app)
         guard select(app.buttons.containing(.staticText, identifier: "Use a media server").firstMatch, in: app) else { return }
         XCTAssertTrue(app.staticTexts["No connected Live TV servers"].waitForExistence(timeout: 5))
         assertNoPublicChannelOffer(in: app)
         XCUIRemote.shared.press(.menu)
-        XCTAssertTrue(app.staticTexts["Bring your channels to Plozz"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Add your channels"].waitForExistence(timeout: 5))
         assertNoSourcesOrNetwork(in: app)
+    }
+
+    @MainActor
+    func testSettingsSourcesPaneOpensEditorWithoutAnIntermediateManagementPage() {
+        let app = launchFixture(arguments: ["--source-settings"])
+        defer { app.terminate() }
+        let addPlaylist = app.buttons["Add IPTV playlist"]
+        XCTAssertTrue(addPlaylist.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Manage sources"].exists)
+        XCTAssertFalse(app.staticTexts["No guide? No problem."].exists)
+        XCUIRemote.shared.press(.right)
+        guard select(addPlaylist, in: app) else { return }
+        XCTAssertTrue(app.textFields["M3U playlist URL"].waitForExistence(timeout: 5))
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(addPlaylist.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Auto preview"].exists)
+        assertNoSourcesOrNetwork(in: app)
+    }
+
+    @MainActor
+    func testSettingsSourcesPaneCanToggleAndEditAnExistingSourceDirectly() {
+        let app = launchFixture(arguments: ["--source-settings", "--configured-sources"])
+        defer { app.terminate() }
+        let enabled = app.switches["live-tv-source-enabled-fixture"]
+        XCTAssertTrue(enabled.waitForExistence(timeout: 5), app.debugDescription)
+        XCUIRemote.shared.press(.right)
+        guard select(enabled, in: app) else { return }
+        let saved = NSPredicate(format: "label == %@", "Sources 1 writes 1 requests 0")
+        expectation(for: saved, evaluatedWith: app.staticTexts["fixture-source-metrics"])
+        waitForExpectations(timeout: 5)
+        guard select(app.buttons["live-tv-edit-source-fixture"], in: app) else { return }
+        XCTAssertTrue(app.textFields["M3U playlist URL"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textFields["M3U playlist URL"].value as? String, "https://example.invalid/fixture.m3u")
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(app.buttons["live-tv-remove-source-fixture"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Manage sources"].exists)
+        XCTAssertEqual(app.staticTexts["fixture-source-metrics"].label, "Sources 1 writes 1 requests 0")
     }
 
     @MainActor

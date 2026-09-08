@@ -11,7 +11,6 @@ struct LiveTVServerSetupView: View {
     @State private var probe: LiveTVServerProbeModel
     @State private var saveFailed = false
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.themePalette) private var palette
 
     init(
         sources: LiveTVSourceManagementModel,
@@ -26,52 +25,50 @@ struct LiveTVServerSetupView: View {
     }
 
     var body: some View {
-        List {
+        LiveTVSettingsPage(title: "Media server") {
             if choices.isEmpty {
-                Section {
+                SettingsSectionGroup {
                     ContentUnavailableView(
                         "No connected Live TV servers",
                         systemImage: "server.rack",
-                        description: Text("Connect Jellyfin, Emby or Plex, and enable that account for this profile. Only this profile's accounts appear here.")
+                        description: Text("Connect a server and enable it for this profile.")
                     )
                     if let connectServer {
                         Button("Connect a server", systemImage: "plus", action: connectServer)
+                            .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                     } else {
-                        Text("You can connect a server in Settings.")
+                        Text("Connect a server in Settings.")
                     }
                 }
             } else {
-                Section {
+                SettingsSectionGroup {
                     ForEach(choices) { choice in
                         Button {
                             saveFailed = false
                             probe.beginCheck(choice)
                         } label: {
-                            HStack(spacing: 20) {
-                                Image(systemName: "server.rack").accessibilityHidden(true)
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text(choice.name).font(.headline)
-                                    Text(choice.kind.rawValue).font(.caption)
+                            SettingsRowLabel(icon: "server.rack", title: Text(choice.name)) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(choice.kind.rawValue)
                                     if !choice.userName.isEmpty {
-                                        Text(choice.userName).font(.caption).privacySensitive()
+                                        Text(choice.userName).privacySensitive()
                                     }
                                 }
-                                Spacer()
+                                .font(.caption)
+                                .settingsRowSecondary()
+                            } trailing: {
                                 if sources.configuration.servers.contains(where: { $0.accountID == choice.id && $0.isEnabled }) {
-                                    Text("Added").font(.caption)
+                                    SettingsSelectionIndicator()
                                 }
                             }
                         }
+                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                     }
-                } header: {
-                    Text("Choose a server")
-                } footer: {
-                    Text("Checking reads the server's Live TV setup. It does not open a tuner or interrupt another viewer.")
                 }
             }
 
             if let choice = probe.choice {
-                Section {
+                SettingsSectionGroup(verbatim: choice.name) {
                     if probe.isChecking {
                         ProgressView("Checking Live TV")
                     } else if let failure = probe.failure {
@@ -84,7 +81,7 @@ struct LiveTVServerSetupView: View {
                         LiveTVServerAvailabilitySummary(availability: availability)
                     }
                     if saveFailed {
-                        Text("The source couldn't be saved. Your previous setup is unchanged.")
+                        Text("Couldn't save the source. Try again.")
                     }
                     Button(action: {
                         if probe.isChecking {
@@ -109,24 +106,17 @@ struct LiveTVServerSetupView: View {
                             Text("Check again")
                         }
                     }
-                } header: {
-                    Text(choice.name)
+                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                 }
             }
 
             if !choices.isEmpty, let connectServer {
-                Section {
+                SettingsSectionGroup {
                     Button("Connect another server", systemImage: "plus", action: connectServer)
+                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                 }
             }
         }
-        #if os(iOS)
-        .settingsPageSurface()
-        #else
-        .listStyle(.plain)
-        .background { SettingsPageBackground() }
-        #endif
-        .navigationTitle("Media server")
         .task(id: probe.pendingRequest) {
             if let request = probe.pendingRequest { await probe.perform(request) }
         }
@@ -136,12 +126,15 @@ struct LiveTVServerSetupView: View {
 
 struct LiveTVServerAvailabilitySummary: View {
     let availability: ServerLiveTVAvailability
-    @Environment(\.themePalette) private var palette
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(title).font(.headline)
-            Text(detail).foregroundStyle(palette.secondaryText)
+            if availability.status != .available || !availability.hasChannels {
+                Text(title).font(.headline)
+            }
+            if let detail {
+                Text(detail).settingsRowSecondary()
+            }
             if availability.hasChannels {
                 Text("\(availability.channelCount) channels").font(.caption)
             }
@@ -152,32 +145,32 @@ struct LiveTVServerAvailabilitySummary: View {
     private var title: LocalizedStringResource {
         switch availability.status {
         case .available:
-            availability.hasChannels ? "Your channels are ready" : "No channels returned"
-        case .notConfigured: "Live TV isn't set up on this server"
+            availability.hasChannels ? "Ready" : "No channels returned"
+        case .notConfigured: "Live TV not configured"
         case .noChannels: "No channels returned"
-        case .permissionDenied: "Live TV access isn't allowed"
-        case .serviceUnavailable: "The Live TV service is unavailable"
-        case .unsupportedAPI: "This Live TV API isn't supported"
-        case .unsupportedPlaybackMode: "Guide available, playback not supported"
+        case .permissionDenied: "Live TV access denied"
+        case .serviceUnavailable: "Live TV unavailable"
+        case .unsupportedAPI: "Unsupported server"
+        case .unsupportedPlaybackMode: "Guide only"
         }
     }
 
-    private var detail: LocalizedStringResource {
+    private var detail: LocalizedStringResource? {
         switch availability.status {
         case .available:
-            "Add this source alongside your other channels. Browsing also works when the server has no guide listings."
+            nil
         case .notConfigured:
-            "Set up Live TV in the server's web dashboard, then check again. Tuner and subscription requirements depend on the server."
+            "Set up Live TV in the server's dashboard, then try again."
         case .noChannels:
-            "Check the server's Live TV setup and this account's channel permissions, then try again."
+            "Check the server's channels and this account's permissions."
         case .permissionDenied:
-            "Ask the server administrator to allow Live TV for this account. Plozz won't use another user's credentials."
+            "Ask the server administrator to enable Live TV for this account."
         case .serviceUnavailable:
-            "Check that the server and its Live TV service are online, then try again."
+            "Check the server connection and try again."
         case .unsupportedAPI:
-            "Plozz can't read this server's Live TV interface. You can add a separate IPTV playlist instead."
+            "Try an IPTV playlist instead."
         case .unsupportedPlaybackMode:
-            "You can browse this server's channels and guide, but Plozz can't play this tuner mode yet."
+            "Plozz can't play these channels yet."
         }
     }
 }

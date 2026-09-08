@@ -34,46 +34,37 @@ public struct LiveTVSettingsView: View {
                 store.save(settings)
             }
         #elseif os(iOS)
-        List {
+        SettingsPageList {
             if sourceManagement != nil {
-                Section {
+                SettingsSectionGroup {
                     NavigationLink {
                         sourceDestination
                     } label: {
-                        Label("Manage sources", systemImage: "antenna.radiowaves.left.and.right")
+                        Label("Sources", systemImage: "antenna.radiowaves.left.and.right")
                     }
-                } header: {
-                    Text("Sources")
                 }
             }
-            Section {
+            SettingsSectionGroup("Channel order") {
                 Picker("Sort", selection: $settings.sortByName) {
                     Text("Channel number").tag(false)
                     Text("Name").tag(true)
                 }
                 .pickerStyle(.segmented)
-            } header: {
-                Text("Channel order")
             }
 
-            Section {
+            SettingsSectionGroup("Filters") {
                 Toggle("Favorites only", isOn: $settings.favoritesOnly)
                 Toggle("With guide listings", isOn: $settings.guideOnly)
-            } header: {
-                Text("Filters")
             }
 
-            Section {
+            SettingsSectionGroup("Channels") {
                 NavigationLink {
                     LiveTVHiddenChannelsView(model: hiddenChannelsModel)
                 } label: {
                     HiddenChannelsNavigationLabel(count: hiddenChannelsModel.hiddenChannels.count)
                 }
-            } header: {
-                Text("Channels")
             }
         }
-        .settingsPageSurface()
         .navigationTitle("Live TV")
         .onAppear {
             hiddenChannelsModel.reload()
@@ -96,8 +87,7 @@ public struct LiveTVSettingsView: View {
         let browsingRows = [
             SettingsSplitRow(
                 id: "sort",
-                title: "Sort",
-                description: "Choose how channels are ordered."
+                title: "Sort"
             ) {
                 SettingsSegmentedPicker(
                     options: [false, true],
@@ -116,7 +106,7 @@ public struct LiveTVSettingsView: View {
             SettingsSplitRow(
                 id: "keep-watching-while-browsing",
                 title: "Keep watching while browsing",
-                description: "After watching full screen, keep that channel playing while you browse. Turn off to preview the focused channel."
+                description: "Keep the watched channel playing instead of previewing other channels."
             ) {
                 Toggle("Keep watching while browsing", isOn: $settings.keepWatchingWhileBrowsing)
                     .toggleStyle(SettingsSwitchToggleStyle())
@@ -124,46 +114,34 @@ public struct LiveTVSettingsView: View {
             },
             SettingsSplitRow(
                 id: "favorites-only",
-                title: "Favorites only",
-                description: "Show only channels marked as favorites."
+                title: "Favorites only"
             ) {
                 Toggle("Favorites only", isOn: $settings.favoritesOnly)
                     .toggleStyle(SettingsSwitchToggleStyle())
             },
             SettingsSplitRow(
                 id: "with-guide-listings",
-                title: "With guide listings",
-                description: "Show only channels with available guide listings."
+                title: "With guide listings"
             ) {
                 Toggle("With guide listings", isOn: $settings.guideOnly)
                     .toggleStyle(SettingsSwitchToggleStyle())
             },
             SettingsSplitRow(
                 id: "hidden-channels",
-                title: "Hidden channels",
-                description: "Restore channels hidden from Live TV and Search."
+                title: "Hidden channels"
             ) {
-                NavigationLink {
-                    LiveTVHiddenChannelsView(model: hiddenChannelsModel)
-                } label: {
-                    HiddenChannelsNavigationLabel(count: hiddenChannelsModel.hiddenChannels.count)
+                VStack(alignment: .leading, spacing: 24) {
+                    LiveTVHiddenChannelsListContent(model: hiddenChannelsModel)
                 }
-                .buttonStyle(SettingsFocusButtonStyle())
             },
         ]
         guard sourceManagement != nil else { return browsingRows }
         return [
             SettingsSplitRow(
                 id: "sources",
-                title: "Sources",
-                description: "Add, edit or pause IPTV playlists and connected Live TV servers."
+                title: "Sources"
             ) {
-                NavigationLink {
-                    sourceDestination
-                } label: {
-                    Label("Manage sources", systemImage: "antenna.radiowaves.left.and.right")
-                }
-                .buttonStyle(SettingsFocusButtonStyle())
+                sourceDestination
             }
         ] + browsingRows
     }
@@ -188,44 +166,41 @@ private struct HiddenChannelsNavigationLabel: View {
     }
 }
 
+#if os(iOS)
 private struct LiveTVHiddenChannelsView: View {
     let model: LiveTVHiddenChannelsSettingsModel
 
     var body: some View {
-        List {
+        SettingsPageList {
             LiveTVHiddenChannelsListContent(model: model)
         }
-        #if os(iOS)
-        .settingsPageSurface()
-        #else
-        .listStyle(.plain)
-        .background { SettingsPageBackground() }
-        #endif
         .navigationTitle("Hidden channels")
         .onAppear {
             model.reload()
         }
     }
 }
+#endif
 
 private struct LiveTVHiddenChannelsListContent: View {
     let model: LiveTVHiddenChannelsSettingsModel
 
     var body: some View {
         if model.isLoading && !model.hasLoadedPreferences {
-            Section {
+            SettingsSectionGroup {
                 HStack(spacing: 12) {
                     ProgressView()
                     Text("Loading hidden channels")
                 }
             }
         } else if !model.hasLoadedPreferences {
-            Section {
+            SettingsSectionGroup {
                 VStack(alignment: .leading, spacing: 12) {
                     Label("Hidden channels couldn't be loaded.", systemImage: "exclamationmark.triangle.fill")
                     Button("Retry") {
                         model.retry()
                     }
+                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                 }
             }
         } else {
@@ -236,15 +211,14 @@ private struct LiveTVHiddenChannelsListContent: View {
             }
 
             if model.hiddenChannels.isEmpty {
-                Section {
+                SettingsSectionGroup {
                     ContentUnavailableView(
                         "No hidden channels",
-                        systemImage: "eye",
-                        description: Text("Channels you hide from Live TV will appear here.")
+                        systemImage: "eye"
                     )
                 }
             } else {
-                Section {
+                SettingsSectionGroup {
                     ForEach(model.hiddenChannels) { channel in
                         HStack(spacing: 16) {
                             Text(channel.name)
@@ -253,6 +227,7 @@ private struct LiveTVHiddenChannelsListContent: View {
                             Button("Restore") {
                                 model.restoreChannel(id: channel.id)
                             }
+                            .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                             .accessibilityLabel("Restore \(channel.name)")
                             .disabled(model.hasPendingChanges)
                         }
@@ -260,10 +235,11 @@ private struct LiveTVHiddenChannelsListContent: View {
                 }
 
                 if model.hiddenChannels.count > 1 {
-                    Section {
+                    SettingsSectionGroup {
                         Button("Restore all") {
                             model.restoreAllChannels()
                         }
+                        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                         .disabled(model.hasPendingChanges)
                     }
                 }
@@ -277,10 +253,11 @@ private struct LiveTVHiddenChannelsFailureSection: View {
     let retry: () -> Void
 
     var body: some View {
-        Section {
+        SettingsSectionGroup {
             VStack(alignment: .leading, spacing: 12) {
                 Label(message, systemImage: "exclamationmark.triangle.fill")
                 Button("Retry", action: retry)
+                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
             }
         }
     }
