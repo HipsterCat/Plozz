@@ -69,7 +69,18 @@ PROJECT = REPO / "Plozz.xcodeproj"
 # A dedicated DerivedData root. Kept separate from the normal build so a routine
 # `deploy-tv.sh` can never leave half-populated extraction output behind, and so
 # wiping it costs a localization rebuild rather than everyone's incremental state.
-DERIVED = REPO / ".build/l10n-deriveddata"
+DERIVED = Path(os.environ.get(
+    "PLOZZ_L10N_DERIVED",
+    REPO / ".build/l10n-deriveddata",
+))
+CLONED_SOURCE_PACKAGES = Path(os.environ.get(
+    "PLOZZ_L10N_CLONED_SOURCE_PACKAGES",
+    REPO / ".build/package-workspaces/l10n",
+))
+PACKAGE_CACHE = Path(os.environ.get(
+    "PLOZZ_PACKAGE_CACHE_PATH",
+    Path.home() / "Library/Caches/org.swift.swiftpm",
+))
 
 # The architecture the extraction build pins (see build_for_extraction). The
 # collector must read the SAME arch or it will mix in a stale snapshot.
@@ -109,6 +120,18 @@ def build_for_extraction(platform_keys: list[str], quiet: bool) -> None:
     # a setdefault would silently leave the build broken.
     env["GIT_CONFIG_PARAMETERS"] = "'safe.bareRepository=all'"
 
+    generate_args = ["--bake-only"] if (PROJECT / "project.pbxproj").exists() else []
+    generation = subprocess.run(
+        [str(REPO / "tools/generate-project.sh"), *generate_args],
+        cwd=REPO,
+        env=env,
+        text=True,
+        stdout=subprocess.DEVNULL if quiet else None,
+        stderr=subprocess.STDOUT if quiet else None,
+    )
+    if generation.returncode != 0:
+        sys.exit("✗ Project generation or canonical package-lock sync failed.")
+
     for key in platform_keys:
         scheme, destination = PLATFORMS[key]
         print(f"▸ Extraction build: {scheme} ({destination})")
@@ -119,6 +142,10 @@ def build_for_extraction(platform_keys: list[str], quiet: bool) -> None:
             "-configuration", "Debug",
             "-destination", destination,
             "-derivedDataPath", str(DERIVED),
+            "-clonedSourcePackagesDirPath", str(CLONED_SOURCE_PACKAGES),
+            "-packageCachePath", str(PACKAGE_CACHE),
+            "-onlyUsePackageVersionsFromResolvedFile",
+            "-skipPackageUpdates",
             # Only reachable from the command line — see the module docstring.
             "SWIFT_EMIT_LOC_STRINGS=YES",
             # Extraction never installs or runs anything, so signing is pure cost

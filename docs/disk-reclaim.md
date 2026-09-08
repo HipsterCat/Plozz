@@ -125,8 +125,26 @@ write:
 
 The lease is independent of output naming and location. Worktree `.build`
 folders, per-worktree test/localization roots, and multiple Xcode DerivedData
-folders remain distinct real outputs; this change does not merge, rename, or
+folders remain distinct real outputs; the lease does not merge, rename, or
 reinterpret them.
+
+Swift package resolution follows a separate storage policy:
+
+- the committed root `Package.resolved` is copied into the generated Xcode
+  workspace by `tools/generate-project.sh`;
+- every Xcode writer passes
+  `-onlyUsePackageVersionsFromResolvedFile` and `-skipPackageUpdates`;
+- the compressed SwiftPM repository/artifact cache remains shared through
+  `~/Library/Caches/org.swift.swiftpm`;
+- mutable checkouts and extracted binary artifacts use writer-specific paths
+  under `.build`, while sequential work inside one writer (both localization
+  platforms, both release archives, and CI build plus tests) reuses that
+  writer's path.
+
+Do not replace those writer-specific paths with one machine-wide mutable
+`SourcePackages` directory. Concurrent Xcode writers can corrupt or invalidate
+shared mutable package state. These settings prevent future redundant stores;
+they do not authorize deleting any existing DerivedData or `.build` root.
 
 ## Defense in depth
 

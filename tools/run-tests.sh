@@ -55,6 +55,7 @@ export GIT_CONFIG_PARAMETERS="${GIT_CONFIG_PARAMETERS-'safe.bareRepository=all'}
 source tools/lib/apple-build-lease.sh
 acquire_apple_build_shared_lease "plozz/run-tests"
 install_apple_build_lease_traps
+source tools/lib/swift-package-storage.sh
 
 PARALLEL="${PLOZZ_PARALLEL:-NO}"
 
@@ -90,13 +91,7 @@ fi
 #      DerivedData is cleared, and the invocation is retried ONCE from clean.
 PLOZZ_DERIVED_DATA="${PLOZZ_DERIVED_DATA:-$PWD/.build/test-derived-data}"
 PLOZZ_CLONED_SOURCE_PACKAGES="${PLOZZ_CLONED_SOURCE_PACKAGES:-$PLOZZ_DERIVED_DATA/SourcePackages}"
-PLOZZ_PACKAGE_CACHE_PATH="${PLOZZ_PACKAGE_CACHE_PATH:-$HOME/Library/Caches/org.swift.swiftpm}"
-PACKAGE_RESOLUTION_ARGS=(
-  -clonedSourcePackagesDirPath "$PLOZZ_CLONED_SOURCE_PACKAGES"
-  -packageCachePath "$PLOZZ_PACKAGE_CACHE_PATH"
-  -onlyUsePackageVersionsFromResolvedFile
-  -skipPackageUpdates
-)
+configure_plozz_package_resolution "$PLOZZ_CLONED_SOURCE_PACKAGES"
 PLOZZ_HANG_SECS="${PLOZZ_HANG_SECS:-180}"
 # How long to let xcodebuild wind down AFTER every test bundle has reported its
 # result. Past that point the run is logically over and everything else is
