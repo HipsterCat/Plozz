@@ -54,7 +54,7 @@ struct PrototypeBrowser: View {
             let focusReturnTarget = returnTarget
             VStack(spacing: PrototypeLayout.gap) {
                 if !model.guideChannels.isEmpty {
-                    if geometry.size.width >= 650, model.guideChannelCount > 0 {
+                    if geometry.size.width >= 650 {
                         PrototypeTimeRuler(
                             start: guideStart, now: model.now, width: geometry.size.width,
                             timelineOffset: timelineOffset, section: currentSection
@@ -189,8 +189,7 @@ struct PrototypeBrowser: View {
                 }
             }
             .overlay(alignment: .topLeading) {
-                if geometry.size.width >= 650, model.guideChannelCount > 0,
-                   !model.guideChannels.isEmpty, !isLoading {
+                if geometry.size.width >= 650, !model.guideChannels.isEmpty, !isLoading {
                     HStack(spacing: PrototypeLayout.columnGap) {
                         Color.clear.frame(width: PrototypeLayout.stationWidth(for: geometry.size.width))
                         PrototypeNowLine(start: guideStart, now: model.now, timelineOffset: timelineOffset)
@@ -656,7 +655,9 @@ struct PrototypeGuideRow: View {
                     .focused(focus, equals: channelFocus)
                     .disabled(railActive && returnTarget != channelFocus)
                 if programs.isEmpty {
-                    channelContent()
+                    channelContent(
+                        elapsedWidth: timelineWidth * now.timeIntervalSince(start) / 7_200 - timelineOffset
+                    )
                         .frame(maxWidth: .infinity)
                 } else {
                     PrototypeSynchronizedTimeline(
@@ -710,7 +711,10 @@ struct PrototypeGuideRow: View {
                                         Button("Now", systemImage: "clock", action: goToNow)
                                     }
                                 } else {
-                                    channelContent(slotID: slot.id)
+                                    channelContent(
+                                        slotID: slot.id,
+                                        elapsedWidth: timelineWidth * now.timeIntervalSince(slot.start) / 7_200
+                                    )
                                         .frame(width: cellWidth(slot))
                                         .padding(.trailing, min(PrototypeLayout.cellGap, slotWidth(slot) / 4))
                                         .frame(width: slotWidth(slot), height: rowHeight)
@@ -735,7 +739,7 @@ struct PrototypeGuideRow: View {
         .program(channelID: channel.id, programID: id, section: section)
     }
 
-    private func channelContent(slotID: String? = nil) -> some View {
+    private func channelContent(slotID: String? = nil, elapsedWidth: CGFloat = 0) -> some View {
         let target = PrototypeBrowseFocus.channelContent(channel.id, slotID: slotID, section: section)
         return Button(action: tune) {
             PrototypeGuideGap(
@@ -743,6 +747,9 @@ struct PrototypeGuideRow: View {
                 state: guideGapState, showsStatus: focus.wrappedValue?.rowID == channelFocus.rowID
             )
                 .frame(maxWidth: .infinity)
+                .background {
+                    PrototypeElapsedProgramFill(elapsedWidth: elapsedWidth)
+                }
                 .contentShape(Rectangle())
         }
         .buttonStyle(PrototypeButtonStyle(

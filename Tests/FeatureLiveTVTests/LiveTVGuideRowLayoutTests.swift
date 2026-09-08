@@ -245,32 +245,95 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
             id: "station", number: 1, name: "Test station", category: "News",
             symbol: "tv", accent: 0, source: .iptv, tagline: ""
         )
-        let model = LiveTVPrototypeModel(now: start.addingTimeInterval(1_800), channels: [channel])
-        try model.replacePrograms([program("Test program", from: 0, to: 3_600)])
-        let browser = PrototypeBrowser(
-            model: model, imports: LiveTVPrototypeImportModel(configuration: .init(playlists: [])),
-            selectedID: .constant(nil), selectedRowID: .constant(nil),
-            railActive: .constant(false), focusedProgram: .constant(nil), hasFocus: .constant(false),
-            topRequest: 0, nowRequest: 0, guideOffset: .constant(0), timeAnchor: .constant(start),
-            timelineOffset: .constant(0), restoreFocusRequest: 0, isPresented: true,
-            isRestoringFocus: false, restoresPlaybackFocus: false, watchOrigin: nil,
-            focusRestored: { _ in }, tune: { _ in }, details: { _ in },
-            openControls: {}, openSources: {}, openGuideTime: {}, openToolbar: {},
-            isLoading: false, loadFailed: false, reload: {}
-        )
-        .environment(\.plozzReduceTransparency, false)
-        .environment(\.themePalette, ThemePalette.dark)
-        let innerWidth: CGFloat = 1_000 - PrototypeLayout.guideInset - PrototypeLayout.guideTrailingInset
-        let x = Int(PrototypeLayout.guideInset + PrototypeLayout.stationWidth(for: innerWidth)
-            + PrototypeLayout.columnGap + PrototypeLayout.timelineWidth(for: innerWidth) / 4)
-        let top = Int(PrototypeLayout.guideInset)
+        for programs in [[], [program("Test program", from: 0, to: 3_600)]] {
+            let model = LiveTVPrototypeModel(now: start.addingTimeInterval(1_800), channels: [channel])
+            try model.replacePrograms(programs)
+            let browser = PrototypeBrowser(
+                model: model, imports: LiveTVPrototypeImportModel(configuration: .init(playlists: [])),
+                selectedID: .constant(nil), selectedRowID: .constant(nil),
+                railActive: .constant(false), focusedProgram: .constant(nil), hasFocus: .constant(false),
+                topRequest: 0, nowRequest: 0, guideOffset: .constant(0), timeAnchor: .constant(start),
+                timelineOffset: .constant(0), restoreFocusRequest: 0, isPresented: true,
+                isRestoringFocus: false, restoresPlaybackFocus: false, watchOrigin: nil,
+                focusRestored: { _ in }, tune: { _ in }, details: { _ in },
+                openControls: {}, openSources: {}, openGuideTime: {}, openToolbar: {},
+                isLoading: false, loadFailed: false, reload: {}
+            )
+            .environment(\.plozzReduceTransparency, false)
+            .environment(\.themePalette, ThemePalette.dark)
+            let innerWidth: CGFloat = 1_000 - PrototypeLayout.guideInset - PrototypeLayout.guideTrailingInset
+            let x = Int(PrototypeLayout.guideInset + PrototypeLayout.stationWidth(for: innerWidth)
+                + PrototypeLayout.columnGap + PrototypeLayout.timelineWidth(for: innerWidth) / 4)
+            let top = Int(PrototypeLayout.guideInset)
+            let samples = try alphaSamples(
+                browser, size: CGSize(width: 1_000, height: 400),
+                points: [(x, top + 2), (x, top + 40), (x, top + 44),
+                         (x, top + 44 + Int(PrototypeLayout.gap) / 2),
+                         (x, top + 44 + Int(PrototypeLayout.gap) + 4)]
+            )
+            XCTAssertTrue(samples.allSatisfy { $0 > 190 }, "\(samples), listings: \(programs.count)")
+        }
+    }
+
+    func testNoGuideRowFillTracksVisibleTimeAndClampsInBothDirections() throws {
+        let width: CGFloat = 1_000
+        let timelineWidth = PrototypeLayout.timelineWidth(for: width)
+        let timelineOrigin = width - timelineWidth
+        let positions = [80.0, timelineWidth / 2, timelineWidth - 80]
+        for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+            for nowOffset: TimeInterval in [-3_600, 1_800, 36_000] {
+                for offset: CGFloat in [0, 120] {
+                    let fillEnd = timelineWidth * nowOffset / 7_200 - offset
+                    let samples = try alphaSamples(
+                        GuideRowFixture(
+                            programs: [], start: start, nowOffset: nowOffset,
+                            width: width, timelineOffset: offset
+                        )
+                        .environment(\.layoutDirection, direction)
+                        .environment(\.themePalette, ThemePalette.dark),
+                        size: CGSize(width: width, height: PrototypeLayout.rowHeight),
+                        points: positions.map { x in
+                            let logicalX = timelineOrigin + x
+                            return (
+                                Int(direction == .leftToRight ? logicalX : width - logicalX - 1),
+                                Int(PrototypeLayout.rowHeight - 20)
+                            )
+                        }
+                    )
+                    XCTAssertEqual(
+                        samples.map { $0 > 0 }, positions.map { $0 < fillEnd },
+                        "\(direction), time: \(nowOffset), scroll: \(offset), alpha: \(samples)"
+                    )
+                    XCTAssertTrue(samples.allSatisfy { $0 < 30 })
+                }
+            }
+        }
+    }
+
+    func testNoGuideAndMissingListingFillEndsAtTheNowLine() async throws {
+        let width: CGFloat = 1_000
+        let timelineWidth = PrototypeLayout.timelineWidth(for: width)
+        let lineX = width - timelineWidth + timelineWidth / 4
+        for programs in [[], [program("Later", from: 3_600, to: 21_600)]] {
+            let samples = try await hostedAlphaSamples(
+                GuideRowFixture(programs: programs, start: start, nowOffset: 1_800, width: width)
+                    .environment(\.themePalette, ThemePalette.dark),
+                size: CGSize(width: width, height: PrototypeLayout.rowHeight),
+                points: [(Int(lineX - 4), Int(PrototypeLayout.rowHeight - 20)),
+                         (Int(lineX + 4), Int(PrototypeLayout.rowHeight - 20))]
+            )
+            XCTAssertEqual(samples.map { $0 > 0 }, [true, false], "\(samples), listings: \(programs.count)")
+        }
+    }
+
+    func testCompactChannelOnlyRowsDoNotInventProgressWithoutATimeRuler() throws {
         let samples = try alphaSamples(
-            browser, size: CGSize(width: 1_000, height: 400),
-            points: [(x, top + 2), (x, top + 40), (x, top + 44),
-                     (x, top + 44 + Int(PrototypeLayout.gap) / 2),
-                     (x, top + 44 + Int(PrototypeLayout.gap) + 4)]
+            GuideRowFixture(programs: [], start: start, nowOffset: 1_800, width: 600)
+                .environment(\.themePalette, ThemePalette.dark),
+            size: CGSize(width: 600, height: PrototypeLayout.rowHeight + PrototypeLayout.gap),
+            points: [(400, Int(PrototypeLayout.rowHeight - 20))]
         )
-        XCTAssertTrue(samples.allSatisfy { $0 > 190 }, "\(samples)")
+        XCTAssertEqual(samples, [0])
     }
 
     func testElapsedProgramFillHasASubtleLeadingEdgeAndClampsToTheCell() throws {
@@ -345,6 +408,33 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
             XCTAssertTrue(didRender)
         }
         return points.map { x, y in pixels[(y * width + x) * 4 + 3] }
+    }
+
+    private func hostedAlphaSamples<V: View>(
+        _ view: V, size: CGSize, points: [(Int, Int)]
+    ) async throws -> [UInt8] {
+        let controller = UIHostingController(rootView: view.frame(width: size.width, height: size.height))
+        controller.safeAreaRegions = []
+        let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+        window.backgroundColor = .clear
+        window.rootViewController = controller
+        controller.view.backgroundColor = .clear
+        window.isHidden = false
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        window.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        controller.view.layoutIfNeeded()
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            controller.view.layer.render(in: context.cgContext)
+        }
+        let pixels = try rgbaPixels(XCTUnwrap(image.cgImage))
+        return points.map { x, y in pixels[(y * Int(size.width) + x) * 4 + 3] }
     }
 
     func testScrollFadesRampOnlyWhereContentExtendsPastTheViewport() {
@@ -622,8 +712,10 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
 private struct GuideRowFixture: View {
     let programs: [LiveTVPrototypeProgram]
     let start: Date
+    var nowOffset: TimeInterval = 2_500
+    var width: CGFloat = 1_400
+    var timelineOffset: CGFloat = 0
     @FocusState private var focus: PrototypeBrowseFocus?
-    @State private var offset: CGFloat = 0
 
     private let channel = LiveTVPrototypeChannel(
         id: "station", number: 28, name: "Test station", category: "Kids",
@@ -633,8 +725,8 @@ private struct GuideRowFixture: View {
     var body: some View {
         PrototypeGuideRow(
             channel: channel, programs: programs, start: start,
-            now: start.addingTimeInterval(2_500), width: 1_400,
-            timelineOffset: $offset, focus: $focus, railActive: false,
+            now: start.addingTimeInterval(nowOffset), width: width,
+            timelineOffset: .constant(timelineOffset), focus: $focus, railActive: false,
             returnTarget: nil, favorite: false, playing: false,
             toggleFavorite: {}, tune: {}, details: { _ in },
             controls: {}, top: {}, goToNow: {}

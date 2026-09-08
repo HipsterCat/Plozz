@@ -193,9 +193,12 @@ is no prior in-memory history to migrate on the first updated launch.
   opacity rather than disappearing completely, then grows more opaque lower
   down, with a solid fallback for Reduce Transparency or increased contrast.
   One noninteractive Now line spans the ruler, its spacing and the channel
-  viewport. A subtle fill marks elapsed time inside programme cells and remains
-  aligned with that line when the timeline scrolls. Channel-only rows do not
-  invent programme progress.
+  viewport. A subtle fill marks elapsed time inside programme cells, no-guide
+  rows and gaps between listings, staying aligned with that line when the
+  timeline scrolls. Wide guides retain the time ruler and Now line even when
+  no channel has listings. On no-guide rows this indicates elapsed clock time,
+  not a known programme duration; channel names remain stationary. Compact
+  channel-only layouts without a time ruler do not imply programme progress.
   Shared smooth edge masks dissolve rows underneath the fixed time header and
   programme cells at the horizontal viewport edges. The guide has no bottom
   fade and extends to the TV screen's bottom and trailing edges in both Search
