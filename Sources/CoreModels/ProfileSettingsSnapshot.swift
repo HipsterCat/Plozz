@@ -9,9 +9,9 @@ import Foundation
 /// the settings stores already use, so this stays in lockstep with them without
 /// re-encoding each settings type. Only the base keys in
 /// `ProfileSettingsTransfer.transferableBaseKeys` travel — device- and
-/// platform-specific settings (UI density, navigation style), device-local debug
-/// (diagnostics), the sync feature flag itself, and device-capability flags are
-/// deliberately kept local.
+/// platform-specific settings (UI density, navigation style, accidental-exit
+/// prevention), device-local debug (diagnostics), the sync feature flag itself,
+/// and device-capability flags are deliberately kept local.
 public struct ProfileSettingsSnapshot: Codable, Hashable, Sendable {
     public var profileID: String
     /// base settings key → property-list-encoded value blob.
@@ -31,6 +31,7 @@ public enum ProfileSettingsTransfer {
     /// Deliberately EXCLUDED:
     ///  - `com.plozz.uiDensity` (touch vs. TV density — platform-specific)
     ///  - `navigationStyle` (tab bar vs. sidebar — platform-specific)
+    ///  - `preventsAccidentalExit` (tvOS remote behavior — platform-specific)
     ///  - `com.plozz.diagnosticsSettings` (device-local debugging)
     ///  - `com.plozz.syncSetup.enabled` (the sync flag itself — must not propagate)
     ///  - `com.plozz.musicAvailability` (a per-device capability, not a preference)

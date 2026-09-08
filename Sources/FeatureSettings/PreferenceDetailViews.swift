@@ -141,6 +141,19 @@ struct AppearanceDetailView: View {
             VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
                 CompactNavigationPicker(selection: $navigation.style)
 
+                #if os(tvOS)
+                SettingsDetailGroup(
+                    title: "Leaving Plozz",
+                    description: "Keep Plozz open when you press Back in the sidebar or tab bar. Use the TV button to leave."
+                ) {
+                    Toggle(
+                        "Prevent Accidental Exit",
+                        isOn: $navigation.preventsAccidentalExit
+                    )
+                    .toggleStyle(SettingsSwitchToggleStyle())
+                }
+                #endif
+
                 SettingsDetailGroup(
                     title: "Destinations",
                     description: "Keep the essentials fixed and choose which media shortcuts appear."

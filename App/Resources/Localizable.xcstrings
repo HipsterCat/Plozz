@@ -56456,8 +56456,8 @@
             "value" : "लाइब्रेरी में एपिसोड: कुल %#@arg2@ में से %#@arg1@"
           },
           "substitutions" : {
-            "arg2" : {
-              "argNum" : 2,
+            "arg1" : {
+              "argNum" : 1,
               "formatSpecifier" : "lld",
               "variations" : {
                 "plural" : {
@@ -56476,8 +56476,8 @@
                 }
               }
             },
-            "arg1" : {
-              "argNum" : 1,
+            "arg2" : {
+              "argNum" : 2,
               "formatSpecifier" : "lld",
               "variations" : {
                 "plural" : {
@@ -56696,8 +56696,8 @@
             "value" : "全%#@arg2@話中%#@arg1@話がライブラリにあります"
           },
           "substitutions" : {
-            "arg2" : {
-              "argNum" : 2,
+            "arg1" : {
+              "argNum" : 1,
               "formatSpecifier" : "lld",
               "variations" : {
                 "plural" : {
@@ -56710,8 +56710,8 @@
                 }
               }
             },
-            "arg1" : {
-              "argNum" : 1,
+            "arg2" : {
+              "argNum" : 2,
               "formatSpecifier" : "lld",
               "variations" : {
                 "plural" : {
@@ -56732,8 +56732,8 @@
             "value" : "전체 %#@arg2@개 에피소드 중 %#@arg1@개가 미디어 보관함에 있음"
           },
           "substitutions" : {
-            "arg2" : {
-              "argNum" : 2,
+            "arg1" : {
+              "argNum" : 1,
               "formatSpecifier" : "lld",
               "variations" : {
                 "plural" : {
@@ -56746,8 +56746,8 @@
                 }
               }
             },
-            "arg1" : {
-              "argNum" : 1,
+            "arg2" : {
+              "argNum" : 2,
               "formatSpecifier" : "lld",
               "variations" : {
                 "plural" : {
@@ -206050,6 +206050,9 @@
         }
       }
     },
+    "Keep Plozz open when you press Back in the sidebar or tab bar. Use the TV button to leave." : {
+
+    },
     "Keep Separate" : {
       "comment" : "Button declining to reuse this PIN for Plex, so the Plex prompt keeps asking separately.",
       "localizations" : {
@@ -209580,6 +209583,9 @@
           }
         }
       }
+    },
+    "Leaving Plozz" : {
+
     },
     "Left %lld%%" : {
       "comment" : "Option label in the player subtitle style editor for the Horizontal Offset control. %lld is the percentage offset to the left of center.",
@@ -293289,6 +293295,9 @@
           }
         }
       }
+    },
+    "Prevent Accidental Exit" : {
+
     },
     "Preview" : {
       "comment" : "Label for the day/night preview control in the Night Shift (Circadian) settings, shown on both tvOS and iOS.",

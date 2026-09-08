@@ -1,32 +1,39 @@
 import Foundation
 import Observation
 
-/// Persists the selected `NavigationStyle` across launches in standard
-/// `UserDefaults`.
+/// Persists the selected `NavigationStyle` and tvOS exit behavior across
+/// launches in standard `UserDefaults`.
 ///
-/// Mirrors `CardStyleSettingsStore` exactly. The style is stored **per profile**
-/// (key `navigationStyle`, scoped by namespace); the primary profile keeps the
-/// legacy un-suffixed key so existing installs upgrade cleanly and inherit the
+/// Mirrors `MusicPlayerSettingsStore`: both preferences are stored **per profile**
+/// with namespace-scoped keys. The primary profile keeps the legacy un-suffixed
+/// navigation-style key so existing installs upgrade cleanly and inherit the
 /// choice they already made while it was an app-wide setting.
 public protocol NavigationStyleSettingsStoring: Sendable {
     func load() -> NavigationStyle
     func save(_ style: NavigationStyle)
+    func loadPreventsAccidentalExit() -> Bool
+    func savePreventsAccidentalExit(_ preventsExit: Bool)
 }
 
 public final class NavigationStyleSettingsStore: NavigationStyleSettingsStoring, @unchecked Sendable {
     private let defaults: UserDefaults
-    private let key: String
+    private let styleKey: String
+    private let preventsAccidentalExitKey: String
 
     /// - Parameter namespace: per-profile scope. `nil` (the default/primary
     ///   profile) uses the legacy un-suffixed key (`NavigationStyle.storageKey`);
     ///   other profiles pass their `Profile.id`.
     public init(defaults: UserDefaults = .standard, namespace: String? = nil) {
         self.defaults = defaults
-        self.key = SettingsKey.scoped(NavigationStyle.storageKey, namespace: namespace)
+        self.styleKey = SettingsKey.scoped(NavigationStyle.storageKey, namespace: namespace)
+        self.preventsAccidentalExitKey = SettingsKey.scoped(
+            "preventsAccidentalExit",
+            namespace: namespace
+        )
     }
 
     public func load() -> NavigationStyle {
-        guard let raw = defaults.string(forKey: key),
+        guard let raw = defaults.string(forKey: styleKey),
               let style = NavigationStyle(rawValue: raw) else {
             return .default
         }
@@ -34,7 +41,15 @@ public final class NavigationStyleSettingsStore: NavigationStyleSettingsStoring,
     }
 
     public func save(_ style: NavigationStyle) {
-        defaults.set(style.rawValue, forKey: key)
+        defaults.set(style.rawValue, forKey: styleKey)
+    }
+
+    public func loadPreventsAccidentalExit() -> Bool {
+        defaults.bool(forKey: preventsAccidentalExitKey)
+    }
+
+    public func savePreventsAccidentalExit(_ preventsExit: Bool) {
+        defaults.set(preventsExit, forKey: preventsAccidentalExitKey)
     }
 }
 
@@ -42,16 +57,21 @@ public final class NavigationStyleSettingsStore: NavigationStyleSettingsStoring,
 /// chosen navigation chrome persisted + broadcast to the view tree. Mirrors
 /// `CardStyleSettingsModel`.
 ///
-/// Owns **both** halves of the navigation preference — which chrome, and (for the
-/// custom rail) how its library list is arranged. They are one user-facing setting
-/// edited on one Settings page, and keeping them together is what lets the rail
-/// read a single model rather than widening `ProfileSettingsModel`'s observable
-/// surface with a second, always-paired entry.
+/// Owns all navigation preferences — which chrome, whether Back may leave the app
+/// from top-level navigation, and (for the custom rail) how its library list is
+/// arranged. Keeping them together lets every shell and the Settings page share
+/// one profile-scoped model.
 @MainActor
 @Observable
 public final class NavigationStyleSettingsModel {
     public var style: NavigationStyle {
         didSet { store.save(style) }
+    }
+
+    /// Consumes short Back presses in the tvOS sidebar or tab bar without
+    /// changing Back navigation inside content or system Home controls.
+    public var preventsAccidentalExit: Bool {
+        didSet { store.savePreventsAccidentalExit(preventsAccidentalExit) }
     }
 
     /// Which optional destinations and libraries navigation shows, plus the library
@@ -78,6 +98,7 @@ public final class NavigationStyleSettingsModel {
         self.store = store
         self.layoutStore = layoutStore
         self.style = store.load()
+        self.preventsAccidentalExit = store.loadPreventsAccidentalExit()
         self.libraryLayout = layoutStore.load()
     }
 

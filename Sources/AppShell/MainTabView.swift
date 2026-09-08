@@ -971,6 +971,7 @@ struct MainTabView: View {
             }
         }
         .tabViewStyle(.tabBarOnly)
+        .tvNavigationExitProtection(isEnabled: navigationStyleModel.preventsAccidentalExit)
     }
 
     /// Native tvOS sidebar. Uses the same ordered/hidden library plan as custom
@@ -1040,6 +1041,7 @@ struct MainTabView: View {
             }
         }
         .tabViewStyle(.sidebarAdaptable)
+        .tvNavigationExitProtection(isEnabled: navigationStyleModel.preventsAccidentalExit)
     }
 
     /// Plozz's own chrome: the collapsible library rail plus the selected
@@ -1053,7 +1055,8 @@ struct MainTabView: View {
             selection: libraryNavigationSelection,
             onOpenProfileSwitcher: openProfileSwitcher,
             chrome: navigationChrome,
-            content: railDestination
+            content: railDestination,
+            preventsAccidentalExit: navigationStyleModel.preventsAccidentalExit
         )
         .environment(navigationChrome)
     }
