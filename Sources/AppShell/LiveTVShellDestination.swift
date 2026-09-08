@@ -1,5 +1,7 @@
 #if DEBUG && os(tvOS)
 import CoreModels
+import CoreSecureStore
+import AppRuntime
 import EnginePlozzigen
 import FeatureLiveTV
 import FeaturePlayback
@@ -16,14 +18,24 @@ struct LiveTVShellDestination: View {
     let usesNativeNavigation: Bool
     let onExpandedChange: (Bool) -> Void
 
+    @Environment(ProfilesModel.self) private var profiles
     @State private var hidesNavigation = false
     private let preferencesStore: LiveTVPreferencesStore
     private let viewSettingsStore: LiveTVViewSettingsStore
+    private let sourceStore: LiveTVSourcesStore
+    private let accountsProviders: AccountsProvidersModel?
+    private let authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)?
+    private let connectServer: (() -> Void)?
+    private let didConfigurePlaylist: () -> Void
 
     init(
         isActive: Bool,
         profileID: String,
         preferencesNamespace: String?,
+        accountsProviders: AccountsProvidersModel? = nil,
+        authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)? = nil,
+        connectServer: (() -> Void)? = nil,
+        didConfigurePlaylist: @escaping () -> Void = {},
         usesNativeNavigation: Bool = false,
         onExpandedChange: @escaping (Bool) -> Void = { _ in }
     ) {
@@ -33,6 +45,11 @@ struct LiveTVShellDestination: View {
         self.onExpandedChange = onExpandedChange
         self.preferencesStore = LiveTVPreferencesStore(namespace: preferencesNamespace)
         self.viewSettingsStore = LiveTVViewSettingsStore(namespace: preferencesNamespace)
+        self.sourceStore = LiveTVSourceStorage.store(namespace: preferencesNamespace)
+        self.accountsProviders = accountsProviders
+        self.authenticatedHTTPResolver = authenticatedHTTPResolver
+        self.connectServer = connectServer
+        self.didConfigurePlaylist = didConfigurePlaylist
     }
 
     @ViewBuilder
@@ -52,6 +69,14 @@ struct LiveTVShellDestination: View {
             usesNativeFullscreen: usesNativeNavigation,
             preferencesStore: preferencesStore,
             viewSettingsStore: viewSettingsStore,
+            sourceStore: sourceStore,
+            serverProviderResolver: accountsProviders?.liveTVProviderResolver(),
+            authenticatedHTTPResolver: authenticatedHTTPResolver,
+            isProfileAuthorized: { [profiles, profileID] in profiles.activeProfileID == profileID },
+            serverChoices: accountsProviders?.liveTVServerChoices ?? [],
+            serverAuthorizationID: accountsProviders?.liveTVAuthorizationID ?? "",
+            connectServer: connectServer,
+            didConfigurePlaylist: didConfigurePlaylist,
             onExpandedChange: updateExpandedState
         ) { playback in
             LiveChannelPlayerView(
@@ -59,7 +84,7 @@ struct LiveTVShellDestination: View {
                 title: playback.channel.name,
                 streamURL: playback.streamURL,
                 logoURL: playback.channel.logoURL,
-                httpHeaders: playback.channel.httpHeaders,
+                httpHeaders: playback.httpHeaders,
                 makeEngine: { try PlozzigenVideoEngine() },
                 onPreviousChannel: playback.previousChannel,
                 onNextChannel: playback.nextChannel,
@@ -71,7 +96,11 @@ struct LiveTVShellDestination: View {
                 isActive: isActive,
                 onReturnToGuide: playback.returnToGuide,
                 playPauseRequest: playback.playPauseRequest,
-                onPlaybackStarted: playback.playbackStarted
+                onPlaybackStarted: playback.playbackStarted,
+                reportingID: playback.reportingID,
+                onPlaybackUpdate: playback.playbackUpdate,
+                onPlaybackFailed: playback.playbackFailed,
+                preparingChannelName: playback.preparingChannelName
             )
         }
         .id(profileID)
@@ -90,6 +119,25 @@ struct LiveTVShellDestination: View {
         hidesNavigation = expanded && isActive
         guard isActive else { return }
         onExpandedChange(expanded)
+    }
+}
+
+struct LiveTVShellSourcesDestination: View {
+    let profileID: String
+    let preferencesNamespace: String?
+    let accountsProviders: AccountsProvidersModel
+    var connectServer: (() -> Void)? = nil
+    let didConfigurePlaylist: () -> Void
+
+    var body: some View {
+        LiveTVSourcesView(
+            store: LiveTVSourceStorage.store(namespace: preferencesNamespace),
+            serverChoices: accountsProviders.liveTVServerChoices,
+            serverProviderResolver: accountsProviders.liveTVProviderResolver(),
+            connectServer: connectServer,
+            didConfigurePlaylist: didConfigurePlaylist
+        )
+        .id(profileID)
     }
 }
 #endif

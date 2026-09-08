@@ -51,6 +51,88 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         XCTAssertFalse(model.showsActivityIndicator)
     }
 
+    func testLiveSessionStartsAtFirstFrameAndReportsStateAndHeartbeat() async {
+        let engine = LiveEngineSpy()
+        let clock = LiveTestClock()
+        engine.liveSnapshot.firstFrameReady = false
+        let model = makeModel(engine: engine, clock: clock)
+        defer { model.stop() }
+        var updates: [LiveTVPlaybackUpdate] = []
+        model.setSessionReporting(.init(id: UUID(), update: { updates.append($0) }, failed: {}))
+        await model.start()
+        XCTAssertTrue(updates.isEmpty)
+        engine.liveSnapshot.firstFrameReady = true
+        model.refreshFromEngine()
+        XCTAssertEqual(updates.map(\.state), [.started])
+        clock.now = 14
+        model.refreshFromEngine()
+        XCTAssertEqual(updates.count, 1)
+        clock.now = 15
+        model.refreshFromEngine()
+        XCTAssertEqual(updates.map(\.state), [.started, .playing])
+        model.togglePlayPause()
+        model.refreshFromEngine()
+        XCTAssertEqual(updates.last?.state, .paused)
+        XCTAssertEqual(updates.last?.positionSeconds, 100)
+        XCTAssertEqual(engine.vodLoads, 0)
+    }
+
+    func testNewLiveSessionReloadsEvenWhenItsResolvedURLIsUnchanged() async {
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+        var original: [LiveTVPlaybackUpdate.State] = []
+        var replacement: [LiveTVPlaybackUpdate.State] = []
+        model.setSessionReporting(.init(id: UUID(), update: { original.append($0.state) }, failed: {}))
+        await model.start()
+        await model.changeSource(
+            channelID: "",
+            streamURL: URL(string: "https://example.invalid/channel.m3u8")!,
+            reporting: .init(id: UUID(), update: { replacement.append($0.state) }, failed: {})
+        )
+        XCTAssertEqual(engine.liveLoads, 2)
+        XCTAssertEqual(original, [.started])
+        XCTAssertEqual(replacement, [.started])
+    }
+
+    func testSameLiveSessionDoesNotRestartOrRepeatStartedReport() async {
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+        var updates: [LiveTVPlaybackUpdate.State] = []
+        let reporting = LiveChannelSessionReporting(id: UUID(), update: { updates.append($0.state) }, failed: {})
+        model.setSessionReporting(reporting)
+        await model.start()
+        await model.changeSource(
+            channelID: "",
+            streamURL: URL(string: "https://example.invalid/channel.m3u8")!,
+            reporting: reporting
+        )
+        model.refreshFromEngine()
+        XCTAssertEqual(engine.liveLoads, 1)
+        XCTAssertEqual(updates, [.started])
+    }
+
+    func testLiveSessionFailureIsReportedOnceAndStopDoesNotReportFailure() async {
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine)
+        var failures = 0
+        model.setSessionReporting(.init(id: UUID(), update: { _ in }, failed: { failures += 1 }))
+        await model.start()
+        engine.onFailure?(.serverUnreachable)
+        engine.onFailure?(.serverUnreachable)
+        model.refreshFromEngine()
+        XCTAssertEqual(failures, 1)
+        model.stop()
+        XCTAssertEqual(failures, 1)
+
+        let stopped = makeModel(engine: LiveEngineSpy())
+        stopped.setSessionReporting(.init(id: UUID(), update: { _ in }, failed: { failures += 1 }))
+        await stopped.start()
+        stopped.stop()
+        XCTAssertEqual(failures, 1)
+    }
+
     func testPlayingIntentWithoutFirstFrameKeepsStartupCover() async {
         let engine = LiveEngineSpy()
         engine.liveSnapshot.firstFrameReady = false

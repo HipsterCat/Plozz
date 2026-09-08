@@ -80,17 +80,27 @@ struct ChannelLogoPlate: Equatable {
             red = original.red
             green = original.green
             blue = original.blue
-        } else if let tone, tone.brightInk < 0.04, tone.luminance < 0.70 {
-            // Even a small white wordmark beneath a coloured icon needs dark
-            // backing. Otherwise favour white over judging only the mean ink.
-            red = 1
-            green = 1
-            blue = 1
-        } else {
-            red = 0.14
-            green = 0.15
-            blue = 0.17
+            return
         }
+
+        // A small white wordmark still needs dark backing, regardless of the
+        // larger coloured icon. Brand tint stays secondary to that contrast.
+        let usesLightBacking = tone.map { $0.brightInk < 0.04 && $0.luminance < 0.70 } ?? false
+        let base = usesLightBacking
+            ? (red: 1.0, green: 1.0, blue: 1.0)
+            : (red: 0.14, green: 0.15, blue: 0.17)
+        let ink = (red: tone?.red ?? 0, green: tone?.green ?? 0, blue: tone?.blue ?? 0)
+        let chroma = max(ink.red, ink.green, ink.blue) - min(ink.red, ink.green, ink.blue)
+        let tint = chroma > 0.12 ? (usesLightBacking ? 0.08 : 0.12) : 0
+        let mean = (ink.red + ink.green + ink.blue) / 3
+        let muted = (
+            red: mean + (ink.red - mean) * 0.45,
+            green: mean + (ink.green - mean) * 0.45,
+            blue: mean + (ink.blue - mean) * 0.45
+        )
+        red = max(usesLightBacking ? 0 : base.red, base.red + (muted.red - base.red) * tint)
+        green = max(usesLightBacking ? 0 : base.green, base.green + (muted.green - base.green) * tint)
+        blue = max(usesLightBacking ? 0 : base.blue, base.blue + (muted.blue - base.blue) * tint)
     }
 
     var color: Color { Color(red: red, green: green, blue: blue) }

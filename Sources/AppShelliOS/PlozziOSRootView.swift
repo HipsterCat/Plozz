@@ -64,8 +64,13 @@ public struct PlozziOSRootView: View {
 
     public var body: some View {
         Group {
-            if appModel.accounts.isEmpty {
-                PlozziOSOnboardingView(appModel: appModel)
+            if !appModel.canEnterApp {
+                PlozziOSOnboardingView(
+                    appModel: appModel,
+                    onStandalonePlayback: PlozziOSAppModel.isStandalonePlaybackAvailable
+                        ? { _ = appModel.enterStandalonePlayback() }
+                        : nil
+                )
             } else if appModel.mustChooseProfile
                 || (appModel.requiresLaunchProfileSelection
                     && !appModel.didCompleteLaunchProfileSelection) {
@@ -87,6 +92,12 @@ public struct PlozziOSRootView: View {
                     // picker both manage profiles from the launch screen too.
                     manager: appModel.managementRequiresParentalPIN ? nil : appModel
                     // No `onCancel`: at launch there is nothing to go back to.
+                )
+            } else if usesInlineStandaloneFirstRun, appModel.pendingFirstRunStep != nil {
+                PlozziOSFirstRunView(
+                    step: appModel.pendingFirstRunStep,
+                    appModel: appModel,
+                    systemColorScheme: systemColorScheme
                 )
             } else {
                 PlozziOSTabShell(
@@ -362,7 +373,8 @@ public struct PlozziOSRootView: View {
     }
 
     private var releaseNotesStartupReady: Bool {
-        !appModel.accounts.isEmpty
+        appModel.canEnterApp
+            && !appModel.pendingStandaloneLiveTVEntry
             && !appModel.mustChooseProfile
             && (!appModel.requiresLaunchProfileSelection
                 || appModel.didCompleteLaunchProfileSelection)
@@ -477,9 +489,18 @@ public struct PlozziOSRootView: View {
     /// the cover so changing it animates in place instead of re-presenting.
     private var firstRunPresentedBinding: Binding<Bool> {
         Binding(
-            get: { appModel.pendingFirstRunStep != nil },
+            get: {
+                appModel.pendingFirstRunStep != nil
+                    && !usesInlineStandaloneFirstRun
+            },
             set: { _ in }
         )
+    }
+
+    /// Keep standalone setup in the root, behind its ordinary profile picker
+    /// and access-gate cover, instead of mounting tabs beneath a new cover.
+    private var usesInlineStandaloneFirstRun: Bool {
+        appModel.allowsStandalonePlayback && !appModel.admissionContext.hasMediaAccounts
     }
 
     /// Takes a pairing link, waiting for an open sheet to close first.
@@ -661,6 +682,7 @@ private struct PlozziOSTabShell: View {
     @State private var settingsPresentationColorScheme: ColorScheme = .dark
     @State private var selectedDestination: PlozziOSDestination = .home
     @State private var lastContentDestination: PlozziOSDestination = .home
+    @State private var retainsExplicitLiveTVEntry = false
     @State private var sharedHomeViewModel: HomeViewModel
     /// The profile picker opened deliberately (from Settings) rather than at
     /// launch. Presented from the ROOT so the Parental PIN and profile-lock gates
@@ -704,18 +726,32 @@ private struct PlozziOSTabShell: View {
         _showingProfileSwitcher = showingProfileSwitcher
         _deferredPairingURL = deferredPairingURL
         self.systemColorScheme = systemColorScheme
+        let visible = Self.configuredDestinations(appModel: appModel)
+        let initial: PlozziOSDestination
+        #if DEBUG
+        initial = AppAdmissionNavigation.initialSelection(
+            current: .home,
+            visible: visible,
+            liveTV: .liveTV,
+            fallback: .settings,
+            admission: appModel.admissionContext,
+            hasPendingLiveTVEntry: appModel.pendingStandaloneLiveTVEntry
+        )
+        #else
+        initial = visible.contains(.home) ? .home : (visible.first ?? .settings)
+        #endif
+        _selectedDestination = State(initialValue: initial)
+        _lastContentDestination = State(initialValue: initial)
         _sharedHomeViewModel = State(
             initialValue: Self.makeHomeViewModel(appModel: appModel)
         )
     }
 
-    private var configurableDestinationKeys: [String] {
-        NavigationDestinationDefaults.iOS
-    }
-
-    private var tabDestinations: [PlozziOSDestination] {
-        let ordered = appModel.settings.navigation.libraryLayout
-            .visibleKeys(available: configurableDestinationKeys)
+    private static func configuredDestinations(
+        appModel: PlozziOSAppModel
+    ) -> [PlozziOSDestination] {
+        appModel.settings.navigation.libraryLayout
+            .visibleKeys(available: NavigationDestinationDefaults.iOS)
             .compactMap { key -> PlozziOSDestination? in
                 switch key {
                 case NavigationLibraryLayout.homeKey: return .home
@@ -729,7 +765,46 @@ private struct PlozziOSTabShell: View {
                 default: return nil
                 }
             }
-        return ordered
+    }
+
+    private var tabDestinations: [PlozziOSDestination] {
+        let configured = Self.configuredDestinations(appModel: appModel)
+        #if DEBUG
+        return AppAdmissionNavigation.destinations(
+            configured,
+            liveTV: .liveTV,
+            includesExplicitEntry: appModel.allowsStandalonePlayback
+                && (appModel.pendingStandaloneLiveTVEntry || retainsExplicitLiveTVEntry)
+        )
+        #else
+        return configured
+        #endif
+    }
+
+    private var effectiveSelectedDestination: PlozziOSDestination {
+        #if DEBUG
+        if appModel.pendingStandaloneLiveTVEntry && appModel.allowsStandalonePlayback {
+            return .liveTV
+        }
+        #endif
+        return resolvedDestination(selectedDestination)
+    }
+
+    private var destinationSelection: Binding<PlozziOSDestination> {
+        Binding(
+            get: { effectiveSelectedDestination },
+            set: { selectedDestination = resolvedDestination($0) }
+        )
+    }
+
+    private func consumeStandaloneEntryIfNeeded() {
+        #if DEBUG
+        guard appModel.pendingStandaloneLiveTVEntry, appModel.allowsStandalonePlayback else { return }
+        retainsExplicitLiveTVEntry = true
+        selectedDestination = .liveTV
+        lastContentDestination = .liveTV
+        appModel.consumeStandaloneLiveTVEntryIntent()
+        #endif
     }
 
     private var tabDestinationKey: String {
@@ -778,10 +853,17 @@ private struct PlozziOSTabShell: View {
         #if DEBUG
         case .liveTV:
             PlozziOSLiveTVDestination(
-                isActive: selectedDestination == .liveTV,
+                isActive: effectiveSelectedDestination == .liveTV,
                 profileID: appModel.profiles.activeProfileID,
-                preferencesNamespace: appModel.profiles.activeNamespace
+                preferencesNamespace: appModel.profiles.activeNamespace,
+                accountsProviders: appModel.accountsProviders,
+                authenticatedHTTPResolver: appModel.authenticatedHTTPResolver,
+                connectServer: onAddServer,
+                didConfigurePlaylist: {
+                    _ = appModel.recordSuccessfulIPTVSetup()
+                }
             )
+            .environment(appModel.profiles)
         #endif
         case .downloads:
             NavigationStack {
@@ -843,7 +925,7 @@ private struct PlozziOSTabShell: View {
     }
 
     var body: some View {
-        TabView(selection: $selectedDestination) {
+        TabView(selection: destinationSelection) {
             ForEach(tabDestinations) { destination in
                 if destination == .search && tabDestinations.last == .search {
                     // Preserve native trailing Search until the viewer moves it.
@@ -875,6 +957,9 @@ private struct PlozziOSTabShell: View {
 
         .tabViewStyle(.tabBarOnly)
         .environment(sharedHomeViewModel)
+        .onChange(of: appModel.pendingStandaloneLiveTVEntry, initial: true) { _, _ in
+            consumeStandaloneEntryIfNeeded()
+        }
         .onChange(of: tabDestinationKey, initial: true) { _, _ in
             selectedDestination = resolvedDestination(selectedDestination)
         }
@@ -887,6 +972,8 @@ private struct PlozziOSTabShell: View {
             #if DEBUG
             if destination == .liveTV {
                 heroTrailerController.stop()
+            } else {
+                retainsExplicitLiveTVEntry = false
             }
             #endif
         }
@@ -897,7 +984,7 @@ private struct PlozziOSTabShell: View {
         .background { AppBackground(palette: palette) }
         .background(alignment: .topLeading) {
             PlozziOSHomeSidebarOverlapProbe(
-                enabled: selectedDestination == .home,
+                enabled: effectiveSelectedDestination == .home,
                 geometryModel: sidebarGeometry
             )
             .frame(width: 0, height: 0)

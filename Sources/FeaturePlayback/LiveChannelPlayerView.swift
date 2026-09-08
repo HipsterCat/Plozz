@@ -6,11 +6,17 @@ import Observation
 import SwiftUI
 import UIKit
 
-/// Debug-only, provider-free playback host for public IPTV HLS channels.
+struct LiveChannelSessionReporting {
+    let id: UUID
+    let update: @MainActor (LiveTVPlaybackUpdate) -> Void
+    let failed: @MainActor () -> Void
+}
+
+/// Debug-only playback host for live channels.
 ///
 /// The host deliberately bypasses `PlayerViewModel`: live channels have no
-/// provider playback session, watch history, resume point, duration, or
-/// scrobbling lifecycle. Video still runs through Plozz's production
+/// VOD watch history, resume point, duration, or scrobbling lifecycle. The
+/// caller owns any server-specific live session. Video still runs through Plozz's production
 /// AetherEngine adapter and its existing video surface.
 public struct LiveChannelPlayerView: View {
     private let channelID: String
@@ -30,6 +36,10 @@ public struct LiveChannelPlayerView: View {
     private let onReturnToGuide: (() -> Void)?
     private let playPauseRequest: Int
     private let onPlaybackStarted: () -> Void
+    private let reportingID: UUID?
+    private let onPlaybackUpdate: @MainActor (LiveTVPlaybackUpdate) -> Void
+    private let onPlaybackFailed: @MainActor () -> Void
+    private let preparingChannelName: String?
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -62,7 +72,11 @@ public struct LiveChannelPlayerView: View {
         isActive: Bool = true,
         onReturnToGuide: (() -> Void)? = nil,
         playPauseRequest: Int = 0,
-        onPlaybackStarted: @escaping () -> Void = {}
+        onPlaybackStarted: @escaping () -> Void = {},
+        reportingID: UUID? = nil,
+        onPlaybackUpdate: @escaping @MainActor (LiveTVPlaybackUpdate) -> Void = { _ in },
+        onPlaybackFailed: @escaping @MainActor () -> Void = {},
+        preparingChannelName: String? = nil
     ) {
         self.channelID = channelID
         self.title = title
@@ -81,6 +95,10 @@ public struct LiveChannelPlayerView: View {
         self.onReturnToGuide = onReturnToGuide
         self.playPauseRequest = playPauseRequest
         self.onPlaybackStarted = onPlaybackStarted
+        self.reportingID = reportingID
+        self.onPlaybackUpdate = onPlaybackUpdate
+        self.onPlaybackFailed = onPlaybackFailed
+        self.preparingChannelName = preparingChannelName
     }
 
     private var playerSurface: some View {
@@ -199,6 +217,11 @@ public struct LiveChannelPlayerView: View {
                     )
                 }
             }
+            if let preparingChannelName {
+                LiveChannelCompactStatusView(
+                    icon: nil, title: "Opening \(preparingChannelName)", showsProgress: true
+                )
+            }
         }
         .animation(.easeOut(duration: 0.2), value: controlsVisible)
         #if os(tvOS)
@@ -294,6 +317,7 @@ public struct LiveChannelPlayerView: View {
             model?.handleScenePhase(phase)
         }
         .onChange(of: source, initial: true) { _, _ in updateSource() }
+        .onChange(of: reportingID) { _, _ in updateSource() }
         .onDisappear {
             // A native fullscreen presentation obscures, but does not retire,
             // this owner. The same engine and output view return to the guide.
@@ -331,13 +355,18 @@ public struct LiveChannelPlayerView: View {
 
     private func updateSource() {
         guard isActive else { return }
+        if sourceMatchesCurrentModel, model?.sessionReportingID == reportingID {
+            model?.setSessionReporting(sessionReporting)
+            return
+        }
         playbackStartPolicy.resetViewing()
         sourceTask?.cancel()
         if let model {
             sourceTask = Task {
                 guard !Task.isCancelled else { return }
                 await model.changeSource(
-                    channelID: channelID, streamURL: streamURL, httpHeaders: httpHeaders
+                    channelID: channelID, streamURL: streamURL, httpHeaders: httpHeaders,
+                    reporting: sessionReporting
                 )
             }
             return
@@ -351,12 +380,14 @@ public struct LiveChannelPlayerView: View {
             LiveChannelDiagnostics().event(.initializationFailure, attempt: 0)
             engineInitializationFailed = true
             focusAfterPresentation(.close)
+            if reportingID != nil { onPlaybackFailed() }
             return
         }
         let playerModel = LiveChannelPlayerModel(
             engine: engine, channelID: channelID, streamURL: streamURL, httpHeaders: httpHeaders
         )
         model = playerModel
+        playerModel.setSessionReporting(sessionReporting)
         playerModel.handleScenePhase(scenePhase)
         sourceTask = Task {
             guard !Task.isCancelled else { return }
@@ -377,6 +408,12 @@ public struct LiveChannelPlayerView: View {
             streamURL: streamURL,
             httpHeaders: httpHeaders
         )
+    }
+
+    private var sessionReporting: LiveChannelSessionReporting? {
+        reportingID.map {
+            LiveChannelSessionReporting(id: $0, update: onPlaybackUpdate, failed: onPlaybackFailed)
+        }
     }
 
     private var sourceMatchesCurrentModel: Bool {
@@ -1015,10 +1052,17 @@ final class LiveChannelPlayerModel {
     private var pendingSourceReset = false
     private var userPaused = false
     private var stopped = false
+    @ObservationIgnored private var sessionReporting: LiveChannelSessionReporting?
+    @ObservationIgnored private var reportedSessionStart = false
+    @ObservationIgnored private var reportedSessionFailure = false
+    @ObservationIgnored private var lastSessionReport: TimeInterval?
+    @ObservationIgnored private var lastSessionState: LiveTVPlaybackUpdate.State?
 
     private static let startupTimeout: TimeInterval = 30
     private static let bufferingTimeout: TimeInterval = 60
     private static let maximumManualRetries = 2
+
+    var sessionReportingID: UUID? { sessionReporting?.id }
 
     init(
         engine: any LiveChannelEngine,
@@ -1091,14 +1135,18 @@ final class LiveChannelPlayerModel {
     func changeSource(
         channelID: String,
         streamURL: URL,
-        httpHeaders: [String: String] = [:]
+        httpHeaders: [String: String] = [:],
+        reporting: LiveChannelSessionReporting? = nil
     ) async {
         let nextSource = Source(
             channelID: channelID,
             streamURL: streamURL,
             httpHeaders: httpHeaders
         )
-        guard nextSource != source, !stopped else { return }
+        guard !stopped else { return }
+        let changed = nextSource != source || sessionReporting?.id != reporting?.id
+        setSessionReporting(reporting, reset: changed)
+        guard changed else { return }
 
         source = nextSource
         attemptGeneration += 1
@@ -1124,6 +1172,16 @@ final class LiveChannelPlayerModel {
             return
         }
         await loadAttempt()
+    }
+
+    func setSessionReporting(_ reporting: LiveChannelSessionReporting?, reset: Bool = false) {
+        if reset || sessionReporting?.id != reporting?.id {
+            reportedSessionStart = false
+            reportedSessionFailure = false
+            lastSessionReport = nil
+            lastSessionState = nil
+        }
+        sessionReporting = reporting
     }
 
     func retry() async {
@@ -1209,6 +1267,7 @@ final class LiveChannelPlayerModel {
     func stop() {
         guard !stopped else { return }
         stopped = true
+        setSessionReporting(nil)
         attemptGeneration += 1
         diagnostics.event(.stop, attempt: attemptCount)
         cancelRecovery()
@@ -1358,6 +1417,29 @@ final class LiveChannelPlayerModel {
             }
         }
         idleSleepGuard.keepAwake(phase == .playing)
+        reportSessionActivity(position: snapshot.position)
+    }
+
+    private func reportSessionActivity(position: TimeInterval) {
+        guard let sessionReporting, hasPresentedFrame, !phase.isInterrupted, !isSuspended, !stopped else { return }
+        let state: LiveTVPlaybackUpdate.State = phase == .paused ? .paused : .playing
+        let now = uptime()
+        if !reportedSessionStart {
+            reportedSessionStart = true
+            lastSessionReport = now
+            lastSessionState = .playing
+            sessionReporting.update(.init(state: .started, positionSeconds: position))
+        } else if lastSessionState != state || now - (lastSessionReport ?? now) >= 15 {
+            lastSessionReport = now
+            lastSessionState = state
+            sessionReporting.update(.init(state: state, positionSeconds: position))
+        }
+    }
+
+    private func reportSessionFailure() {
+        guard let sessionReporting, !reportedSessionFailure else { return }
+        reportedSessionFailure = true
+        sessionReporting.failed()
     }
 
     private func resumeActivePlayback() {
@@ -1470,6 +1552,7 @@ final class LiveChannelPlayerModel {
         foregroundTask = nil
         engine.stop()
         idleSleepGuard.allowSleep()
+        reportSessionFailure()
     }
 
     private func streamEnded(generation: Int? = nil) {
@@ -1484,6 +1567,7 @@ final class LiveChannelPlayerModel {
         foregroundTask = nil
         engine.stop()
         idleSleepGuard.allowSleep()
+        reportSessionFailure()
     }
 }
 

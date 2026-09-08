@@ -6,19 +6,18 @@ import SwiftUI
 
 /// Profile-scoped channel browsing preferences for Live TV.
 public struct LiveTVSettingsView: View {
-    private enum Route: Hashable {
-        case hiddenChannels
-    }
-
     private let store: any LiveTVViewSettingsStoring
+    private let sourceManagement: (() -> AnyView)?
     @State private var settings: LiveTVViewSettings
     @State private var hiddenChannelsModel: LiveTVHiddenChannelsSettingsModel
 
     public init(
         store: any LiveTVViewSettingsStoring = LiveTVViewSettingsStore(),
-        preferencesStore: any LiveTVPreferencesStoring = LiveTVPreferencesStore()
+        preferencesStore: any LiveTVPreferencesStoring = LiveTVPreferencesStore(),
+        sourceManagement: (() -> AnyView)? = nil
     ) {
         self.store = store
+        self.sourceManagement = sourceManagement
         self._settings = State(initialValue: store.load())
         self._hiddenChannelsModel = State(
             initialValue: LiveTVHiddenChannelsSettingsModel(store: preferencesStore)
@@ -34,11 +33,19 @@ public struct LiveTVSettingsView: View {
             .onChange(of: settings) { _, settings in
                 store.save(settings)
             }
-            .navigationDestination(for: Route.self) { route in
-                destination(for: route)
-            }
         #elseif os(iOS)
         List {
+            if sourceManagement != nil {
+                Section {
+                    NavigationLink {
+                        sourceDestination
+                    } label: {
+                        Label("Manage sources", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                } header: {
+                    Text("Sources")
+                }
+            }
             Section {
                 Picker("Sort", selection: $settings.sortByName) {
                     Text("Channel number").tag(false)
@@ -57,7 +64,9 @@ public struct LiveTVSettingsView: View {
             }
 
             Section {
-                NavigationLink(value: Route.hiddenChannels) {
+                NavigationLink {
+                    LiveTVHiddenChannelsView(model: hiddenChannelsModel)
+                } label: {
                     HiddenChannelsNavigationLabel(count: hiddenChannelsModel.hiddenChannels.count)
                 }
             } header: {
@@ -72,23 +81,19 @@ public struct LiveTVSettingsView: View {
         .onChange(of: settings) { _, settings in
             store.save(settings)
         }
-        .navigationDestination(for: Route.self) { route in
-            destination(for: route)
-        }
         #endif
     }
 
     @ViewBuilder
-    private func destination(for route: Route) -> some View {
-        switch route {
-        case .hiddenChannels:
-            LiveTVHiddenChannelsView(model: hiddenChannelsModel)
+    private var sourceDestination: some View {
+        if let sourceManagement {
+            sourceManagement()
         }
     }
 
     #if os(tvOS)
     private var rows: [SettingsSplitRow] {
-        [
+        let browsingRows = [
             SettingsSplitRow(
                 id: "sort",
                 title: "Sort",
@@ -103,10 +108,19 @@ public struct LiveTVSettingsView: View {
             SettingsSplitRow(
                 id: "auto-preview",
                 title: "Auto preview",
-                description: "Preview channels as you browse. Choosing Watch keeps that channel playing until you leave Live TV."
+                description: "Preview the focused channel as you browse."
             ) {
                 Toggle("Auto preview", isOn: $settings.autoPreview)
                     .toggleStyle(SettingsSwitchToggleStyle())
+            },
+            SettingsSplitRow(
+                id: "keep-watching-while-browsing",
+                title: "Keep watching while browsing",
+                description: "After watching full screen, keep that channel playing while you browse. Turn off to preview the focused channel."
+            ) {
+                Toggle("Keep watching while browsing", isOn: $settings.keepWatchingWhileBrowsing)
+                    .toggleStyle(SettingsSwitchToggleStyle())
+                    .disabled(!settings.autoPreview)
             },
             SettingsSplitRow(
                 id: "favorites-only",
@@ -129,12 +143,29 @@ public struct LiveTVSettingsView: View {
                 title: "Hidden channels",
                 description: "Restore channels hidden from Live TV and Search."
             ) {
-                NavigationLink(value: Route.hiddenChannels) {
+                NavigationLink {
+                    LiveTVHiddenChannelsView(model: hiddenChannelsModel)
+                } label: {
                     HiddenChannelsNavigationLabel(count: hiddenChannelsModel.hiddenChannels.count)
                 }
                 .buttonStyle(SettingsFocusButtonStyle())
             },
         ]
+        guard sourceManagement != nil else { return browsingRows }
+        return [
+            SettingsSplitRow(
+                id: "sources",
+                title: "Sources",
+                description: "Add, edit or pause IPTV playlists and connected Live TV servers."
+            ) {
+                NavigationLink {
+                    sourceDestination
+                } label: {
+                    Label("Manage sources", systemImage: "antenna.radiowaves.left.and.right")
+                }
+                .buttonStyle(SettingsFocusButtonStyle())
+            }
+        ] + browsingRows
     }
     #endif
 }

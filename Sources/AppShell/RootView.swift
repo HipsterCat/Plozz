@@ -209,6 +209,7 @@ public struct RootView: View {
     }
 
     private var startupPresentationReady: Bool {
+        guard appState.canEnterApp, !appState.pendingStandaloneLiveTVEntry else { return false }
         guard appState.profileFlow.pendingSetupProfile == nil else { return false }
         guard case .ready = appState.state else { return false }
         return !appState.profileFlow.isChoosingProfile
@@ -251,7 +252,15 @@ public struct RootView: View {
             // temporarily moves that machine to `.onboarding`, but setup must
             // remain mounted underneath so its exact NavigationStack path
             // survives and the auth screen can behave as an overlay.
-            if let setupProfile = appState.profileFlow.pendingSetupProfile {
+            if appState.allowsStandalonePlayback && appState.profileFlow.isChoosingProfile {
+                // Standalone can resume profile confirmation without a server.
+                // A remembered locked profile must still be selected/unlocked
+                // before its confirmation or editor can appear.
+                ProfileSelectionView(
+                    appState: appState,
+                    canCancel: appState.profileFlow.isProfileSelectionCancelable
+                )
+            } else if let setupProfile = appState.profileFlow.pendingSetupProfile {
                 ProfileSetupFlowView(
                     appState: appState,
                     profile: setupProfile,
@@ -335,6 +344,7 @@ public struct RootView: View {
                     AppLanguageScope(model: appState.profileSettings.appLanguageModel) {
                     MainTabView(
                         accounts: accounts,
+                        accountsProviders: appState.accountsProviders,
                         detailSnapshotCache: detailCache,
                         currentAccounts: { appState.accountsProviders.homeAccounts },
                         networkFileResolver: appState.mediaShare.networkFileResolver,
@@ -470,7 +480,15 @@ public struct RootView: View {
                         syncRepair: syncRepairActions,
                         pendingSyncedServers: appState.cloudSyncUI.pendingSyncedServers,
                         onIgnorePendingServer: { appState.ignorePendingSyncedServer($0) },
-                        onSetUpFromAnotherDevice: { showSyncReceiveFromSettings = true }
+                        onSetUpFromAnotherDevice: { showSyncReceiveFromSettings = true },
+                        admissionContext: appState.admissionContext,
+                        pendingStandaloneLiveTVEntry: appState.pendingStandaloneLiveTVEntry,
+                        onConsumeStandaloneLiveTVEntry: {
+                            _ = appState.consumeStandaloneLiveTVEntryIntent()
+                        },
+                        onConfiguredIPTVPlaylist: {
+                            _ = appState.recordSuccessfulIPTVSetup()
+                        }
                     )
                     .id(rootScopeIdentity)
                     .transition(.opacity)
@@ -1057,7 +1075,10 @@ private struct OnboardingPageContent: View {
 
                 },
                 onCancel: { appState.cancelAuthentication() },
-                onSetUpFromAnotherDevice: onSetUpFromAnotherDevice
+                onSetUpFromAnotherDevice: onSetUpFromAnotherDevice,
+                onStandalonePlayback: AppState.isStandalonePlaybackAvailable && !canReturnToApp
+                    ? { _ = appState.enterStandalonePlayback() }
+                    : nil
             )
 
         case let .authenticating(server):

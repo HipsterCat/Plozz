@@ -28,6 +28,39 @@ import UIKit
 @MainActor
 @Observable
 final class PlozziOSAppModel {
+    private let appAdmission: AppAdmissionModel
+
+    static var isStandalonePlaybackAvailable: Bool {
+        #if DEBUG
+        true
+        #else
+        false
+        #endif
+    }
+
+    var admissionContext: AppAdmissionContext {
+        appAdmission.context(
+            hasMediaAccounts: !accountsProviders.accounts.isEmpty,
+            standalonePlaybackAvailable: Self.isStandalonePlaybackAvailable
+        )
+    }
+
+    var canEnterApp: Bool { admissionContext.canEnterApp }
+    var allowsStandalonePlayback: Bool { admissionContext.explicitStandaloneChoice }
+    var pendingStandaloneLiveTVEntry: Bool { appAdmission.pendingLiveTVEntry }
+
+    @discardableResult
+    func consumeStandaloneLiveTVEntryIntent() -> Bool {
+        appAdmission.consumeLiveTVEntryIntent()
+    }
+
+    /// Call only after a user-requested playlist/free-channel setup succeeds.
+    /// This records admission without changing first-run setup or navigation.
+    @discardableResult
+    func recordSuccessfulIPTVSetup() -> Bool {
+        appAdmission.recordStandaloneChoice(isAvailable: Self.isStandalonePlaybackAvailable)
+    }
+
     private struct HeroTrailerCacheEntry {
         let source: HeroTrailerSource?
         let expiresAt: Date
@@ -473,7 +506,9 @@ final class PlozziOSAppModel {
 
     var accountError: String?
 
-    init() {
+    init(appAdmissionStore: any AppAdmissionStoring = AppAdmissionStore()) {
+        let appAdmission = AppAdmissionModel(store: appAdmissionStore)
+        self.appAdmission = appAdmission
         let authenticatedHTTPResolver = ManagedAuthenticatedHTTPResolver()
         let accountStore: AccountStore
         var launchErrors: [String] = []
@@ -601,7 +636,10 @@ final class PlozziOSAppModel {
         )
         self.pendingLibrarySelection = nil
         self.pendingFirstRunStep =
-            !accountsProviders.accounts.isEmpty
+            appAdmission.context(
+                hasMediaAccounts: !accountsProviders.accounts.isEmpty,
+                standalonePlaybackAvailable: Self.isStandalonePlaybackAvailable
+            ).canEnterApp
                 && !profiles.firstRunProfileSetupComplete
             ? .confirmProfile
             : nil
@@ -731,7 +769,7 @@ final class PlozziOSAppModel {
         accountsProviders.reloadAccounts()
         // Self-heal any stale server names (shared path with tvOS).
         accountsProviders.refreshServerNames()
-        if !accountsProviders.accounts.isEmpty,
+        if canEnterApp,
            !profiles.firstRunProfileSetupComplete {
             pendingFirstRunStep = .confirmProfile
         }
@@ -768,6 +806,21 @@ final class PlozziOSAppModel {
 
     var accounts: [Account] {
         accountsProviders.accounts
+    }
+
+    /// Set setup and navigation intent before publishing admission so the root
+    /// can mount the right destination without an intermediate Home screen.
+    @discardableResult
+    func enterStandalonePlayback() -> Bool {
+        guard Self.isStandalonePlaybackAvailable,
+              pendingFirstRunStep == nil,
+              pendingLibrarySelection == nil,
+              plexHomeUsers.pendingPlexUserSelection == nil,
+              !isManagedServerPresentationActive else { return false }
+        if !profiles.firstRunProfileSetupComplete {
+            pendingFirstRunStep = .confirmProfile
+        }
+        return appAdmission.enterStandalonePlayback(isAvailable: Self.isStandalonePlaybackAvailable)
     }
 
     var crashReportContext: CrashReportContext {
@@ -985,6 +1038,7 @@ final class PlozziOSAppModel {
         accountsProviders.reloadAccounts()
         plexHomeUsers.resetAllForDebug()
         profiles.resetToPristineDefaultForDebugging()
+        if accountsProviders.accounts.isEmpty { appAdmission.resetForDebugging() }
         pendingLibrarySelection = nil
         pendingFirstRunStep = nil
         pendingPairingInvite = nil
@@ -2358,7 +2412,7 @@ final class PlozziOSAppModel {
     }
 
     func confirmFirstRunProfile() {
-        advanceFirstRunStep(to: .seerr)
+        advanceFirstRunStep(to: accounts.isEmpty && allowsStandalonePlayback ? .theme : .seerr)
     }
 
     func completeFirstRunSeerrSetup() {

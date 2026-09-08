@@ -128,6 +128,9 @@ public struct SettingsView: View {
     private let profiles: [Profile]
     private let activeProfile: Profile
     private let liveTVPreferencesNamespace: String?
+    #if DEBUG
+    @Environment(LiveTVSettingsSources.self) private var liveTVSources: LiveTVSettingsSources?
+    #endif
     private let askProfileOnStartup: Bool
     private let appVersion: String
     private let appBuild: String
@@ -1042,7 +1045,8 @@ public struct SettingsView: View {
                 ),
                 preferencesStore: LiveTVPreferencesStore(
                     namespace: liveTVPreferencesNamespace
-                )
+                ),
+                sourceManagement: liveTVSources.map { destination in { destination.content() } }
             )
             .id(activeProfile.id)
         #endif

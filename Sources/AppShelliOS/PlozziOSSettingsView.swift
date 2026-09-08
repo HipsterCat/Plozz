@@ -651,7 +651,19 @@ private struct PlozziOSSettingsSplitView: View {
                 ),
                 preferencesStore: LiveTVPreferencesStore(
                     namespace: appModel.profiles.activeNamespace
-                )
+                ),
+                sourceManagement: {
+                    AnyView(PlozziOSLiveTVSourcesDestination(
+                        profileID: appModel.profiles.activeProfile.id,
+                        preferencesNamespace: appModel.profiles.activeNamespace,
+                        accountsProviders: appModel.accountsProviders,
+                        profiles: appModel.profiles,
+                        connectServer: onAddServer,
+                        didConfigurePlaylist: {
+                            _ = appModel.recordSuccessfulIPTVSetup()
+                        }
+                    ))
+                }
             )
             .id(appModel.profiles.activeProfile.id)
         #endif
@@ -937,7 +949,19 @@ private struct PlozziOSSettingsCompactMenu: View {
                         ),
                         preferencesStore: LiveTVPreferencesStore(
                             namespace: appModel.profiles.activeNamespace
-                        )
+                        ),
+                        sourceManagement: {
+                            AnyView(PlozziOSLiveTVSourcesDestination(
+                                profileID: appModel.profiles.activeProfile.id,
+                                preferencesNamespace: appModel.profiles.activeNamespace,
+                                accountsProviders: appModel.accountsProviders,
+                                profiles: appModel.profiles,
+                                connectServer: onAddServer,
+                                didConfigurePlaylist: {
+                                    _ = appModel.recordSuccessfulIPTVSetup()
+                                }
+                            ))
+                        }
                     )
                     .id(appModel.profiles.activeProfile.id)
                 } label: {

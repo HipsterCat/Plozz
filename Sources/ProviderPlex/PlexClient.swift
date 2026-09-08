@@ -266,16 +266,44 @@ public struct PlexClient: Sendable {
 
     /// Sends `endpoint` against the resolved base URL, transparently re-resolving
     /// and retrying once if the chosen connection is unreachable (self-heal).
-    private func send(_ endpoint: Endpoint, using client: HTTPClient? = nil) async throws -> (Data, HTTPURLResponse) {
+    private func send(
+        _ endpoint: Endpoint,
+        using client: HTTPClient? = nil,
+        preservingStatus: Bool = false
+    ) async throws -> (Data, HTTPURLResponse) {
         let client = client ?? http
         let base = await resolver.resolved()
         do {
+            if preservingStatus { return try await client.sendRaw(endpoint, baseURL: base) }
             return try await client.send(endpoint, baseURL: base)
         } catch AppError.serverUnreachable {
             resolver.reportFailure(base)
             let retry = await resolver.resolved()
             guard retry != base else { throw AppError.serverUnreachable }
+            if preservingStatus { return try await client.sendRaw(endpoint, baseURL: retry) }
             return try await client.send(endpoint, baseURL: retry)
+        }
+    }
+
+    func liveTVGet(path: String, query: [URLQueryItem] = []) async throws -> Data {
+        var liveHeaders = headers
+        liveHeaders["Cache-Control"] = "no-store"
+        let (data, response) = try await send(
+            Endpoint(
+                path: path, queryItems: query, headers: liveHeaders,
+                redirectPolicy: .sameOrigin
+            ),
+            preservingStatus: true
+        )
+        switch response.statusCode {
+        case 200..<300: return data
+        case 401: throw AppError.unauthorized
+        case 403: throw ServerLiveTVError.permissionDenied
+        case 404: throw AppError.notFound
+        case 429: throw AppError.rateLimited(
+            retryAfter: response.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
+        )
+        default: throw AppError.invalidResponse
         }
     }
 

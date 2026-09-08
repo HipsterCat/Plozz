@@ -13,6 +13,7 @@ public struct JellyfinProvider: MediaProvider {
     public let accountID: String
     public let credentialRevision: CredentialRevision
     let client: JellyfinClient
+    let liveTVLeases = JellyfinLiveTVLeaseStore()
     let themeArchiveResolver: @Sendable (String?) async -> URL?
     private let authenticatedStreamProber: (any AuthenticatedHTTPStreamProbing)?
     private let probeDescriptors: MediaBrowserProbeDescriptorStore

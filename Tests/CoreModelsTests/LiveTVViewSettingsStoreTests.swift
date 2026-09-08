@@ -15,6 +15,7 @@ final class LiveTVViewSettingsStoreTests: XCTestCase {
 
         XCTAssertFalse(settings.sortByName)
         XCTAssertTrue(settings.autoPreview)
+        XCTAssertFalse(settings.keepWatchingWhileBrowsing)
         XCTAssertFalse(settings.favoritesOnly)
         XCTAssertFalse(settings.guideOnly)
     }
@@ -24,6 +25,7 @@ final class LiveTVViewSettingsStoreTests: XCTestCase {
         let settings = LiveTVViewSettings(
             sortByName: true,
             autoPreview: false,
+            keepWatchingWhileBrowsing: true,
             favoritesOnly: true,
             guideOnly: true
         )
@@ -54,7 +56,7 @@ final class LiveTVViewSettingsStoreTests: XCTestCase {
         )
 
         primary.save(LiveTVViewSettings(sortByName: true, autoPreview: false))
-        secondary.save(LiveTVViewSettings(favoritesOnly: true, guideOnly: true))
+        secondary.save(LiveTVViewSettings(keepWatchingWhileBrowsing: true, favoritesOnly: true, guideOnly: true))
 
         XCTAssertEqual(
             primary.load(),
@@ -62,7 +64,7 @@ final class LiveTVViewSettingsStoreTests: XCTestCase {
         )
         XCTAssertEqual(
             secondary.load(),
-            LiveTVViewSettings(favoritesOnly: true, guideOnly: true)
+            LiveTVViewSettings(keepWatchingWhileBrowsing: true, favoritesOnly: true, guideOnly: true)
         )
         XCTAssertEqual(
             defaults.object(forKey: LiveTVViewSettingsStore.sortByNameKey) as? Bool,
@@ -77,6 +79,16 @@ final class LiveTVViewSettingsStoreTests: XCTestCase {
             ) as? Bool,
             true
         )
+        XCTAssertEqual(
+            defaults.object(forKey: LiveTVViewSettingsStore.keepWatchingWhileBrowsingKey) as? Bool,
+            false
+        )
+        XCTAssertEqual(
+            defaults.object(forKey: SettingsKey.scoped(
+                LiveTVViewSettingsStore.keepWatchingWhileBrowsingKey, namespace: secondaryNamespace
+            )) as? Bool,
+            true
+        )
     }
 
     func testSettingsAreStoredAsTypedBooleans() {
@@ -85,6 +97,7 @@ final class LiveTVViewSettingsStoreTests: XCTestCase {
             LiveTVViewSettings(
                 sortByName: true,
                 autoPreview: false,
+                keepWatchingWhileBrowsing: true,
                 favoritesOnly: true,
                 guideOnly: false
             )
@@ -92,8 +105,65 @@ final class LiveTVViewSettingsStoreTests: XCTestCase {
 
         XCTAssertEqual(defaults.object(forKey: LiveTVViewSettingsStore.sortByNameKey) as? Bool, true)
         XCTAssertEqual(defaults.object(forKey: LiveTVViewSettingsStore.autoPreviewKey) as? Bool, false)
+        XCTAssertEqual(defaults.object(forKey: LiveTVViewSettingsStore.keepWatchingWhileBrowsingKey) as? Bool, true)
         XCTAssertEqual(defaults.object(forKey: LiveTVViewSettingsStore.favoritesOnlyKey) as? Bool, true)
         XCTAssertEqual(defaults.object(forKey: LiveTVViewSettingsStore.guideOnlyKey) as? Bool, false)
+    }
+
+    func testLegacySettingsKeepTheirValuesAndFollowFocusAfterWatching() {
+        let defaults = makeDefaults()
+        defaults.set(true, forKey: LiveTVViewSettingsStore.sortByNameKey)
+        defaults.set(false, forKey: LiveTVViewSettingsStore.autoPreviewKey)
+        defaults.set(true, forKey: LiveTVViewSettingsStore.favoritesOnlyKey)
+        defaults.set(true, forKey: LiveTVViewSettingsStore.guideOnlyKey)
+
+        XCTAssertEqual(
+            LiveTVViewSettingsStore(defaults: defaults).load(),
+            LiveTVViewSettings(sortByName: true, autoPreview: false, favoritesOnly: true, guideOnly: true)
+        )
+        XCTAssertNil(defaults.object(forKey: LiveTVViewSettingsStore.keepWatchingWhileBrowsingKey))
+    }
+
+    func testLegacySecondaryProfileDoesNotInheritPrimaryPostWatchPreference() {
+        let defaults = makeDefaults()
+        LiveTVViewSettingsStore(defaults: defaults).save(
+            LiveTVViewSettings(keepWatchingWhileBrowsing: true)
+        )
+        let namespace = "legacy-secondary"
+        defaults.set(true, forKey: SettingsKey.scoped(
+            LiveTVViewSettingsStore.sortByNameKey, namespace: namespace
+        ))
+
+        XCTAssertEqual(
+            LiveTVViewSettingsStore(defaults: defaults, namespace: namespace).load(),
+            LiveTVViewSettings(sortByName: true)
+        )
+    }
+
+    func testInvalidPostWatchValueFallsBackWithoutDiscardingExistingSettings() {
+        let defaults = makeDefaults()
+        defaults.set("keep-watching", forKey: LiveTVViewSettingsStore.keepWatchingWhileBrowsingKey)
+        defaults.set(false, forKey: LiveTVViewSettingsStore.autoPreviewKey)
+        defaults.set(true, forKey: LiveTVViewSettingsStore.guideOnlyKey)
+
+        XCTAssertEqual(
+            LiveTVViewSettingsStore(defaults: defaults).load(),
+            LiveTVViewSettings(autoPreview: false, guideOnly: true)
+        )
+    }
+
+    func testPostWatchPreferenceCanBeTurnedOffWithoutChangingAutoPreview() {
+        let defaults = makeDefaults()
+        let store = LiveTVViewSettingsStore(defaults: defaults)
+        store.save(LiveTVViewSettings(autoPreview: false, keepWatchingWhileBrowsing: true))
+        var settings = store.load()
+        settings.keepWatchingWhileBrowsing = false
+        store.save(settings)
+
+        XCTAssertEqual(
+            LiveTVViewSettingsStore(defaults: defaults).load(),
+            LiveTVViewSettings(autoPreview: false)
+        )
     }
 
     @MainActor

@@ -19,6 +19,7 @@ enum PrototypeLayout {
     static let programRadius = rowRadius - programInset
     static let horizontalFade = PlozzTheme.Spacing.large
     static let verticalFade = PlozzTheme.Spacing.xLarge
+    static let minimumGuideOpacity = 0.05
     static let guideInset = PlozzTheme.Metrics.Radius.inset
     static let stationArtworkInset = guideInset + 8
     static var guideTrailingInset: CGFloat {
@@ -259,7 +260,7 @@ struct PrototypeGuideSurface: View {
                 PrototypeLayout.guideShape
                     .fill(LinearGradient(
                         stops: [
-                            .init(color: .clear, location: 0),
+                            .init(color: palette.backgroundBase.opacity(PrototypeLayout.minimumGuideOpacity), location: 0),
                             .init(color: palette.backgroundBase.opacity(0.12), location: 0.2),
                             .init(color: palette.backgroundBase.opacity(0.4), location: 0.55),
                             .init(color: palette.backgroundBase.opacity(0.75), location: 1)
@@ -295,13 +296,16 @@ struct PrototypeControlSurface: View {
 }
 
 enum PrototypeSheet: Identifiable {
-    case filters, sources, guideTime
+    case filters, sources, guideTime, addPlaylist, serverSetup, freeChannels
     case program(LiveTVPrototypeProgram)
 
     var id: String {
         switch self {
         case .filters: "filters"
         case .sources: "sources"
+        case .addPlaylist: "add-playlist"
+        case .serverSetup: "server-setup"
+        case .freeChannels: "free-channels"
         case .guideTime: "guide-time"
         case .program(let program): program.id
         }

@@ -644,6 +644,7 @@ let package = Package(
                 // The universal watchlist runtime lives here so tvOS and iOS share
                 // one implementation instead of two 560-line copies.
                 "FeatureHomeCore",
+                "FeatureLiveTVCore",
                 "FeatureWatchlistCore",
                 "MediaTransportCore",
                 "MediaTransportFTP",

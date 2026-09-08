@@ -17,6 +17,7 @@ public final class LiveTVPreviewController {
 
     public private(set) var isExpanded = false
     public private(set) var followsFocus: Bool
+    public private(set) var keepWatchingWhileBrowsing: Bool
     public private(set) var pendingRequest: LiveTVPreviewRequest?
     public private(set) var focusRestoreRequest = 0
     public private(set) var isRestoringGuideFocus = false
@@ -26,11 +27,21 @@ public final class LiveTVPreviewController {
     private let model: LiveTVPrototypeModel
     private var focusedChannelID: String?
     private var browsingActive = true
+    private var hasExplicitPlayback = false
     private var revision: UInt64 = 0
 
-    public init(model: LiveTVPrototypeModel, followsFocus: Bool = true) {
+    public var isHoldingWatchedChannel: Bool {
+        keepWatchingWhileBrowsing && hasExplicitPlayback
+    }
+
+    public init(
+        model: LiveTVPrototypeModel,
+        followsFocus: Bool = true,
+        keepWatchingWhileBrowsing: Bool = false
+    ) {
         self.model = model
         self.followsFocus = followsFocus
+        self.keepWatchingWhileBrowsing = keepWatchingWhileBrowsing
     }
 
     public func suppressesNavigation(isActive: Bool, isSearching: Bool = false) -> Bool {
@@ -62,9 +73,15 @@ public final class LiveTVPreviewController {
         schedulePreview()
     }
 
+    public func setKeepWatchingWhileBrowsing(_ enabled: Bool) {
+        guard keepWatchingWhileBrowsing != enabled else { return }
+        keepWatchingWhileBrowsing = enabled
+        schedulePreview()
+    }
+
     @discardableResult
     public func commitPreview(_ request: LiveTVPreviewRequest) -> Bool {
-        guard pendingRequest == request, browsingActive, followsFocus, !isExpanded else { return false }
+        guard pendingRequest == request, canPreviewFocusedChannel else { return false }
         pendingRequest = nil
         guard model.visibleChannels.contains(where: { $0.id == request.channelID }) else { return false }
         model.tune(request.channelID)
@@ -75,21 +92,25 @@ public final class LiveTVPreviewController {
         cancelPendingPreview()
         model.tune(channelID)
         guard !model.tuneFailed else { return }
+        hasExplicitPlayback = true
         hasRequestedInitialGuideFocus = true
         let preferredSection = origin?.channelID == channelID ? origin?.section
             : (isExpanded ? watchOrigin?.section : nil)
         watchOrigin = model.guideRow(for: channelID, preferring: preferredSection)
-        followsFocus = false
+        focusedChannelID = channelID
         isRestoringGuideFocus = false
         isExpanded = true
     }
 
     public func returnToGuide(restoresFocus: Bool = true) {
         guard isExpanded else { return }
+        cancelPendingPreview()
+        focusedChannelID = model.playingChannelID
         restoresPlaybackFocus = true
         isRestoringGuideFocus = restoresFocus
         isExpanded = false
         focusRestoreRequest &+= 1
+        if !restoresFocus { schedulePreview() }
     }
 
     public func requestBrowsingFocus() {
@@ -102,13 +123,22 @@ public final class LiveTVPreviewController {
     }
 
     public func completeGuideFocusRestore(_ request: Int) {
-        guard request == focusRestoreRequest else { return }
+        guard request == focusRestoreRequest, isRestoringGuideFocus else { return }
         isRestoringGuideFocus = false
+        schedulePreview()
+    }
+
+    /// Supplies the final focus synchronously, before SwiftUI's selection observer runs.
+    public func completeGuideFocusRestore(_ request: Int, focusedChannelID: String?) {
+        guard request == focusRestoreRequest, isRestoringGuideFocus else { return }
+        self.focusedChannelID = focusedChannelID
+        completeGuideFocusRestore(request)
     }
 
     public func playbackEnded() {
         isExpanded = false
         isRestoringGuideFocus = false
+        hasExplicitPlayback = false
         watchOrigin = nil
         cancelPendingPreview()
     }
@@ -118,17 +148,23 @@ public final class LiveTVPreviewController {
         focusedChannelID = nil
         isExpanded = false
         isRestoringGuideFocus = false
+        hasExplicitPlayback = false
         watchOrigin = nil
         model.stop()
     }
 
     private func schedulePreview() {
         cancelPendingPreview()
-        guard browsingActive, followsFocus, !isExpanded,
+        guard canPreviewFocusedChannel,
               let focusedChannelID, focusedChannelID != model.playingChannelID else { return }
         pendingRequest = LiveTVPreviewRequest(
             channelID: focusedChannelID, revision: revision, focusedAt: ContinuousClock.now
         )
+    }
+
+    private var canPreviewFocusedChannel: Bool {
+        browsingActive && followsFocus && !isExpanded && !isRestoringGuideFocus
+            && !isHoldingWatchedChannel
     }
 
     private func cancelPendingPreview() {

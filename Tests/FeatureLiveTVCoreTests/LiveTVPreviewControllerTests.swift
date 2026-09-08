@@ -124,7 +124,7 @@ final class LiveTVPreviewControllerTests: XCTestCase {
         XCTAssertNil(model.previousChannelID)
     }
 
-    func testWatchAndReturnKeepChannelAndIgnoreBrowsingFocus() throws {
+    func testWatchAndReturnRestoreTheWatchedChannelThenResumeFocusPreviewsByDefault() throws {
         let model = LiveTVPrototypeModel()
         let preview = LiveTVPreviewController(model: model)
         let id = model.channels[0].id
@@ -139,8 +139,15 @@ final class LiveTVPreviewControllerTests: XCTestCase {
         XCTAssertFalse(preview.isExpanded)
         XCTAssertEqual(model.playingChannelID, id)
         XCTAssertEqual(preview.focusRestoreRequest, 1)
-        XCTAssertFalse(preview.followsFocus)
-        preview.setFollowsFocus(true)
+        XCTAssertTrue(preview.followsFocus)
+        XCTAssertFalse(preview.keepWatchingWhileBrowsing)
+        XCTAssertNil(preview.pendingRequest)
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest, focusedChannelID: id)
+        XCTAssertNil(preview.pendingRequest)
+        XCTAssertNil(model.previousChannelID)
+        preview.focus(id)
+        XCTAssertNil(preview.pendingRequest)
+        preview.focus(model.channels[1].id)
         preview.commitPreview(try XCTUnwrap(preview.pendingRequest))
         XCTAssertEqual(model.playingChannelID, model.channels[1].id)
     }
@@ -218,7 +225,7 @@ final class LiveTVPreviewControllerTests: XCTestCase {
         preview.setBrowsingActive(false)
         XCTAssertNil(model.playingChannelID)
         XCTAssertFalse(preview.isExpanded)
-        XCTAssertFalse(preview.followsFocus)
+        XCTAssertTrue(preview.followsFocus)
         preview.focus(model.channels[1].id)
         XCTAssertNil(preview.pendingRequest)
     }
@@ -327,6 +334,348 @@ final class LiveTVPreviewControllerTests: XCTestCase {
         XCTAssertTrue(preview.isExpanded)
         preview.returnToGuide()
         XCTAssertTrue(preview.restoresPlaybackFocus)
+    }
+
+    func testRepeatedFullscreenVisitsNeverTurnOffAutoPreview() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        for index in 0..<3 {
+            let watched = model.channels[index].id
+            let next = model.channels[index + 1].id
+            preview.watch(watched)
+            preview.returnToGuide()
+            preview.completeGuideFocusRestore(preview.focusRestoreRequest, focusedChannelID: watched)
+            preview.focus(next)
+            XCTAssertTrue(preview.commitPreview(try XCTUnwrap(preview.pendingRequest)))
+            XCTAssertEqual(model.playingChannelID, next)
+            XCTAssertTrue(preview.followsFocus)
+        }
+        XCTAssertTrue(model.recentChannelIDs.isEmpty)
+    }
+
+    func testKeepWatchingOnlySuppressesPreviewsAfterAnExplicitSelection() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model, keepWatchingWhileBrowsing: true)
+        let watched = model.channels[0].id
+        XCTAssertFalse(preview.isHoldingWatchedChannel)
+        preview.focus(watched)
+        XCTAssertTrue(preview.commitPreview(try XCTUnwrap(preview.pendingRequest)))
+        preview.focus(model.channels[1].id)
+        XCTAssertTrue(preview.commitPreview(try XCTUnwrap(preview.pendingRequest)))
+        preview.watch(watched)
+        XCTAssertTrue(preview.isHoldingWatchedChannel)
+        preview.returnToGuide()
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest, focusedChannelID: watched)
+        preview.focus(model.channels[2].id)
+        XCTAssertNil(preview.pendingRequest)
+        XCTAssertEqual(model.playingChannelID, watched)
+        XCTAssertTrue(preview.followsFocus)
+        preview.watch(model.channels[2].id)
+        XCTAssertTrue(preview.isExpanded)
+        XCTAssertEqual(model.playingChannelID, model.channels[2].id)
+    }
+
+    func testTurningOffKeepWatchingResumesSettlingAndTurningItOnCancelsPendingWork() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model, keepWatchingWhileBrowsing: true)
+        let watched = model.channels[0].id
+        let focused = model.channels[1].id
+        preview.watch(watched)
+        preview.returnToGuide()
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest, focusedChannelID: watched)
+        preview.focus(focused)
+        preview.setKeepWatchingWhileBrowsing(false)
+        let stale = try XCTUnwrap(preview.pendingRequest)
+        XCTAssertEqual(model.playingChannelID, watched)
+        preview.setKeepWatchingWhileBrowsing(true)
+        XCTAssertFalse(preview.commitPreview(stale))
+        XCTAssertNil(preview.pendingRequest)
+        XCTAssertEqual(model.playingChannelID, watched)
+        preview.setKeepWatchingWhileBrowsing(false)
+        let current = try XCTUnwrap(preview.pendingRequest)
+        XCTAssertNotEqual(current, stale)
+        XCTAssertTrue(preview.commitPreview(current))
+        XCTAssertEqual(model.playingChannelID, focused)
+    }
+
+    func testEnablingKeepWatchingDoesNotRetuneAnEarlierWatchedChannel() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        preview.watch(model.channels[0].id)
+        preview.returnToGuide()
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest)
+        let current = model.channels[1].id
+        preview.focus(current)
+        XCTAssertTrue(preview.commitPreview(try XCTUnwrap(preview.pendingRequest)))
+        preview.setKeepWatchingWhileBrowsing(true)
+        preview.focus(model.channels[2].id)
+        XCTAssertNil(preview.pendingRequest)
+        XCTAssertEqual(model.playingChannelID, current)
+    }
+
+    func testPreferencesChangedDuringFullscreenApplyAfterReturnWithoutRetuningEarly() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model, followsFocus: false)
+        let watched = model.channels[0].id
+        let next = model.channels[1].id
+        preview.watch(watched)
+        preview.focus(next)
+        preview.setFollowsFocus(true)
+        preview.setKeepWatchingWhileBrowsing(true)
+        XCTAssertNil(preview.pendingRequest)
+        XCTAssertEqual(model.playingChannelID, watched)
+        preview.returnToGuide()
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest, focusedChannelID: watched)
+        preview.focus(next)
+        XCTAssertNil(preview.pendingRequest)
+        preview.setKeepWatchingWhileBrowsing(false)
+        XCTAssertTrue(preview.commitPreview(try XCTUnwrap(preview.pendingRequest)))
+    }
+
+    func testAutoPreviewOffStillRequiresSelectionAfterWatchingRegardlessOfHoldPreference() throws {
+        for keepWatching in [false, true] {
+            let model = LiveTVPrototypeModel()
+            let preview = LiveTVPreviewController(
+                model: model, followsFocus: false, keepWatchingWhileBrowsing: keepWatching
+            )
+            let watched = model.channels[0].id
+            let focused = model.channels[1].id
+            preview.watch(watched)
+            preview.returnToGuide()
+            preview.completeGuideFocusRestore(preview.focusRestoreRequest, focusedChannelID: watched)
+            preview.focus(focused)
+            XCTAssertNil(preview.pendingRequest)
+            preview.setKeepWatchingWhileBrowsing(!keepWatching)
+            XCTAssertNil(preview.pendingRequest)
+            XCTAssertFalse(preview.followsFocus)
+            XCTAssertEqual(model.playingChannelID, watched)
+            preview.setKeepWatchingWhileBrowsing(false)
+            preview.setFollowsFocus(true)
+            XCTAssertTrue(preview.commitPreview(try XCTUnwrap(preview.pendingRequest)))
+            XCTAssertEqual(model.playingChannelID, focused)
+        }
+    }
+
+    func testDisablingAutoPreviewCancelsPostWatchRequestAndReenablingUsesFreshRequest() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        preview.watch(model.channels[0].id)
+        preview.returnToGuide()
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest)
+        preview.focus(model.channels[1].id)
+        let stale = try XCTUnwrap(preview.pendingRequest)
+        preview.setFollowsFocus(false)
+        XCTAssertFalse(preview.commitPreview(stale))
+        XCTAssertNil(preview.pendingRequest)
+        preview.setFollowsFocus(true)
+        let current = try XCTUnwrap(preview.pendingRequest)
+        preview.setFollowsFocus(true)
+        preview.setKeepWatchingWhileBrowsing(false)
+        XCTAssertEqual(preview.pendingRequest, current)
+        XCTAssertNotEqual(current, stale)
+        XCTAssertTrue(preview.commitPreview(current))
+    }
+
+    func testRestoreGatesTransientFocusAndSettingsUntilFinalFocusIsDelivered() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        let watched = model.channels[0].id
+        let other = model.channels[1].id
+        preview.watch(watched)
+        preview.focus(other)
+        preview.returnToGuide()
+        preview.focus(other)
+        preview.setFollowsFocus(false)
+        preview.setKeepWatchingWhileBrowsing(true)
+        preview.setFollowsFocus(true)
+        preview.setKeepWatchingWhileBrowsing(false)
+        XCTAssertNil(preview.pendingRequest)
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest, focusedChannelID: watched)
+        XCTAssertNil(preview.pendingRequest)
+        XCTAssertEqual(model.playingChannelID, watched)
+        preview.focus(other)
+        XCTAssertTrue(preview.commitPreview(try XCTUnwrap(preview.pendingRequest)))
+    }
+
+    func testRestorationToAnotherVisibleChannelStartsANewSettlingRequestOnlyAfterHandoff() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        let watched = model.channels[0].id
+        let fallback = model.channels[1].id
+        preview.watch(watched)
+        preview.returnToGuide()
+        model.query = model.channels[1].name
+        preview.focus(fallback)
+        XCTAssertNil(preview.pendingRequest)
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest, focusedChannelID: fallback)
+        let request = try XCTUnwrap(preview.pendingRequest)
+        XCTAssertEqual(request.channelID, fallback)
+        XCTAssertEqual(model.playingChannelID, watched)
+        preview.focus(fallback)
+        XCTAssertEqual(preview.pendingRequest, request)
+        XCTAssertTrue(preview.commitPreview(request))
+        XCTAssertEqual(model.playingChannelID, fallback)
+    }
+
+    func testSupersededAndDuplicateRestoreCallbacksCannotChangeFocusOrRestartSettling() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        preview.watch(model.channels[0].id)
+        preview.returnToGuide()
+        let stale = preview.focusRestoreRequest
+        preview.requestBrowsingFocus()
+        let current = preview.focusRestoreRequest
+        preview.completeGuideFocusRestore(stale, focusedChannelID: model.channels[2].id)
+        XCTAssertTrue(preview.isRestoringGuideFocus)
+        XCTAssertNil(preview.pendingRequest)
+        let focused = model.channels[1].id
+        preview.completeGuideFocusRestore(current, focusedChannelID: focused)
+        let pending = try XCTUnwrap(preview.pendingRequest)
+        preview.completeGuideFocusRestore(current, focusedChannelID: model.channels[2].id)
+        preview.completeGuideFocusRestore(current)
+        XCTAssertEqual(preview.pendingRequest, pending)
+        XCTAssertTrue(preview.commitPreview(pending))
+        XCTAssertEqual(model.playingChannelID, focused)
+    }
+
+    func testInitialAndSidebarHandoffsRearmPreviewEvenWhenChannelFocusDoesNotChange() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        let first = try XCTUnwrap(preview.requestInitialGuideFocus(isActive: true, hasOverlay: false))
+        preview.focus(first.channelID)
+        XCTAssertNil(preview.pendingRequest)
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest, focusedChannelID: first.channelID)
+        let stale = try XCTUnwrap(preview.pendingRequest)
+        preview.requestBrowsingFocus()
+        XCTAssertFalse(preview.commitPreview(stale))
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest, focusedChannelID: first.channelID)
+        let current = try XCTUnwrap(preview.pendingRequest)
+        XCTAssertNotEqual(current, stale)
+        XCTAssertTrue(preview.commitPreview(current))
+    }
+
+    func testReturnWithoutFocusRestorationIgnoresHiddenFullscreenFocusThenAllowsNewFocus() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        let watched = model.channels[0].id
+        let other = model.channels[1].id
+        preview.watch(watched)
+        preview.focus(other)
+        preview.returnToGuide(restoresFocus: false)
+        XCTAssertFalse(preview.isRestoringGuideFocus)
+        XCTAssertNil(preview.pendingRequest)
+        XCTAssertEqual(model.playingChannelID, watched)
+        preview.focus(other)
+        XCTAssertTrue(preview.commitPreview(try XCTUnwrap(preview.pendingRequest)))
+    }
+
+    func testInactiveRestorationCannotPreviewUntilBrowsingResumesAndOldWorkStaysCancelled() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        preview.watch(model.channels[0].id)
+        preview.returnToGuide()
+        preview.setBrowsingActive(false)
+        let focused = model.channels[1].id
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest, focusedChannelID: focused)
+        XCTAssertNil(preview.pendingRequest)
+        preview.setBrowsingActive(true)
+        let stale = try XCTUnwrap(preview.pendingRequest)
+        preview.setBrowsingActive(false)
+        XCTAssertFalse(preview.commitPreview(stale))
+        preview.setBrowsingActive(true)
+        let current = try XCTUnwrap(preview.pendingRequest)
+        XCTAssertNotEqual(current, stale)
+        XCTAssertTrue(preview.commitPreview(current))
+    }
+
+    func testReturningToBackgroundCannotPreviewBeforeTheWatchedOccurrenceIsRestored() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        let watched = model.channels[0].id
+        let next = model.channels[1].id
+        preview.watch(watched)
+        preview.setBrowsingActive(false)
+        preview.returnToGuide()
+        preview.focus(next)
+        preview.setBrowsingActive(true)
+        XCTAssertTrue(preview.isRestoringGuideFocus)
+        XCTAssertNil(preview.pendingRequest)
+        XCTAssertEqual(model.playingChannelID, watched)
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest, focusedChannelID: watched)
+        XCTAssertNil(preview.pendingRequest)
+        preview.focus(next)
+        XCTAssertTrue(preview.commitPreview(try XCTUnwrap(preview.pendingRequest)))
+    }
+
+    func testStopAndPlaybackEndCancelRestorationAndResetOnlyTheSessionHold() throws {
+        for endsNaturally in [false, true] {
+            let model = LiveTVPrototypeModel()
+            let preview = LiveTVPreviewController(model: model, keepWatchingWhileBrowsing: true)
+            preview.watch(model.channels[0].id)
+            preview.returnToGuide()
+            let stale = preview.focusRestoreRequest
+            if endsNaturally {
+                model.stop()
+                preview.playbackEnded()
+            } else {
+                preview.stop()
+            }
+            preview.completeGuideFocusRestore(stale, focusedChannelID: model.channels[2].id)
+            XCTAssertNil(preview.pendingRequest)
+            XCTAssertFalse(preview.isRestoringGuideFocus)
+            XCTAssertNil(preview.watchOrigin)
+            XCTAssertTrue(preview.followsFocus)
+            XCTAssertTrue(preview.keepWatchingWhileBrowsing)
+            XCTAssertFalse(preview.isHoldingWatchedChannel)
+            preview.focus(model.channels[1].id)
+            XCTAssertTrue(preview.commitPreview(try XCTUnwrap(preview.pendingRequest)))
+            XCTAssertEqual(model.playingChannelID, model.channels[1].id)
+        }
+    }
+
+    func testRestorationWithNoRemainingFocusDoesNotPreviewRememberedSelection() {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        preview.watch(model.channels[0].id)
+        preview.returnToGuide()
+        preview.focus(model.channels[1].id)
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest, focusedChannelID: nil)
+        XCTAssertNil(preview.pendingRequest)
+        preview.setBrowsingActive(false)
+        preview.setBrowsingActive(true)
+        XCTAssertNil(preview.pendingRequest)
+    }
+
+    func testFailedWatchDoesNotActivateHoldWatchedPolicy() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model, keepWatchingWhileBrowsing: true)
+        model.simulateTunerBusy = true
+        preview.watch(model.channels[0].id)
+        XCTAssertTrue(model.tuneFailed)
+        XCTAssertFalse(preview.isExpanded)
+        model.simulateTunerBusy = false
+        preview.focus(model.channels[1].id)
+        XCTAssertTrue(preview.commitPreview(try XCTUnwrap(preview.pendingRequest)))
+    }
+
+    func testPreviewAndUnconfirmedWatchNeverWriteRecentsAndPostWatchPreviewKeepsConfirmedRecents() throws {
+        let model = LiveTVPrototypeModel()
+        let preview = LiveTVPreviewController(model: model)
+        let watched = model.channels[0].id
+        preview.focus(watched)
+        XCTAssertTrue(preview.commitPreview(try XCTUnwrap(preview.pendingRequest)))
+        XCTAssertTrue(model.recentChannelIDs.isEmpty)
+        preview.watch(watched)
+        XCTAssertTrue(model.recentChannelIDs.isEmpty)
+        XCTAssertFalse(model.recordWatched(model.channels[1].id))
+        XCTAssertTrue(model.recentChannelIDs.isEmpty)
+        // The playback host calls this only after the selected stream's matching first frame.
+        XCTAssertTrue(model.recordWatched(watched))
+        preview.returnToGuide()
+        preview.completeGuideFocusRestore(preview.focusRestoreRequest, focusedChannelID: watched)
+        preview.focus(model.channels[1].id)
+        XCTAssertTrue(preview.commitPreview(try XCTUnwrap(preview.pendingRequest)))
+        XCTAssertEqual(model.recentChannelIDs, [watched])
     }
 }
 

@@ -97,7 +97,7 @@ final class LiveTVGuideFocusTests: XCTestCase {
             XCTAssertTrue(controller.backPress.view === controller.view)
             controller.closeFromRemote()
             controller.closeFromRemote()
-            await waitUntil { probe.searchClosed }
+            await waitUntil { probe.searchClosed && controller.view.window == nil }
             XCTAssertTrue(probe.searchClosed)
             XCTAssertEqual(probe.searchCloseCount, 1)
             XCTAssertNil(controller.view.window)
@@ -203,7 +203,7 @@ final class LiveTVGuideFocusTests: XCTestCase {
         defer { window.isHidden = true; window.rootViewController = nil }
         let controller = try await waitForSearch(in: window)
         controller.closeFromRemote()
-        await waitUntil { probe.searchClosed }
+        await waitUntil { probe.searchClosed && controller.view.window == nil }
         XCTAssertTrue(probe.searchClosed)
         XCTAssertEqual(probe.searchCloseCount, 1)
         XCTAssertNil(controller.view.window)

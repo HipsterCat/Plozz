@@ -1,4 +1,5 @@
 #if DEBUG
+import CoreModels
 import Foundation
 import Observation
 
@@ -17,6 +18,7 @@ public enum LiveTVImportPhase: Equatable, Sendable {
 
 public struct LiveTVGuideSourceStatus: Identifiable, Equatable, Sendable {
     public let source: LiveTVGuideSource
+    public let playlistSourceID: String
     public var id: String { source.id }
     public fileprivate(set) var phase: LiveTVImportPhase = .idle
     public fileprivate(set) var failure: LiveTVSourceImportError?
@@ -25,16 +27,28 @@ public struct LiveTVGuideSourceStatus: Identifiable, Equatable, Sendable {
     public fileprivate(set) var lastRefresh: Date?
 }
 
+public struct LiveTVPlaylistSourceStatus: Identifiable, Equatable, Sendable {
+    public let source: LiveTVPlaylistSource
+    public var id: String { source.id }
+    public fileprivate(set) var phase: LiveTVImportPhase = .idle
+    public fileprivate(set) var failure: LiveTVSourceImportError?
+    public fileprivate(set) var entryCount = 0
+    public fileprivate(set) var skippedEntryCount = 0
+    public fileprivate(set) var channelCount = 0
+    public fileprivate(set) var lastRefresh: Date?
+}
+
 public enum LiveTVGuideGapState: Equatable, Sendable {
-    case loading, disabled, failed, unmatched, noListings
+    case loading, disabled, failed, unmatched, noListings, unrequested
 
     public var title: LocalizedStringResource {
         switch self {
         case .loading: "Loading guide..."
-        case .disabled: "No guide sources enabled"
+        case .disabled: "No program guide available"
         case .failed: "Guide update failed"
         case .unmatched: "No matching program guide"
         case .noListings: "No listings for this time"
+        case .unrequested: "Guide not loaded for this time"
         }
     }
 }
@@ -42,16 +56,27 @@ public enum LiveTVGuideGapState: Equatable, Sendable {
 @MainActor
 @Observable
 public final class LiveTVPrototypeImportModel {
-    public let playlistURL: URL
+    public private(set) var configuration: LiveTVSourcesConfiguration
+    public private(set) var playlistSources: [LiveTVPlaylistSourceStatus]
+    public internal(set) var serverSources: [LiveTVServerSourceStatus] = []
+    public internal(set) var serverGuideWindows: [LiveTVServerGuideWindowStatus] = []
+    public var playlistURL: URL? { configuration.playlists.first?.playlistURL }
     public private(set) var guideSources: [LiveTVGuideSourceStatus]
     public private(set) var enabledSourceIDs: Set<String>
     public private(set) var selectedSourceByChannel: [String: String] = [:]
+    public private(set) var playlistSourceIDByChannel: [String: String] = [:]
+    public private(set) var configuredSourceIDByChannel: [String: String] = [:]
+    public private(set) var serverChannelReferences: [String: LiveTVServerChannelReference] = [:]
     public private(set) var playlistPhase: LiveTVImportPhase = .idle
     public private(set) var guidePhase: LiveTVImportPhase = .idle
     public private(set) var playlistFailure: LiveTVSourceImportError?
     public private(set) var guideFailure: LiveTVSourceImportError?
-    public private(set) var entryCount = 0
-    public private(set) var skippedEntryCount = 0
+    public var entryCount: Int {
+        playlistSources.filter(\.source.isEnabled).reduce(0) { $0 + $1.entryCount }
+    }
+    public var skippedEntryCount: Int {
+        playlistSources.filter(\.source.isEnabled).reduce(0) { $0 + $1.skippedEntryCount }
+    }
     public private(set) var guideChannelCount = 0
     public private(set) var matchedChannelCount = 0
     public private(set) var programCount = 0
@@ -62,9 +87,29 @@ public final class LiveTVPrototypeImportModel {
     @ObservationIgnored private let loader: any LiveTVSourceLoading
     @ObservationIgnored private var revision = 0
     @ObservationIgnored private var cachedGuides: [String: LiveTVGuideImport] = [:]
+    @ObservationIgnored private var cachedPlaylists: [String: LiveTVPlaylistImport] = [:]
+    @ObservationIgnored private var disabledGuideIDs: Set<String> = []
+    @ObservationIgnored private var legacySourceID: String?
     @ObservationIgnored private var sourceChannels: [LiveTVPrototypeChannel] = []
+    @ObservationIgnored private var reloadGeneration = 0
+    @ObservationIgnored var serverRevision = 0
+    @ObservationIgnored var serverSourceRevisions: [String: Int] = [:]
+    @ObservationIgnored var cachedServerCatalogs: [String: LiveTVServerCatalog] = [:]
+    @ObservationIgnored var serverProviderResolver: LiveTVServerProviderResolver = { _ in nil }
+    @ObservationIgnored var activeServerGuideRequests: Set<UUID> = []
 
-    public var isLoading: Bool { playlistPhase == .loading || guidePhase == .loading }
+    public var isLoading: Bool {
+        playlistPhase == .loading || guidePhase == .loading
+            || serverSources.contains { $0.phase == .loading || $0.guidePhase == .loading }
+    }
+    public var catalogPhase: LiveTVImportPhase {
+        let phases = playlistSources.filter(\.source.isEnabled).map(\.phase)
+            + serverSources.filter(\.source.isEnabled).map(\.phase)
+        if phases.contains(.loading) { return .loading }
+        if phases.contains(.loaded) { return .loaded }
+        if phases.contains(.failed) { return .failed }
+        return .idle
+    }
     public var failedSourceCount: Int {
         guideSources.filter { enabledSourceIDs.contains($0.id) && $0.phase == .failed }.count
     }
@@ -75,33 +120,156 @@ public final class LiveTVPrototypeImportModel {
     }
 
     public init(
+        configuration: LiveTVSourcesConfiguration,
+        loader: any LiveTVSourceLoading = LiveTVSourceLoader(),
+        serverProviderResolver: @escaping LiveTVServerProviderResolver = { _ in nil }
+    ) {
+        self.configuration = configuration
+        playlistSources = configuration.playlists.map { LiveTVPlaylistSourceStatus(source: $0) }
+        serverSources = configuration.servers.map { LiveTVServerSourceStatus(source: $0) }
+        let sources = configuration.playlists.flatMap { playlist in
+            LiveTVConfiguredSources.guides(for: playlist).map {
+                LiveTVGuideSourceStatus(source: $0, playlistSourceID: playlist.id)
+            }
+        }
+        guideSources = sources
+        let enabledPlaylists = Set(configuration.playlists.filter(\.isEnabled).map(\.id))
+        enabledSourceIDs = Set(sources.filter { enabledPlaylists.contains($0.playlistSourceID) }.map(\.id))
+        self.loader = loader
+        self.serverProviderResolver = serverProviderResolver
+    }
+
+    /// Legacy fixture/prototype initializer. Production must pass explicit profile configuration.
+    public init(
         playlistURL: URL = URL(string: "https://iptv-org.github.io/iptv/countries/us.m3u")!,
         guideURL: URL? = nil,
         sources: [LiveTVGuideSource] = LiveTVGuideSource.defaults,
         loader: any LiveTVSourceLoading = LiveTVSourceLoader()
     ) {
-        self.playlistURL = playlistURL
         let sources = guideURL.map {
             [LiveTVGuideSource(id: "guide", name: "XMLTV", url: $0, provider: LiveTVGuideSource.provider(for: $0))]
         } ?? sources
         precondition(Set(sources.map(\.id)).count == sources.count, "Guide source IDs must be unique.")
-        guideSources = sources.map { LiveTVGuideSourceStatus(source: $0) }
+        let playlist = LiveTVPlaylistSource(
+            id: "prototype", name: "IPTV", playlistURL: playlistURL, guideURLs: sources.map(\.url)
+        )
+        configuration = LiveTVSourcesConfiguration(playlists: [playlist])
+        playlistSources = [LiveTVPlaylistSourceStatus(source: playlist)]
+        legacySourceID = playlist.id
+        guideSources = sources.map { LiveTVGuideSourceStatus(source: $0, playlistSourceID: playlist.id) }
         enabledSourceIDs = Set(sources.map(\.id))
         self.loader = loader
     }
 
+    public func applyConfiguration(
+        _ configuration: LiveTVSourcesConfiguration, into model: LiveTVPrototypeModel
+    ) throws {
+        try configuration.validate()
+        guard self.configuration != configuration || legacySourceID != nil
+            || (configuration.playlists.allSatisfy({ !$0.isEnabled })
+                && configuration.servers.allSatisfy({ !$0.isEnabled })) else { return }
+        reloadGeneration &+= 1
+        applyServerConfiguration(configuration.servers)
+        let enabledConfiguredIDs = Set(
+            configuration.playlists.filter(\.isEnabled).map(\.id)
+                + configuration.servers.filter(\.isEnabled).map(\.id)
+        )
+        if let selected = model.configuredSourceID, !enabledConfiguredIDs.contains(selected) {
+            model.configuredSourceID = nil
+        }
+        if self.configuration.playlists == configuration.playlists, legacySourceID == nil {
+            self.configuration = configuration
+            try publishPlaylists(into: model)
+            return
+        }
+        revision &+= 1
+        let previousPlaylists = playlistSources.reduce(into: [String: LiveTVPlaylistSourceStatus]()) {
+            $0[$1.id] = $1
+        }
+        let previousGuides = guideSources.reduce(into: [String: LiveTVGuideSourceStatus]()) {
+            $0[$1.id] = $1
+        }
+        let retainedIDs = Set(configuration.playlists.filter {
+            $0.isEnabled && previousPlaylists[$0.id]?.source.playlistURL == $0.playlistURL
+                && $0.id != legacySourceID
+        }.map(\.id))
+        cachedPlaylists = cachedPlaylists.filter { retainedIDs.contains($0.key) }
+        self.configuration = configuration
+        legacySourceID = nil
+        playlistSources = configuration.playlists.map { source in
+            var status = LiveTVPlaylistSourceStatus(source: source)
+            if retainedIDs.contains(source.id), let previous = previousPlaylists[source.id] {
+                status.phase = previous.phase == .loading ? .idle : previous.phase
+                status.failure = previous.failure
+                status.entryCount = previous.entryCount
+                status.skippedEntryCount = previous.skippedEntryCount
+                status.channelCount = previous.channelCount
+                status.lastRefresh = previous.lastRefresh
+            }
+            return status
+        }
+        guideSources = configuration.playlists.flatMap { playlist in
+            LiveTVConfiguredSources.guides(for: playlist).map { source in
+                var status = LiveTVGuideSourceStatus(source: source, playlistSourceID: playlist.id)
+                if retainedIDs.contains(playlist.id), let previous = previousGuides[source.id] {
+                    status.phase = previous.phase == .loading ? .idle : previous.phase
+                    status.failure = previous.failure
+                    status.matchedChannelCount = previous.matchedChannelCount
+                    status.programCount = previous.programCount
+                    status.lastRefresh = previous.lastRefresh
+                }
+                return status
+            }
+        }
+        let enabledPlaylists = Set(configuration.playlists.filter(\.isEnabled).map(\.id))
+        disabledGuideIDs.formIntersection(Set(guideSources.map(\.id)))
+        enabledSourceIDs = Set(guideSources.filter {
+            enabledPlaylists.contains($0.playlistSourceID) && !disabledGuideIDs.contains($0.id)
+        }.map(\.id))
+        let retainedGuides = Set(guideSources.filter {
+            retainedIDs.contains($0.playlistSourceID) && enabledSourceIDs.contains($0.id)
+        }.map(\.id))
+        cachedGuides = cachedGuides.filter { retainedGuides.contains($0.key) }
+        lastGuideRefresh = guideSources.filter { cachedGuides[$0.id] != nil }.compactMap(\.lastRefresh).max()
+        playlistFailure = nil
+        guideFailure = nil
+        try publishPlaylists(into: model)
+        updatePhases()
+    }
+
+    public func setPlaylistEnabled(
+        _ sourceID: String, enabled: Bool, into model: LiveTVPrototypeModel
+    ) throws {
+        guard let index = configuration.playlists.firstIndex(where: { $0.id == sourceID }) else {
+            throw LiveTVSourcesValidationError.invalidSourceID
+        }
+        var updated = configuration
+        updated.playlists[index].isEnabled = enabled
+        try applyConfiguration(updated, into: model)
+    }
+
     public func setSourceEnabled(_ sourceID: String, enabled: Bool, into model: LiveTVPrototypeModel) throws {
-        guard guideSources.contains(where: { $0.id == sourceID }) else {
+        guard let source = guideSources.first(where: { $0.id == sourceID }),
+              !enabled || configuration.playlists.contains(where: { $0.id == source.playlistSourceID && $0.isEnabled })
+        else {
             throw LiveTVSourceImportError.invalidGuide
         }
         guard enabledSourceIDs.contains(sourceID) != enabled else { return }
-        if enabled { enabledSourceIDs.insert(sourceID) }
+        if enabled {
+            enabledSourceIDs.insert(sourceID)
+            disabledGuideIDs.remove(sourceID)
+        }
         else {
             enabledSourceIDs.remove(sourceID)
+            disabledGuideIDs.insert(sourceID)
             cachedGuides.removeValue(forKey: sourceID)
         }
         // Fence in-flight results immediately, before SwiftUI starts the replacement task.
-        revision += 1
+        revision &+= 1
+        for index in playlistSources.indices where playlistSources[index].phase == .loading {
+            playlistSources[index].phase = .idle
+        }
+        if playlistPhase == .loading { playlistPhase = .idle }
         for index in guideSources.indices where guideSources[index].phase == .loading {
             guideSources[index].phase = .idle
         }
@@ -110,60 +278,134 @@ public final class LiveTVPrototypeImportModel {
     }
 
     public func gapState(for channel: LiveTVPrototypeChannel) -> LiveTVGuideGapState {
-        if enabledSourceIDs.isEmpty { return .disabled }
+        if let reference = serverChannelReferences[channel.id],
+           let status = serverSources.first(where: { $0.id == reference.sourceID }) {
+            if status.phase == .loading { return .loading }
+            if status.failure != nil || status.guideFailure == .permissionDenied { return .failed }
+            if status.availability?.supportsGuide == false { return .disabled }
+            guard let window = serverGuideWindows.last(where: {
+                $0.sourceID == reference.sourceID && $0.channelIDs.contains(channel.id)
+            }) else { return .unrequested }
+            return serverGuideState(channelID: channel.id, from: window.from, to: window.to)
+        }
+        let owner = playlistSourceIDByChannel[channel.id]
+        let enabledGuides = guideSources.filter {
+            enabledSourceIDs.contains($0.id) && (owner == nil || $0.playlistSourceID == owner)
+        }
+        if enabledGuides.isEmpty { return .disabled }
         if selectedSourceByChannel[channel.id] != nil { return .noListings }
         if playlistPhase == .idle || playlistPhase == .loading || guidePhase == .loading { return .loading }
         let provider = LiveTVStreamIdentity(url: channel.streamURL).provider
-        let relevant = guideSources.filter {
-            enabledSourceIDs.contains($0.id) && $0.source.provider == provider
-        }
+        let relevant = enabledGuides.filter { $0.source.provider == provider }
         if relevant.contains(where: { $0.phase == .failed }) { return .failed }
         return .unmatched
     }
 
     public func reload(into model: LiveTVPrototypeModel) async {
-        revision += 1
+        reloadGeneration &+= 1
+        let request = reloadGeneration
+        await reloadPlaylists(into: model)
+        guard request == reloadGeneration, !Task.isCancelled else { return }
+        await reloadServers(into: model)
+    }
+
+    private func reloadPlaylists(into model: LiveTVPrototypeModel) async {
+        revision &+= 1
         let request = revision
+        do {
+            try configuration.validate()
+        } catch {
+            playlistPhase = .failed
+            playlistFailure = .invalidPlaylist
+            guidePhase = .idle
+            return
+        }
+        let enabledPlaylists = playlistSources.filter { $0.source.isEnabled }
+        guard !enabledPlaylists.isEmpty else {
+            cachedPlaylists = [:]
+            cachedGuides = [:]
+            playlistFailure = nil
+            guideFailure = nil
+            lastGuideRefresh = nil
+            do { try publishPlaylists(into: model) }
+            catch { playlistFailure = .invalidPlaylist }
+            playlistPhase = .idle
+            guidePhase = .idle
+            return
+        }
         guidePhase = enabledSourceIDs.isEmpty ? .idle : .loading
         for index in guideSources.indices where guideSources[index].phase == .loading {
             guideSources[index].phase = .idle
         }
         playlistPhase = .loading
         playlistFailure = nil
-        do {
-            let playlist = try await loader.loadPlaylist(from: playlistURL)
-            try Task.checkCancellation()
-            guard revision == request else { return }
-            try model.replaceChannels(playlist.channels)
-            sourceChannels = playlist.channels
-            entryCount = playlist.entryCount
-            skippedEntryCount = playlist.skippedEntryCount
-            playlistPhase = .loaded
-            try publishGuides(into: model)
-        } catch {
-            guard revision == request else { return }
-            let cancelled = Task.isCancelled || error is CancellationError
-                || (error as? LiveTVSourceImportError) == .cancelled
-            playlistFailure = cancelled ? nil : error as? LiveTVSourceImportError ?? .invalidPlaylist
-            playlistPhase = cancelled ? .idle : .failed
-            guidePhase = cachedGuides.isEmpty ? .idle : .loaded
-            return
-        }
-
         guideFailure = nil
+        for index in playlistSources.indices {
+            playlistSources[index].phase = .idle
+            playlistSources[index].failure = nil
+        }
+        for index in playlistSources.indices where playlistSources[index].source.isEnabled {
+            guard revision == request else { return }
+            let source = playlistSources[index].source
+            playlistSources[index].phase = .loading
+            do {
+                try Task.checkCancellation()
+                let imported = try await loader.loadPlaylist(from: source.playlistURL)
+                try Task.checkCancellation()
+                guard revision == request else { return }
+                let playlist = source.id == legacySourceID ? imported : LiveTVConfiguredSources.scope(
+                    imported, to: source.id, preservesChannelIDs: preservesChannelIDs(for: source.id)
+                )
+                let previous = cachedPlaylists[source.id]
+                cachedPlaylists[source.id] = playlist
+                do {
+                    try publishPlaylists(into: model)
+                } catch {
+                    cachedPlaylists[source.id] = previous
+                    throw error
+                }
+                playlistSources[index].entryCount = playlist.entryCount
+                playlistSources[index].skippedEntryCount = playlist.skippedEntryCount
+                playlistSources[index].channelCount = playlist.channels.count
+                playlistSources[index].lastRefresh = Date()
+                playlistSources[index].phase = .loaded
+            } catch {
+                guard revision == request else { return }
+                if isCancellation(error) {
+                    playlistSources[index].phase = .idle
+                    playlistPhase = .idle
+                    guidePhase = .idle
+                    return
+                }
+                let failure = error as? LiveTVSourceImportError ?? .invalidPlaylist
+                playlistSources[index].failure = failure
+                playlistSources[index].phase = .failed
+                playlistFailure = failure
+            }
+        }
+        playlistPhase = playlistSources.contains { $0.source.isEnabled && $0.phase == .loaded }
+            ? .loaded : .failed
+
+        let loadedPlaylists = Set(playlistSources.filter { $0.phase == .loaded }.map(\.id))
         for index in guideSources.indices {
-            guideSources[index].phase = .idle
+            guideSources[index].phase = cachedGuides[guideSources[index].id] == nil ? .idle : .loaded
             guideSources[index].failure = nil
         }
         let now = Date()
-        for index in guideSources.indices where enabledSourceIDs.contains(guideSources[index].id) {
+        for index in guideSources.indices where enabledSourceIDs.contains(guideSources[index].id)
+            && loadedPlaylists.contains(guideSources[index].playlistSourceID) {
             guard revision == request else { return }
             let source = guideSources[index].source
+            let owner = guideSources[index].playlistSourceID
+            let channels = cachedPlaylists[owner]?.channels ?? []
             guideSources[index].phase = .loading
             do {
-                let guide = try await loader.loadGuide(from: source.url, channels: sourceChannels, now: now)
+                try Task.checkCancellation()
+                let imported = try await loader.loadGuide(from: source.url, channels: channels, now: now)
                 try Task.checkCancellation()
                 guard revision == request else { return }
+                let guide = preservesChannelIDs(for: owner)
+                    ? imported : LiveTVConfiguredSources.scope(imported, to: owner)
                 let previous = cachedGuides[source.id]
                 cachedGuides[source.id] = guide
                 do {
@@ -180,8 +422,7 @@ public final class LiveTVPrototypeImportModel {
                 lastGuideRefresh = guideSources[index].lastRefresh
             } catch {
                 guard revision == request else { return }
-                if Task.isCancelled || error is CancellationError
-                    || (error as? LiveTVSourceImportError) == .cancelled {
+                if isCancellation(error) {
                     guideSources[index].phase = .idle
                     guidePhase = .idle
                     return
@@ -192,10 +433,54 @@ public final class LiveTVPrototypeImportModel {
                 guideFailure = failure
             }
         }
-        if enabledSourceIDs.isEmpty { guidePhase = .idle }
-        else {
-            guidePhase = failedSourceCount == enabledSourceIDs.count ? .failed : .loaded
+        updateGuidePhase()
+    }
+
+    private func preservesChannelIDs(for sourceID: String) -> Bool {
+        sourceID == legacySourceID || sourceID == "free-us"
+    }
+
+    func isCancellation(_ error: any Error) -> Bool {
+        Task.isCancelled || error is CancellationError || (error as? LiveTVSourceImportError) == .cancelled
+    }
+
+    private func updatePhases() {
+        let enabled = playlistSources.filter { $0.source.isEnabled }
+        if enabled.contains(where: { $0.phase == .loaded }) { playlistPhase = .loaded }
+        else if !enabled.isEmpty, enabled.allSatisfy({ $0.phase == .failed }) { playlistPhase = .failed }
+        else { playlistPhase = .idle }
+        updateGuidePhase()
+    }
+
+    private func updateGuidePhase() {
+        let enabled = guideSources.filter { enabledSourceIDs.contains($0.id) }
+        if enabled.contains(where: { $0.phase == .loaded }) { guidePhase = .loaded }
+        else if enabled.contains(where: { $0.phase == .failed }) { guidePhase = .failed }
+        else { guidePhase = .idle }
+    }
+
+    func publishPlaylists(into model: LiveTVPrototypeModel) throws {
+        let playlists = playlistSources.filter(\.source.isEnabled).compactMap { status in
+            cachedPlaylists[status.id].map { (status.id, $0) }
         }
+        let servers = serverSources.filter(\.source.isEnabled).compactMap { cachedServerCatalogs[$0.id] }
+        guard playlists.reduce(0, { $0 + $1.1.channels.count }) + servers.reduce(0, { $0 + $1.channels.count })
+            <= LiveTVPlaylistParser.maximumEntries else {
+            throw LiveTVSourceImportError.responseTooLarge
+        }
+        let channels = playlists.flatMap { $0.1.channels } + servers.flatMap(\.channels)
+        try model.replaceChannels(channels)
+        sourceChannels = channels
+        playlistSourceIDByChannel = Dictionary(uniqueKeysWithValues: playlists.flatMap { sourceID, playlist in
+            playlist.channels.map { ($0.id, sourceID) }
+        })
+        serverChannelReferences = servers.reduce(into: [:]) { result, catalog in
+            result.merge(catalog.references) { current, _ in current }
+        }
+        configuredSourceIDByChannel = playlistSourceIDByChannel.merging(
+            serverChannelReferences.mapValues(\.sourceID)
+        ) { current, _ in current }
+        try publishGuides(into: model)
     }
 
     private func publishGuides(into model: LiveTVPrototypeModel) throws {
@@ -209,7 +494,8 @@ public final class LiveTVPrototypeImportModel {
             guard let guide = cachedGuides[status.id] else { continue }
             channelCount += guide.guideChannelCount
             let grouped = Dictionary(grouping: guide.programs, by: \.channelID)
-            let matchedIDs = Set(guide.matches.keys).union(grouped.keys).intersection(channelIDs)
+            let ownedChannelIDs = channelIDs.filter { playlistSourceIDByChannel[$0] == status.playlistSourceID }
+            let matchedIDs = Set(guide.matches.keys).union(grouped.keys).intersection(ownedChannelIDs)
             for channelID in matchedIDs {
                 let method = guide.matches[channelID]?.method ?? .displayName
                 let programs = grouped[channelID] ?? []
@@ -222,25 +508,31 @@ public final class LiveTVPrototypeImportModel {
                 chosen[channelID] = (status.id, method, programs, upcoming)
             }
         }
-        let programs = chosen.values.flatMap(\.programs)
+        let nativePrograms = serverSources.filter(\.source.isEnabled)
+            .compactMap { cachedServerCatalogs[$0.id] }.flatMap(\.programs)
+        let programs = chosen.values.flatMap(\.programs) + nativePrograms
+        guard programs.count <= LiveTVXMLTVParser.maximumRetainedPrograms else {
+            throw LiveTVSourceImportError.guideTooLarge
+        }
         try model.replacePrograms(programs)
         selectedSourceByChannel = chosen.mapValues(\.sourceID)
         guideChannelCount = channelCount
-        matchedChannelCount = chosen.count
+        matchedChannelCount = chosen.count + Set(nativePrograms.map(\.channelID)).count
         programCount = programs.count
         coverageStart = programs.map(\.start).min()
         coverageEnd = programs.map(\.end).max()
     }
 
-    private func validateCacheBudget() throws {
+    func validateCacheBudget() throws {
         var count = 0
         var textBytes = 0
-        for guide in cachedGuides.values {
-            count += guide.programs.count
+        let sources = cachedGuides.values.map(\.programs) + cachedServerCatalogs.values.map(\.programs)
+        for programs in sources {
+            count += programs.count
             guard count <= LiveTVXMLTVParser.maximumRetainedPrograms else {
                 throw LiveTVSourceImportError.guideTooLarge
             }
-            for program in guide.programs {
+            for program in programs {
                 textBytes += program.title.utf8.count + program.subtitle.utf8.count
                 guard textBytes <= LiveTVXMLTVParser.maximumRetainedTextBytes else {
                     throw LiveTVSourceImportError.guideTooLarge

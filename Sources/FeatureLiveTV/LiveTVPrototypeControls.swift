@@ -89,6 +89,7 @@ struct PrototypeSheetContent: View {
     let goToNow: () -> Void
     let guideStart: Date
     let tune: (String) -> Void
+    var sourceManagement: ((PrototypeSheet) -> AnyView)? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(\.themePalette) private var palette
 
@@ -102,12 +103,16 @@ struct PrototypeSheetContent: View {
                 case .guideTime:
                     PrototypeGuideTimeForm(guideOffset: $guideOffset, goToNow: goToNow, guideStart: guideStart)
                         .navigationTitle("Guide time")
-                case .sources:
-                    PrototypeSourcesForm(model: model, imports: imports, reload: reload) {
-                        showGuide()
-                        dismiss()
+                case .sources, .addPlaylist, .serverSetup, .freeChannels:
+                    if let sourceManagement {
+                        sourceManagement(destination)
+                    } else {
+                        PrototypeSourcesForm(model: model, imports: imports, reload: reload) {
+                            showGuide()
+                            dismiss()
+                        }
+                        .navigationTitle("Live TV sources")
                     }
-                    .navigationTitle("Live TV sources")
                 case .program(let program):
                     PrototypeProgramDetails(
                         program: program, model: model,
@@ -237,8 +242,14 @@ private struct PrototypeSourcesForm: View {
     var body: some View {
         Form {
             Section {
-                Text("iptv-org · United States").font(.headline)
-                Text(imports.playlistURL.absoluteString).font(.caption)
+                ForEach(imports.playlistSources) { status in
+                    Text(status.source.name).font(.headline)
+                    PrototypeSourceAddress(url: status.source.playlistURL).font(.caption)
+                }
+                if imports.playlistSources.isEmpty, let url = imports.playlistURL {
+                    Text("IPTV playlist").font(.headline)
+                    PrototypeSourceAddress(url: url).font(.caption)
+                }
                 Text("\(imports.entryCount) playlist entries")
                 Text("\(imports.skippedEntryCount) unsupported or duplicate entries skipped")
             } header: {
@@ -278,7 +289,7 @@ private struct PrototypeSourcesForm: View {
                         Text(status.source.name).font(.headline)
                     }
                     .accessibilityIdentifier("live-tv-guide-source-\(status.id)")
-                    Text(status.source.url.absoluteString).font(.caption)
+                    PrototypeSourceAddress(url: status.source.url).font(.caption)
                     PrototypeGuideSourceStatus(
                         status: status, enabled: imports.enabledSourceIDs.contains(status.id)
                     )
@@ -305,7 +316,7 @@ private struct PrototypeSourcesForm: View {
                 Text("Repeats the imported channels into labeled copies; it does not add stations. Favorites and recently watched channels are saved separately for each profile.")
             }
             Section {
-                Text("Channel history is separate from movie and episode progress. Plex, Jellyfin and Emby tuning are not connected yet.")
+                Text("Channel history is separate from movie and episode progress. Jellyfin and Emby can play channels from a configured Live TV server. Plex currently supports channels and guide listings, not playback.")
             }
         }
         .alert("Guide selection could not be applied", isPresented: $selectionFailed) {
@@ -316,7 +327,19 @@ private struct PrototypeSourcesForm: View {
     }
 }
 
-private struct PrototypeGuideSourceStatus: View {
+struct PrototypeSourceAddress: View {
+    let url: URL
+
+    var body: some View {
+        if let host = url.host {
+            Text(host).privacySensitive()
+        } else {
+            Text("Source address unavailable")
+        }
+    }
+}
+
+struct PrototypeGuideSourceStatus: View {
     let status: LiveTVGuideSourceStatus
     let enabled: Bool
 

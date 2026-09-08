@@ -4,6 +4,41 @@ import XCTest
 @testable import FeatureLiveTVCore
 
 final class LiveTVPlaylistParserTests: XCTestCase {
+    func testRejectsHLSMediaSegmentsInsteadOfImportingThemAsChannels() {
+        let input = """
+        #EXTM3U
+        #EXT-X-TARGETDURATION:6
+        #EXTINF:6,First segment
+        https://example.com/segment-1.ts
+        #EXTINF:6,Second segment
+        https://example.com/segment-2.ts
+        """
+        XCTAssertThrowsError(try LiveTVPlaylistParser().parse(input)) {
+            XCTAssertEqual($0 as? LiveTVSourceImportError, .streamManifest)
+        }
+    }
+
+    func testRejectsHLSMasterAsAChannelList() {
+        let input = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=800000
+        https://example.com/media.m3u8
+        """
+        XCTAssertThrowsError(try LiveTVPlaylistParser().parse(input)) {
+            XCTAssertEqual($0 as? LiveTVSourceImportError, .streamManifest)
+        }
+    }
+
+    func testM3U8ChannelListStillAcceptsHLSChannelURLs() throws {
+        let input = """
+        #EXTM3U
+        #EXTINF:-1,News
+        https://example.com/live.m3u8
+        """
+        let parser = LiveTVPlaylistParser(baseURL: URL(string: "https://example.com/channels.m3u8"))
+        XCTAssertEqual(try parser.parse(input).channels.map(\.name), ["News"])
+    }
+
     func testParsesAttributesCommasRelativeURLsAndScopedHeaders() throws {
         let input = """
         #EXTM3U

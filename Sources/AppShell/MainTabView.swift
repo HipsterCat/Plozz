@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import AppRuntime
 import CoreModels
 import CoreNetworking
 import CoreUI
@@ -20,6 +21,39 @@ import SimklService
 import AniListService
 import MALService
 import LastFmService
+
+#if DEBUG
+/// Keep the typed environment dependency stable across Settings redraws.
+@MainActor
+private struct LiveTVSettingsSourcesScope<Content: View>: View {
+    let content: Content
+    @State private var sources: LiveTVSettingsSources
+
+    init(
+        content: Content,
+        profileID: String,
+        preferencesNamespace: String?,
+        accountsProviders: AccountsProvidersModel,
+        connectServer: @escaping () -> Void,
+        didConfigurePlaylist: @escaping () -> Void
+    ) {
+        self.content = content
+        _sources = State(initialValue: LiveTVSettingsSources {
+            AnyView(LiveTVShellSourcesDestination(
+                profileID: profileID,
+                preferencesNamespace: preferencesNamespace,
+                accountsProviders: accountsProviders,
+                connectServer: connectServer,
+                didConfigurePlaylist: didConfigurePlaylist
+            ))
+        })
+    }
+
+    var body: some View {
+        content.environment(sources)
+    }
+}
+#endif
 
 /// The signed-in experience: Home, Search and Settings tabs, with item-detail
 /// navigation and full-screen playback.
@@ -212,6 +246,7 @@ struct MainTabView: View {
     }
 
     let accounts: [ResolvedAccount]
+    let accountsProviders: AccountsProvidersModel
     /// The detail-snapshot cache scoped to the active content identity (profile +
     /// accounts + Plex Home-user generation), injected from `RootView` so every
     /// detail destination shares one identity-isolated instance instead of the
@@ -405,7 +440,13 @@ struct MainTabView: View {
     var pendingSyncedServers: [SyncedAccountDescriptor] = []
     var onIgnorePendingServer: (String) -> Void = { _ in }
     var onSetUpFromAnotherDevice: (() -> Void)?
+    var admissionContext = AppAdmissionContext(hasMediaAccounts: true)
+    var pendingStandaloneLiveTVEntry = false
+    var onConsumeStandaloneLiveTVEntry: (() -> Void)?
+    var onConfiguredIPTVPlaylist: () -> Void = {}
 
+    @State private var hasResolvedStandaloneStartup = false
+    @State private var retainsExplicitLiveTVEntry = false
     @State private var discovery = LibraryDiscoveryModel()
     /// Owns the Settings library-discovery result as an `@Observable` reference so
     /// that a reload (which fires on Settings appearance, DURING the tab focus-flip)
@@ -484,12 +525,22 @@ struct MainTabView: View {
             // Top-bar selection is deliberately separate. A viewer can leave a
             // library selected in rail/sidebar mode, use the top bar, then return
             // without that library destination being erased.
-            set: { selectedTabRaw = resolvedTopBarTab($0).rawValue }
+            set: {
+                releaseExplicitLiveTVEntry(ifLeavingFor: destination(for: $0))
+                selectedTabRaw = resolvedTopBarTab($0).rawValue
+            }
         )
     }
 
     private var resolvedSelectedTab: MainTab {
-        resolvedTopBarTab(MainTab(rawValue: selectedTabRaw) ?? .home)
+        let stored = MainTab(rawValue: selectedTabRaw) ?? .home
+        if let startup = standaloneStartupDestination(
+            current: destination(for: stored),
+            destinations: topBarDestinations
+        ) {
+            return mainTab(for: startup)
+        }
+        return resolvedTopBarTab(stored)
     }
 
     private func resolvedTopBarTab(_ tab: MainTab) -> MainTab {
@@ -510,7 +561,74 @@ struct MainTabView: View {
 
     /// Destination currently visible under native sidebar or custom rail.
     private var activeLibraryNavigationDestination: NavigationRailDestination {
-        libraryNavigationEntryOverride ?? resolvedRailSelection
+        let current = libraryNavigationEntryOverride ?? resolvedRailSelection
+        return standaloneStartupDestination(
+            current: current,
+            destinations: activeNavigationDestinations
+        ) ?? current
+    }
+
+    private func standaloneStartupDestination(
+        current: NavigationRailDestination,
+        destinations: [NavigationRailDestination]
+    ) -> NavigationRailDestination? {
+        #if DEBUG
+        guard admissionContext.explicitStandaloneChoice,
+              pendingStandaloneLiveTVEntry
+                || (!hasResolvedStandaloneStartup && !admissionContext.hasMediaAccounts) else {
+            return nil
+        }
+        return AppAdmissionNavigation.initialSelection(
+            current: current,
+            visible: destinations,
+            liveTV: .liveTV,
+            fallback: .settings,
+            admission: admissionContext,
+            hasPendingLiveTVEntry: pendingStandaloneLiveTVEntry
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    /// Effective selections above already render the requested destination on
+    /// the first frame. Only then persist both chrome variants and acknowledge.
+    private func settleStandaloneStartup() {
+        guard admissionContext.explicitStandaloneChoice,
+              pendingStandaloneLiveTVEntry
+                || (!hasResolvedStandaloneStartup && !admissionContext.hasMediaAccounts) else {
+            hasResolvedStandaloneStartup = true
+            return
+        }
+        let tab = resolvedSelectedTab
+        let rail = activeLibraryNavigationDestination
+        retainsExplicitLiveTVEntry = pendingStandaloneLiveTVEntry
+        selectedTabRaw = tab.rawValue
+        railSelectionRaw = rail.storageValue
+        libraryNavigationEntryOverride = nil
+        hasResolvedStandaloneStartup = true
+        if pendingStandaloneLiveTVEntry { onConsumeStandaloneLiveTVEntry?() }
+    }
+
+    private func releaseExplicitLiveTVEntry(ifLeavingFor destination: NavigationRailDestination) {
+        #if DEBUG
+        if destination != .liveTV { retainsExplicitLiveTVEntry = false }
+        #endif
+    }
+
+    private func includingExplicitLiveTVEntry(
+        _ destinations: [NavigationRailDestination]
+    ) -> [NavigationRailDestination] {
+        #if DEBUG
+        return AppAdmissionNavigation.destinations(
+            destinations,
+            liveTV: .liveTV,
+            includesExplicitEntry: admissionContext.explicitStandaloneChoice
+                && (pendingStandaloneLiveTVEntry || retainsExplicitLiveTVEntry)
+        )
+        #else
+        return destinations
+        #endif
     }
 
     private var navigationStyle: NavigationStyle {
@@ -531,6 +649,7 @@ struct MainTabView: View {
         Binding(
             get: { activeLibraryNavigationDestination },
             set: { destination in
+                releaseExplicitLiveTVEntry(ifLeavingFor: destination)
                 libraryNavigationEntryOverride = nil
                 railSelectionRaw = destination.storageValue
                 selectedTabRaw = mainTab(for: destination).rawValue
@@ -670,27 +789,27 @@ struct MainTabView: View {
     }
 
     private var topBarDestinations: [NavigationRailDestination] {
-        NavigationRailPlan.destinations(
+        includingExplicitLiveTVEntry(NavigationRailPlan.destinations(
             visibleLibraries: availableRailLibraries,
             layout: navigationStyleModel.libraryLayout,
             availableKeys: compactDestinationKeys
-        )
+        ))
     }
 
     private var sidebarDestinations: [NavigationRailDestination] {
-        NavigationRailPlan.destinations(
+        includingExplicitLiveTVEntry(NavigationRailPlan.destinations(
             visibleLibraries: availableRailLibraries,
             layout: navigationStyleModel.libraryLayout,
             availableKeys: sidebarDestinationKeys
-        )
+        ))
     }
 
     private var customRailDestinations: [NavigationRailDestination] {
-        NavigationRailPlan.destinations(
+        includingExplicitLiveTVEntry(NavigationRailPlan.destinations(
             visibleLibraries: availableRailLibraries,
             layout: navigationStyleModel.libraryLayout,
             availableKeys: customRailDestinationKeys
-        )
+        ))
     }
 
     private var activeNavigationDestinations: [NavigationRailDestination] {
@@ -783,6 +902,21 @@ struct MainTabView: View {
     /// as anything else in the body grew. Naming it gives the checker a fixed
     /// point and keeps the tab list readable.
     private var settingsTabContent: some View {
+        #if DEBUG
+        LiveTVSettingsSourcesScope(
+            content: settingsViewContent,
+            profileID: activeProfile.id,
+            preferencesNamespace: liveTVPreferencesNamespace,
+            accountsProviders: accountsProviders,
+            connectServer: onAddAccount,
+            didConfigurePlaylist: onConfiguredIPTVPlaylist
+        )
+        #else
+        settingsViewContent
+        #endif
+    }
+
+    private var settingsViewContent: some View {
             SettingsView(
                 subtitleBehavior: subtitleBehaviorModel,
                 spoilers: spoilerModel,
@@ -1061,6 +1195,10 @@ struct MainTabView: View {
                 isActive: isActiveTab(.liveTV),
                 profileID: activeProfile.id,
                 preferencesNamespace: liveTVPreferencesNamespace,
+                accountsProviders: accountsProviders,
+                authenticatedHTTPResolver: authenticatedHTTPResolver,
+                connectServer: onAddAccount,
+                didConfigurePlaylist: onConfiguredIPTVPlaylist,
                 usesNativeNavigation: true
             ))
         #endif
@@ -1093,6 +1231,10 @@ struct MainTabView: View {
                 isActive: activeLibraryNavigationDestination == .liveTV,
                 profileID: activeProfile.id,
                 preferencesNamespace: liveTVPreferencesNamespace,
+                accountsProviders: accountsProviders,
+                authenticatedHTTPResolver: authenticatedHTTPResolver,
+                connectServer: onAddAccount,
+                didConfigurePlaylist: onConfiguredIPTVPlaylist,
                 usesNativeNavigation: true
             ))
         #endif
@@ -1215,6 +1357,10 @@ struct MainTabView: View {
                 isActive: showsLiveTV,
                 profileID: activeProfile.id,
                 preferencesNamespace: liveTVPreferencesNamespace,
+                accountsProviders: accountsProviders,
+                authenticatedHTTPResolver: authenticatedHTTPResolver,
+                connectServer: onAddAccount,
+                didConfigurePlaylist: onConfiguredIPTVPlaylist,
                 onExpandedChange: updateLiveTVChrome
             )
             .opacity(showsLiveTV ? 1 : 0)
@@ -1331,6 +1477,9 @@ struct MainTabView: View {
         let _ = plozzPrintChanges { Self._printChanges() }
         let _ = PlozzBodyRate.tick("MainTabView")
         return shellContent
+        .onChange(of: pendingStandaloneLiveTVEntry, initial: true) { _, _ in
+            settleStandaloneStartup()
+        }
         .background {
             // Switching tabs is `MainTabView`'s job, so the capture rig's tab
             // requests are consumed here rather than in either shell. A leaf
@@ -1416,6 +1565,9 @@ struct MainTabView: View {
             navigationLibrariesSnapshotStore.save(reconciled)
         }
         .onChange(of: activeDestinationKey, initial: true) { _, destination in
+            if let selected = NavigationRailDestination(storageValue: destination) {
+                releaseExplicitLiveTVEntry(ifLeavingFor: selected)
+            }
             BrowseDiagnostics.event("screen tab=\(destination)")
             // Keeps person tracing alive across relaunches once it has been
             // asked for, so restoring the live stream never costs the repro.

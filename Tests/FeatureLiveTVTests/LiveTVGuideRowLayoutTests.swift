@@ -218,6 +218,135 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
         )
     }
 
+    func testGuideSurfaceNeverDisappearsBehindTheTimeHeader() throws {
+        let samples = try alphaSamples(
+            PrototypeGuideSurface()
+                .environment(\.plozzReduceTransparency, false)
+                .environment(\.themePalette, ThemePalette.dark),
+            size: CGSize(width: 600, height: 400),
+            points: [(300, 0), (300, 1), (300, 40), (300, 200), (300, 398)]
+        )
+        XCTAssertEqual(PrototypeLayout.minimumGuideOpacity, 0.05)
+        XCTAssertTrue(samples.allSatisfy { $0 >= 12 })
+        XCTAssertLessThan(try XCTUnwrap(samples.first), 25)
+    }
+
+    func testNowMarkerDrawsOneContinuousLineAcrossHeaderAndRows() throws {
+        let samples = try alphaSamples(
+            PrototypeNowLine(start: start, now: start.addingTimeInterval(1_800), timelineOffset: 50),
+            size: CGSize(width: 600, height: 400),
+            points: [(99, 0), (99, 43), (99, 44), (99, 59), (99, 60), (99, 199), (99, 398)]
+        )
+        XCTAssertTrue(samples.allSatisfy { $0 > 190 })
+    }
+
+    func testBrowserNowMarkerBridgesTheActualRulerAndRowContainer() throws {
+        let channel = LiveTVPrototypeChannel(
+            id: "station", number: 1, name: "Test station", category: "News",
+            symbol: "tv", accent: 0, source: .iptv, tagline: ""
+        )
+        let model = LiveTVPrototypeModel(now: start.addingTimeInterval(1_800), channels: [channel])
+        try model.replacePrograms([program("Test program", from: 0, to: 3_600)])
+        let browser = PrototypeBrowser(
+            model: model, imports: LiveTVPrototypeImportModel(configuration: .init(playlists: [])),
+            selectedID: .constant(nil), selectedRowID: .constant(nil),
+            railActive: .constant(false), focusedProgram: .constant(nil), hasFocus: .constant(false),
+            topRequest: 0, nowRequest: 0, guideOffset: .constant(0), timeAnchor: .constant(start),
+            timelineOffset: .constant(0), restoreFocusRequest: 0, isPresented: true,
+            isRestoringFocus: false, restoresPlaybackFocus: false, watchOrigin: nil,
+            focusRestored: { _ in }, tune: { _ in }, details: { _ in },
+            openControls: {}, openSources: {}, openGuideTime: {}, openToolbar: {},
+            isLoading: false, loadFailed: false, reload: {}
+        )
+        .environment(\.plozzReduceTransparency, false)
+        .environment(\.themePalette, ThemePalette.dark)
+        let innerWidth: CGFloat = 1_000 - PrototypeLayout.guideInset - PrototypeLayout.guideTrailingInset
+        let x = Int(PrototypeLayout.guideInset + PrototypeLayout.stationWidth(for: innerWidth)
+            + PrototypeLayout.columnGap + PrototypeLayout.timelineWidth(for: innerWidth) / 4)
+        let top = Int(PrototypeLayout.guideInset)
+        let samples = try alphaSamples(
+            browser, size: CGSize(width: 1_000, height: 400),
+            points: [(x, top + 2), (x, top + 40), (x, top + 44),
+                     (x, top + 44 + Int(PrototypeLayout.gap) / 2),
+                     (x, top + 44 + Int(PrototypeLayout.gap) + 4)]
+        )
+        XCTAssertTrue(samples.allSatisfy { $0 > 190 }, "\(samples)")
+    }
+
+    func testElapsedProgramFillHasASubtleLeadingEdgeAndClampsToTheCell() throws {
+        for (elapsed, expected) in [
+            (-40.0, [false, false, false]),
+            (80.0, [true, false, false]),
+            (400.0, [true, true, true])
+        ] {
+            let samples = try alphaSamples(
+                PrototypeElapsedProgramFill(elapsedWidth: elapsed)
+                    .environment(\.themePalette, ThemePalette.dark),
+                size: CGSize(width: 200, height: 100),
+                points: [(40, 50), (100, 50), (180, 50)]
+            )
+            XCTAssertEqual(samples.map { $0 > 0 }, expected)
+            XCTAssertTrue(samples.allSatisfy { $0 < 30 })
+        }
+    }
+
+    func testElapsedFillAndNowMarkerFollowRightToLeftTimeDirection() throws {
+        let fill = try alphaSamples(
+            PrototypeElapsedProgramFill(elapsedWidth: 80)
+                .environment(\.layoutDirection, .rightToLeft),
+            size: CGSize(width: 200, height: 100),
+            points: [(40, 50), (100, 50), (180, 50)]
+        )
+        XCTAssertEqual(fill.map { $0 > 0 }, [false, false, true])
+        let marker = try alphaSamples(
+            PrototypeNowLine(start: start, now: start.addingTimeInterval(1_800), timelineOffset: 50)
+                .environment(\.layoutDirection, .rightToLeft),
+            size: CGSize(width: 600, height: 400),
+            points: [(99, 50), (499, 50), (499, 60)]
+        )
+        XCTAssertEqual(marker.map { $0 > 0 }, [false, true, true])
+    }
+
+    func testAlphaSamplerReadsTopToBottomScreenCoordinates() throws {
+        let samples = try alphaSamples(
+            VStack(spacing: 0) {
+                Color.black.opacity(0.2)
+                Color.black.opacity(0.8)
+            },
+            size: CGSize(width: 100, height: 100),
+            points: [(50, 10), (50, 90)]
+        )
+        XCTAssertEqual(Double(samples[0]), 51, accuracy: 1)
+        XCTAssertEqual(Double(samples[1]), 204, accuracy: 1)
+    }
+
+    private func alphaSamples<V: View>(
+        _ view: V, size: CGSize, points: [(Int, Int)]
+    ) throws -> [UInt8] {
+        let width = Int(size.width)
+        let height = Int(size.height)
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        try pixels.withUnsafeMutableBytes { bytes in
+            let context = try XCTUnwrap(CGContext(
+                data: bytes.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+            ))
+            var didRender = false
+            UITraitCollection(accessibilityContrast: .normal).performAsCurrent {
+                let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height))
+                renderer.render(rasterizationScale: 1) { renderedSize, draw in
+                    XCTAssertEqual(renderedSize, size)
+                    draw(context)
+                    didRender = true
+                }
+            }
+            XCTAssertTrue(didRender)
+        }
+        return points.map { x, y in pixels[(y * width + x) * 4 + 3] }
+    }
+
     func testScrollFadesRampOnlyWhereContentExtendsPastTheViewport() {
         let atStart = PrototypeScrollFade(before: 0, after: 2_000)
         XCTAssertEqual(atStart.leading, 0)

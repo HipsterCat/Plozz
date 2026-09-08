@@ -819,6 +819,118 @@ public struct JellyfinClient: Sendable {
         return try await http.decode(PlaybackInfoResponse.self, from: endpoint, baseURL: baseURL)
     }
 
+    // MARK: Live TV
+
+    func liveTVSend(_ request: Endpoint) async throws -> Data {
+        var request = request
+        request.headers.merge(authHeaders) { _, authentication in authentication }
+        request.headers["Accept"] = "application/json"
+        request.headers["Cache-Control"] = "no-store"
+        request.redirectPolicy = .sameOrigin
+        let (data, response) = try await http.sendRaw(request, baseURL: baseURL)
+        switch response.statusCode {
+        case 200..<300: return data
+        case 401: throw AppError.unauthorized
+        case 403: throw ServerLiveTVError.permissionDenied
+        case 404: throw AppError.notFound
+        case 409: throw ServerLiveTVError.tunerUnavailable
+        case 429: throw AppError.rateLimited(
+            retryAfter: response.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
+        )
+        default: throw AppError.invalidResponse
+        }
+    }
+
+    func liveTVPlaybackInfo(userID: String, itemID: String) async throws -> Data {
+        let endpoint = try Endpoint(
+            method: .post,
+            path: "/Items/\(itemID)/PlaybackInfo",
+            queryItems: [URLQueryItem(name: "UserId", value: userID)]
+        ).jsonBody(PlaybackInfoBody(
+            UserId: userID,
+            MaxStreamingBitrate: capabilityProfile.maxStreamingBitrate,
+            AutoOpenLiveStream: false,
+            MediaSourceId: nil,
+            EnableDirectPlay: true,
+            EnableDirectStream: true,
+            EnableTranscoding: true,
+            DeviceProfile: capabilityProfile
+        ))
+        return try await liveTVSend(endpoint)
+    }
+
+    func liveTVOpen(
+        userID: String,
+        itemID: String,
+        openToken: String,
+        playSessionID: String?
+    ) async throws -> Data {
+        let wireItemID: JellyfinLiveTVOpenItemID
+        if providerKind == .emby {
+            guard let value = Int64(itemID), value >= 0 else {
+                throw ServerLiveTVError.invalidChannel
+            }
+            wireItemID = .integer(value)
+        } else {
+            wireItemID = .string(itemID)
+        }
+        let endpoint = try Endpoint(method: .post, path: "/LiveStreams/Open")
+            .jsonBody(JellyfinLiveTVOpenBody(
+                OpenToken: openToken,
+                UserId: userID,
+                ItemId: wireItemID,
+                PlaySessionId: playSessionID,
+                MaxStreamingBitrate: capabilityProfile.maxStreamingBitrate,
+                DeviceProfile: capabilityProfile
+            ))
+        return try await liveTVSend(endpoint)
+    }
+
+    func liveTVClose(liveStreamID: String) async throws {
+        guard !liveStreamID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AppError.invalidResponse
+        }
+        _ = try await liveTVSend(Endpoint(
+            method: .post,
+            path: "/LiveStreams/Close",
+            queryItems: [
+                URLQueryItem(
+                    name: providerKind == .emby ? "LiveStreamId" : "liveStreamId",
+                    value: liveStreamID
+                )
+            ]
+        ))
+    }
+
+    func liveTVReport(_ body: JellyfinLiveTVProgressBody, path: String) async throws {
+        _ = try await liveTVSend(
+            Endpoint(method: .post, path: path).jsonBody(body)
+        )
+    }
+
+    func liveTVStopEncoding(playSessionID: String) async throws {
+        // A server may not expose this legacy endpoint. Never broaden a failed
+        // session-scoped request to a device-only stop.
+        guard !playSessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !deviceProfile.deviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AppError.invalidResponse
+        }
+        _ = try await liveTVSend(Endpoint(
+            method: .delete,
+            path: "/Videos/ActiveEncodings",
+            queryItems: [
+                URLQueryItem(
+                    name: providerKind == .emby ? "DeviceId" : "deviceId",
+                    value: deviceProfile.deviceID
+                ),
+                URLQueryItem(
+                    name: providerKind == .emby ? "PlaySessionId" : "playSessionId",
+                    value: playSessionID
+                )
+            ]
+        ))
+    }
+
     func reportPlaybackProgress(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {
         let path: String
         switch event {
@@ -1284,6 +1396,17 @@ struct ReachabilityObservingHTTPClient: HTTPClient {
         do {
             let result = try await wrapped.send(endpoint, baseURL: baseURL)
             latch.confirm()
+            return result
+        } catch AppError.serverUnreachable {
+            latch.invalidate()
+            throw AppError.serverUnreachable
+        }
+    }
+
+    func sendRaw(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
+        do {
+            let result = try await wrapped.sendRaw(endpoint, baseURL: baseURL)
+            if (200..<300).contains(result.1.statusCode) { latch.confirm() }
             return result
         } catch AppError.serverUnreachable {
             latch.invalidate()

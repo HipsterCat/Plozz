@@ -1,8 +1,9 @@
 # Live TV prototype
 
 A native, Debug-only Live TV destination for iterating on a physical Apple TV,
-iPhone and iPad. It browses real public channels and plays their HLS streams through
-Plozz's existing AetherEngine (`PlozzigenVideoEngine`) integration. It now lives
+iPhone and iPad. It combines configured IPTV playlists and authorized server
+channels, using Plozz's existing AetherEngine (`PlozzigenVideoEngine`) integration.
+It lives
 inside Plozz's actual navigation instead of replacing the application root.
 Release navigation and onboarding remain unchanged.
 
@@ -16,8 +17,10 @@ tools/generate-project.sh
 ```
 
 Open `Plozz.xcodeproj` and run a Debug **Plozz** build on Apple TV or
-**PlozziOS** on iPhone/iPad. After normal profile/account setup, select **Live TV**
-in navigation. Apple TV supports the top tabs, native sidebar and custom
+**PlozziOS** on iPhone/iPad. Choose a media server or **Live TV / IPTV** during
+first-run setup, then complete the ordinary profile and appearance steps.
+Standalone IPTV requires no media-server account. Select **Live TV** in
+navigation. Apple TV supports the top tabs, native sidebar and custom
 navigation rail variations; iPhone/iPad expose the same destination in their
 tab shell. Device installation must be authorized; a build alone does not
 install anything.
@@ -26,7 +29,7 @@ For isolated physical-TV iteration, build a branded Debug app using the existing
 per-branch build configuration. It has its own bundle ID, preferences and data;
 normal Plozz remains installed and untouched. Cloud sync and Top Shelf are not
 enabled for branded builds. A branded app therefore needs its own normal
-profile/account setup. Once installed, launch that bundle explicitly:
+profile/source setup. Once installed, launch that bundle explicitly:
 
 ```sh
 xcrun devicectl device process launch --device <device-id> \
@@ -50,8 +53,11 @@ Release builds.
 
 ## Try
 
-The preview loads the complete supplied US playlist, then the enabled XMLTV guides.
-Channels become available before guide loading finishes. There is one unified
+An empty configuration opens source setup; it does not contact a public feed or
+play an unsolicited channel. Add an M3U playlist, use an authorized connected
+server, or explicitly confirm the free US preset. Enabled sources are combined;
+adding one does not replace another. Channels become available before guide
+loading finishes. There is one unified
 channel guide, not separate Channels and Guide tabs. It groups up to three
 **Recently watched** channels first, then **Favorites**, then the full filtered
 channel list. Empty groups are omitted. Recent and Favorite entries are
@@ -64,8 +70,10 @@ Favorites and recent channels are saved per Plozz profile and restored across
 sessions. Initially empty or temporarily unavailable source catalogs do not
 erase saved IDs. Unreadable preferences are not overwritten, and failed writes
 offer a retry rather than displaying an unsaved change as successful.
-Search/category state and guide-source selections remain session-scoped.
-View preferences live in the app's **Settings > Live TV** page.
+Search/category state remains session-scoped. Playlist addresses, optional guide
+addresses and their order, source names, and enabled states are stored securely
+per profile. Server sources store an account reference, not duplicate credentials.
+View preferences and source management live in **Settings > Live TV**.
 Earlier prototype builds did not store Favorites or Recents on disk, so there
 is no prior in-memory history to migrate on the first updated launch.
 
@@ -83,6 +91,10 @@ is no prior in-memory history to migrate on the first updated launch.
   dialog. Apple TV uses the native inline search keyboard above the familiar
   channel/programme rows; iPhone/iPad replace the hero with an inline search field.
   Both use the same query and filtered catalog, not an extra eight-result list.
+  On TV, each actual guide row supplies a row-sized native focus boundary.
+  This keeps keyboard-collapse scrolling aimed at that row rather than the
+  entire SwiftUI results host; retain `PrototypeSearchFocusBoundary` around
+  rows when changing the guide layout.
   The current category remains identified. Leaving Search restores the
   original guide occurrence and time position; the video stays in the same player.
   On Apple TV, Back works from both the native keyboard and the results.
@@ -151,8 +163,9 @@ is no prior in-memory history to migrate on the first updated launch.
   Guide, Search, preview metadata and the player use the same `ChannelLogoArtwork`
   component. Solid logo plates replace the gradients that faded into the page.
   Detected source backings are extended unchanged, including white boxes inside
-  transparent margins. Otherwise dark/coloured marks use white, while even a
-  small bright wordmark can require charcoal. A quiet perimeter stroke keeps
+  transparent margins. Otherwise a restrained, desaturated brand tint sits over
+  a light or charcoal plate; even a small bright wordmark can require charcoal.
+  A quiet perimeter stroke keeps
   the plate boundary visible. Brand pixels are not recoloured or haloed.
   The existing shared hero preparation cache and synchronous memo resolve the
   logo and its backing together, so a warmed guide logo appears immediately in
@@ -176,8 +189,13 @@ is no prior in-memory history to migrate on the first updated launch.
   Focus and selection never swap the button's structural identity.
 - The preview spans the screen width behind the upper guide. One continuous
   fade reaches the page colour before the video's lower edge; the date/time
-  header no longer starts an opaque panel. The tray grows more opaque lower
+  header no longer starts an opaque panel. The tray begins at five percent
+  opacity rather than disappearing completely, then grows more opaque lower
   down, with a solid fallback for Reduce Transparency or increased contrast.
+  One noninteractive Now line spans the ruler, its spacing and the channel
+  viewport. A subtle fill marks elapsed time inside programme cells and remains
+  aligned with that line when the timeline scrolls. Channel-only rows do not
+  invent programme progress.
   Shared smooth edge masks dissolve rows underneath the fixed time header and
   programme cells at the horizontal viewport edges. The guide has no bottom
   fade and extends to the TV screen's bottom and trailing edges in both Search
@@ -188,12 +206,18 @@ is no prior in-memory history to migrate on the first updated launch.
   Programme containers match the full height and corner radius of their station
   logo plates. Row spacing still separates channels; time widths and inner text
   padding are unchanged.
-- **Sources** reports playlist entries, skipped entries, guide matches, listings,
-  coverage dates and per-feed failures. Its toggles enable or disable the five
-  preset guides; disabling one immediately removes its contribution. Results
-  appear incrementally, and a failed feed does not block the remaining feeds.
-  **Show channels with guide listings** applies the corresponding filter,
-  making the populated rows easy to find.
+- **Sources** adds, edits, pauses and removes playlists and connected servers.
+  Playlist checks finish before saving, and stale editors cannot overwrite a
+  newer source. Guides are optional and can be added, removed or reordered later.
+  The playlist address must describe a channel list, not an HLS master or media
+  manifest. Channel entries can themselves point to HLS streams.
+  Source details retain playlist/skipped-entry counts, guide matches, loaded
+  listings and per-feed failures; the guide overview shows loaded coverage.
+  Settings can edit the same secure configuration without pretending to have
+  live import statistics. Open Live TV to load sources and inspect those results.
+  Failed sources do not block successful ones or erase their last-good data.
+  **With guide listings** filters populated channels without changing source
+  authorization or stopping a hidden, deliberately watched channel.
 - Guide retains all channels, even if none has a schedule. Unknown intervals
   remain honest gaps; they do not hide channels or shift later programs under
   the wrong time. Channel buttons still tune live without guide data.
@@ -201,8 +225,9 @@ is no prior in-memory history to migrate on the first updated launch.
   a program, without inventing a show title, start time or duration. Real
   listings still show their programme title. Entirely unlisted rows
   keep that label stationary rather than drawing an empty six-hour program.
-  Loading, disabled, failed and unmatched-source diagnostics remain in Sources,
-  not repeated on every channel. Program details identify the selected guide source.
+  Detailed diagnostics remain in Sources, not repeated on every channel.
+  A focused missing-listing row can show a loading, failed or not-yet-requested
+  state. Program details identify the selected guide source.
 - On wide screens, the station/logo column stays fixed while program rows scroll
   horizontally through a shared six-hour window. The time ruler stays above the
   vertical list and follows the same horizontal offset. Its leading label
@@ -237,6 +262,36 @@ is no prior in-memory history to migrate on the first updated launch.
   promoting a channel into Recents cannot make transport bounce between stations.
   This channel history never writes movie/episode progress or watched status.
 
+### Connected-server Live TV and standalone setup
+
+Jellyfin and Emby adapters discover authorized channels, load native guide data,
+and open explicitly owned live-stream sessions. Plex supports available lineup
+and guide discovery, but tuning is deliberately unavailable until a complete
+ordinary-client acquisition/release contract is substantiated. Setup identifies
+guide-only Plex sources before they are added; it does not promise playback.
+No adapter invokes administrative, device-wide session termination.
+
+Checking a server is metadata-only and never acquires a tuner. The chooser
+distinguishes missing tuner setup, no channels, permissions, an unreachable
+service, unsupported APIs and guide-only playback limitations. It uses only
+accounts available to the current profile, including effective Plex Home
+credentials, and rejects stale results after profile or authorization changes.
+Source configuration uses the existing household parental-PIN policy.
+
+Native guides bypass XMLTV name matching. The browser requests the displayed
+two-/six-hour window for a bounded neighborhood of at most 12 rows; recently
+watched and favorite duplicates do not produce duplicate requests. Loaded or
+in-flight coverage is reused. Larger requested windows are split at the provider
+limits rather than downloading every Plex channel for every day on entry.
+
+Standalone admission is an explicit, device-local choice, separate from
+accounts, profiles and source count. Deleting the last source or signing out of
+the final server does not strand an opted-in installation at server login.
+Existing profile confirmation and PIN/Plex Home gates remain intact. An explicit
+first entry can temporarily expose a hidden Live TV destination; later launches
+respect navigation customization, including Settings-only layouts. Builds
+without the Debug-only destination do not honor standalone admission.
+
 ### Required follow-up: channel scanning
 
 Channel scanning is a committed product follow-up, deliberately **not implemented
@@ -263,8 +318,13 @@ On Apple TV, resting on a different channel for **600 ms** requests its preview.
 Rapid scrolling cancels pending requests; moving between programs on the same
 channel does not restart the delay or retune. The delay is **not** a stream
 startup guarantee: network, source, keyframe and decoder startup follow it.
-There is only one active player, with sound on while browsing. No second stream
-is opened to fake an instant crossfade. Search, controls, sheets and inactive
+There is only one active player, with sound on while browsing. No second decoder
+is opened to fake an instant crossfade. A server change can prepare a replacement
+session while the current feed remains visible, then retire the old owned session.
+Tuner contention offers an explicit stop-current-and-retry action rather than
+silently interrupting playback. Cleanup attempts completing cannot guarantee
+that an unreachable server has released its tuner.
+Search, controls, sheets and inactive
 scenes cancel pending focus-driven tunes.
 
 Live video fills the upper backdrop rather than a boxed preview. A leading scrim
@@ -287,11 +347,14 @@ not merely an assigned focus binding. A bounded station fallback releases the
 entry gates if it fails, so the guide cannot remain unreachable from Search.
 Moving from the sidebar toward the guide reveals its remembered occurrence even
 when that row was scrolled offscreen.
-Returning from fullscreen keeps the chosen channel playing rather than retuning
-on the first navigation press. **Auto preview** in Settings controls whether
-focus-following resumes when Live TV is reopened; deliberate watching keeps
-the current channel playing during that visit. The remote's Play/Pause also
-works during browsing.
+Returning from fullscreen keeps the chosen channel playing while its guide
+focus is restored. **Auto preview** remains enabled by default after watching:
+subsequent focus movement uses the same 600 ms settling delay. The separate
+per-profile **Keep watching while browsing** setting opts into retaining the
+deliberately watched channel instead. Turning Auto preview off still prevents
+focus-driven tuning. No preview can commit during focus restoration, and stale
+restoration callbacks cannot rearm it. The remote's Play/Pause also works during
+browsing.
 The normal tvOS player header has no Close button; Back returns to the guide.
 Transport focus selects an available playback action instead of a removed
 header target. Startup and interruption escape/retry controls remain available,
@@ -311,7 +374,7 @@ existing foreground-only teardown/reload policy.
 
 ## Real inputs and artwork
 
-The default inputs are:
+The explicitly selected free US preset uses these developer test inputs:
 
 - Playlist: `https://iptv-org.github.io/iptv/countries/us.m3u`
 - Pluto TV US: `https://i.mjh.nz/PlutoTV/us.xml.gz`
@@ -335,11 +398,11 @@ variants without duplicate row IDs. Channel logos come from `tvg-logo` metadata
 in the [iptv-org catalog](https://github.com/iptv-org/iptv).
 Channel and hero marks reuse `HeroLogoArtwork`: cached off-main preparation,
 transparent/solid-margin trimming, ink-aware sizing, monochrome contrast and
-colour-logo halos. A bounded fit contains the whole mark inside the station plate;
-measured ink chooses a light or dark gradient. The existing preparation pass
+contrast analysis. A bounded fit contains the whole mark inside the station plate;
+measured ink chooses a legible solid backing. The existing preparation pass
 retains the background colour it already detects before removing a solid plate.
 That sample follows the prepared-logo cache and synchronous memo to the host.
-The gradient adds no image download, resampling pass, blur or continuous animation.
+The solid plate adds no image download, resampling pass, blur or continuous animation.
 Multicolour artwork is not recoloured. Failed/missing artwork keeps a readable
 fixed-size text fallback. Loading artwork never changes the reserved row height.
 
@@ -391,22 +454,25 @@ matched programs, supporting feeds that interleave channel declarations and
 listings without keeping all unmatched programs in memory. Plain XML and gzip
 are accepted. Normal external XMLTV DOCTYPE headers are accepted without
 retrieving the DTD; entity declarations remain rejected.
-Custom-source onboarding and persistent guide caching are not exposed.
+Custom-source setup is available in Debug. Persistent guide caching remains
+planned; current guide data and backend playback handles are runtime-only.
 
 ## Boundaries
 
-General source onboarding, manual guide mapping, Plex/Jellyfin/Emby tuner
-adapters, generated library channels, profile persistence/sync, PiP, AirPlay
-integration, parental policy and recording management remain planned. This
-iteration connects selectable public guide presets, not a finished multi-source
-account manager. Many streams still lack a confidently identified schedule;
+Manual guide mapping, Plex tuning, generated library channels, cross-device
+source sync, persistent guide caching, Multiview, Xtream-compatible login,
+catch-up, PiP, AirPlay integration, programme-rating restrictions and recording
+management remain planned. Source-configuration PIN protection is not a
+programme-content rating filter. Real tuner installations remain a validation
+gate beyond controlled provider fixtures. Many streams still lack a confidently identified schedule;
 more name guesses are not a substitute for accurate provider/region mapping.
 
 The normal shell owns account/profile models; the Live TV feature does not
 create a second account or profile stack. The small
 `FeaturePlayback.LiveChannelPlayerView` hosts the existing real engine without
-constructing the VOD `PlayerViewModel`, media-provider reporting sessions, resume
-writers or trackers. This avoids incorrectly treating an endless channel as a
+constructing the VOD `PlayerViewModel`, VOD reporting sessions, resume
+writers or trackers. Live server sessions have separate UUID-scoped first-frame,
+progress and cleanup reporting. This avoids incorrectly treating an endless channel as a
 movie while leaving ordinary library playback unchanged. The app shells inject the
 player into `FeatureLiveTV`; UI feature modules do not import one another.
 The app also injects the `LiveChannelEngine` implementation into the host, so
@@ -431,8 +497,8 @@ player's `InfoActionButtonStyle`: white labels at rest and black labels on a
 white capsule when focused, with both colours changing together. The same style
 covers transport, Favorite, loading, retry and close actions. Its type stays
 constant as focus changes, avoiding replacement of the focused control.
-Close receives focus when controls mount, without waiting for the stream load.
-The connecting indicator does not intercept input. On-device regression checks
+An available transport or recovery action receives focus; normal TV playback
+has no top-right Close control. The connecting indicator does not intercept input. On-device regression checks
 must include video rendering and Back/Close while a channel is still connecting;
 the headless package test runner has no window scene to exercise TV focus.
 
@@ -453,11 +519,13 @@ visible. Two manual retries remain available; they do not replenish automatic
 recovery's budget. Startup is bounded at 30 seconds and sustained activity/stall
 at 60 seconds, leaving room for Aether's own recovery before failing visibly.
 
-This prototype is foreground-only. Inactivity pauses; actual background entry
-stops its engine, and foreground return opens a fresh live session. A user-paused
-channel stays paused until explicitly resumed. Stop, failure, backgrounding and
-replacement invalidate outstanding loads and seeks. Ordinary VOD playback and
-its lifecycle remain unchanged.
+This prototype is foreground-only. Brief inactivity pauses the current feed
+and cancels pending tunes without releasing the current server lease. Actual
+background entry or leaving Live TV closes the owned stream and leaves playback
+for the guide. Returning to active browsing follows the Auto preview preference;
+touch browsing still requires selecting a channel. Stop, failure, backgrounding
+and replacement invalidate outstanding loads and seeks. Ordinary VOD playback
+and its lifecycle remain unchanged.
 
 Debug diagnostics use the existing `HandoffDiagnostics` bounded playback journal
 and `PlozzLog` recent-log ring, tagged `LIVE_TV` with `engine=AetherEngine`.
@@ -499,3 +567,8 @@ test target with a window scene; the standalone package runner skips it.
 It exercises native sidebar/top-bar presentation, actual dismissal, focus
 ownership, in-flight startup, channel changes and reuse of the engine's output
 view. It does not substitute for a physical Siri Remote usability pass.
+
+The [native Live TV regression fixture](../Tests/FeatureLiveTVRemoteTests/README.md)
+provides that scene-backed host, actual remote Search traversal and isolated
+source-onboarding navigation. Its independent project and inputs are committed;
+it does not require a configured server or download a channel feed.

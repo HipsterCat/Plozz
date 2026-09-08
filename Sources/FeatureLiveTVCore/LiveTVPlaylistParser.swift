@@ -24,6 +24,7 @@ public enum LiveTVSourceImportError: Error, Equatable, Sendable {
     case invalidResponse
     case responseTooLarge
     case invalidPlaylist
+    case streamManifest
     case invalidGuide
     case guideTooLarge
 
@@ -39,6 +40,8 @@ public enum LiveTVSourceImportError: Error, Equatable, Sendable {
             "The Live TV playlist is too large to import safely."
         case .invalidPlaylist:
             "The Live TV playlist isn't a supported M3U file."
+        case .streamManifest:
+            "This link is a video stream, not a channel playlist. Use your provider's M3U channel-list link."
         case .invalidGuide:
             "The Live TV guide isn't a supported XMLTV file."
         case .guideTooLarge:
@@ -93,6 +96,11 @@ public struct LiveTVPlaylistParser: Sendable {
             .hasPrefix("#EXTM3U")
         else {
             throw LiveTVSourceImportError.invalidPlaylist
+        }
+        guard !rawLines.contains(where: {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#EXT-X-")
+        }) else {
+            throw LiveTVSourceImportError.streamManifest
         }
 
         var channels: [LiveTVPrototypeChannel] = []

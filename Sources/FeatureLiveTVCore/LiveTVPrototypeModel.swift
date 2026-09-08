@@ -55,6 +55,8 @@ public struct LiveTVPrototypeChannel: Identifiable, Equatable, Sendable {
     public let guideID: String?
     public let guideName: String?
     public let httpHeaders: [String: String]
+    public let playlistSourceID: String?
+    public var configuredSourceID: String? { playlistSourceID }
 
     public init(
         id: String,
@@ -70,7 +72,9 @@ public struct LiveTVPrototypeChannel: Identifiable, Equatable, Sendable {
         logoNeedsDarkBackground: Bool = false,
         guideID: String? = nil,
         guideName: String? = nil,
-        httpHeaders: [String: String] = [:]
+        httpHeaders: [String: String] = [:],
+        playlistSourceID: String? = nil,
+        configuredSourceID: String? = nil
     ) {
         precondition((0...5).contains(accent), "Live TV fixture accent must be between 0 and 5.")
         self.id = id
@@ -87,6 +91,7 @@ public struct LiveTVPrototypeChannel: Identifiable, Equatable, Sendable {
         self.guideID = guideID
         self.guideName = guideName
         self.httpHeaders = httpHeaders
+        self.playlistSourceID = configuredSourceID ?? playlistSourceID
     }
 }
 
@@ -143,6 +148,18 @@ public final class LiveTVPrototypeModel {
             guard source != oldValue else { return }
             refreshVisibleChannels()
         }
+    }
+
+    public var playlistSourceID: String? {
+        didSet {
+            guard playlistSourceID != oldValue else { return }
+            refreshVisibleChannels()
+        }
+    }
+
+    public var configuredSourceID: String? {
+        get { playlistSourceID }
+        set { playlistSourceID = newValue }
     }
 
     public var favoritesOnly = false {
@@ -413,6 +430,7 @@ public final class LiveTVPrototypeModel {
         query = ""
         category = nil
         source = nil
+        playlistSourceID = nil
         favoritesOnly = false
         guideOnly = false
         isBatchingFilterChanges = false
@@ -531,7 +549,8 @@ public final class LiveTVPrototypeModel {
                     tagline: channel.tagline, logoURL: channel.logoURL, streamURL: channel.streamURL,
                     logoNeedsDarkBackground: channel.logoNeedsDarkBackground,
                     guideID: channel.guideID, guideName: channel.guideName,
-                    httpHeaders: channel.httpHeaders
+                    httpHeaders: channel.httpHeaders,
+                    playlistSourceID: channel.playlistSourceID
                 )
             }
         } else {
@@ -561,6 +580,7 @@ public final class LiveTVPrototypeModel {
             guard !hiddenChannelIDs.contains(channel.id),
                   selectedCategory == nil || Self.normalized(channel.category) == selectedCategory,
                   source == nil || channel.source == source,
+                  playlistSourceID == nil || channel.playlistSourceID == playlistSourceID,
                   !favoritesOnly || favoriteIDs.contains(channel.id),
                   !guideOnly || hasGuide(for: channel)
             else { return nil }

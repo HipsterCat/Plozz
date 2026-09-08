@@ -35,7 +35,7 @@ struct PrototypeNativeSearch<Results: View>: UIViewControllerRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIViewController(context: Context) -> UINavigationController {
-        let host = UIHostingController(rootView: results(context.coordinator.closeAction))
+        let host = UIHostingController(rootView: PrototypeSearchResults(content: results(context.coordinator.closeAction)))
         host.view.backgroundColor = .clear
         let search = PrototypeSearchController(searchResultsController: host)
         search.close = context.coordinator.closeAction
@@ -72,7 +72,7 @@ struct PrototypeNativeSearch<Results: View>: UIViewControllerRepresentable {
 
     func updateUIViewController(_ controller: UINavigationController, context: Context) {
         context.coordinator.parent = self
-        context.coordinator.host?.rootView = results(context.coordinator.closeAction)
+        context.coordinator.host?.rootView = PrototypeSearchResults(content: results(context.coordinator.closeAction))
         guard let search = context.coordinator.search else {
             assertionFailure("Missing Live TV Search controller")
             return
@@ -105,7 +105,7 @@ struct PrototypeNativeSearch<Results: View>: UIViewControllerRepresentable {
 
     final class Coordinator: NSObject, UISearchResultsUpdating, UISearchBarDelegate, UINavigationControllerDelegate {
         var parent: PrototypeNativeSearch
-        var host: UIHostingController<Results>?
+        var host: UIHostingController<PrototypeSearchResults<Results>>?
         weak var search: PrototypeSearchController?
         var container: UISearchContainerViewController?
         weak var navigation: UINavigationController?

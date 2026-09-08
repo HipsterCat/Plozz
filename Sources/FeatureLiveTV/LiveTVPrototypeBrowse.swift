@@ -46,8 +46,10 @@ struct PrototypeBrowser: View {
     @State private var guideHours = 6
     @FocusState private var focused: PrototypeBrowseFocus?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
+        let guideRequest = serverGuideRequest
         GeometryReader { geometry in
             let focusReturnTarget = returnTarget
             VStack(spacing: PrototypeLayout.gap) {
@@ -67,24 +69,24 @@ struct PrototypeBrowser: View {
                     ContentUnavailableView {
                         Label("Loading your channels", systemImage: "antenna.radiowaves.left.and.right")
                     } description: {
-                        Text("The full playlist loads first. Guide listings follow without delaying playback.")
+                        Text("Channels appear as each source loads. Guide listings follow without delaying playback.")
                     }
                 } else if model.channels.isEmpty && loadFailed {
                     ContentUnavailableView {
-                        Label("Playlist unavailable", systemImage: "wifi.exclamationmark")
+                        Label("Channels unavailable", systemImage: "wifi.exclamationmark")
                     } description: {
-                        Text("Check your connection and retry the source.")
+                        Text("Check your connection or open Sources to review what needs attention.")
                     } actions: {
                         Button("Retry", action: reload).buttonStyle(PrototypeButtonStyle())
                         Button("Sources", action: openSources).buttonStyle(PrototypeButtonStyle())
                     }
                 } else if model.channels.isEmpty {
                     ContentUnavailableView {
-                        Label("No supported channels", systemImage: "tv")
+                        Label("No channels available", systemImage: "antenna.radiowaves.left.and.right")
                     } description: {
-                        Text("The playlist has no supported HTTP or HTTPS streams. Sources shows how many entries were skipped.")
+                        Text("Your enabled sources haven't provided any channels. Open Sources to check their status or add another source.")
                     } actions: {
-                        Button("Reload playlist", action: reload).buttonStyle(PrototypeButtonStyle())
+                        Button("Refresh channels", action: reload).buttonStyle(PrototypeButtonStyle())
                         Button("Sources", action: openSources).buttonStyle(PrototypeButtonStyle())
                     }
                 } else if allChannelsHidden {
@@ -122,29 +124,35 @@ struct PrototypeBrowser: View {
                                             PrototypeGuideSectionLabel(section: entry.section)
                                                 .padding(.top, PrototypeLayout.smallGap)
                                         }
-                                        PrototypeGuideRow(
-                                            channel: channel, section: entry.section,
-                                            programs: model.programs(
-                                                for: channel.id, from: guideStart,
-                                                hours: guideHours
-                                            ),
-                                            start: guideStart, now: model.now,
-                                            width: geometry.size.width, timelineOffset: $timelineOffset,
-                                            focus: $focused,
-                                            railActive: (railActive && restrictDirectionalEntry)
-                                                || isRestoringFocus || requiresContentFocusHandoff,
-                                            returnTarget: focusReturnTarget,
-                                            favorite: model.favoriteIDs.contains(channel.id),
-                                            playing: model.playingChannelID == channel.id,
-                                            toggleFavorite: { model.toggleFavorite(channel.id) },
-                                            tune: { tune(entry.id) }, details: details,
-                                            controls: openControls,
-                                            top: { goToTop(proxy) },
-                                            goToNow: goToNow,
-                                            focusChanged: confirmFocus,
-                                            sources: openSources, guideTime: openGuideTime,
-                                            hide: hideChannel.map { action in { action(channel, entry.id) } }
-                                        )
+                                        PrototypeSearchFocusBoundary {
+                                            PrototypeGuideRow(
+                                                channel: channel, section: entry.section,
+                                                programs: model.programs(
+                                                    for: channel.id, from: guideStart,
+                                                    hours: guideHours
+                                                ),
+                                                start: guideStart, now: model.now,
+                                                width: geometry.size.width, timelineOffset: $timelineOffset,
+                                                focus: $focused,
+                                                railActive: (railActive && restrictDirectionalEntry)
+                                                    || isRestoringFocus || requiresContentFocusHandoff,
+                                                returnTarget: focusReturnTarget,
+                                                favorite: model.favoriteIDs.contains(channel.id),
+                                                playing: model.playingChannelID == channel.id,
+                                                toggleFavorite: { model.toggleFavorite(channel.id) },
+                                                tune: { tune(entry.id) }, details: details,
+                                                controls: openControls,
+                                                top: { goToTop(proxy) },
+                                                goToNow: goToNow,
+                                                focusChanged: confirmFocus,
+                                                sources: openSources, guideTime: openGuideTime,
+                                                hide: hideChannel.map { action in { action(channel, entry.id) } },
+                                                guideGapState: imports.gapState(
+                                                    for: channel, from: guideStart,
+                                                    to: guideStart.addingTimeInterval(TimeInterval(guideHours) * 3_600)
+                                                )
+                                            )
+                                        }
                                     }
                                     .id(entry.id)
                                     .onAppear {
@@ -158,16 +166,6 @@ struct PrototypeBrowser: View {
                             .padding(.top, PrototypeLayout.smallGap)
                         }
                         .scrollIndicators(.hidden)
-                        .background(alignment: .topLeading) {
-                            if geometry.size.width >= 650, model.guideChannelCount > 0 {
-                                HStack(spacing: PrototypeLayout.columnGap) {
-                                    Color.clear.frame(width: PrototypeLayout.stationWidth(for: geometry.size.width))
-                                    PrototypeNowLine(start: guideStart, now: model.now, timelineOffset: timelineOffset)
-                                }
-                                .allowsHitTesting(false)
-                                .accessibilityHidden(true)
-                            }
-                        }
                         .verticalEdgeFadeMask(
                             fadeHeight: PrototypeLayout.verticalFade,
                             topStrength: verticalFade.leading,
@@ -188,6 +186,17 @@ struct PrototypeBrowser: View {
                             await restoreFocus(using: proxy, width: geometry.size.width)
                         }
                     }
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if geometry.size.width >= 650, model.guideChannelCount > 0,
+                   !model.guideChannels.isEmpty, !isLoading {
+                    HStack(spacing: PrototypeLayout.columnGap) {
+                        Color.clear.frame(width: PrototypeLayout.stationWidth(for: geometry.size.width))
+                        PrototypeNowLine(start: guideStart, now: model.now, timelineOffset: timelineOffset)
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                 }
             }
             .onChange(of: geometry.size.width, initial: true) { old, new in
@@ -261,7 +270,30 @@ struct PrototypeBrowser: View {
             pendingFocus = target
             focused = target
         }
+        .task(id: guideRequest) {
+            guard let guideRequest else { return }
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            await imports.reloadServerGuides(
+                channelIDs: guideRequest.channels.map(\.id),
+                from: guideRequest.from, to: guideRequest.to, into: model
+            )
+        }
         .onDisappear { hasFocus = false }
+    }
+
+    private var serverGuideRequest: PrototypeServerGuideRequest? {
+        guard isPresented, scenePhase == .active else { return nil }
+        let guideSources = Set(imports.serverSources.filter {
+            $0.source.isEnabled && $0.availability?.supportsGuide == true
+                && $0.guideFailure != .permissionDenied
+        }.map(\.id))
+        return PrototypeServerGuideRequest(
+            rows: model.guideChannels.map(\.id),
+            anchor: scrollID ?? confirmedFocus?.rowID ?? selectedRowID,
+            references: imports.serverChannelReferences.filter { guideSources.contains($0.value.sourceID) },
+            from: guideStart, to: guideStart.addingTimeInterval(TimeInterval(guideHours) * 3_600)
+        )
     }
 
     private var guideStart: Date {
@@ -450,7 +482,6 @@ private struct PrototypeTimeRuler: View {
             PrototypeGuideSectionLabel(section: section)
                 .frame(width: PrototypeLayout.stationWidth(for: width), alignment: .leading)
             GeometryReader { geometry in
-                PrototypeNowLine(start: start, now: now, timelineOffset: timelineOffset)
                 HStack(spacing: 0) {
                     ForEach(0..<12, id: \.self) { tick in
                         Text(start.addingTimeInterval(TimeInterval(tick * 1_800)), format: .dateTime.hour().minute())
@@ -483,11 +514,10 @@ private struct PrototypeTimeRuler: View {
     }
 }
 
-private struct PrototypeNowLine: View {
+struct PrototypeNowLine: View {
     let start: Date
     let now: Date
     let timelineOffset: CGFloat
-    @Environment(\.layoutDirection) private var direction
 
     var body: some View {
         GeometryReader { geometry in
@@ -495,12 +525,30 @@ private struct PrototypeNowLine: View {
             if x >= 0, x <= geometry.size.width {
                 Rectangle().fill(ThemePalette.brandBlue.opacity(0.8))
                     .frame(width: 2, height: geometry.size.height)
-                    .position(
-                        x: direction == .rightToLeft ? geometry.size.width - x : x,
-                        y: geometry.size.height / 2
-                    )
+                    .position(x: x, y: geometry.size.height / 2)
             }
         }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+struct PrototypeElapsedProgramFill: View {
+    let elapsedWidth: CGFloat
+    @Environment(\.themePalette) private var palette
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = min(geometry.size.width, max(0, elapsedWidth))
+            if width > 0 {
+                Rectangle()
+                    .fill(palette.primaryText.opacity(contrast == .increased ? 0.16 : 0.08))
+                    .frame(width: width, height: geometry.size.height)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: PrototypeLayout.programRadius, style: .continuous))
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -529,6 +577,7 @@ struct PrototypeGuideRow: View {
     var sources: () -> Void = {}
     var guideTime: () -> Void = {}
     var hide: (() -> Void)?
+    var guideGapState: LiveTVGuideGapState?
     @ScaledMetric(relativeTo: .subheadline) private var rowHeight: CGFloat = PrototypeLayout.rowHeight
     @State private var compactFade = PrototypeScrollFade()
 
@@ -559,6 +608,9 @@ struct PrototypeGuideRow: View {
                                     Button { open(program) } label: {
                                         PrototypeProgramLabel(program: program, now: now)
                                             .frame(width: 230, alignment: .leading)
+                                            .background {
+                                                PrototypeElapsedProgramFill(elapsedWidth: 230 * program.progress(at: now))
+                                            }
                                     }
                                     .buttonStyle(PrototypeButtonStyle(
                                         surface: .program, focusChanged: { focusChanged(programFocus(program.id), $0) }
@@ -629,6 +681,11 @@ struct PrototypeGuideRow: View {
                                             alignment: .leading
                                         )
                                         .clipped()
+                                        .background {
+                                            PrototypeElapsedProgramFill(
+                                                elapsedWidth: timelineWidth * now.timeIntervalSince(slot.start) / 7_200
+                                            )
+                                        }
                                     }
                                     .buttonStyle(PrototypeButtonStyle(
                                         padded: false, surface: .program,
@@ -681,7 +738,10 @@ struct PrototypeGuideRow: View {
     private func channelContent(slotID: String? = nil) -> some View {
         let target = PrototypeBrowseFocus.channelContent(channel.id, slotID: slotID, section: section)
         return Button(action: tune) {
-            PrototypeGuideGap(channelName: channel.name, height: rowHeight)
+            PrototypeGuideGap(
+                channelName: channel.name, height: rowHeight,
+                state: guideGapState, showsStatus: focus.wrappedValue?.rowID == channelFocus.rowID
+            )
                 .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
         }
@@ -692,6 +752,7 @@ struct PrototypeGuideRow: View {
         .focused(focus, equals: target)
         .disabled(railActive && returnTarget != target)
         .accessibilityLabel(Text(channel.name))
+        .accessibilityValue(guideGapState.map { Text($0.title) } ?? Text(""))
         .accessibilityHint("Play channel")
         .accessibilityIdentifier("live-tv-channel-content-\(section.rawValue)-\(channel.number)-\(slotID ?? "whole")")
         .contextMenu {
@@ -818,15 +879,27 @@ struct PrototypeProgramLabel: View {
 struct PrototypeGuideGap: View {
     let channelName: String
     let height: CGFloat
+    var state: LiveTVGuideGapState?
+    var showsStatus = false
     @Environment(\.themePalette) private var palette
     @ScaledMetric(relativeTo: .subheadline) private var fontSize = PrototypeLayout.guideFontSize
     var body: some View {
-        Text(channelName)
-            .font(.system(size: fontSize)).foregroundStyle(palette.primaryText.opacity(0.8)).lineLimit(2)
-            .padding(.horizontal, PrototypeLayout.rowInset)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: height)
-            .accessibilityHint("No program listing for this time.")
+        VStack(alignment: .leading, spacing: PrototypeLayout.smallGap) {
+            Text(channelName)
+                .font(.system(size: fontSize))
+                .foregroundStyle(palette.primaryText.opacity(0.8))
+                .lineLimit(2)
+            if showsStatus, let state, state == .loading || state == .failed || state == .unrequested {
+                Text(state.title)
+                    .font(.caption)
+                    .foregroundStyle(palette.secondaryText)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, PrototypeLayout.rowInset)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: height)
+        .accessibilityHint("No program listing for this time.")
     }
 }
 

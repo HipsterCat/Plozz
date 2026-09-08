@@ -6,12 +6,14 @@ import XCTest
 
 @MainActor
 final class ChannelLogoArtworkTests: XCTestCase {
-    func testDarkAndColouredInkWithoutWhiteLetteringUsesPureWhite() {
+    func testDarkColouredInkGetsASubtleLightBrandTint() {
         for luminance in [0.08, 0.3, 0.55] {
             let plate = ChannelLogoPlate(tone: ResolvedLogoTone(
                 luminance: luminance, coverage: 0.4, red: 0.8, green: 0.15, blue: 0.1
             ))
-            XCTAssertEqual(plate.color, Color(red: 1, green: 1, blue: 1))
+            XCTAssertGreaterThan(min(plate.red, plate.green, plate.blue), 0.93)
+            XCTAssertGreaterThan(plate.red, plate.green)
+            XCTAssertLessThan(max(plate.red, plate.green, plate.blue) - min(plate.red, plate.green, plate.blue), 0.04)
             XCTAssertTrue(plate.isLight)
         }
     }
@@ -21,7 +23,36 @@ final class ChannelLogoArtworkTests: XCTestCase {
             luminance: 0.35, coverage: 0.4, red: 0.9, green: 0.3, blue: 0.1, brightInk: 0.06
         ))
         XCTAssertFalse(plate.isLight)
-        XCTAssertLessThan(max(plate.red, plate.green, plate.blue), 0.2)
+        XCTAssertLessThan(max(plate.red, plate.green, plate.blue), 0.24)
+    }
+
+    func testNeutralInkDoesNotInventAChannelColour() {
+        let darkInk = ChannelLogoPlate(tone: ResolvedLogoTone(
+            luminance: 0.2, coverage: 0.4, red: 0.2, green: 0.2, blue: 0.2
+        ))
+        XCTAssertEqual(darkInk.color, Color(red: 1, green: 1, blue: 1))
+        let whiteInk = ChannelLogoPlate(tone: ResolvedLogoTone(
+            luminance: 1, coverage: 0.4, red: 1, green: 1, blue: 1, brightInk: 1
+        ))
+        XCTAssertEqual(whiteInk, ChannelLogoPlate(tone: nil))
+    }
+
+    func testMutedBrandTintsRetainStrongBlackOrWhiteInkContrast() {
+        for ink in [(1.0, 0.0, 0.0), (0.0, 0.2, 1.0), (1.0, 0.8, 0.0)] {
+            for whiteLettering in [false, true] {
+                let plate = ChannelLogoPlate(tone: ResolvedLogoTone(
+                    luminance: 0.4, coverage: 0.4,
+                    red: ink.0, green: ink.1, blue: ink.2, brightInk: whiteLettering ? 0.1 : 0
+                ))
+                func linear(_ value: Double) -> Double {
+                    value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+                }
+                let luminance = 0.2126 * linear(plate.red)
+                    + 0.7152 * linear(plate.green) + 0.0722 * linear(plate.blue)
+                let contrast = whiteLettering ? 1.05 / (luminance + 0.05) : (luminance + 0.05) / 0.05
+                XCTAssertGreaterThan(contrast, 7)
+            }
+        }
     }
 
     func testOriginalWhitePlateWinsEvenWithBrightHighlightsInsideTheLogo() {
@@ -144,7 +175,9 @@ final class ChannelLogoArtworkTests: XCTestCase {
         let center = (rendered.height / 2 * rendered.width + rendered.width / 2) * 4
         XCTAssertEqual(Array(pixels[center..<(center + 4)]), [255, 0, 0, 255])
         let background = (4 * rendered.width + rendered.width / 2) * 4
-        XCTAssertEqual(Array(pixels[background..<(background + 4)]), [255, 255, 255, 255])
+        XCTAssertEqual(pixels[background + 3], 255)
+        XCTAssertGreaterThan(pixels[background], pixels[background + 1])
+        XCTAssertGreaterThan(min(pixels[background], pixels[background + 1], pixels[background + 2]), 235)
     }
 
     private func rgbaPixels(_ image: CGImage) throws -> [UInt8] {
