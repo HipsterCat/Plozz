@@ -142,7 +142,7 @@ struct MainTabView: View {
     private var liveTVTabLabel: some View {
         RootNavigationTabLabel(
             title: Text("Live TV"),
-            systemImage: "tv.fill",
+            systemImage: "antenna.radiowaves.left.and.right",
             usesCompactSidebarText: navigationStyle == .sidebar
         )
     }

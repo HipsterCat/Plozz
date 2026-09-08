@@ -642,7 +642,7 @@ public struct SettingsView: View {
                    value: nil,
                    route: .customizeHome)
             #if DEBUG
-            navRow("Live TV", icon: "tv",
+            navRow("Live TV", icon: "antenna.radiowaves.left.and.right",
                    value: nil,
                    route: .liveTV)
             #endif

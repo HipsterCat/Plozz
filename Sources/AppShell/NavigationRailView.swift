@@ -503,7 +503,7 @@ struct NavigationRailView: View {
             item(.watchlist, symbol: "bookmark.fill", label: Text(Self.watchlistTitle))
         #if DEBUG
         case .liveTV:
-            item(.liveTV, symbol: "tv.fill", label: Text(Self.liveTVTitle))
+            item(.liveTV, symbol: "antenna.radiowaves.left.and.right", label: Text(Self.liveTVTitle))
         #endif
         case .music:
             item(.music, symbol: "music.note", label: Text(Self.musicTitle))

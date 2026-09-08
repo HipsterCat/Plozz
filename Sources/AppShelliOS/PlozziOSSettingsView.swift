@@ -341,7 +341,7 @@ private struct PlozziOSSettingsSplitView: View {
                         settingsRow(.appearance, title: "Appearance", systemImage: "paintpalette")
                         settingsRow(.home, title: "Customize Home", systemImage: "house")
                         #if DEBUG
-                        settingsRow(.liveTV, title: "Live TV", systemImage: "tv")
+                        settingsRow(.liveTV, title: "Live TV", systemImage: "antenna.radiowaves.left.and.right")
                         #endif
                         settingsRow(.detailPage, title: "Detail Page", systemImage: "rectangle.portrait.on.rectangle.portrait")
                         settingsRow(.playback, title: "Playback", systemImage: "play.rectangle")
@@ -941,7 +941,7 @@ private struct PlozziOSSettingsCompactMenu: View {
                     )
                     .id(appModel.profiles.activeProfile.id)
                 } label: {
-                    Label("Live TV", systemImage: "tv")
+                    Label("Live TV", systemImage: "antenna.radiowaves.left.and.right")
                 }
                 #endif
                 NavigationLink {

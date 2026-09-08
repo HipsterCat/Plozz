@@ -613,7 +613,7 @@ private enum PlozziOSDestination: String, CaseIterable, Identifiable, Hashable {
         case .home: "house"
         case .watchlist: "bookmark"
         #if DEBUG
-        case .liveTV: "tv.fill"
+        case .liveTV: "antenna.radiowaves.left.and.right"
         #endif
         case .downloads: "arrow.down.circle"
         case .search: "magnifyingglass"
