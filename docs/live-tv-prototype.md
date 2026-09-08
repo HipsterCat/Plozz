@@ -94,11 +94,12 @@ is no prior in-memory history to migrate on the first updated launch.
   App navigation is suppressed before the TV keyboard opens and stays suppressed
   through closing and guide-focus restoration, so Back does not briefly open the
   native navigation menu or pinned rail.
-  Native top-bar/sidebar destinations keep Live TV one destination deep in a
-  stable NavigationStack, matching detail pages rather than remaining at the
-  tab root. The same visibility policy covers Search and expanded playback
-  without replacing the player or relying on the guide's scroll position.
-  The custom pinned rail retains its existing chrome coordinator.
+  Live TV is the root of its native navigation stack, with no hidden empty page
+  for Back to expose. Its shell sends Search/playback chrome visibility directly
+  to that owning stack, restoring native navigation while browsing. Playback
+  publishes hiding in the same action that expands the picture. The player
+  remains mounted, independent of guide scrolling. The custom pinned rail
+  retains its existing chrome coordinator.
   Live TV also participates in the profile's Hide or Reorder Navigation list,
   alongside Home, Search and the other destinations. Settings remains visible
   but can be moved. Press-and-hold Hide keeps focus at the vacated list position;

@@ -138,8 +138,8 @@ final class LiveTVGuideFocusTests: XCTestCase {
         XCTAssertNil(controller.view.window)
     }
 
-    func testNativeSidebarKeepsItsPushedLiveTVContentAcrossSearchAndPlaybackVisibility() async throws {
-        // This verifies the pushed Live TV subtree and Search host stay alive.
+    func testNativeSidebarKeepsItsRootLiveTVContentAcrossSearchAndPlaybackVisibility() async throws {
+        // This verifies the Live TV root and Search host stay alive.
         // Actual system-sidebar suppression still requires an app-hosted device trial.
         let probe = try GuideFocusProbe(section: .channels)
         probe.restoring = false
@@ -174,6 +174,27 @@ final class LiveTVGuideFocusTests: XCTestCase {
         XCTAssertTrue(window.rootViewController === root)
         XCTAssertEqual(probe.liveContentAppearances, appearances)
         XCTAssertEqual(probe.liveContentDisappearances, disappearances)
+    }
+
+    func testBackFromTheGuideCannotExposeAnEmptyNavigationRoot() async throws {
+        let probe = try GuideFocusProbe(section: .channels)
+        probe.restoring = false
+        probe.searchClosed = true
+        probe.navigationExcluded = false
+        let window = makeWindow(NativeSidebarSearchHarness(probe: probe))
+        defer { window.isHidden = true; window.rootViewController = nil }
+        await waitUntil { probe.dismissGuide != nil }
+        let dismiss = try XCTUnwrap(probe.dismissGuide)
+        let appearances = probe.liveContentAppearances
+        let disappearances = probe.liveContentDisappearances
+        XCTAssertEqual(appearances, disappearances + 1)
+
+        dismiss()
+        try await Task.sleep(for: .milliseconds(350))
+
+        XCTAssertEqual(probe.liveContentAppearances, appearances)
+        XCTAssertEqual(probe.liveContentDisappearances, disappearances)
+        XCTAssertFalse(probe.navigationExcluded)
     }
 
     func testSearchCanCloseWhileGuideFocusIsRecovering() async throws {
@@ -349,6 +370,7 @@ private final class GuideFocusProbe {
     var navigationExcluded = true
     var liveContentAppearances = 0
     var liveContentDisappearances = 0
+    var dismissGuide: (() -> Void)?
 
     init(section: LiveTVGuideSection) throws {
         origin = LiveTVGuideRowID(channelID: "24", section: section)
@@ -434,12 +456,12 @@ private struct NativeSidebarSearchHarness: View {
     var body: some View {
         TabView {
             Tab("Live TV", systemImage: "tv") {
-                LiveTVNavigationContainer {
+                LiveTVNavigationContainer(hidesNavigation: probe.navigationExcluded) {
                     ZStack {
                         Color.black
                         NativeGuideFocusHarness(probe: probe)
+                        NativeGuideDismissProbe(probe: probe)
                     }
-                    .toolbar(probe.navigationExcluded ? .hidden : .visible, for: .tabBar)
                     .onAppear { probe.liveContentAppearances += 1 }
                     .onDisappear { probe.liveContentDisappearances += 1 }
                 }
@@ -449,6 +471,18 @@ private struct NativeSidebarSearchHarness: View {
             }
         }
         .tabViewStyle(.sidebarAdaptable)
+    }
+}
+
+private struct NativeGuideDismissProbe: View {
+    let probe: GuideFocusProbe
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Color.clear
+            .frame(width: 1, height: 1)
+            .allowsHitTesting(false)
+            .onAppear { probe.dismissGuide = { dismiss() } }
     }
 }
 

@@ -570,6 +570,9 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         }
         let selectedOrigin = !preview.isExpanded && selectedRowID?.channelID == id ? selectedRowID : nil
         preview.watch(id, origin: origin ?? selectedOrigin)
+        #if os(tvOS)
+        if preview.isExpanded { onExpandedChange(true) }
+        #endif
         if !model.tuneFailed {
             selectedChannelID = id
             selectedRowID = preview.watchOrigin

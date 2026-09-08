@@ -2,50 +2,21 @@
 import SwiftUI
 import UIKit
 
-private enum LiveTVNavigationDestination: Hashable {
-    case content
-}
-
-/// Hosts Live TV at the same navigation depth as the detail pages whose native
-/// tab/sidebar suppression is already reliable.
-///
-/// A toolbar visibility preference from a `NavigationStack` root doesn't make
-/// tvOS's sidebar-adaptable `TabView` treat that root as a full-screen
-/// destination. Keep Live TV permanently one level deep instead. The content
-/// never moves between the root and destination while Search/playback change, so
-/// the guide, Search coordinator, and live player retain their identities.
+/// Live TV is the navigation root, not a dismissible page above an empty root.
+/// The owning stack receives chrome visibility without moving the live player.
 public struct LiveTVNavigationContainer<Content: View>: View {
-    @State private var path = [LiveTVNavigationDestination.content]
+    private let hidesNavigation: Bool
     private let content: Content
 
-    public init(@ViewBuilder content: () -> Content) {
+    public init(hidesNavigation: Bool, @ViewBuilder content: () -> Content) {
+        self.hidesNavigation = hidesNavigation
         self.content = content()
     }
 
     public var body: some View {
-        NavigationStack(path: pinnedPath) {
-            Color.clear
-                .navigationDestination(for: LiveTVNavigationDestination.self) { destination in
-                    switch destination {
-                    case .content:
-                        content
-                            .navigationBarBackButtonHidden()
-                            .toolbar(.hidden, for: .navigationBar)
-                    }
-                }
-        }
-    }
-
-    /// Live TV's own Back handlers restore Search/guide state. Don't let an
-    /// unhandled system pop expose the otherwise-empty anchoring root.
-    private var pinnedPath: Binding<[LiveTVNavigationDestination]> {
-        Binding(
-            get: { path },
-            set: { proposedPath in
-                guard proposedPath.last == .content else { return }
-                path = [.content]
-            }
-        )
+        NavigationStack { content }
+            .toolbar(hidesNavigation ? .hidden : .visible, for: .tabBar)
+            .toolbar(.hidden, for: .navigationBar)
     }
 }
 

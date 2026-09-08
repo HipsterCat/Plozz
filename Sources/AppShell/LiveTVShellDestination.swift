@@ -13,6 +13,7 @@ import SwiftUI
 struct LiveTVShellDestination: View {
     let isActive: Bool
     let profileID: String
+    let usesNativeNavigation: Bool
     let onExpandedChange: (Bool) -> Void
 
     @State private var hidesNavigation = false
@@ -23,16 +24,29 @@ struct LiveTVShellDestination: View {
         isActive: Bool,
         profileID: String,
         preferencesNamespace: String?,
+        usesNativeNavigation: Bool = false,
         onExpandedChange: @escaping (Bool) -> Void = { _ in }
     ) {
         self.isActive = isActive
         self.profileID = profileID
+        self.usesNativeNavigation = usesNativeNavigation
         self.onExpandedChange = onExpandedChange
         self.preferencesStore = LiveTVPreferencesStore(namespace: preferencesNamespace)
         self.viewSettingsStore = LiveTVViewSettingsStore(namespace: preferencesNamespace)
     }
 
+    @ViewBuilder
     var body: some View {
+        if usesNativeNavigation {
+            LiveTVNavigationContainer(hidesNavigation: hidesNavigation) {
+                liveTVContent
+            }
+        } else {
+            liveTVContent
+        }
+    }
+
+    private var liveTVContent: some View {
         LiveTVPrototypeView(
             isActive: isActive,
             preferencesStore: preferencesStore,
@@ -58,7 +72,6 @@ struct LiveTVShellDestination: View {
             )
         }
         .id(profileID)
-        .toolbar(hidesNavigation ? .hidden : .visible, for: .tabBar)
         .onChange(of: isActive, initial: true) { _, active in
             if !active {
                 updateExpandedState(false)
