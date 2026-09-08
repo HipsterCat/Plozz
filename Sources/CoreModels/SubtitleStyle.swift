@@ -8,12 +8,13 @@ import Foundation
 /// app (Latin glyphs only); the renderer cascades to the tvOS system CJK fonts for
 /// Japanese/Korean/Chinese so mixed-language and dual-subtitle lines still render.
 /// `system` falls back to SF (no bundle). The enum is deliberately small and
-/// additive. Avenir uses the face supplied by iOS/tvOS rather than a bundled font.
+/// additive. Avenir Next uses the face supplied by iOS/tvOS rather than a bundled font.
 public enum SubtitleFontFamily: String, Codable, Sendable, Equatable, CaseIterable {
     case atkinson
     case system
     case roboto
-    case avenir
+    // Preserve the stored identifier so existing Avenir selections upgrade in place.
+    case avenirNext = "avenir"
     case lexend
     case sfRounded
     case fredoka
@@ -28,7 +29,7 @@ public enum SubtitleFontFamily: String, Codable, Sendable, Equatable, CaseIterab
         case .lexend: return "Lexend"
         case .fredoka: return "Fredoka"
         case .openDyslexic: return "OpenDyslexic"
-        case .avenir: return "Avenir"
+        case .avenirNext: return "Avenir Next"
         }
     }
 
@@ -42,7 +43,7 @@ public enum SubtitleFontFamily: String, Codable, Sendable, Equatable, CaseIterab
         case .lexend: return "Lexend"
         case .fredoka: return "Fredoka"
         case .openDyslexic: return "OpenDyslexic"
-        case .avenir: return "Avenir"
+        case .avenirNext: return "AvenirNext"
         }
     }
 
@@ -56,13 +57,13 @@ public enum SubtitleFontFamily: String, Codable, Sendable, Equatable, CaseIterab
     /// the nearest of these, so the picker only ever shows real faces: the system
     /// families expose the full range; the static bundled faces (Atkinson,
     /// OpenDyslexic) only Regular/Bold; the variable-derived faces (Lexend,
-    /// Roboto, Fredoka) ship Regular/Medium/SemiBold/Bold. Avenir maps those choices
-    /// to its built-in Roman/Medium/Heavy/Black faces.
+    /// Roboto, Fredoka) ship Regular/Medium/SemiBold/Bold. Avenir Next maps those
+    /// choices to its built-in Regular/Medium/DemiBold/Bold faces.
     public var availableWeights: [SubtitleFontWeight] {
         switch self {
         case .atkinson, .openDyslexic:
             return [.regular, .bold]
-        case .system, .sfRounded, .roboto, .lexend, .fredoka, .avenir:
+        case .system, .sfRounded, .roboto, .lexend, .fredoka, .avenirNext:
             return [.regular, .medium, .semibold, .bold]
         }
     }
@@ -74,13 +75,13 @@ public enum SubtitleFontFamily: String, Codable, Sendable, Equatable, CaseIterab
     ) -> [String] {
         guard let stem = postScriptStem else { return [] }
         let weight = weight.snapped(to: availableWeights)
-        if self == .avenir {
+        if self == .avenirNext {
             let face: String
             switch weight {
-            case .regular: face = isItalic ? "Oblique" : "Roman"
-            case .medium: face = isItalic ? "MediumOblique" : "Medium"
-            case .semibold: face = isItalic ? "HeavyOblique" : "Heavy"
-            case .bold: face = isItalic ? "BlackOblique" : "Black"
+            case .regular: face = isItalic ? "Italic" : "Regular"
+            case .medium: face = isItalic ? "MediumItalic" : "Medium"
+            case .semibold: face = isItalic ? "DemiBoldItalic" : "DemiBold"
+            case .bold: face = isItalic ? "BoldItalic" : "Bold"
             }
             return ["\(stem)-\(face)"]
         }

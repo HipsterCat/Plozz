@@ -8,26 +8,45 @@ import CoreModels
 final class PlayerControlsFormattingTests: XCTestCase {
     func testSubtitleFontPickerGroupsSimilarFacesAfterTheDefault() {
         XCTAssertEqual(SubtitleFontFamily.allCases, [
-            .atkinson, .system, .roboto, .avenir, .lexend, .sfRounded, .fredoka, .openDyslexic
+            .atkinson, .system, .roboto, .avenirNext, .lexend, .sfRounded, .fredoka, .openDyslexic
         ])
     }
 
-    func testAvenirSelectionPersistsPerProfileWithoutChangingDefaults() throws {
+    func testAvenirNextSelectionPersistsPerProfileWithoutChangingDefaults() throws {
         let suite = "SubtitleAvenirTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = SubtitleStyleStore(defaults: defaults, namespace: "avenir-profile")
         let primary = SubtitleStyleStore(defaults: defaults)
         var preferences = SubtitleStylePreferences.default
-        preferences.base.fontFamily = .avenir
+        preferences.base.fontFamily = .avenirNext
         preferences.base.fontWeight = .semibold
         preferences.base.verticalPosition = 0.005
         store.save(preferences)
         XCTAssertEqual(store.load(), preferences)
         XCTAssertEqual(primary.load(), .default)
         XCTAssertEqual(SubtitleStyle.default.fontFamily, .atkinson)
-        XCTAssertEqual(SubtitleFontFamily.avenir.displayName, "Avenir")
-        XCTAssertTrue(SubtitleFontFamily.allCases.contains(.avenir))
+        XCTAssertEqual(SubtitleFontFamily.avenirNext.displayName, "Avenir Next")
+        XCTAssertTrue(SubtitleFontFamily.allCases.contains(.avenirNext))
+    }
+
+    func testExistingAvenirProfilesUpgradeToAvenirNextWithoutResettingStyle() throws {
+        let suite = "SubtitleAvenirUpgradeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let saved = Data(#"{"base":{"fontFamily":"avenir","fontWeight":"semibold","fontScale":1.2,"verticalPosition":0.005},"overrides":[]}"#.utf8)
+        for namespace: String? in [nil, "second-profile"] {
+            defaults.set(saved, forKey: SettingsKey.scoped(SubtitleStyleStore.storageKey, namespace: namespace))
+            let store = SubtitleStyleStore(defaults: defaults, namespace: namespace)
+            let restored = store.load()
+            XCTAssertEqual(restored.base.fontFamily, .avenirNext)
+            XCTAssertEqual(restored.base.fontWeight, .semibold)
+            XCTAssertEqual(restored.base.fontScale, 1.2)
+            XCTAssertEqual(restored.base.verticalPosition, 0.005)
+            store.save(restored)
+            XCTAssertEqual(store.load(), restored)
+        }
+        XCTAssertEqual(SubtitleFontFamily.avenirNext.rawValue, "avenir")
     }
 
     func testExistingFontCandidateFallbacksAreUnchanged() {
