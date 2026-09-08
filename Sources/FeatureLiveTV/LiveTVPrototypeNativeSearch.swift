@@ -2,9 +2,20 @@
 import SwiftUI
 import UIKit
 
-/// Like detail pages, Live TV needs a navigation root to publish toolbar
-/// visibility to the native TabView. Keep it stable while Search/playback change.
+private enum LiveTVNavigationDestination: Hashable {
+    case content
+}
+
+/// Hosts Live TV at the same navigation depth as the detail pages whose native
+/// tab/sidebar suppression is already reliable.
+///
+/// A toolbar visibility preference from a `NavigationStack` root doesn't make
+/// tvOS's sidebar-adaptable `TabView` treat that root as a full-screen
+/// destination. Keep Live TV permanently one level deep instead. The content
+/// never moves between the root and destination while Search/playback change, so
+/// the guide, Search coordinator, and live player retain their identities.
 public struct LiveTVNavigationContainer<Content: View>: View {
+    @State private var path = [LiveTVNavigationDestination.content]
     private let content: Content
 
     public init(@ViewBuilder content: () -> Content) {
@@ -12,9 +23,29 @@ public struct LiveTVNavigationContainer<Content: View>: View {
     }
 
     public var body: some View {
-        NavigationStack {
-            content.toolbar(.hidden, for: .navigationBar)
+        NavigationStack(path: pinnedPath) {
+            Color.clear
+                .navigationDestination(for: LiveTVNavigationDestination.self) { destination in
+                    switch destination {
+                    case .content:
+                        content
+                            .navigationBarBackButtonHidden()
+                            .toolbar(.hidden, for: .navigationBar)
+                    }
+                }
         }
+    }
+
+    /// Live TV's own Back handlers restore Search/guide state. Don't let an
+    /// unhandled system pop expose the otherwise-empty anchoring root.
+    private var pinnedPath: Binding<[LiveTVNavigationDestination]> {
+        Binding(
+            get: { path },
+            set: { proposedPath in
+                guard proposedPath.last == .content else { return }
+                path = [.content]
+            }
+        )
     }
 }
 

@@ -13,6 +13,9 @@ public struct LiveTVPrototypePlayback {
     public let streamURL: URL
     public let previousChannel: () -> Void
     public let nextChannel: () -> Void
+    public let isFavorite: Bool
+    public let canToggleFavorite: Bool
+    public let onToggleFavorite: () -> Void
     public let isExpanded: Bool
     public let returnToGuide: () -> Void
     public let playPauseRequest: Int
@@ -107,6 +110,9 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         channel: channel, streamURL: url,
                         previousChannel: { changeChannel(by: -1) },
                         nextChannel: { changeChannel(by: 1) },
+                        isFavorite: model.favoriteIDs.contains(channel.id),
+                        canToggleFavorite: model.preferencesIssue != .loadFailed,
+                        onToggleFavorite: { model.toggleFavorite(channel.id) },
                         isExpanded: preview.isExpanded,
                         returnToGuide: returnToGuide,
                         playPauseRequest: playPauseRequest,

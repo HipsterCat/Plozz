@@ -86,7 +86,7 @@ public struct ResolvedLogoTone: Equatable, Sendable {
     /// a pale highlight. A logo with plenty of it reads on almost any picture,
     /// whatever its mean tone says.
     public let brightInk: Double
-    /// Original solid backing, measured before the shared pipeline removes it.
+    /// Original solid backing, including a retained box inside transparent margins.
     /// Transparent logos have no plate; hosts can use their ink colour instead.
     public let backgroundPlate: HeroBackgroundSample?
 
@@ -241,6 +241,10 @@ enum HeroLogoMemo {
     /// oldest-first costs one await on the next look, not a re-decode.
     private static let capacity = 60
 
+    static func key(for references: [ArtworkReference], hasFallback: Bool = false) -> String {
+        (references.map(\.privacySafeIdentity) + [hasFallback ? "1" : "0"]).joined(separator: "|")
+    }
+
     static func value(for key: String) -> ProcessedLogo? { entries[key] }
 
     static func store(_ value: ProcessedLogo, for key: String) {
@@ -375,8 +379,7 @@ private struct LoadedLogo<TextFallback: View>: View {
 
     /// Re-run resolution whenever the candidate sources change.
     private var taskKey: String {
-        (references.map(\.privacySafeIdentity) + [asyncFallbackURL == nil ? "0" : "1"])
-            .joined(separator: "|")
+        HeroLogoMemo.key(for: references, hasFallback: asyncFallbackURL != nil)
     }
 
     private func resolve() async {
@@ -1122,13 +1125,6 @@ private extension UIImage {
         // from the border ring; `nil` means the logo is genuinely transparent and
         // nothing is stripped.
         let plate = Self.detectBackgroundPlate(data, width: width, height: height, bytesPerRow: bytesPerRow)
-        let backgroundPlate = plate.map {
-            let r = $0.red / 255, g = $0.green / 255, b = $0.blue / 255
-            return HeroBackgroundSample(
-                red: r, green: g, blue: b, luminance: 0.2126 * r + 0.7152 * g + 0.0722 * b
-            )
-        }
-
         // Single fused pass: strip the plate (when present) *and* measure the
         // content bounds + tone of what survives, so the full image is touched
         // exactly once instead of in two separate O(width*height) passes.
@@ -1153,6 +1149,26 @@ private extension UIImage {
         let cropArea = Double((stats.maxX - stats.minX + 1) * (stats.maxY - stats.minY + 1))
         let coverage = cropArea > 0 ? min(1.0, weight / cropArea) : 1.0
         let brightInk = weight > 0 ? min(1.0, stats.brightWeight / weight) : 0
+        let colorVariance = weight > 0
+            ? max(0, stats.squaredColorSum / weight - meanR * meanR - meanG * meanG - meanB * meanB)
+            : 0
+        var originalPlate = plate
+        if originalPlate == nil,
+           colorVariance > 0.001,
+           let insetPlate = Self.detectBackgroundPlate(
+               data, width: width, height: height, bytesPerRow: bytesPerRow,
+               bounds: (stats.minX, stats.minY, stats.maxX, stats.maxY)
+           ) {
+            // A boxed logo can have transparent padding. Retain its pixels, but
+            // expose the box colour so channel plates can extend it seamlessly.
+            originalPlate = insetPlate
+        }
+        let backgroundPlate = originalPlate.map {
+            let r = $0.red / 255, g = $0.green / 255, b = $0.blue / 255
+            return HeroBackgroundSample(
+                red: r, green: g, blue: b, luminance: 0.2126 * r + 0.7152 * g + 0.0722 * b
+            )
+        }
         guard let processedFull = Self.makeImage(&data, width: width, height: height, bytesPerRow: bytesPerRow) else {
             return nil
         }
@@ -1201,9 +1217,15 @@ private extension UIImage {
     /// box rather than real artwork — a genuinely transparent logo has a
     /// transparent border, so this returns `nil` for it. Reads the buffer without
     /// mutating it; the actual removal happens in `stripPlateAndMeasure`.
-    private static func detectBackgroundPlate(_ data: [UInt8], width: Int, height: Int, bytesPerRow: Int) -> PlateColor? {
+    private static func detectBackgroundPlate(
+        _ data: [UInt8], width: Int, height: Int, bytesPerRow: Int,
+        bounds: (minX: Int, minY: Int, maxX: Int, maxY: Int)? = nil
+    ) -> PlateColor? {
         let bpp = 4
-        guard width > 2, height > 2 else { return nil }
+        let minX = bounds?.minX ?? 0, minY = bounds?.minY ?? 0
+        let maxX = bounds?.maxX ?? (width - 1), maxY = bounds?.maxY ?? (height - 1)
+        let sampleWidth = maxX - minX + 1, sampleHeight = maxY - minY + 1
+        guard sampleWidth > 2, sampleHeight > 2 else { return nil }
 
         // Sample the border ring to estimate the background colour and confirm it
         // is opaque + uniform enough to be a deliberate plate rather than artwork.
@@ -1213,13 +1235,13 @@ private extension UIImage {
             rSum += Int(data[i]); gSum += Int(data[i + 1]); bSum += Int(data[i + 2]); aSum += Int(data[i + 3])
             count += 1
         }
-        for x in stride(from: 0, to: width, by: max(1, width / 64)) {
-            sample(x, 0)
-            sample(x, height - 1)
+        for x in stride(from: minX, through: maxX, by: max(1, sampleWidth / 64)) {
+            sample(x, minY)
+            sample(x, maxY)
         }
-        for y in stride(from: 0, to: height, by: max(1, height / 64)) {
-            sample(0, y)
-            sample(width - 1, y)
+        for y in stride(from: minY, through: maxY, by: max(1, sampleHeight / 64)) {
+            sample(minX, y)
+            sample(maxX, y)
         }
         guard count > 0 else { return nil }
 
@@ -1245,11 +1267,11 @@ private extension UIImage {
             let d = max(abs(r - bgR), max(abs(g - bgG), abs(b - bgB)))
             if d > maxDev { maxDev = d }
         }
-        for x in stride(from: 0, to: width, by: max(1, width / 64)) {
-            dev(x, 0); dev(x, height - 1)
+        for x in stride(from: minX, through: maxX, by: max(1, sampleWidth / 64)) {
+            dev(x, minY); dev(x, maxY)
         }
-        for y in stride(from: 0, to: height, by: max(1, height / 64)) {
-            dev(0, y); dev(width - 1, y)
+        for y in stride(from: minY, through: maxY, by: max(1, sampleHeight / 64)) {
+            dev(minX, y); dev(maxX, y)
         }
         // Tolerance for "the border is one flat colour". Loose enough to absorb
         // JPEG noise, tight enough to spare gradient/photographic backgrounds.
@@ -1335,6 +1357,7 @@ private extension UIImage {
                     stats.rSum += r * af
                     stats.gSum += g * af
                     stats.bSum += b * af
+                    stats.squaredColorSum += (r * r + g * g + b * b) * af
                     stats.weight += af
                     // A logo's MEAN tone hides its most legible feature: the white
                     // keyline around a pastel wordmark, or the highlights on a
@@ -1371,6 +1394,7 @@ private struct LogoStats {
     var rSum = 0.0
     var gSum = 0.0
     var bSum = 0.0
+    var squaredColorSum = 0.0
     var weight = 0.0
     /// Ink bright enough to carry its own contrast — see
     /// ``PreparedLogo/brightInk``.

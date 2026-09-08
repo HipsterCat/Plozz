@@ -659,7 +659,8 @@ final class LiveChannelPlaybackFocusPolicyTests: XCTestCase {
         let availability = LiveChannelPlaybackFocusPolicy.Availability(
             isPresented: true,
             canPlayPause: true,
-            canGoLive: false
+            canGoLive: false,
+            canToggleFavorite: true
         )
 
         XCTAssertEqual(availability.preferredControl, .playPause)
@@ -669,7 +670,8 @@ final class LiveChannelPlaybackFocusPolicyTests: XCTestCase {
         let availability = LiveChannelPlaybackFocusPolicy.Availability(
             isPresented: true,
             canPlayPause: false,
-            canGoLive: false
+            canGoLive: false,
+            canToggleFavorite: true
         )
 
         XCTAssertEqual(availability.preferredControl, .next)
@@ -679,7 +681,8 @@ final class LiveChannelPlaybackFocusPolicyTests: XCTestCase {
         let availability = LiveChannelPlaybackFocusPolicy.Availability(
             isPresented: true,
             canPlayPause: true,
-            canGoLive: false
+            canGoLive: false,
+            canToggleFavorite: true
         )
 
         XCTAssertTrue(availability.contains(.next))
@@ -690,12 +693,14 @@ final class LiveChannelPlaybackFocusPolicyTests: XCTestCase {
         let availability = LiveChannelPlaybackFocusPolicy.Availability(
             isPresented: true,
             canPlayPause: false,
-            canGoLive: true
+            canGoLive: true,
+            canToggleFavorite: true
         )
 
         XCTAssertTrue(availability.contains(.previous))
         XCTAssertTrue(availability.contains(.goLive))
         XCTAssertTrue(availability.contains(.next))
+        XCTAssertTrue(availability.contains(.favorite))
         XCTAssertFalse(availability.contains(.playPause))
         XCTAssertFalse(availability.contains(.surface))
         XCTAssertFalse(availability.contains(.close))
@@ -704,6 +709,21 @@ final class LiveChannelPlaybackFocusPolicyTests: XCTestCase {
         XCTAssertFalse(
             LiveChannelPlaybackFocusPolicy.Availability.hidden.contains(.next)
         )
+    }
+
+    func testUnavailableFavoriteActionLeavesExistingTransportFocusValid() {
+        let availability = LiveChannelPlaybackFocusPolicy.Availability(
+            isPresented: true,
+            canPlayPause: true,
+            canGoLive: true,
+            canToggleFavorite: false
+        )
+
+        XCTAssertTrue(availability.contains(.previous))
+        XCTAssertTrue(availability.contains(.playPause))
+        XCTAssertTrue(availability.contains(.goLive))
+        XCTAssertTrue(availability.contains(.next))
+        XCTAssertFalse(availability.contains(.favorite))
     }
 
     func testInterruptionPrefersRetryThenFallsBackToClose() {
@@ -715,6 +735,28 @@ final class LiveChannelPlaybackFocusPolicyTests: XCTestCase {
             LiveChannelPlaybackFocusPolicy.interruptionControl(canRetry: false),
             .close
         )
+    }
+}
+
+final class LiveChannelFavoriteControlStateTests: XCTestCase {
+    func testFavoriteControlCopyMatchesPersistedState() {
+        let add = LiveChannelFavoriteControlState(isFavorite: false, canToggle: true)
+        XCTAssertEqual(String(localized: add.title), "Add to Favorites")
+        XCTAssertEqual(add.systemImage, "star")
+        XCTAssertTrue(add.canToggle)
+
+        let remove = LiveChannelFavoriteControlState(isFavorite: true, canToggle: true)
+        XCTAssertEqual(String(localized: remove.title), "Remove from Favorites")
+        XCTAssertEqual(remove.systemImage, "star.fill")
+        XCTAssertTrue(remove.canToggle)
+    }
+
+    func testFavoriteControlCanStayTruthfulWhilePersistenceIsUnavailable() {
+        let state = LiveChannelFavoriteControlState(isFavorite: false, canToggle: false)
+
+        XCTAssertEqual(String(localized: state.title), "Add to Favorites")
+        XCTAssertEqual(state.systemImage, "star")
+        XCTAssertFalse(state.canToggle)
     }
 }
 

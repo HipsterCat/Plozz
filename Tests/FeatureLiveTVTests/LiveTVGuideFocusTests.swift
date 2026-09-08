@@ -138,7 +138,9 @@ final class LiveTVGuideFocusTests: XCTestCase {
         XCTAssertNil(controller.view.window)
     }
 
-    func testNativeSidebarKeepsItsNavigationRootAcrossSearchAndPlaybackVisibility() async throws {
+    func testNativeSidebarKeepsItsPushedLiveTVContentAcrossSearchAndPlaybackVisibility() async throws {
+        // This verifies the pushed Live TV subtree and Search host stay alive.
+        // Actual system-sidebar suppression still requires an app-hosted device trial.
         let probe = try GuideFocusProbe(section: .channels)
         probe.restoring = false
         probe.model.query = "Channel 2"
@@ -147,9 +149,11 @@ final class LiveTVGuideFocusTests: XCTestCase {
         let search = try await waitForSearch(in: window)
         let root = try XCTUnwrap(window.rootViewController)
         let results = try XCTUnwrap(search.searchResultsController)
-        let appearances = probe.nativeRootAppearances
-        let disappearances = probe.nativeRootDisappearances
-        XCTAssertGreaterThan(appearances, 0)
+        let appearances = probe.liveContentAppearances
+        let disappearances = probe.liveContentDisappearances
+        // A standalone native TabView currently settles at 2/1 rather than 1/0.
+        // Compare the settled baseline instead of assuming absolute lifecycle counts.
+        XCTAssertEqual(appearances, disappearances + 1)
 
         probe.searchPresented = false
         await waitUntil { results.view.window == nil }
@@ -168,8 +172,8 @@ final class LiveTVGuideFocusTests: XCTestCase {
         probe.searchClosed = false
         _ = try await waitForSearch(in: window)
         XCTAssertTrue(window.rootViewController === root)
-        XCTAssertEqual(probe.nativeRootAppearances, appearances)
-        XCTAssertEqual(probe.nativeRootDisappearances, disappearances)
+        XCTAssertEqual(probe.liveContentAppearances, appearances)
+        XCTAssertEqual(probe.liveContentDisappearances, disappearances)
     }
 
     func testSearchCanCloseWhileGuideFocusIsRecovering() async throws {
@@ -343,8 +347,8 @@ private final class GuideFocusProbe {
     var searchPresented = true
     var resultsFrame: CGRect?
     var navigationExcluded = true
-    var nativeRootAppearances = 0
-    var nativeRootDisappearances = 0
+    var liveContentAppearances = 0
+    var liveContentDisappearances = 0
 
     init(section: LiveTVGuideSection) throws {
         origin = LiveTVGuideRowID(channelID: "24", section: section)
@@ -436,8 +440,8 @@ private struct NativeSidebarSearchHarness: View {
                         NativeGuideFocusHarness(probe: probe)
                     }
                     .toolbar(probe.navigationExcluded ? .hidden : .visible, for: .tabBar)
-                    .onAppear { probe.nativeRootAppearances += 1 }
-                    .onDisappear { probe.nativeRootDisappearances += 1 }
+                    .onAppear { probe.liveContentAppearances += 1 }
+                    .onDisappear { probe.liveContentDisappearances += 1 }
                 }
             }
             Tab("Settings", systemImage: "gearshape") {

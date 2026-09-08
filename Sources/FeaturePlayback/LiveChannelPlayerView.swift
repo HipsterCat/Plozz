@@ -18,10 +18,12 @@ public struct LiveChannelPlayerView: View {
     private let streamURL: URL
     private let httpHeaders: [String: String]
     private let logoURL: URL?
-    private let logoNeedsDarkBackground: Bool
     private let makeEngine: @MainActor () throws -> any LiveChannelEngine
     private let onPreviousChannel: () -> Void
     private let onNextChannel: () -> Void
+    private let isFavorite: Bool
+    private let canToggleFavorite: Bool
+    private let onToggleFavorite: () -> Void
     private let isExpanded: Bool
     private let onReturnToGuide: (() -> Void)?
     private let playPauseRequest: Int
@@ -42,11 +44,13 @@ public struct LiveChannelPlayerView: View {
         title: String,
         streamURL: URL,
         logoURL: URL?,
-        logoNeedsDarkBackground: Bool = false,
         httpHeaders: [String: String] = [:],
         makeEngine: @escaping @MainActor () throws -> any LiveChannelEngine,
         onPreviousChannel: @escaping () -> Void,
         onNextChannel: @escaping () -> Void,
+        isFavorite: Bool,
+        canToggleFavorite: Bool,
+        onToggleFavorite: @escaping () -> Void,
         isExpanded: Bool = true,
         onReturnToGuide: (() -> Void)? = nil,
         playPauseRequest: Int = 0,
@@ -57,10 +61,12 @@ public struct LiveChannelPlayerView: View {
         self.streamURL = streamURL
         self.httpHeaders = httpHeaders
         self.logoURL = logoURL
-        self.logoNeedsDarkBackground = logoNeedsDarkBackground
         self.makeEngine = makeEngine
         self.onPreviousChannel = onPreviousChannel
         self.onNextChannel = onNextChannel
+        self.isFavorite = isFavorite
+        self.canToggleFavorite = canToggleFavorite
+        self.onToggleFavorite = onToggleFavorite
         self.isExpanded = isExpanded
         self.onReturnToGuide = onReturnToGuide
         self.playPauseRequest = playPauseRequest
@@ -102,17 +108,19 @@ public struct LiveChannelPlayerView: View {
                         LiveChannelOverlay(
                             title: title,
                             logoURL: logoURL,
-                            logoNeedsDarkBackground: logoNeedsDarkBackground,
                             phase: sourceMatches ? model.phase : .loading,
                             isAtLiveEdge: sourceMatches ? model.isAtLiveEdge : true,
                             canPause: sourceMatches && model.canPause,
                             canGoLive: sourceMatches && model.canGoLive,
+                            isFavorite: isFavorite,
+                            canToggleFavorite: canToggleFavorite,
                             focus: $focusedControl,
                             onClose: dismissPlayer,
                             onPrevious: channelPrevious,
                             onPlayPause: togglePlayPause,
                             onGoLive: goLive,
-                            onNext: channelNext
+                            onNext: channelNext,
+                            onToggleFavorite: toggleFavorite
                         )
                         .onAppear(perform: focusPlaybackControlIfNeeded)
                         .transition(.opacity)
@@ -315,7 +323,8 @@ public struct LiveChannelPlayerView: View {
         return .init(
             isPresented: true,
             canPlayPause: sourceMatches && model.canPause,
-            canGoLive: sourceMatches && model.canGoLive
+            canGoLive: sourceMatches && model.canGoLive,
+            canToggleFavorite: canToggleFavorite
         )
     }
 
@@ -425,6 +434,12 @@ public struct LiveChannelPlayerView: View {
         onNextChannel()
     }
 
+    private func toggleFavorite() {
+        guard canToggleFavorite else { return }
+        noteInteraction()
+        onToggleFavorite()
+    }
+
     private func dismissPlayer() {
         if let onReturnToGuide {
             playbackStartPolicy.resetViewing()
@@ -481,7 +496,21 @@ enum LiveChannelControl: Hashable {
     case playPause
     case goLive
     case next
+    case favorite
     case retry
+}
+
+struct LiveChannelFavoriteControlState: Equatable {
+    let isFavorite: Bool
+    let canToggle: Bool
+
+    var title: LocalizedStringResource {
+        isFavorite ? "Remove from Favorites" : "Add to Favorites"
+    }
+
+    var systemImage: String {
+        isFavorite ? "star.fill" : "star"
+    }
 }
 
 enum LiveChannelPlaybackFocusPolicy {
@@ -489,11 +518,13 @@ enum LiveChannelPlaybackFocusPolicy {
         let isPresented: Bool
         let canPlayPause: Bool
         let canGoLive: Bool
+        let canToggleFavorite: Bool
 
         static let hidden = Availability(
             isPresented: false,
             canPlayPause: false,
-            canGoLive: false
+            canGoLive: false,
+            canToggleFavorite: false
         )
 
         var preferredControl: LiveChannelControl {
@@ -509,6 +540,8 @@ enum LiveChannelPlaybackFocusPolicy {
                 return canPlayPause
             case .goLive:
                 return canGoLive
+            case .favorite:
+                return canToggleFavorite
             case .surface, .close, .retry:
                 return false
             }
@@ -541,24 +574,25 @@ private struct LiveChannelRevealSurface: View {
 private struct LiveChannelOverlay: View {
     let title: String
     let logoURL: URL?
-    let logoNeedsDarkBackground: Bool
     let phase: LiveChannelPlaybackPhase
     let isAtLiveEdge: Bool
     let canPause: Bool
     let canGoLive: Bool
+    let isFavorite: Bool
+    let canToggleFavorite: Bool
     @FocusState.Binding var focus: LiveChannelControl?
     let onClose: () -> Void
     let onPrevious: () -> Void
     let onPlayPause: () -> Void
     let onGoLive: () -> Void
     let onNext: () -> Void
+    let onToggleFavorite: () -> Void
 
     var body: some View {
         VStack(spacing: 24) {
             LiveChannelHeader(
                 title: title,
                 logoURL: logoURL,
-                logoNeedsDarkBackground: logoNeedsDarkBackground,
                 status: phase.statusLabel(isAtLiveEdge: isAtLiveEdge),
                 statusColor: phase.statusColor(isAtLiveEdge: isAtLiveEdge),
                 focus: $focus,
@@ -569,11 +603,14 @@ private struct LiveChannelOverlay: View {
                 isPaused: phase == .paused,
                 canPause: canPause,
                 canGoLive: canGoLive,
+                isFavorite: isFavorite,
+                canToggleFavorite: canToggleFavorite,
                 focus: $focus,
                 onPrevious: onPrevious,
                 onPlayPause: onPlayPause,
                 onGoLive: onGoLive,
-                onNext: onNext
+                onNext: onNext,
+                onToggleFavorite: onToggleFavorite
             )
         }
         #if os(tvOS)
@@ -601,7 +638,6 @@ private struct LiveChannelOverlay: View {
 private struct LiveChannelHeader: View {
     let title: String
     let logoURL: URL?
-    let logoNeedsDarkBackground: Bool
     let status: LocalizedStringResource
     let statusColor: Color
     @FocusState.Binding var focus: LiveChannelControl?
@@ -609,10 +645,11 @@ private struct LiveChannelHeader: View {
 
     var body: some View {
         HStack(spacing: 18) {
-            LiveChannelLogo(
-                title: title,
+            ChannelLogoArtwork(
+                name: title,
                 logoURL: logoURL,
-                needsDarkBackground: logoNeedsDarkBackground
+                size: logoSize,
+                cornerRadius: 12
             )
 
             VStack(alignment: .leading, spacing: 6) {
@@ -633,75 +670,18 @@ private struct LiveChannelHeader: View {
             .labelStyle(.iconOnly)
             .accessibilityIdentifier("live-channel-close")
             .focused($focus, equals: .close)
-            .playerGlassButton(prominent: false)
+            .buttonStyle(InfoActionButtonStyle(focused: focus == .close, prominent: false))
             #endif
         }
         .foregroundStyle(.white)
     }
-}
 
-private struct LiveChannelLogo: View {
-    let title: String
-    let logoURL: URL?
-    let needsDarkBackground: Bool
-
-    var body: some View {
-        Group {
-            if let logoURL {
-                FallbackAsyncImage(
-                    references: [.remote(logoURL)],
-                    variant: .serviceLogo
-                ) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                } placeholder: {
-                    LiveChannelLogoPlaceholder(
-                        title: title,
-                        usesDarkBackground: needsDarkBackground
-                    )
-                }
-            } else {
-                LiveChannelLogoPlaceholder(
-                    title: title,
-                    usesDarkBackground: needsDarkBackground
-                )
-            }
-        }
+    private var logoSize: CGSize {
         #if os(tvOS)
-        .frame(width: 92, height: 58)
+        CGSize(width: 108, height: 74)
         #else
-        .frame(width: 60, height: 38)
+        CGSize(width: 76, height: 54)
         #endif
-        .padding(8)
-        .background(
-            needsDarkBackground ? Color.black.opacity(0.82) : Color.white.opacity(0.94),
-            in: RoundedRectangle(cornerRadius: 12)
-        )
-        .accessibilityHidden(true)
-    }
-}
-
-private struct LiveChannelLogoPlaceholder: View {
-    let title: String
-    let usesDarkBackground: Bool
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 9)
-                .fill(
-                    usesDarkBackground
-                        ? Color.white.opacity(0.12)
-                        : Color.black.opacity(0.08)
-                )
-            Text(String(title.prefix(1)).uppercased())
-                .font(.title2.bold())
-                .foregroundStyle(
-                    usesDarkBackground
-                        ? Color.white.opacity(0.85)
-                        : Color.black.opacity(0.78)
-                )
-        }
     }
 }
 
@@ -709,14 +689,18 @@ private struct LiveChannelTransport: View {
     let isPaused: Bool
     let canPause: Bool
     let canGoLive: Bool
+    let isFavorite: Bool
+    let canToggleFavorite: Bool
     @FocusState.Binding var focus: LiveChannelControl?
     let onPrevious: () -> Void
     let onPlayPause: () -> Void
     let onGoLive: () -> Void
     let onNext: () -> Void
+    let onToggleFavorite: () -> Void
 
     var body: some View {
         transportButtons
+            .font(.body.weight(.semibold))
             .padding(.horizontal, 24)
             .padding(.vertical, 18)
             .background(.black.opacity(0.58), in: Capsule())
@@ -725,8 +709,8 @@ private struct LiveChannelTransport: View {
     @ViewBuilder
     private var transportButtons: some View {
         #if os(tvOS)
-        // Only one set of focus targets. Glass already highlights focus;
-        // changing its style on focus recreates the currently focused button.
+        // One set of focus targets with the normal player's instant, paired
+        // foreground/background focus treatment.
         fullWidthButtons
         #else
         ViewThatFits(in: .horizontal) {
@@ -740,6 +724,7 @@ private struct LiveChannelTransport: View {
                     goLiveButton.labelStyle(.iconOnly)
                 }
                 nextButton.labelStyle(.iconOnly)
+                favoriteButton.labelStyle(.iconOnly)
             }
         }
         #endif
@@ -751,6 +736,7 @@ private struct LiveChannelTransport: View {
             if canPause || isPaused { playPauseButton }
             if canGoLive { goLiveButton }
             nextButton
+            favoriteButton
         }
     }
 
@@ -759,7 +745,7 @@ private struct LiveChannelTransport: View {
             Label("Previous Channel", systemImage: "backward.end.fill")
         }
         .focused($focus, equals: .previous)
-        .playerGlassButton(prominent: false)
+        .buttonStyle(InfoActionButtonStyle(focused: focus == .previous, prominent: false))
     }
 
     private var playPauseButton: some View {
@@ -771,7 +757,7 @@ private struct LiveChannelTransport: View {
             }
         }
         .focused($focus, equals: .playPause)
-        .playerGlassButton(prominent: false)
+        .buttonStyle(InfoActionButtonStyle(focused: focus == .playPause, prominent: false))
     }
 
     private var goLiveButton: some View {
@@ -779,7 +765,7 @@ private struct LiveChannelTransport: View {
             Label("Go Live", systemImage: "dot.radiowaves.left.and.right")
         }
         .focused($focus, equals: .goLive)
-        .playerGlassButton(prominent: true)
+        .buttonStyle(InfoActionButtonStyle(focused: focus == .goLive, prominent: true))
     }
 
     private var nextButton: some View {
@@ -787,7 +773,22 @@ private struct LiveChannelTransport: View {
             Label("Next Channel", systemImage: "forward.end.fill")
         }
         .focused($focus, equals: .next)
-        .playerGlassButton(prominent: false)
+        .buttonStyle(InfoActionButtonStyle(focused: focus == .next, prominent: false))
+    }
+
+    private var favoriteButton: some View {
+        let state = LiveChannelFavoriteControlState(
+            isFavorite: isFavorite,
+            canToggle: canToggleFavorite
+        )
+        return Button(action: onToggleFavorite) {
+            Label(state.title, systemImage: state.systemImage)
+        }
+        .focused($focus, equals: .favorite)
+        .disabled(!state.canToggle)
+        // Keep one button style while this focused action changes state.
+        .buttonStyle(InfoActionButtonStyle(focused: focus == .favorite, prominent: false))
+        .accessibilityIdentifier("live-channel-favorite")
     }
 }
 
@@ -850,7 +851,7 @@ private struct LiveChannelStartupView: View {
                 .foregroundStyle(.white)
             Button("Close", action: onClose)
                 .focused($focus, equals: .close)
-                .playerGlassButton(prominent: false)
+                .buttonStyle(InfoActionButtonStyle(focused: focus == .close, prominent: false))
         }
         .padding(36)
         .background(.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 28))
@@ -881,11 +882,11 @@ private struct LiveChannelInterruptionView: View {
                 if canRetry {
                     Button("Try Again", action: onRetry)
                         .focused($focus, equals: .retry)
-                        .playerGlassButton(prominent: true)
+                        .buttonStyle(InfoActionButtonStyle(focused: focus == .retry, prominent: true))
                 }
                 Button("Close", action: onClose)
                     .focused($focus, equals: .close)
-                    .playerGlassButton(prominent: false)
+                    .buttonStyle(InfoActionButtonStyle(focused: focus == .close, prominent: false))
             }
         }
         .foregroundStyle(.white)

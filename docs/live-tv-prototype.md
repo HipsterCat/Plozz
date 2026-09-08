@@ -94,10 +94,11 @@ is no prior in-memory history to migrate on the first updated launch.
   App navigation is suppressed before the TV keyboard opens and stays suppressed
   through closing and guide-focus restoration, so Back does not briefly open the
   native navigation menu or pinned rail.
-  Native top-bar/sidebar destinations use a stable NavigationStack, matching
-  detail pages, so their tab-bar visibility preference has an owning navigation
-  context. The same policy covers Search and expanded playback without replacing
-  the player. The custom pinned rail retains its existing chrome coordinator.
+  Native top-bar/sidebar destinations keep Live TV one destination deep in a
+  stable NavigationStack, matching detail pages rather than remaining at the
+  tab root. The same visibility policy covers Search and expanded playback
+  without replacing the player or relying on the guide's scroll position.
+  The custom pinned rail retains its existing chrome coordinator.
   Live TV also participates in the profile's Hide or Reorder Navigation list,
   alongside Home, Search and the other destinations. Settings remains visible
   but can be moved. Press-and-hold Hide keeps focus at the vacated list position;
@@ -141,11 +142,16 @@ is no prior in-memory history to migrate on the first updated launch.
   The backing fills the complete station focus bounds, with the same corner
   radius and no outside gutter. Artwork fits inside without stretching, with
   eight additional points of inner padding; the full-height plate stays unchanged.
-  A subtle, opaque gradient replaces the flat light/dark logo backing. Its tint
-  comes from the logo's original solid background when detected, otherwise its
-  ink colour; light/dark bounds still protect legibility. This is confined to
-  the logo plate, not the programme tiles or preview backdrop. Hero/search logo
-  sizes remain independent of the full-row guide treatment.
+  Guide, Search, preview metadata and the player use the same `ChannelLogoArtwork`
+  component. Solid logo plates replace the gradients that faded into the page.
+  Detected source backings are extended unchanged, including white boxes inside
+  transparent margins. Otherwise dark/coloured marks use white, while even a
+  small bright wordmark can require charcoal. A quiet perimeter stroke keeps
+  the plate boundary visible. Brand pixels are not recoloured or haloed.
+  The existing shared hero preparation cache and synchronous memo resolve the
+  logo and its backing together, so a warmed guide logo appears immediately in
+  the player with the same appearance. Hero/search/player sizes remain
+  independent of the full-row guide treatment.
   Station tiles show only the logo, or a name fallback when artwork is missing,
   rather than repeating names, numbers and badges beside it. Names and numbers
   remain searchable and available to accessibility; the focused channel's name
@@ -284,6 +290,10 @@ The normal tvOS player header has no Close button; Back returns to the guide.
 Transport focus selects an available playback action instead of a removed
 header target. Startup and interruption escape/retry controls remain available,
 and iPhone/iPad retain their touch Close button.
+The player also offers Add to Favorites / Remove from Favorites for the channel
+being watched, using the same profile preferences as the guide. The star reflects
+saved state; failed saves keep the previous state and surface the existing retry
+alert. Favorite changes do not retune or restart playback.
 
 Tuning another channel reuses the engine with a new, fenced source attempt.
 Loading/failure states remain local and nonfocusable in the preview, with an
@@ -410,9 +420,11 @@ by AetherEngine's typed `playbackPhase`, gated on
 and reconnecting are distinct. The host no longer reconstructs engine state
 from AVPlayer transport hints or a second playback-clock classifier.
 
-TV controls keep one stable set of focus targets. Native glass supplies its own
-focus appearance: button styles must not switch in response to `FocusState`,
-which replaces the focused control and can stall focus/layout resolution.
+TV controls keep one stable set of focus targets. Live playback reuses the normal
+player's `InfoActionButtonStyle`: white labels at rest and black labels on a
+white capsule when focused, with both colours changing together. The same style
+covers transport, Favorite, loading, retry and close actions. Its type stays
+constant as focus changes, avoiding replacement of the focused control.
 Close receives focus when controls mount, without waiting for the stream load.
 The connecting indicator does not intercept input. On-device regression checks
 must include video rendering and Back/Close while a channel is still connecting;

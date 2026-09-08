@@ -132,7 +132,6 @@ struct PrototypeStationMark: View {
     var size: CGFloat = PrototypeLayout.stationSize
     var plateSize: CGSize? = nil
     var cornerRadius: CGFloat = PrototypeLayout.logoRadius
-    @State private var resolvedTone: ResolvedLogoTone?
 
     private var dimensions: CGSize {
         plateSize ?? CGSize(width: size * 1.75, height: size)
@@ -142,65 +141,11 @@ struct PrototypeStationMark: View {
         plateSize == nil ? 6 : PrototypeLayout.stationArtworkInset
     }
 
-    private var lightPlate: Bool {
-        guard let resolvedTone else { return false }
-        return PrototypeLogoPlate.usesLightBackground(
-            luminance: resolvedTone.luminance, brightInk: resolvedTone.brightInk
-        )
-    }
-
     var body: some View {
-        HeroLogoArtwork(
-            primaryURL: channel.logoURL,
-            maxWidth: dimensions.width - artworkInset * 2, maxHeight: dimensions.height - artworkInset * 2,
-            constrainsToBounds: true, alignment: .center, haloStyle: .gentle,
-            onResolve: { resolvedTone = $0 }
-        ) {
-            Text(channel.name)
-                .font(.system(size: size * 0.25, weight: .semibold))
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .foregroundStyle(lightPlate ? .black : .white)
-        }
-            .environment(\.colorScheme, lightPlate ? .light : .dark)
-            .frame(width: dimensions.width, height: dimensions.height)
-            .background(
-                LinearGradient(
-                    colors: PrototypeLogoPlate.colors(for: resolvedTone),
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                ),
-                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .onChange(of: channel.logoURL) { _, _ in resolvedTone = nil }
-            .accessibilityHidden(true)
-    }
-}
-
-enum PrototypeLogoPlate {
-    static func usesLightBackground(luminance: Double, brightInk: Double) -> Bool {
-        luminance < 0.42 && brightInk < 0.20
-    }
-
-    static func colors(for tone: ResolvedLogoTone?) -> [Color] {
-        let light = tone.map { usesLightBackground(luminance: $0.luminance, brightInk: $0.brightInk) } ?? false
-        // Reuse the cached preparation pass, never resample logos during scrolling.
-        let plate = tone?.backgroundPlate
-        let tint = Color(
-            red: plate?.red ?? tone?.red ?? 0.3,
-            green: plate?.green ?? tone?.green ?? 0.3,
-            blue: plate?.blue ?? tone?.blue ?? 0.3
+        ChannelLogoArtwork(
+            name: channel.name, logoURL: channel.logoURL, size: dimensions,
+            cornerRadius: cornerRadius, artworkInset: artworkInset
         )
-        if light {
-            return [
-                Color(white: 0.995).mix(with: tint, by: 0.03),
-                Color(white: 0.98).mix(with: tint, by: 0.10)
-            ]
-        }
-        return [
-            Color(white: 0.055).mix(with: tint, by: 0.17),
-            Color(white: 0.025).mix(with: tint, by: 0.05)
-        ]
     }
 }
 

@@ -412,60 +412,6 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
         }
     }
 
-    func testLogoPlateSupportsDarkInkAndPreservesBrightWordmarks() {
-        XCTAssertTrue(PrototypeLogoPlate.usesLightBackground(luminance: 0.12, brightInk: 0))
-        XCTAssertTrue(PrototypeLogoPlate.usesLightBackground(luminance: 0.3, brightInk: 0.1))
-        XCTAssertFalse(PrototypeLogoPlate.usesLightBackground(luminance: 0.95, brightInk: 0.9))
-        XCTAssertFalse(PrototypeLogoPlate.usesLightBackground(luminance: 0.3, brightInk: 0.4))
-    }
-
-    func testLogoGradientUsesTheOriginalBackgroundRatherThanItsWhiteInk() throws {
-        let tone = ResolvedLogoTone(
-            luminance: 1, coverage: 0.4, red: 1, green: 1, blue: 1, brightInk: 1,
-            backgroundPlate: HeroBackgroundSample(red: 0.1, green: 0.3, blue: 0.9, luminance: 0.3)
-        )
-        let colors = PrototypeLogoPlate.colors(for: tone)
-        XCTAssertEqual(colors.count, 2)
-        XCTAssertNotEqual(colors[0], colors[1])
-        for color in colors {
-            let rgb = try components(color)
-            XCTAssertGreaterThan(rgb.blue, rgb.red)
-            XCTAssertGreaterThan(rgb.blue, rgb.green)
-            XCTAssertEqual(rgb.alpha, 1, accuracy: 0.001)
-        }
-    }
-
-    func testLogoGradientUsesInkHueWhenTheSourceHasNoBackground() throws {
-        let tone = ResolvedLogoTone(luminance: 0.2, coverage: 0.4, red: 0.7, green: 0.1, blue: 0.1)
-        for color in PrototypeLogoPlate.colors(for: tone) {
-            let rgb = try components(color)
-            XCTAssertGreaterThan(rgb.red, rgb.green)
-            XCTAssertGreaterThan(rgb.red, rgb.blue)
-        }
-    }
-
-    func testGradientPreservesLightAndDarkLegibilityWithoutTransparency() throws {
-        for ink in [0.0, 1.0] {
-            let tone = ResolvedLogoTone(
-                luminance: ink, coverage: 0.4, red: ink, green: ink, blue: ink, brightInk: ink
-            )
-            for color in PrototypeLogoPlate.colors(for: tone) {
-                let rgb = try components(color)
-                for channel in [rgb.red, rgb.green, rgb.blue] {
-                    if ink == 0 {
-                        XCTAssertGreaterThan(channel, 0.8)
-                    } else {
-                        XCTAssertLessThan(channel, 0.3)
-                    }
-                }
-                XCTAssertEqual(rgb.alpha, 1, accuracy: 0.001)
-            }
-        }
-        let fallback = PrototypeLogoPlate.colors(for: nil)
-        XCTAssertNotEqual(fallback[0], fallback[1])
-        XCTAssertEqual(try components(fallback[0]).alpha, 1, accuracy: 0.001)
-    }
-
     func testFocusedLogoHasContrastingEdgesOnBothWhiteAndBlackWithoutAGutter() throws {
         let width = Int(PrototypeLayout.stationColumnWidth)
         let height = Int(PrototypeLayout.rowHeight)
@@ -492,12 +438,6 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
                 XCTAssertEqual(pixels[inner + 3], 255)
             }
         }
-    }
-
-    private func components(_ color: Color) throws -> (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat) {
-        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-        try XCTUnwrap(UIColor(color).getRed(&red, green: &green, blue: &blue, alpha: &alpha) ? true : nil)
-        return (red, green, blue, alpha)
     }
 
     private func rgbaPixels(_ image: CGImage) throws -> [UInt8] {
