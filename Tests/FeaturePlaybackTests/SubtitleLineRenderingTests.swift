@@ -8,29 +8,29 @@ import XCTest
 
 @MainActor
 final class SubtitleLineRenderingTests: XCTestCase {
-    func testAvenirUsesBuiltInFacesForEveryWeightAndSlant() throws {
+    func testAvenirNextUsesBuiltInFacesForEveryWeightAndSlant() throws {
         let view = SubtitleLineView()
         let faces: [(SubtitleFontWeight, String, String)] = [
-            (.regular, "Avenir-Roman", "Avenir-Oblique"),
-            (.medium, "Avenir-Medium", "Avenir-MediumOblique"),
-            (.semibold, "Avenir-Heavy", "Avenir-HeavyOblique"),
-            (.bold, "Avenir-Black", "Avenir-BlackOblique")
+            (.regular, "AvenirNext-Regular", "AvenirNext-Italic"),
+            (.medium, "AvenirNext-Medium", "AvenirNext-MediumItalic"),
+            (.semibold, "AvenirNext-DemiBold", "AvenirNext-DemiBoldItalic"),
+            (.bold, "AvenirNext-Bold", "AvenirNext-BoldItalic")
         ]
         for (weight, upright, italic) in faces {
             for (isItalic, expected) in [(false, upright), (true, italic)] {
-                var c = config(family: .avenir, size: 42, text: "Avenir")
+                var c = config(family: .avenirNext, size: 42, text: "Avenir Next")
                 c.weight = weight
                 c.isItalic = isItalic
                 let resolved = try XCTUnwrap(view.postScriptName(c))
                 XCTAssertEqual(resolved, expected)
                 let font = try XCTUnwrap(UIFont(name: resolved, size: c.fontSize))
                 XCTAssertEqual(font.fontName, expected)
-                XCTAssertEqual(font.familyName, "Avenir")
+                XCTAssertEqual(font.familyName, "Avenir Next")
                 c.isBold = true
-                XCTAssertEqual(view.postScriptName(c), isItalic ? "Avenir-BlackOblique" : "Avenir-Black")
+                XCTAssertEqual(view.postScriptName(c), isItalic ? "AvenirNext-BoldItalic" : "AvenirNext-Bold")
             }
         }
-        XCTAssertEqual(SubtitleFontFamily.avenir.postScriptNameCandidates(), ["Avenir-Roman"])
+        XCTAssertEqual(SubtitleFontFamily.avenirNext.postScriptNameCandidates(), ["AvenirNext-Regular"])
     }
 
     func testEveryFontHugsItsVisibleBottomAndMatchesCapHeight() throws {

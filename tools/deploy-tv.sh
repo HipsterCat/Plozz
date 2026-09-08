@@ -100,6 +100,9 @@ export GIT_CONFIG_PARAMETERS="${GIT_CONFIG_PARAMETERS-'safe.bareRepository=all'}
 
 source tools/lib/apple-build-lease.sh
 acquire_apple_build_shared_lease "plozz/deploy-tv"
+source tools/lib/swift-package-storage.sh
+PLOZZ_TV_CLONED_SOURCE_PACKAGES="${PLOZZ_TV_CLONED_SOURCE_PACKAGES:-$ROOT/.build/package-workspaces/deploy-tv}"
+configure_plozz_package_resolution "$PLOZZ_TV_CLONED_SOURCE_PACKAGES"
 APPLE_BUILD_LEASE_SIGNALLED=0
 RESTORE_CANONICAL=0
 cleanup_deploy_tv() {
@@ -151,7 +154,8 @@ fi
 if [[ "$CLEAN" == "1" ]]; then
   echo "▸ Cleaning this worktree's DerivedData…"
   DD="$("${BOUNDED[@]}" "$SETTINGS_TIMEOUT" "clean-path build-settings lookup" -- \
-        xcodebuild -project "$PROJECT" -scheme "$SCHEME" -showBuildSettings 2>/dev/null \
+        xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
+        "${PACKAGE_RESOLUTION_ARGS[@]}" -showBuildSettings 2>/dev/null \
         | awk -F' = ' '/ BUILD_DIR /{print $2; exit}')"
   [[ -n "${DD:-}" ]] && rm -rf "$(dirname "$(dirname "$DD")")"
 fi
@@ -208,7 +212,8 @@ fi
 PREBUILD_APP_PATH="$(
   "${BOUNDED[@]}" "$SETTINGS_TIMEOUT" "tvOS build-settings lookup" -- \
     xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" \
-    -destination "$DESTINATION" -showBuildSettings 2>/dev/null \
+    -destination "$DESTINATION" "${PACKAGE_RESOLUTION_ARGS[@]}" \
+    -showBuildSettings 2>/dev/null \
     | awk -F' = ' '/ CODESIGNING_FOLDER_PATH / { print $2; exit }'
 )"
 if [[ -n "$PREBUILD_APP_PATH" ]]; then
@@ -221,6 +226,7 @@ set -o pipefail
   -scheme "$SCHEME" \
   -configuration "$CONFIG" \
   -destination "$DESTINATION" \
+  "${PACKAGE_RESOLUTION_ARGS[@]}" \
   build \
   | { command -v xcbeautify >/dev/null 2>&1 && xcbeautify || cat; }
 
@@ -239,7 +245,8 @@ if [[ -z "$APP_PATH" ]]; then
   APP_PATH="$(
     "${BOUNDED[@]}" "$SETTINGS_TIMEOUT" "post-build tvOS app-path lookup" -- \
       xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" \
-      -destination "$DESTINATION" -showBuildSettings 2>/dev/null \
+      -destination "$DESTINATION" "${PACKAGE_RESOLUTION_ARGS[@]}" \
+      -showBuildSettings 2>/dev/null \
       | awk -F' = ' '/ CODESIGNING_FOLDER_PATH /{print $2; exit}'
   )"
 fi

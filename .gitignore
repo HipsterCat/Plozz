@@ -17,7 +17,6 @@ trace-output/
 .build/
 .build-dd/
 .swiftpm/
-Package.resolved
 
 # macOS
 .DS_Store

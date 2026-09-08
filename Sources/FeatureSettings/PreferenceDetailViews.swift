@@ -144,7 +144,7 @@ struct AppearanceDetailView: View {
                 #if os(tvOS)
                 SettingsDetailGroup(
                     title: "Leaving Plozz",
-                    description: "Keep Plozz open when you press Back in the sidebar or tab bar. Use the TV button to leave."
+                    description: "The Back button won't close the app."
                 ) {
                     Toggle(
                         "Prevent Accidental Exit",

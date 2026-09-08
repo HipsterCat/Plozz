@@ -19,6 +19,7 @@ jobs:
     runs-on: macos-15
     env:
       GIT_CONFIG_PARAMETERS: "'safe.bareRepository=all'"
+      PLOZZ_CLONED_SOURCE_PACKAGES: ${{ runner.temp }}/plozz-source-packages
     steps:
       - uses: actions/checkout@v5
 
@@ -55,6 +56,9 @@ jobs:
       - name: Release notes regression tests
         run: python3 -m unittest discover -s tools/tests -p 'test_release_notes*.py'
 
+      - name: Package storage regression tests
+        run: python3 -m unittest discover -s tools/tests -p 'test_package_storage.py'
+
       # Validates the artifact translators actually receive: brands marked
       # non-translatable, no keys without words in them, every counted string
       # carrying plural variations, and the permission prompts in each
@@ -87,10 +91,13 @@ jobs:
       - name: Build (tvOS Simulator)
         run: |
           set -o pipefail
+          source tools/lib/swift-package-storage.sh
+          configure_plozz_package_resolution "$PLOZZ_CLONED_SOURCE_PACKAGES"
           tools/with-apple-build-lease.sh plozz/ci-tvos-build -- xcodebuild build \
             -project Plozz.xcodeproj \
             -scheme Plozz \
             -destination 'generic/platform=tvOS Simulator' \
+            "${PACKAGE_RESOLUTION_ARGS[@]}" \
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=YES \
             CODE_SIGNING_ALLOWED=NO
