@@ -256,12 +256,12 @@ struct PlozziOSHeroRequest {
     var actingName: String?
     var onRequest: (MediaItem) -> Void
     /// For a **series**: the loaded Seerr season-request availability (nil while it
-    /// loads), plus a per-season request callback. When both are present and there
-    /// is season content, the Request CTA becomes a season-picker menu ("Request
-    /// All Seasons" + per-season) instead of a one-tap whole-title request. Movies
-    /// (and series whose availability hasn't loaded yet) keep the one-tap button.
+    /// loads), plus per-season request/refresh callbacks. Series never fall back to
+    /// a whole-title request while coverage is unresolved.
     var seasonAvailability: MediaRequestAvailability? = nil
     var onRequestSeasons: (([Int]) -> Void)? = nil
+    var seasonRefreshFailed = false
+    var onRefreshSeasons: (() -> Void)? = nil
 }
 
 /// The shared Seerr request / download-status CTA for both the Home and detail
@@ -275,63 +275,95 @@ struct PlozziOSHeroRequestButton: View {
     let request: PlozziOSHeroRequest
 
     var body: some View {
-        switch request.cta {
-        case .request:
-            if item.kind == .series,
-               let onRequestSeasons = request.onRequestSeasons,
-               let availability = request.seasonAvailability,
-               availability.hasSeasonRequestContent {
+        if showsSeasonRequestControl,
+           let onRequestSeasons = request.onRequestSeasons {
+            if let availability = request.seasonAvailability {
+                let presentation = SeasonRequestPresentation(
+                    availability: availability,
+                    isSubmitting: request.isRequesting
+                )
+                let accessibilityHint =
+                    presentation.detail
+                    ?? "Choose seasons and review their request status."
+                let accessibilityHintText = request.actingName.map {
+                    Text(
+                        "Requests as \($0). Choose seasons and review their request status."
+                    )
+                } ?? Text(accessibilityHint)
                 Menu {
                     SeasonRequestMenuContent(
                         availability: availability,
+                        isSubmitting: request.isRequesting,
+                        refreshFailed: request.seasonRefreshFailed,
+                        onRefresh: request.onRefreshSeasons,
                         onRequest: onRequestSeasons
                     )
                 } label: {
-                    requestLabel
-                }
-                .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
-                .disabled(request.isRequesting)
-                .accessibilityLabel(
-                    request.actingName.map { "Request seasons as \($0)" }
-                        ?? "Request seasons"
-                )
-            } else {
-                Button {
-                    request.onRequest(item)
-                } label: {
-                    requestLabel
-                }
-                .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
-                .disabled(request.isRequesting)
-                .accessibilityLabel(
-                    request.actingName.map { "Request as \($0)" } ?? "Request"
-                )
-            }
-        case .requested:
-            statusPill {
-                Label("Requested", systemImage: "clock")
-            }
-        case let .downloading(progress):
-            statusPill {
-                HStack(spacing: 10) {
-                    Image(systemName: "arrow.down.circle")
-                    ResumeProgressCapsule(
-                        progress: progress,
-                        // The status pill uses the secondary (card) surface, so
-                        // the bar's ink tracks the *palette* lightness — dark ink
-                        // on a light theme, light ink on dark — not the raw
-                        // colour scheme (which left a dark bar on the dark pill).
-                        onLight: palette.isLight,
-                        width: 54,
-                        height: 5,
-                        floorsMinimumFill: false
+                    PlozziOSSeasonRequestSummaryLabel(
+                        presentation: presentation
                     )
-                    Text("\(Int((progress * 100).rounded()))%")
-                        .lineLimit(1)
                 }
+                .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
+                .accessibilityLabel(Text(presentation.title))
+                .accessibilityHint(accessibilityHintText)
+            } else if request.seasonRefreshFailed,
+                      let onRefreshSeasons = request.onRefreshSeasons {
+                Button(action: onRefreshSeasons) {
+                    Label("Retry Season Status", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
+            } else {
+                Button {} label: {
+                    Label("Loading Seasons…", systemImage: "clock")
+                }
+                .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
+                .disabled(true)
             }
-        case .play, .unavailable:
-            EmptyView()
+        } else {
+            switch request.cta {
+            case .request:
+                if item.kind == .series {
+                    Label("Season Status Unavailable", systemImage: "exclamationmark.circle")
+                        .font(.subheadline)
+                } else {
+                    Button {
+                        request.onRequest(item)
+                    } label: {
+                        requestLabel
+                    }
+                    .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
+                    .disabled(request.isRequesting)
+                    .accessibilityLabel(
+                        request.actingName.map { Text("Request as \($0)") }
+                            ?? Text("Request")
+                    )
+                }
+            case .requested:
+                statusPill {
+                    Label("Requested", systemImage: "clock")
+                }
+            case let .downloading(progress):
+                statusPill {
+                    DownloadProgressButtonLabel(
+                        progress: progress,
+                        onLight: palette.isLight
+                    )
+                }
+            case .play, .unavailable:
+                EmptyView()
+            }
+        }
+    }
+
+    private var showsSeasonRequestControl: Bool {
+        guard item.kind == .series, request.onRequestSeasons != nil else {
+            return false
+        }
+        switch request.cta {
+        case .play:
+            return false
+        case .request, .requested, .downloading, .unavailable:
+            return true
         }
     }
 
@@ -349,6 +381,27 @@ struct PlozziOSHeroRequestButton: View {
             ProgressView()
         } else {
             Label("Request", systemImage: "plus.circle")
+        }
+    }
+
+}
+
+struct PlozziOSSeasonRequestSummaryLabel: View {
+    let presentation: SeasonRequestPresentation
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: presentation.systemImage)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(presentation.title)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let detail = presentation.detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 }
@@ -1532,10 +1585,12 @@ struct PlozziOSHomeHeroForeground: View {
             // the progress bar) so the row fits instead of wrapping. A vertical
             // stack is only the last resort (e.g. very large Dynamic Type).
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { actionButtons(resumeTrailingStyle: .full) }
-                HStack(spacing: 12) { actionButtons(resumeTrailingStyle: .seasonEpisodeOnly) }
-                HStack(spacing: 12) { actionButtons(resumeTrailingStyle: .hidden) }
-                VStack(spacing: 12) { actionButtons(resumeTrailingStyle: .full) }
+                HeroActionRow { actionButtons(resumeTrailingStyle: .full) }
+                HeroActionRow { actionButtons(resumeTrailingStyle: .seasonEpisodeOnly) }
+                HeroActionRow { actionButtons(resumeTrailingStyle: .hidden) }
+                HeroActionRow(stacksVertically: true) {
+                    actionButtons(resumeTrailingStyle: .full, wrapsText: true)
+                }
             }
             .controlSize(.large)
         }
@@ -1545,7 +1600,8 @@ struct PlozziOSHomeHeroForeground: View {
 
     @ViewBuilder
     private func actionButtons(
-        resumeTrailingStyle: PlayResumeButtonLabel.ResumeTrailingStyle
+        resumeTrailingStyle: PlayResumeButtonLabel.ResumeTrailingStyle,
+        wrapsText: Bool = false
     ) -> some View {
         if hasPlayAction {
             Button {
@@ -1560,7 +1616,8 @@ struct PlozziOSHomeHeroForeground: View {
                     spacing: 10,
                     capsuleWidth: 60,
                     resumeTrailingStyle: resumeTrailingStyle,
-                    separatesEpisodeText: item.startsWatching
+                    separatesEpisodeText: item.startsWatching,
+                    wrapsText: wrapsText
                 )
             }
             .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
@@ -1795,7 +1852,9 @@ private struct PlozziOSDetailHeroForeground: View {
             asyncFallbackURL: { await ArtworkRouter.shared.artworkURL(.thumbnail, for: item) },
             pinIdentity: item.stablePresentationID
         ) {
-            MediaArtworkPlaceholder()
+            MediaArtworkPlaceholder(
+                symbol: .init(for: item), cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius
+            )
         }
         .blur(radius: appModel.settings.spoilers.settings.shouldHideThumbnail(for: item) ? 24 : 0)
         .aspectRatio(16 / 9, contentMode: .fit)
@@ -1868,6 +1927,12 @@ private struct PlozziOSDetailHeroForeground: View {
                     collapsing: orderedInlineExtras.count,
                     labelledTrailer: false,
                     resume: .hidden
+                )
+                actionRow(
+                    collapsing: orderedInlineExtras.count,
+                    labelledTrailer: false,
+                    resume: .full,
+                    stacksVertically: true
                 )
             }
             .controlSize(.large)
@@ -2033,7 +2098,8 @@ private struct PlozziOSDetailHeroForeground: View {
     private func actionRow(
         collapsing collapseCount: Int,
         labelledTrailer: Bool,
-        resume: PlayResumeButtonLabel.ResumeTrailingStyle
+        resume: PlayResumeButtonLabel.ResumeTrailingStyle,
+        stacksVertically: Bool = false
     ) -> some View {
         let extras = orderedInlineExtras
         // Fold by priority, then render what survives in display order, so the
@@ -2051,8 +2117,11 @@ private struct PlozziOSDetailHeroForeground: View {
             .map(\.element)
         let collapsed = doomed.map(\.element)
         let menu = menuActions(collapsing: collapsed)
-        return HStack(spacing: 12) {
-            playActionButton(resume: resume)
+        return HeroActionRow(
+            stacksVertically: stacksVertically,
+            alignment: style == .compactPortrait ? .center : .leading
+        ) {
+            playActionButton(resume: resume, wrapsText: stacksVertically)
             heroRequestButton
             ForEach(inline) { extra in
                 inlineExtraButton(extra, labelled: labelledTrailer)
@@ -2129,7 +2198,8 @@ private struct PlozziOSDetailHeroForeground: View {
 
     @ViewBuilder
     private func playActionButton(
-        resume: PlayResumeButtonLabel.ResumeTrailingStyle = .full
+        resume: PlayResumeButtonLabel.ResumeTrailingStyle = .full,
+        wrapsText: Bool = false
     ) -> some View {
         if playableItem != nil || showsPlayPlaceholder {
             Button {
@@ -2145,11 +2215,9 @@ private struct PlozziOSDetailHeroForeground: View {
                     capsuleWidth: 60,
                     resumeTrailingStyle: resume,
                     isPlaceholder: playableItem == nil,
-                    separatesEpisodeText: playableItem?.startsWatching ?? false
+                    separatesEpisodeText: playableItem?.startsWatching ?? false,
+                    wrapsText: wrapsText
                 )
-                // ViewThatFits can only collapse lower-priority actions when the
-                // Play label reports its readable width instead of truncating.
-                .fixedSize(horizontal: true, vertical: false)
             }
             .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
             .disabled(playableItem == nil)
@@ -2543,6 +2611,8 @@ private struct PlozziOSHeroActionButtonStyle: ButtonStyle {
                 }
         } else {
             configuration.label
+            .lineLimit(nil)
+            .fixedSize(horizontal: false, vertical: true)
             .font(.headline.weight(.semibold))
             .foregroundStyle(
                 kind == .primary

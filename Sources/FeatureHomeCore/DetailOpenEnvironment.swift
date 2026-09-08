@@ -43,6 +43,10 @@ public struct DetailOpenEnvironment {
     /// Refreshes a discovery (Seerr) title's request/availability. `nil` when Seerr
     /// isn't wired.
     public let discoveryStatusRefresh: (@Sendable (MediaItem) async -> (MediaAvailabilityStatus, Double?)?)?
+    /// Loads a series season's complete canonical episode metadata roster.
+    /// `nil` leaves roster-backed season coverage unavailable.
+    public let loadSeasonEpisodeRoster:
+        (@Sendable (MediaItem, Int) async -> SeasonEpisodeRosterResult)?
     /// Builds the Related row's loader. A closure rather than a value because the
     /// loader holds per-page state, so each detail page needs its own.
     /// `nil` leaves the row absent.
@@ -59,6 +63,8 @@ public struct DetailOpenEnvironment {
         continueWatchingSnapshot: @escaping @MainActor () -> [MediaItem] = { [] },
         ratingsProvider: any ExternalRatingsProviding = DisabledRatingsProvider(),
         discoveryStatusRefresh: (@Sendable (MediaItem) async -> (MediaAvailabilityStatus, Double?)?)? = nil,
+        loadSeasonEpisodeRoster:
+            (@Sendable (MediaItem, Int) async -> SeasonEpisodeRosterResult)? = nil,
         makeRelatedTitlesLoader:
             (@MainActor (RelatedTitlesLoader.DisplayMode) -> RelatedTitlesLoader?)? = nil,
         snapshotCache: DetailSnapshotCache = .ephemeral
@@ -70,6 +76,7 @@ public struct DetailOpenEnvironment {
         self.crossServerSourceResolver = crossServerSourceResolver
         self.ratingsProvider = ratingsProvider
         self.discoveryStatusRefresh = discoveryStatusRefresh
+        self.loadSeasonEpisodeRoster = loadSeasonEpisodeRoster
         self.makeRelatedTitlesLoader = makeRelatedTitlesLoader
         self.snapshotCache = snapshotCache
     }
@@ -217,6 +224,7 @@ public struct DetailOpenEnvironment {
             initialResumeEpisode: selectedItem.kind == .series ? resume : nil,
             isDiscoveryItem: isDiscovery,
             discoveryStatusRefresh: discoveryStatusRefresh,
+            loadSeasonEpisodeRoster: loadSeasonEpisodeRoster,
             ratingsProvider: ratingsProvider,
             sourceAccountID: selectedSource?.accountID ?? item.sourceAccountID,
             originSourceAccountID: libraryOrigin,
@@ -287,6 +295,7 @@ public struct DetailOpenEnvironment {
             initialResumeEpisode: DetailPlaybackSelection.resumeItem(
                 for: series, in: continueWatchingSnapshot()
             ),
+            loadSeasonEpisodeRoster: loadSeasonEpisodeRoster,
             ratingsProvider: ratingsProvider,
             sourceAccountID: sourceAccountID,
             originSourceAccountID: originAccountID,

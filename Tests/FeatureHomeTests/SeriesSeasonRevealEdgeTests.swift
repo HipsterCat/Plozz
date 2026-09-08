@@ -156,33 +156,6 @@ final class SeriesDetailBrowserPolicyTests: XCTestCase {
         ))
     }
 
-    func testRequestAccessoryCopyReflectsAvailableActions() {
-        XCTAssertEqual(
-            SeriesRequestAccessoryPresentation.title(hasRequestable: true, isRequesting: false),
-            "Request More"
-        )
-        XCTAssertEqual(
-            SeriesRequestAccessoryPresentation.title(hasRequestable: false, isRequesting: false),
-            "Season Requests"
-        )
-        XCTAssertEqual(
-            SeriesRequestAccessoryPresentation.title(hasRequestable: true, isRequesting: true),
-            "Requesting…"
-        )
-        XCTAssertEqual(
-            SeriesRequestAccessoryPresentation.systemImage(hasRequestable: true, isRequesting: false),
-            "plus.circle"
-        )
-        XCTAssertEqual(
-            SeriesRequestAccessoryPresentation.systemImage(hasRequestable: false, isRequesting: false),
-            "clock.arrow.circlepath"
-        )
-        XCTAssertEqual(
-            SeriesRequestAccessoryPresentation.systemImage(hasRequestable: true, isRequesting: true),
-            "clock.arrow.circlepath"
-        )
-    }
-
     func testDiscoverySeriesInactiveCopyDistinguishesLoadingFromEmpty() {
         XCTAssertEqual(
             SeasonRequestHeroPresentation.inactiveTitle(

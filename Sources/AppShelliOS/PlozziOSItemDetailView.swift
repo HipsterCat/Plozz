@@ -163,6 +163,7 @@ struct PlozziOSItemDetailView: View {
 private struct PlozziOSCanonicalItemDetailView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.themePalette) private var palette
     @Environment(HeroTrailerController.self) private var trailerController
     @Environment(PlozziOSAppModel.self) private var appModel
@@ -179,7 +180,13 @@ private struct PlozziOSCanonicalItemDetailView: View {
     @State private var isRequesting = false
     @State private var requestConfirmationItem: MediaItem?
     @State private var requestConfirmationSeasons: [Int]?
-    @State private var seasonRequestAvailability: MediaRequestAvailability?
+    @State private var requestConfirmationContext: String?
+    @State private var seasonRequestState = SeasonRequestState()
+    @State private var seasonRequestScope: String?
+    @State private var seasonRequestRefreshID = UUID()
+    @State private var seasonRequestRefreshFailed = false
+    @State private var isRefreshingSeasonRequests = false
+    @State private var seasonRequestRetryToken = 0
     @State private var requestStatusOverride: MediaAvailabilityStatus?
     @State private var sourceOverride: String?
     @State private var versionOverride: String?
@@ -265,6 +272,9 @@ private struct PlozziOSCanonicalItemDetailView: View {
                 initialResumeEpisode: selectedItem.kind == .series ? resume : nil,
                 isDiscoveryItem: isDiscoveryItem,
                 discoveryStatusRefresh: discoveryStatusRefresh,
+                loadSeasonEpisodeRoster: { [seer = appModel.seerService] item, number in
+                    await seer.seasonEpisodeRoster(for: item, seasonNumber: number)
+                },
                 ratingsProvider: RatingsServiceFactory.make(),
                 sourceAccountID: selectedSource?.accountID ?? item.sourceAccountID,
                 originSourceAccountID: originSourceAccountID,
@@ -330,17 +340,13 @@ private struct PlozziOSCanonicalItemDetailView: View {
                 }
 
                 if let detail = viewModel.state.value,
-                   detail.item.kind == .series,
-                   !isDiscoveryItem,
-                   detail.children.contains(where: {
-                       $0.kind == .season || $0.kind == .episode
-                   }) {
+                   seriesDownloadPresentation(for: detail).isVisible {
                     Button {
                         presentsSeriesDownloads = true
                     } label: {
                         Image(systemName: "arrow.down.circle")
                     }
-                    .accessibilityLabel("Download Show")
+                    .accessibilityLabel("Manage Seasons")
                 }
             }
         }
@@ -351,13 +357,26 @@ private struct PlozziOSCanonicalItemDetailView: View {
                     seasons: detail.children.filter { $0.kind == .season },
                     looseEpisodes: detail.children.filter { $0.kind == .episode },
                     viewModel: viewModel,
+                    presentation: seriesDownloadPresentation(for: detail),
+                    seasonRequestAvailability: currentSeasonRequestAvailability(for: detail),
+                    isRequestingSeasons: isRequesting,
+                    isRefreshingSeasons: seasonRequestScope == seasonRequestScopeKey(for: detail)
+                        && isRefreshingSeasonRequests,
+                    seasonRequestRefreshFailed: currentSeasonRequestRefreshFailed(for: detail),
+                    requestActingName: appModel.activeSeerrRequestActingName,
+                    onRefreshSeasonRequests: { seasonRequestRetryToken &+= 1 },
+                    onRequestSeasons: { beginRequest(detail.item, seasons: $0) },
                     onDownloadBatch: downloadBatch,
                     onDownloadSeason: downloadSeason,
                     onDownloadEpisode: downloadEpisode
                 )
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+                .modifier(requestPresentation(inDownloadSheet: true))
             }
+        }
+        .onChange(of: presentsSeriesDownloads) { _, isPresented in
+            if isPresented { seasonRequestRetryToken &+= 1 }
         }
         .task { await viewModel.load() }
         .onChange(of: viewModel.serverResumeEpisode) { _, resume in
@@ -370,17 +389,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
             seriesPlayTarget = seed
             seriesHeroShowsSeries = false
         }
-        .alert(
-            Text(verbatim: "Seerr"),
-            isPresented: Binding(
-                get: { requestError != nil },
-                set: { if !$0 { requestError = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            requestError.map { Text($0) } ?? Text(verbatim: "")
-        }
+        .modifier(requestPresentation(inDownloadSheet: false))
         .fullScreenCover(item: $playbackRequest) {
             if let playbackProvider = appModel.provider(for: $0.item) {
                 PlozziOSPlayerView(request: $0, provider: playbackProvider)
@@ -391,38 +400,6 @@ private struct PlozziOSCanonicalItemDetailView: View {
                     description: Text("Reconnect the selected server and try again.")
                 )
             }
-        }
-        .confirmationDialog(
-            "Request as Administrator?",
-            isPresented: Binding(
-                get: { requestConfirmationItem != nil },
-                set: {
-                    if !$0 {
-                        requestConfirmationItem = nil
-                        requestConfirmationSeasons = nil
-                    }
-                }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Request as Administrator") {
-                guard let item = requestConfirmationItem else { return }
-                let seasons = requestConfirmationSeasons
-                requestConfirmationItem = nil
-                requestConfirmationSeasons = nil
-                Task { await request(item, seasons: seasons) }
-            }
-            Button("Cancel", role: .cancel) {
-                requestConfirmationItem = nil
-                requestConfirmationSeasons = nil
-            }
-        } message: {
-            Text(
-                """
-                This profile isn’t linked to a Seerr user. \
-                The request will use the unrestricted administrator account.
-                """
-            )
         }
     }
 
@@ -521,15 +498,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
                             hasResolvedSeriesPlayTarget = true
                         },
                         onHeroShowsSeriesChange: { seriesHeroShowsSeries = $0 },
-                        onPlay: play,
-                        seasonRequestAvailability: isDiscoveryItem
-                            ? nil
-                            : seasonRequestAvailability,
-                        isRequestingSeasons: isRequesting,
-                        seasonRequestError: requestError,
-                        onRequestSeasons: {
-                            beginRequest(detail.item, seasons: $0)
-                        }
+                        onPlay: play
                     )
                 }
 
@@ -539,7 +508,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
                         availability: requestStatusOverride ?? detail.item.availability ?? .unknown,
                         isRequesting: isRequesting,
                         errorMessage: requestError,
-                        actingName: appModel.activeSeerrUserName,
+                        actingName: appModel.activeSeerrRequestActingName,
                         onRequest: { beginRequest($0) }
                     )
                     .padding(.horizontal, pageInset)
@@ -608,8 +577,8 @@ private struct PlozziOSCanonicalItemDetailView: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .navigationTitle(Text(verbatim: ""))
-        .task(id: seasonRequestLookupID(for: detail)) {
-            await loadSeasonRequestAvailability(for: detail)
+        .task(id: seasonRequestRefreshKey(for: detail)) {
+            await refreshVisibleSeasonRequests(for: detail)
         }
         .task(id: isDiscoveryItem) {
             await pollDiscoveryStatus()
@@ -654,10 +623,6 @@ private struct PlozziOSCanonicalItemDetailView: View {
         PlozziOSPageLayout.horizontalInset(for: horizontalSizeClass)
     }
 
-    /// The Seerr request CTA shown in the hero for a discovery **movie or series**.
-    /// Movies get a one-tap request; series get a season-picker menu (once the
-    /// season availability has loaded) so you choose which seasons to request.
-    /// `nil` for in-library items and other kinds.
     /// Whether this page's subject is an episode in its own right, rather than a
     /// season/series page fronting one. iOS carries an explicit flag for this
     /// (set only by the menu's "Episode Info" route), unlike tvOS which infers
@@ -666,10 +631,10 @@ private struct PlozziOSCanonicalItemDetailView: View {
         presentsEpisodeAsSubject && item.kind == .episode
     }
 
+    /// Series requests live in the download sheet; movie requests stay in the hero.
     private func heroRequest(for item: MediaItem) -> PlozziOSHeroRequest? {
-        guard isDiscoveryItem, item.kind == .movie || item.kind == .series else { return nil }
+        guard isDiscoveryItem, item.kind == .movie else { return nil }
         let availability = requestStatusOverride ?? item.availability
-        let isSeries = item.kind == .series
         return PlozziOSHeroRequest(
             cta: MediaItem.heroCTA(
                 availability: availability,
@@ -681,10 +646,33 @@ private struct PlozziOSCanonicalItemDetailView: View {
                 seerConnected: appModel.seerService.isConfigured
             ),
             isRequesting: isRequesting,
-            actingName: appModel.activeSeerrUserName,
-            onRequest: { beginRequest($0) },
-            seasonAvailability: isSeries ? seasonRequestAvailability : nil,
-            onRequestSeasons: isSeries ? { beginRequest(item, seasons: $0) } : nil
+            actingName: appModel.activeSeerrRequestActingName,
+            onRequest: { beginRequest($0) }
+        )
+    }
+
+    private func seriesDownloadPresentation(
+        for detail: ItemDetailViewModel.Detail
+    ) -> SeriesDownloadPresentation {
+        SeriesDownloadPresentation(
+            item: detail.item,
+            children: detail.children,
+            isDiscoveryItem: isDiscoveryItem,
+            seerConnected: seerService?.isConfigured == true
+        )
+    }
+
+    private func requestPresentation(inDownloadSheet: Bool) -> PlozziOSRequestPresentation {
+        PlozziOSRequestPresentation(
+            presentsDownloads: $presentsSeriesDownloads,
+            isSheet: inDownloadSheet,
+            error: $requestError,
+            confirmationItem: $requestConfirmationItem,
+            confirmationSeasons: $requestConfirmationSeasons,
+            confirmationContext: $requestConfirmationContext,
+            onConfirm: { item, seasons, context in
+                Task { await request(item, seasons: seasons, context: context) }
+            }
         )
     }
 
@@ -966,15 +954,46 @@ private struct PlozziOSCanonicalItemDetailView: View {
     }
 
     private func beginRequest(_ item: MediaItem, seasons: [Int]? = nil) {
-        if appModel.activeSeerrUserID == nil, appModel.profiles.profiles.count > 1 {
-            requestConfirmationItem = item
-            requestConfirmationSeasons = seasons
+        let context = appModel.plozziOSSeasonRequestContextID
+        let selectedSeasons: [Int]?
+        if let seasons {
+            guard let detail = viewModel.state.value,
+                  seasonRequestScope == seasonRequestScopeKey(for: detail),
+                  SeasonRequestState.itemKey(for: item) == SeasonRequestState.itemKey(for: detail.item) else {
+                seasonRequestRetryToken &+= 1
+                return
+            }
+            let eligible = Set(
+                seasonRequestState.availability?.requestableSeasonNumbers ?? []
+            )
+            let selected = Set(seasons).intersection(eligible).sorted()
+            guard !selected.isEmpty else {
+                seasonRequestRetryToken &+= 1
+                return
+            }
+            selectedSeasons = selected
         } else {
-            Task { await request(item, seasons: seasons) }
+            selectedSeasons = nil
+        }
+        if appModel.activeSeerrRequestIdentity == .admin,
+           appModel.profiles.profiles.count > 1 {
+            requestConfirmationItem = item
+            requestConfirmationSeasons = selectedSeasons
+            requestConfirmationContext = context
+        } else {
+            Task { await request(item, seasons: selectedSeasons, context: context) }
         }
     }
 
-    private func request(_ item: MediaItem, seasons: [Int]? = nil) async {
+    private func request(
+        _ item: MediaItem,
+        seasons: [Int]? = nil,
+        context: String
+    ) async {
+        guard context == appModel.plozziOSSeasonRequestContextID else {
+            requestError = "The request server or profile changed. Review the request and try again."
+            return
+        }
         guard let seerService else {
             requestError = "Connect Overseerr or Jellyseerr in Settings first."
             return
@@ -982,60 +1001,172 @@ private struct PlozziOSCanonicalItemDetailView: View {
         isRequesting = true
         requestError = nil
         defer { isRequesting = false }
+        let requestScope = seasonRequestScope
         let outcome = await seerService.request(
             item,
             seasons: seasons,
-            actingUserID: appModel.activeSeerrUserID
+            identity: appModel.activeSeerrRequestIdentity
         )
+        guard context == appModel.plozziOSSeasonRequestContextID else { return }
         switch outcome {
         case let .success(status):
             if let seasons {
-                seasonRequestAvailability = seasonRequestAvailability?
-                    .markingRequested(seasons)
+                guard requestScope == seasonRequestScope else { return }
+                seasonRequestState.accept(seasons)
+                seasonRequestRetryToken &+= 1
+                await refreshSeasonRequestAvailability(for: item)
             } else {
                 requestStatusOverride = status
+                await viewModel.load()
             }
-            await viewModel.load()
         case .failure(.alreadyRequested):
-            // Seerr already tracks this title — the seeded availability was
-            // stale. Pull the real status so the CTA reflects reality instead of
-            // showing a misleading error.
-            if let status = await appModel.seerService.availability(for: item) {
-                requestStatusOverride = status.0
+            if let seasons {
+                guard requestScope == seasonRequestScope else { return }
+                let refreshed = await refreshSeasonRequestAvailability(for: item)
+                if refreshed { seasonRequestRetryToken &+= 1 }
+                let stillRequestable = Set(
+                    seasonRequestState.availability?
+                        .requestableSeasonNumbers ?? []
+                ).isDisjoint(with: seasons) == false
+                if !refreshed || stillRequestable {
+                    requestError =
+                        "This season is already requested. Refresh status to see the latest state."
+                }
+            } else {
+                // Seerr already tracks this title — the seeded availability was
+                // stale. Pull the real status so the CTA reflects reality instead of
+                // showing a misleading error.
+                if let status = await appModel.seerService.availability(for: item) {
+                    requestStatusOverride = status.0
+                }
+                await viewModel.load()
             }
-            await viewModel.load()
         case let .failure(reason):
             requestError = reason.userMessage
         }
     }
 
-    private func loadSeasonRequestAvailability(
+    private func refreshVisibleSeasonRequests(
         for detail: ItemDetailViewModel.Detail
     ) async {
-        guard detail.item.kind == .series,
-              let seerService,
-              seerService.isConfigured else {
-            seasonRequestAvailability = nil
-            return
+        let scope = seasonRequestScopeKey(for: detail)
+        if seasonRequestScope != scope {
+            seasonRequestScope = scope
+            seasonRequestState.reset()
+            seasonRequestRefreshFailed = false
+            isRefreshingSeasonRequests = false
+            requestConfirmationItem = nil
+            requestConfirmationSeasons = nil
+            requestConfirmationContext = nil
         }
-        seasonRequestAvailability = await seerService
-            .requestAvailability(for: detail.item)?
-            .markingAvailable(
-                detail.children.compactMap {
-                    $0.kind == .season || $0.kind == .episode
-                        ? $0.seasonNumber
-                        : nil
-                }
-            )
+        guard scope != "disabled", scenePhase == .active else { return }
+        repeat {
+            await refreshSeasonRequestAvailability(for: detail.item)
+            guard !seasonRequestRefreshFailed,
+                  seasonRequestState.availability?.seasons
+                    .contains(where: \.isInFlight) == true,
+                  !Task.isCancelled else {
+                return
+            }
+            do {
+                try await Task.sleep(for: .seconds(20))
+            } catch {
+                return
+            }
+        } while !Task.isCancelled
     }
 
-    private func seasonRequestLookupID(
+    @discardableResult
+    private func refreshSeasonRequestAvailability(
+        for item: MediaItem
+    ) async -> Bool {
+        guard let detail = viewModel.state.value,
+              detail.item.id == item.id else {
+            return false
+        }
+        let scope = seasonRequestScopeKey(for: detail)
+        let refreshID = UUID()
+        seasonRequestRefreshID = refreshID
+        guard scope != "disabled",
+              let seerService,
+              seerService.isConfigured else {
+            seasonRequestState.reset()
+            seasonRequestRefreshFailed = false
+            isRefreshingSeasonRequests = false
+            return false
+        }
+        isRefreshingSeasonRequests = true
+        defer {
+            if seasonRequestRefreshID == refreshID {
+                isRefreshingSeasonRequests = false
+            }
+        }
+        let refreshed = await seerService.requestAvailability(for: item)
+        guard !Task.isCancelled,
+              seasonRequestScope == scope,
+              viewModel.state.value.map({ seasonRequestScopeKey(for: $0) }) == scope,
+              seasonRequestRefreshID == refreshID,
+              viewModel.state.value?.item.id == item.id else {
+            return false
+        }
+        guard let refreshed else {
+            seasonRequestRefreshFailed = true
+            return false
+        }
+        let presentSeasonNumbers = detail.children.compactMap {
+            ($0.kind == .season || $0.kind == .episode) && $0.locallyValidatedPlayableSource
+                ? $0.seasonNumber
+                : nil
+        }
+        seasonRequestState.apply(
+            refreshed,
+            presentInLibrary: presentSeasonNumbers
+        )
+        seasonRequestRefreshFailed = false
+        return true
+    }
+
+    private func seasonRequestScopeKey(
+        for detail: ItemDetailViewModel.Detail
+    ) -> String {
+        guard seriesDownloadPresentation(for: detail).canRequestSeasons else {
+            return "disabled"
+        }
+        return [
+            appModel.plozziOSSeasonRequestContextID,
+            detail.item.sourceAccountID ?? "_",
+            detail.item.id,
+            detail.item.providerIDs["Tmdb"] ?? "_"
+        ].joined(separator: "|")
+    }
+
+    private func currentSeasonRequestAvailability(
+        for detail: ItemDetailViewModel.Detail
+    ) -> MediaRequestAvailability? {
+        seasonRequestScope == seasonRequestScopeKey(for: detail)
+            ? seasonRequestState.availability
+            : nil
+    }
+
+    private func currentSeasonRequestRefreshFailed(
+        for detail: ItemDetailViewModel.Detail
+    ) -> Bool {
+        seasonRequestScope == seasonRequestScopeKey(for: detail)
+            && seasonRequestRefreshFailed
+    }
+
+    private func seasonRequestRefreshKey(
         for detail: ItemDetailViewModel.Detail
     ) -> String {
         let seasons = detail.children.compactMap(\.seasonNumber)
             .map(String.init)
             .joined(separator: ",")
-        return "\(detail.item.id):\(seasons):\(seerService?.isConfigured == true)"
+        return [
+            seasonRequestScopeKey(for: detail),
+            seasons,
+            String(seasonRequestRetryToken),
+            scenePhase == .active ? "active" : "inactive"
+        ].joined(separator: "|")
     }
 
     private func requestFailureMessage(_ reason: SeerRequestFailure) -> LocalizedStringResource {
@@ -1274,7 +1405,7 @@ private struct PlozziOSRequestAction: View {
                 Label("Requested — awaiting approval", systemImage: "clock")
                     .foregroundStyle(.orange)
             case .processing:
-                Label("Downloading", systemImage: "arrow.down.circle")
+                Label("Library Request Processing", systemImage: "arrow.down.circle")
                     .foregroundStyle(.blue)
             case .partiallyAvailable:
                 Label("Partially available", systemImage: "circle.lefthalf.filled")
@@ -1292,73 +1423,60 @@ private struct PlozziOSRequestAction: View {
     }
 }
 
-private struct PlozziOSSeasonRequestMenu: View {
-    let availability: MediaRequestAvailability
-    let isRequesting: Bool
-    let onRequest: ([Int]) -> Void
+private struct PlozziOSRequestPresentation: ViewModifier {
+    @Binding var presentsDownloads: Bool
+    let isSheet: Bool
+    @Binding var error: LocalizedStringResource?
+    @Binding var confirmationItem: MediaItem?
+    @Binding var confirmationSeasons: [Int]?
+    @Binding var confirmationContext: String?
+    let onConfirm: (MediaItem, [Int]?, String) -> Void
 
-    private var seasons: [MediaSeasonRequestState] {
-        availability.requestPickerSeasons
-    }
+    private var isEnabled: Bool { presentsDownloads == isSheet }
 
-    private var requestableSeasons: [MediaSeasonRequestState] {
-        seasons.filter(\.isRequestable)
-    }
-
-    var body: some View {
-        Menu {
-            if requestableSeasons.count > 1 {
-                Button("Request All Missing Seasons") {
-                    onRequest(requestableSeasons.map(\.number))
+    func body(content: Content) -> some View {
+        content
+            .alert(
+                Text(verbatim: "Seerr"),
+                isPresented: Binding(
+                    get: { isEnabled && error != nil },
+                    set: { if isEnabled && !$0 { error = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                error.map { Text($0) } ?? Text(verbatim: "")
+            }
+            .confirmationDialog(
+                "Request as Administrator?",
+                isPresented: Binding(
+                    get: { isEnabled && confirmationItem != nil },
+                    set: { if isEnabled && !$0 { clearConfirmation() } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Request as Administrator") {
+                    guard let item = confirmationItem,
+                          let context = confirmationContext else { return }
+                    let seasons = confirmationSeasons
+                    clearConfirmation()
+                    onConfirm(item, seasons, context)
                 }
-                Divider()
+                Button("Cancel", role: .cancel, action: clearConfirmation)
+            } message: {
+                Text(
+                    """
+                    This profile isn’t linked to a Seerr user. \
+                    The request will use the unrestricted administrator account.
+                    """
+                )
             }
-
-            ForEach(seasons) { season in
-                if season.requestFailed {
-                    Label(
-                        "\(season.title) — Failed",
-                        systemImage: "exclamationmark.circle"
-                    )
-                } else if season.isRequestable {
-                    Button("Request \(season.title)") {
-                        onRequest([season.number])
-                    }
-                } else {
-                    Label {
-                        Text(verbatim: "\(season.title) — ") + Text(statusText(for: season))
-                    } icon: {
-                        Image(systemName: season.status == .processing ? "arrow.down.circle" : "clock")
-                    }
-                }
-            }
-        } label: {
-            if isRequesting {
-                ProgressView()
-                    .frame(width: 44, height: 44)
-            } else {
-                Image(systemName: "plus.rectangle.on.folder")
-                    .font(.headline)
-                    .frame(width: 44, height: 44)
-            }
-        }
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.circle)
-        .disabled(isRequesting || seasons.isEmpty)
-        .accessibilityLabel("Request missing seasons")
     }
 
-    private func statusText(for season: MediaSeasonRequestState) -> LocalizedStringResource {
-        switch season.status {
-        case .processing:
-            "Processing"
-        case .available, .partiallyAvailable:
-            "Available"
-        case .pending:
-            "Requested"
-        case .unknown, .deleted:
-            season.requestFailed ? "Failed" : "Unavailable"
-        }
+    private func clearConfirmation() {
+        confirmationItem = nil
+        confirmationSeasons = nil
+        confirmationContext = nil
     }
 }
 
@@ -1436,10 +1554,6 @@ private struct PlozziOSInlineSeriesBrowser: View {
     /// Whether the hero should describe the show rather than the play target.
     let onHeroShowsSeriesChange: (Bool) -> Void
     let onPlay: (MediaItem, Bool) -> Void
-    let seasonRequestAvailability: MediaRequestAvailability?
-    let isRequestingSeasons: Bool
-    let seasonRequestError: LocalizedStringResource?
-    let onRequestSeasons: ([Int]) -> Void
 
     init(
         viewModel: ItemDetailViewModel,
@@ -1449,11 +1563,7 @@ private struct PlozziOSInlineSeriesBrowser: View {
         initialEpisode: MediaItem?,
         onPlayTargetChange: @escaping (MediaItem?) -> Void,
         onHeroShowsSeriesChange: @escaping (Bool) -> Void,
-        onPlay: @escaping (MediaItem, Bool) -> Void,
-        seasonRequestAvailability: MediaRequestAvailability?,
-        isRequestingSeasons: Bool,
-        seasonRequestError: LocalizedStringResource?,
-        onRequestSeasons: @escaping ([Int]) -> Void
+        onPlay: @escaping (MediaItem, Bool) -> Void
     ) {
         self.viewModel = viewModel
         self.seasons = seasons
@@ -1463,10 +1573,6 @@ private struct PlozziOSInlineSeriesBrowser: View {
         self.onPlayTargetChange = onPlayTargetChange
         self.onHeroShowsSeriesChange = onHeroShowsSeriesChange
         self.onPlay = onPlay
-        self.seasonRequestAvailability = seasonRequestAvailability
-        self.isRequestingSeasons = isRequestingSeasons
-        self.seasonRequestError = seasonRequestError
-        self.onRequestSeasons = onRequestSeasons
         _selectedSeasonID = State(
             initialValue: SeriesEpisodeEntry.seasonID(
                 initialEpisode: initialEpisode,
@@ -1522,24 +1628,8 @@ private struct PlozziOSInlineSeriesBrowser: View {
                                 }
                             }
                         }
-
-                        if let seasonRequestAvailability,
-                           seasonRequestAvailability.hasSeasonRequestContent {
-                            PlozziOSSeasonRequestMenu(
-                                availability: seasonRequestAvailability,
-                                isRequesting: isRequestingSeasons,
-                                onRequest: onRequestSeasons
-                            )
-                        }
                     }
                     .padding(.trailing, pageInset)
-
-                    if let seasonRequestError {
-                        Text(seasonRequestError)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                            .padding(.horizontal, pageInset)
-                    }
                 }
 
                 PlozziOSInlineEpisodeRail(
@@ -1695,6 +1785,7 @@ private enum PlozziOSSeasonDownloadError: LocalizedError {
 
 private struct PlozziOSSeriesDownloadPicker: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
     @Environment(PlozziOSAppModel.self) private var appModel
     @State private var isBusy = false
     @State private var errorMessage: String?
@@ -1704,6 +1795,14 @@ private struct PlozziOSSeriesDownloadPicker: View {
     let seasons: [MediaItem]
     let looseEpisodes: [MediaItem]
     let viewModel: ItemDetailViewModel
+    let presentation: SeriesDownloadPresentation
+    let seasonRequestAvailability: MediaRequestAvailability?
+    let isRequestingSeasons: Bool
+    let isRefreshingSeasons: Bool
+    let seasonRequestRefreshFailed: Bool
+    let requestActingName: String?
+    let onRefreshSeasonRequests: () -> Void
+    let onRequestSeasons: ([Int]) -> Void
     let onDownloadBatch: (
         [PlozziOSSeasonDownloadPrompt.Batch],
         String,
@@ -1723,51 +1822,74 @@ private struct PlozziOSSeriesDownloadPicker: View {
     ) async throws -> Int
     let onDownloadEpisode: (MediaItem, DownloadQuality?) async throws -> Void
 
+    private var seasonList: SeriesDownloadSeasons {
+        SeriesDownloadSeasons(
+            librarySeasons: presentation.hasLibraryDownloads ? seasons : [],
+            looseEpisodes: presentation.hasLibraryDownloads ? looseEpisodes : [],
+            requestAvailability: presentation.canRequestSeasons ? seasonRequestAvailability : nil
+        )
+    }
+
     var body: some View {
+        let seasonList = self.seasonList
+        let downloadState = presentation.hasLibraryDownloads ? showDownloadState : nil
+        let downloadAction = showDownloadAction
         NavigationStack {
             List {
-                Section {
+                SeriesDownloadActions(
+                    hasDownloads: presentation.hasLibraryDownloads,
+                    canRequestSeasons: presentation.canRequestSeasons,
+                    availability: seasonList.requestAvailability,
+                    isSubmitting: isRequestingSeasons,
+                    isRefreshing: isRefreshingSeasons,
+                    refreshFailed: seasonRequestRefreshFailed,
+                    actingName: requestActingName,
+                    onRefresh: onRefreshSeasonRequests,
+                    onRequest: onRequestSeasons
+                ) {
                     Button(action: beginShowDownload) {
-                        HStack(spacing: 12) {
-                            Text("Download Entire Show")
-                            if completedEpisodeCount > 0,
-                               showDownloadState == nil {
-                                Text(
-                                    "Downloaded: \(completedEpisodeCount.formatted())"
+                        SeriesDownloadActionLabel(
+                            title: downloadAction.title(for: .current),
+                            subtitle: "All available episodes in this show, for offline viewing.",
+                            systemImage: downloadAction.systemImage,
+                            detail: completedEpisodeCount > 0 && downloadState == nil
+                                ? "Downloaded: \(completedEpisodeCount.formatted())"
+                                : nil
+                        ) {
+                            if downloadState != nil || isBusy {
+                                PlozziOSDownloadControl(
+                                    state: downloadState,
+                                    isPreparing: isBusy
                                 )
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                             }
-                            Spacer()
-                            PlozziOSDownloadControl(
-                                state: showDownloadState,
-                                isPreparing: isBusy
-                            )
                         }
-                        .foregroundStyle(.primary)
                     }
                     .buttonStyle(.plain)
-                    .disabled(isBusy)
+                    .disabled(!downloadAction.isEnabled)
                 }
 
-                if !seasons.isEmpty {
-                    Section("Seasons") {
-                        ForEach(seasons) { season in
-                            NavigationLink {
-                                seasonDestination(season)
-                            } label: {
-                                PlozziOSSeasonDownloadRow(
-                                    season: season,
-                                    viewModel: viewModel
-                                )
-                            }
+                if !presentation.isVisible {
+                    ContentUnavailableView(
+                        "No Downloads Available",
+                        systemImage: "arrow.down.circle",
+                        description: Text("Connect Seerr to request missing seasons, or add episodes to your library.")
+                    )
+                }
+
+                if !seasonList.rows.isEmpty {
+                    Section {
+                        ForEach(seasonList.rows) { row in
+                            seasonRow(row)
                         }
+                    } header: {
+                        Text(verbatim: series.title)
+                            .textCase(nil)
                     }
                 }
 
-                if !looseEpisodes.isEmpty {
+                if !seasonList.unassignedEpisodes.isEmpty {
                     Section("Episodes") {
-                        ForEach(looseEpisodes) { episode in
+                        ForEach(seasonList.unassignedEpisodes, id: \.stablePresentationID) { episode in
                             PlozziOSEpisodeDownloadRow(
                                 episode: episode,
                                 isBusy: isBusy,
@@ -1777,7 +1899,10 @@ private struct PlozziOSSeriesDownloadPicker: View {
                     }
                 }
             }
-            .navigationTitle(Text("Download ") + Text(verbatim: series.title))
+            .listStyle(.insetGrouped)
+            .contentMargins(.top, 12, for: .scrollContent)
+            .listSectionSpacing(16)
+            .navigationTitle("Seasons")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1785,6 +1910,15 @@ private struct PlozziOSSeriesDownloadPicker: View {
                         dismiss()
                     }
                     .disabled(isBusy)
+                }
+                if presentation.canRequestSeasons {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        SeasonRequestRefreshButton(
+                            isRefreshing: isRefreshingSeasons,
+                            isSubmitting: isRequestingSeasons,
+                            onRefresh: onRefreshSeasonRequests
+                        )
+                    }
                 }
             }
         }
@@ -1852,18 +1986,97 @@ private struct PlozziOSSeriesDownloadPicker: View {
 
     private var downloadConfirmationTitle: Text {
         if let prompt {
-            return Text(prompt.title)
+            return prompt.title
         }
         return Text("Download?")
     }
 
-    private func seasonDestination(_ season: MediaItem) -> some View {
-        PlozziOSSeasonDownloadPicker(
-            season: season,
+    private var showDownloadAction: SeriesDownloadAction {
+        if isBusy { return .preparing }
+        if activeShowBatchID != nil { return .pause }
+        if pausedShowBatchID != nil { return .resume }
+        return .download
+    }
+
+    @ViewBuilder
+    private func seasonRow(_ row: SeriesDownloadSeason) -> some View {
+        if row.hasLibraryContent {
+            NavigationLink {
+                seasonDestination(row)
+            } label: {
+                PlozziOSSeasonDownloadRow(row: row, series: series, viewModel: viewModel)
+            }
+        } else if row.canRequest, let number = row.number {
+            Button {
+                onRequestSeasons([number])
+            } label: {
+                PlozziOSSeasonDownloadRow(row: row, series: series, viewModel: viewModel)
+            }
+            .buttonStyle(.plain)
+            .disabled(isRequestingSeasons)
+            .accessibilityLabel(Text("Request \(Text(row.title))"))
+        } else {
+            PlozziOSSeasonDownloadRow(row: row, series: series, viewModel: viewModel)
+        }
+    }
+
+    @ViewBuilder
+    private func seasonDestination(_ row: SeriesDownloadSeason) -> some View {
+        if row.librarySeasons.count > 1
+            || (!row.librarySeasons.isEmpty && !row.looseEpisodes.isEmpty) {
+            List {
+                NavigationLink("All Episodes and Versions") {
+                    seasonPicker(row)
+                }
+                ForEach(row.librarySeasons, id: \.stablePresentationID) { librarySeason in
+                    NavigationLink {
+                        seasonPicker(row, selection: .library(librarySeason.stablePresentationID))
+                    } label: {
+                        Text(verbatim: librarySeason.title)
+                    }
+                }
+                if !row.looseEpisodes.isEmpty {
+                    NavigationLink("Other Episodes") {
+                        seasonPicker(row, selection: .loose)
+                    }
+                }
+            }
+            .navigationTitle(Text(row.title))
+            .navigationBarTitleDisplayMode(.inline)
+        } else {
+            seasonPicker(row)
+        }
+    }
+
+    private func seasonPicker(
+        _ row: SeriesDownloadSeason,
+        selection: PlozziOSSeasonDownloadSelection = .all
+    ) -> some View {
+        let container: MediaItem
+        switch selection {
+        case .all: container = row.librarySeasons.first ?? series
+        case .loose: container = series
+        case .library(let id):
+            container = row.librarySeasons.first { $0.stablePresentationID == id } ?? series
+        }
+        return PlozziOSSeasonDownloadPicker(
+            series: series,
+            season: row,
+            selection: selection,
             viewModel: viewModel,
             isBusy: isBusy,
+            canRequestSeasons: presentation.canRequestSeasons,
+            requestState: seasonList.rows.first { $0.id == row.id }?.requestState,
+            isRequestingSeasons: isRequestingSeasons,
+            isRefreshingSeasons: isRefreshingSeasons,
+            seasonRequestRefreshFailed: seasonRequestRefreshFailed,
+            requestActingName: requestActingName,
+            onRefreshSeasonRequests: onRefreshSeasonRequests,
+            onRequestSeason: {
+                if let number = row.number { onRequestSeasons([number]) }
+            },
             onDownloadSeason: {
-                beginSeasonDownload(season, episodes: $0)
+                beginSeasonDownload(container, title: row.title, episodes: $0)
             },
             onDownloadEpisode: startEpisodeDownload
         )
@@ -1881,7 +2094,8 @@ private struct PlozziOSSeriesDownloadPicker: View {
         isBusy = true
         Task {
             var batches: [PlozziOSSeasonDownloadPrompt.Batch] = []
-            for season in seasons {
+            var seen = Set<String>()
+            for season in seasons where season.locallyValidatedPlayableSource {
                 await viewModel.loadEpisodes(for: season.id)
                 guard let episodes = viewModel.seasonLoadState(for: season.id)
                     .authoritativeEpisodes else {
@@ -1890,12 +2104,16 @@ private struct PlozziOSSeriesDownloadPicker: View {
                     isBusy = false
                     return
                 }
-                if !episodes.isEmpty {
-                    batches.append(.init(season: season, episodes: episodes))
+                let available = SeasonEpisodeList.downloadableEpisodes(from: episodes, for: series)
+                    .filter { seen.insert($0.stablePresentationID).inserted }
+                if !available.isEmpty {
+                    batches.append(.init(season: season, episodes: available))
                 }
             }
-            if !looseEpisodes.isEmpty {
-                batches.append(.init(season: series, episodes: looseEpisodes))
+            let availableLoose = SeasonEpisodeList.downloadableEpisodes(from: looseEpisodes, for: series)
+                .filter { seen.insert($0.stablePresentationID).inserted }
+            if !availableLoose.isEmpty {
+                batches.append(.init(season: series, episodes: availableLoose))
             }
 
             isBusy = false
@@ -1919,6 +2137,7 @@ private struct PlozziOSSeriesDownloadPicker: View {
 
     private func beginSeasonDownload(
         _ season: MediaItem,
+        title: SeriesDownloadSeasonTitle,
         episodes: [MediaItem]
     ) {
         guard !episodes.isEmpty else { return }
@@ -1937,7 +2156,7 @@ private struct PlozziOSSeriesDownloadPicker: View {
                     )
                 }
                 prompt = PlozziOSSeasonDownloadPrompt(
-                    scope: .season(season.title),
+                    scope: .season(title),
                     batches: [.init(season: season, episodes: episodes)]
                 )
             }
@@ -1971,7 +2190,13 @@ private struct PlozziOSSeriesDownloadPicker: View {
             switch prompt.scope {
             case .season(let title):
                 batchKind = .season
-                batchTitle = title
+                switch title {
+                case .content(let value):
+                    batchTitle = value
+                case .localized(var resource):
+                    resource.locale = locale
+                    batchTitle = String(localized: resource) // l10n:content - persisted batch label, resolved only on confirmation
+                }
             case .show(let title):
                 batchKind = .show
                 batchTitle = title
@@ -1993,13 +2218,15 @@ private struct PlozziOSSeriesDownloadPicker: View {
     }
 
     private var showDownloadState: MediaDownloadBadgeState? {
+        let librarySeasons = seasons.filter(\.locallyValidatedPlayableSource)
         let episodes: [MediaItem]?
-        if seasons.allSatisfy({
+        if librarySeasons.allSatisfy({
             viewModel.seasonLoadState(for: $0.id).authoritativeEpisodes != nil
         }) {
-            episodes = seasons.flatMap {
+            let candidates = librarySeasons.flatMap {
                 viewModel.seasonLoadState(for: $0.id).authoritativeEpisodes ?? []
             } + looseEpisodes
+            episodes = SeasonEpisodeList.downloadableEpisodes(from: candidates, for: series)
         } else {
             episodes = nil
         }
@@ -2021,6 +2248,8 @@ private struct PlozziOSSeriesDownloadPicker: View {
     private var completedEpisodeCount: Int {
         appModel.downloads.records.filter {
             $0.snapshot.seriesID == series.id
+                && (series.sourceAccountID == nil
+                    || $0.snapshot.sourceAccountID == series.sourceAccountID)
                 && $0.status == .completed
         }.count
     }
@@ -2051,128 +2280,413 @@ private struct PlozziOSSeriesDownloadPicker: View {
 private struct PlozziOSSeasonDownloadRow: View {
     @Environment(PlozziOSAppModel.self) private var appModel
 
-    let season: MediaItem
+    let row: SeriesDownloadSeason
+    let series: MediaItem
     let viewModel: ItemDetailViewModel
 
     var body: some View {
-        HStack(spacing: 12) {
-            PlozziOSDownloadThumbnail(
-                item: season,
-                style: .season
-            )
-            Text(verbatim: season.title)
-                .lineLimit(2)
-            if completedEpisodeCount > 0, downloadState == nil {
-                Text("Downloaded: \(completedEpisodeCount.formatted())")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        let downloadState = self.downloadState
+        SeasonDownloadRowContent(
+            title: Text(row.title),
+            status: row.statusTitle,
+            statusSystemImage: row.statusSystemImage,
+            showsRequestAction: row.canRequest,
+            completedDownloadCount: downloadState == nil ? completedEpisodeCount : 0
+        ) {
+            if row.hasLibraryContent {
+                PlozziOSDownloadThumbnail(
+                    item: row.librarySeasons.first ?? series,
+                    style: .season
+                )
+            } else {
+                SeasonDownloadRowArtwork(showsMediaEdge: false) {
+                    MediaArtworkPlaceholder(glyphSize: 16, symbol: .media)
+                }
             }
-            Spacer()
+        } accessory: {
             if let downloadState {
                 PlozziOSDownloadControl(state: downloadState)
             }
         }
     }
 
-    private var downloadState: MediaDownloadBadgeState? {
-        let episodes = viewModel.seasonLoadState(for: season.id)
-            .authoritativeEpisodes
-        let records = matchingDownloadRecords(
+    private var episodes: [MediaItem]? {
+        guard row.librarySeasons.allSatisfy({
+            viewModel.seasonLoadState(for: $0.id).authoritativeEpisodes != nil
+        }) else { return nil }
+        let candidates = row.librarySeasons.flatMap {
+            viewModel.seasonLoadState(for: $0.id).authoritativeEpisodes ?? []
+        } + row.looseEpisodes
+        return SeasonEpisodeList.downloadableEpisodes(from: candidates, for: series)
+    }
+
+    private var downloadRecords: [DownloadedMediaRecord] {
+        guard row.hasLibraryContent else { return [] }
+        guard row.number != nil || episodes != nil else { return [] }
+        return matchingDownloadRecords(
             downloads: appModel.downloads,
             episodes: episodes,
-            seriesID: season.seriesID,
-            sourceAccountID: season.sourceAccountID,
-            seasonNumber: season.seasonNumber
+            seriesID: row.librarySeasons.first?.seriesID ?? series.id,
+            sourceAccountID: row.librarySeasons.first?.sourceAccountID ?? series.sourceAccountID,
+            seasonNumber: row.number
         )
-        return downloadCollectionBadgeState(
-            records: records,
+    }
+
+    private var downloadState: MediaDownloadBadgeState? {
+        downloadCollectionBadgeState(
+            records: downloadRecords,
             expectedCount: episodes?.count,
             scopeKind: .season
         )
     }
 
     private var completedEpisodeCount: Int {
-        appModel.downloads.records.filter {
-            $0.snapshot.seriesID == season.seriesID
-                && (season.sourceAccountID == nil
-                    || $0.snapshot.sourceAccountID == season.sourceAccountID)
-                && $0.snapshot.seasonNumber == season.seasonNumber
-                && $0.status == .completed
-        }.count
+        downloadRecords.filter { $0.status == .completed }.count
+    }
+}
+
+private enum PlozziOSSeasonDownloadSelection: Equatable {
+    case all
+    case library(String)
+    case loose
+}
+
+private enum PlozziOSSeasonEpisodeEntry: Identifiable {
+    case roster(SeasonEpisodeRow)
+    case unavailable(MediaItem)
+
+    var id: String {
+        switch self {
+        case .roster(let row): "roster:\(row.id)"
+        case .unavailable(let episode): "unavailable:\(episode.stablePresentationID)"
+        }
+    }
+
+    var episodeNumber: Int? {
+        switch self {
+        case .roster(let row): row.episodeNumber
+        case .unavailable(let episode): episode.episodeNumber
+        }
     }
 }
 
 private struct PlozziOSSeasonDownloadPicker: View {
     @Environment(PlozziOSAppModel.self) private var appModel
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var loadedMetadataContext: String?
+    @State private var isRefreshingEpisodes = false
 
-    let season: MediaItem
+    let series: MediaItem
+    let season: SeriesDownloadSeason
+    let selection: PlozziOSSeasonDownloadSelection
     let viewModel: ItemDetailViewModel
     let isBusy: Bool
+    let canRequestSeasons: Bool
+    let requestState: MediaSeasonRequestState?
+    let isRequestingSeasons: Bool
+    let isRefreshingSeasons: Bool
+    let seasonRequestRefreshFailed: Bool
+    let requestActingName: String?
+    let onRefreshSeasonRequests: () -> Void
+    let onRequestSeason: () -> Void
     let onDownloadSeason: ([MediaItem]) -> Void
     let onDownloadEpisode: (MediaItem, DownloadQuality) -> Void
 
+    private var selectedLibrarySeasons: [MediaItem] {
+        switch selection {
+        case .all: season.librarySeasons
+        case .library(let id): season.librarySeasons.filter { $0.stablePresentationID == id }
+        case .loose: []
+        }
+    }
+
+    private var selectionIsAvailable: Bool {
+        if case .library = selection { return !selectedLibrarySeasons.isEmpty }
+        return true
+    }
+
+    private var episodeContainerKey: String {
+        let containers = season.librarySeasons.map(\.stablePresentationID).joined(separator: "|")
+        return "\(series.stablePresentationID)|\(season.id)|\(containers)|\(needsLooseEpisodeLoad)"
+    }
+
+    private var hasLoadedLibrary: Bool {
+        season.librarySeasons.allSatisfy {
+            viewModel.seasonLoadState(for: $0.id).authoritativeEpisodes != nil
+        } && (!needsLooseEpisodeLoad || viewModel.seasonLoadState(for: series.id).authoritativeEpisodes != nil)
+    }
+
+    private var needsLooseEpisodeLoad: Bool {
+        !season.looseEpisodes.isEmpty || season.librarySeasons.isEmpty
+    }
+
+    private var libraryLoadFailed: Bool {
+        let containers = season.librarySeasons.map(\.id) + (needsLooseEpisodeLoad ? [series.id] : [])
+        return containers.contains {
+            if case .failed = viewModel.seasonLoadState(for: $0) { return true }
+            return false
+        }
+    }
+
+    private var libraryEpisodes: [MediaItem] {
+        let nested = season.librarySeasons.flatMap {
+            viewModel.seasonLoadState(for: $0.id).authoritativeEpisodes ?? []
+        }
+        let loose = needsLooseEpisodeLoad
+            ? (viewModel.seasonLoadState(for: series.id).authoritativeEpisodes ?? []).filter {
+                $0.kind == .episode && $0.seasonNumber == season.number
+            }
+            : []
+        return nested + loose
+    }
+
+    private var selectedEpisodeIDs: Set<String> {
+        let candidates: [MediaItem]
+        switch selection {
+        case .all:
+            candidates = libraryEpisodes
+        case .library:
+            candidates = selectedLibrarySeasons.flatMap {
+                viewModel.seasonLoadState(for: $0.id).authoritativeEpisodes ?? []
+            }
+        case .loose:
+            candidates = (viewModel.seasonLoadState(for: series.id).authoritativeEpisodes ?? [])
+                .filter { $0.kind == .episode && $0.seasonNumber == season.number }
+        }
+        return Set(SeasonEpisodeList.downloadableEpisodes(from: candidates, for: series).map(\.stablePresentationID))
+    }
+
+    private var downloadScopeTitle: LocalizedStringResource {
+        switch selection {
+        case .all:
+            season.librarySeasons.count > 1
+                || (!season.librarySeasons.isEmpty && !season.looseEpisodes.isEmpty)
+                ? "All available episodes and versions in this season, for offline viewing."
+                : "All available episodes in this season, for offline viewing."
+        case .library: "All available episodes in this version, for offline viewing."
+        case .loose: "All available episodes in Other Episodes, for offline viewing."
+        }
+    }
+
+    private var navigationTitle: Text {
+        switch selection {
+        case .all: Text(season.title)
+        case .loose: Text("Other Episodes")
+        case .library:
+            selectedLibrarySeasons.first.map { Text(verbatim: $0.title) } ?? Text(season.title)
+        }
+    }
+
+    private var metadataContext: String {
+        "\(appModel.plozziOSSeasonRequestContextID)|\(SeasonRequestState.itemKey(for: series))|\(season.id)"
+    }
+
+    private var isCurrentSeries: Bool {
+        viewModel.state.value.map {
+            SeasonRequestState.itemKey(for: $0.item) == SeasonRequestState.itemKey(for: series)
+        } == true
+    }
+
+    private var metadataState: SeasonEpisodeRosterLoadState {
+        guard let number = season.number else { return .unavailable }
+        guard loadedMetadataContext == metadataContext else { return .loading }
+        return viewModel.seasonEpisodeRosterState(for: number)
+    }
+
+    private var downloadAction: SeriesDownloadAction {
+        if isBusy { return .preparing }
+        if activeSeasonBatchID != nil { return .pause }
+        if pausedSeasonBatchID != nil { return .resume }
+        return .download
+    }
+
     var body: some View {
         Group {
-            switch viewModel.seasonLoadState(for: season.id) {
-            case .notLoaded:
-                ProgressView("Loading Episodes")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .failed:
+            if !selectionIsAvailable {
+                ContentUnavailableView(
+                    "Season Changed", systemImage: "arrow.clockwise",
+                    description: Text("Go back and select a current season version.")
+                )
+            } else if libraryLoadFailed {
                 ContentUnavailableView {
                     Label("Couldn’t Load Episodes", systemImage: "exclamationmark.triangle")
                 } description: {
                     Text("Check the server and try again.")
                 } actions: {
                     Button("Try Again") {
-                        Task { await viewModel.loadEpisodes(for: season.id) }
+                        Task { await loadLibrary(forceRefresh: true) }
                     }
                 }
-            case .loaded(let episodes):
-                if episodes.isEmpty {
-                    ContentUnavailableView(
-                        "No Episodes",
-                        systemImage: "play.rectangle"
-                    )
-                } else {
-                    List {
-                        Section {
+            } else if !hasLoadedLibrary {
+                ProgressView("Loading Episodes")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                let episodes = SeasonEpisodeList(
+                    series: series, seasonNumber: season.number,
+                    libraryEpisodes: libraryEpisodes, roster: metadataState.roster
+                )
+                let downloadable = downloadableEpisodes(in: episodes)
+                let entries = episodeEntries(in: episodes)
+                List {
+                    Section {
+                        if !downloadable.isEmpty {
                             Button {
-                                performSeasonAction(episodes)
+                                performSeasonAction(downloadable)
                             } label: {
-                                HStack(spacing: 12) {
-                                    Text("Download Season")
-                                    Spacer()
+                                SeriesDownloadActionLabel(
+                                    title: downloadAction.title(for: .current),
+                                    subtitle: downloadScopeTitle,
+                                    systemImage: downloadAction.systemImage
+                                ) {
                                     PlozziOSDownloadControl(
-                                        state: downloadState(for: episodes),
+                                        state: downloadState(for: downloadable),
                                         isPreparing: isBusy
                                     )
                                 }
-                                .foregroundStyle(.primary)
                             }
                             .buttonStyle(.plain)
-                            .disabled(isBusy)
+                            .disabled(!downloadAction.isEnabled || isRefreshingEpisodes)
                         }
-
-                        Section("Episodes") {
-                            ForEach(episodes) { episode in
-                                PlozziOSEpisodeDownloadRow(
-                                    episode: episode,
-                                    isBusy: isBusy,
+                        if canRequestSeasons, (season.number ?? 0) > 0 {
+                            SeasonEpisodeRequestControls(
+                                state: requestState,
+                                hasUnavailableEpisodes: episodes.coverage?.hasUnavailableEpisodes == true,
+                                isSubmitting: isRequestingSeasons,
+                                isRefreshing: isRefreshingSeasons || isRefreshingEpisodes,
+                                refreshFailed: seasonRequestRefreshFailed,
+                                actingName: requestActingName,
+                                managementURL: appModel.seerService.mediaManagementURL(for: series),
+                                onRefresh: onRefreshSeasonRequests,
+                                onRequest: onRequestSeason
+                            )
+                        }
+                        if metadataState == .failed {
+                            Button {
+                                Task { await loadMetadata(forceRefresh: true) }
+                            } label: {
+                                SeriesDownloadActionLabel(
+                                    title: "Retry Episode Information",
+                                    subtitle: "Couldn’t load the full episode list. Library downloads are still available.",
+                                    systemImage: "arrow.clockwise"
+                                ) {}
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    } header: {
+                        SeasonEpisodeCoverageHeader(
+                            coverage: episodes.coverage,
+                            isLoading: metadataState == .loading || metadataState == .notLoaded,
+                            hasNumberingConflict: episodes.hasNumberingConflict
+                        )
+                    }
+                    Section("Episodes") {
+                        ForEach(entries) { entry in
+                            switch entry {
+                            case .roster(let row):
+                                PlozziOSSeasonEpisodeRow(
+                                    row: row,
+                                    selectedEpisodeIDs: selectedEpisodeIDs,
+                                    isBusy: isBusy || isRefreshingEpisodes,
                                     onDownload: onDownloadEpisode
                                 )
+                            case .unavailable(let episode):
+                                PlozziOSUnavailableEpisodeRow(episode: episode)
                             }
+                        }
+                        if entries.isEmpty {
+                            Text("No episode information is available for this season.")
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }
+                .listStyle(.insetGrouped)
+                .contentMargins(.top, 12, for: .scrollContent)
+                .listSectionSpacing(16)
             }
         }
-        .navigationTitle(Text(verbatim: season.title))
+        .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: season.id) {
-            guard case .notLoaded = viewModel.seasonLoadState(for: season.id)
-            else { return }
-            await viewModel.loadEpisodes(for: season.id)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                SeasonRequestRefreshButton(
+                    isRefreshing: isRefreshingEpisodes || isRefreshingSeasons,
+                    isSubmitting: isBusy || isRequestingSeasons,
+                    onRefresh: { Task { await refresh() } }
+                )
+                .accessibilityLabel("Refresh Episodes and Season Status")
+            }
         }
+        .task(id: "\(episodeContainerKey)|\(scenePhase == .active)") {
+            guard scenePhase == .active else { return }
+            await loadLibrary(forceRefresh: false)
+        }
+        .task(id: "\(metadataContext)|\(scenePhase == .active)") {
+            guard scenePhase == .active else { return }
+            await loadMetadata(forceRefresh: loadedMetadataContext != metadataContext)
+        }
+    }
+
+    private func downloadableEpisodes(in list: SeasonEpisodeList) -> [MediaItem] {
+        var seen = Set<String>()
+        let selection = selectedEpisodeIDs
+        return list.rows.flatMap(\.libraryEpisodes).filter {
+            selection.contains($0.stablePresentationID) && seen.insert($0.stablePresentationID).inserted
+        }
+    }
+
+    private func episodeEntries(in list: SeasonEpisodeList) -> [PlozziOSSeasonEpisodeEntry] {
+        let entries = list.rows.map(PlozziOSSeasonEpisodeEntry.roster)
+            + upcomingPlaceholders(in: list).map(PlozziOSSeasonEpisodeEntry.unavailable)
+        return entries.sorted {
+            let lhs = $0.episodeNumber ?? Int.max
+            let rhs = $1.episodeNumber ?? Int.max
+            return lhs == rhs ? $0.id < $1.id : lhs < rhs
+        }
+    }
+
+    private func upcomingPlaceholders(in list: SeasonEpisodeList) -> [MediaItem] {
+        guard list.coverage == nil else { return [] }
+        let unavailable = libraryEpisodes.filter {
+            $0.kind == .episode && !$0.locallyValidatedPlayableSource
+        }
+        let scheduled = SeriesUpcoming.placeholders(
+            for: season.number, seriesID: series.id, seriesTitle: series.title,
+            ownedEpisodes: libraryEpisodes,
+            schedule: viewModel.state.value?.upcomingSchedule?.upcomingEpisodes ?? [], seriesArtwork: series
+        )
+        var seen = Set<String>()
+        return (unavailable + scheduled).filter { seen.insert($0.stablePresentationID).inserted }
+    }
+
+    private func loadLibrary(forceRefresh: Bool) async {
+        let context = metadataContext
+        guard isCurrentSeries, !Task.isCancelled else { return }
+        if needsLooseEpisodeLoad {
+            await viewModel.loadEpisodes(for: series.id, forceRefresh: forceRefresh)
+        }
+        for librarySeason in season.librarySeasons {
+            guard !Task.isCancelled, isCurrentSeries, context == metadataContext else { return }
+            await viewModel.loadEpisodes(for: librarySeason.id, forceRefresh: forceRefresh)
+        }
+    }
+
+    private func loadMetadata(forceRefresh: Bool) async {
+        guard let number = season.number, isCurrentSeries, !Task.isCancelled else { return }
+        let context = metadataContext
+        await viewModel.loadSeasonEpisodeRoster(for: number, forceRefresh: forceRefresh)
+        guard !Task.isCancelled, isCurrentSeries, context == metadataContext else { return }
+        loadedMetadataContext = context
+    }
+
+    private func refresh() async {
+        let context = metadataContext
+        isRefreshingEpisodes = true
+        defer { isRefreshingEpisodes = false }
+        onRefreshSeasonRequests()
+        await loadLibrary(forceRefresh: true)
+        guard !Task.isCancelled, isCurrentSeries, context == metadataContext else { return }
+        await loadMetadata(forceRefresh: true)
     }
 
     private func downloadState(
@@ -2182,9 +2696,9 @@ private struct PlozziOSSeasonDownloadPicker: View {
             records: matchingDownloadRecords(
                 downloads: appModel.downloads,
                 episodes: episodes,
-                seriesID: season.seriesID,
-                sourceAccountID: season.sourceAccountID,
-                seasonNumber: season.seasonNumber
+                seriesID: series.id,
+                sourceAccountID: series.sourceAccountID,
+                seasonNumber: season.number
             ),
             expectedCount: episodes.count,
             scopeKind: .season
@@ -2202,11 +2716,14 @@ private struct PlozziOSSeasonDownloadPicker: View {
     }
 
     private var seasonBatchRecords: [DownloadedMediaRecord] {
-        appModel.downloads.records.filter {
-            $0.snapshot.seriesID == season.seriesID
-                && $0.snapshot.seasonNumber == season.seasonNumber
-                && $0.batchKind == .season
-        }
+        let selection = selectedEpisodeIDs
+        return matchingDownloadRecords(
+            downloads: appModel.downloads,
+            episodes: libraryEpisodes.filter { selection.contains($0.stablePresentationID) },
+            seriesID: series.id,
+            sourceAccountID: series.sourceAccountID,
+            seasonNumber: season.number
+        ).filter { $0.batchKind == .season }
     }
 
     private var activeSeasonBatchID: String? {
@@ -2223,36 +2740,100 @@ private struct PlozziOSSeasonDownloadPicker: View {
     }
 }
 
+private struct PlozziOSSeasonEpisodeRow: View {
+    @Environment(PlozziOSAppModel.self) private var appModel
+    let row: SeasonEpisodeRow
+    let selectedEpisodeIDs: Set<String>
+    let isBusy: Bool
+    let onDownload: (MediaItem, DownloadQuality) -> Void
+
+    var body: some View {
+        let selected = row.libraryEpisodes.filter { selectedEpisodeIDs.contains($0.stablePresentationID) }
+        if selected.isEmpty {
+            SeasonEpisodeRowContent(
+                number: row.episodeNumber,
+                title: appModel.settings.spoilers.settings.isEnabled ? nil : row.metadata?.title
+            ) {
+                SeasonEpisodeRowArtwork(showsMediaEdge: false) {
+                    MediaArtworkPlaceholder(glyphSize: 16, symbol: .media)
+                }
+            } status: {
+                if row.libraryEpisodes.isEmpty {
+                    SeasonEpisodeAvailabilityLabel(
+                        availability: row.availability,
+                        airDate: row.metadata?.airDate
+                    )
+                } else {
+                    SeasonEpisodeAvailabilityLabel(
+                        availability: .inLibrary, title: "Available in Another Version"
+                    )
+                }
+            } accessory: {}
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(selected, id: \.stablePresentationID) { episode in
+                    PlozziOSEpisodeDownloadRow(
+                        episode: episode, displayedEpisodeNumber: row.episodeNumber,
+                        isBusy: isBusy, onDownload: onDownload
+                    )
+                }
+            }
+        }
+    }
+}
+
+private struct PlozziOSUnavailableEpisodeRow: View {
+    @Environment(PlozziOSAppModel.self) private var appModel
+    let episode: MediaItem
+
+    var body: some View {
+        SeasonEpisodeRowContent(
+            number: episode.episodeNumber,
+            title: appModel.settings.spoilers.settings.shouldHideText(for: episode) ? nil : episode.title
+        ) {
+            SeasonEpisodeRowArtwork(showsMediaEdge: false) {
+                MediaArtworkPlaceholder(glyphSize: 16, symbol: .media)
+            }
+        } status: {
+            SeasonEpisodeAvailabilityLabel(
+                availability: .scheduled(
+                    airDate: episode.scheduledAirDate ?? episode.releaseDate,
+                    hasTime: episode.scheduledAirDateHasTime,
+                    calendarDayStoredInUTC: episode.scheduledAirDate == nil
+                ),
+                airDate: episode.scheduledAirDate ?? episode.releaseDate,
+                calendarDayStoredInUTC: episode.scheduledAirDate == nil
+            )
+        } accessory: {}
+    }
+}
+
 private struct PlozziOSEpisodeDownloadRow: View {
     @Environment(PlozziOSAppModel.self) private var appModel
     @State private var showsDownloadConfirmation = false
 
     let episode: MediaItem
+    var displayedEpisodeNumber: Int? = nil
     let isBusy: Bool
     let onDownload: (MediaItem, DownloadQuality) -> Void
 
     var body: some View {
         let record = currentDownloadRecord
-        HStack(spacing: 12) {
+        SeasonEpisodeRowContent(
+            number: displayedEpisodeNumber ?? episode.episodeNumber,
+            title: appModel.settings.spoilers.settings.shouldHideText(for: episode) ? nil : episode.title
+        ) {
             PlozziOSDownloadThumbnail(
                 item: episode,
                 style: .episode
             )
-            VStack(alignment: .leading, spacing: 3) {
-                if let number = episode.episodeNumber {
-                    Text("Episode \(number)")
-                        .font(.caption)
-                        .plozzForeground(.secondary)
-                }
-                Text(verbatim: episode.title)
-                    .lineLimit(2)
-                if let record {
-                    downloadStatusText(for: record)
-                        .font(.caption)
-                        .plozzForeground(.secondary)
-                }
+        } status: {
+            if let record {
+                downloadStatusText(for: record)
+            } else {
+                SeasonEpisodeAvailabilityLabel(availability: .inLibrary)
             }
-            Spacer()
+        } accessory: {
             if let record {
                 if record.status == .queued
                     || record.status == .preparing
@@ -2261,6 +2842,7 @@ private struct PlozziOSEpisodeDownloadRow: View {
                         Task { await appModel.downloads.pause(record) }
                     } label: {
                         PlozziOSDownloadControl(state: record.badgeState)
+                            .frame(minWidth: 44, minHeight: 44)
                     }
                     .buttonStyle(.plain)
                     .disabled(isBusy)
@@ -2273,6 +2855,7 @@ private struct PlozziOSEpisodeDownloadRow: View {
                             state: record.badgeState,
                             fallbackSystemImage: "arrow.clockwise"
                         )
+                        .frame(minWidth: 44, minHeight: 44)
                     }
                     .buttonStyle(.plain)
                     .disabled(isBusy)
@@ -2292,14 +2875,13 @@ private struct PlozziOSEpisodeDownloadRow: View {
                     }
                 } label: {
                     PlozziOSDownloadControl()
+                        .frame(minWidth: 44, minHeight: 44)
                 }
                 .buttonStyle(.plain)
                 .disabled(isBusy)
-                .accessibilityLabel(Text("Download ") + Text(verbatim: episode.title))
+                .accessibilityLabel(Text("Download \(displayTitle)"))
                 .confirmationDialog(
-                    Text("Download ")
-                        + Text(verbatim: episode.title)
-                        + Text(verbatim: "?"),
+                    Text("Download \(displayTitle)?"),
                     isPresented: $showsDownloadConfirmation,
                     titleVisibility: .visible
                 ) {
@@ -2340,6 +2922,17 @@ private struct PlozziOSEpisodeDownloadRow: View {
         }
     }
 
+    private var displayTitle: Text {
+        let spoilers = appModel.settings.spoilers.settings
+        if spoilers.shouldHideText(for: episode) {
+            if let number = displayedEpisodeNumber ?? episode.episodeNumber {
+                return Text("Episode \(number)")
+            }
+            return Text(spoilers.maskedTitle(for: episode))
+        }
+        return Text(verbatim: episode.title)
+    }
+
     private var currentDownloadRecord: DownloadedMediaRecord? {
         guard !appModel.downloads.records.isEmpty else { return nil }
         return appModel.downloads.cachedRecord(forSelectedVersionOf: episode)
@@ -2376,13 +2969,14 @@ private struct PlozziOSEpisodeDownloadRow: View {
     private func downloadingStatusText(
         for record: DownloadedMediaRecord
     ) -> some View {
+        // Metrics are formatted data, not another translatable status template.
         if let fraction = record.fractionCompleted {
-            Text("Downloading ") + Text(
-                fraction,
-                format: .percent.precision(.fractionLength(0))
-            ) + transferMetricsText(for: record)
+            Text(MediaDownloadDestination.current.downloadingTitle)
+                + Text(verbatim: " ")
+                + Text(fraction, format: .percent.precision(.fractionLength(0)))
+                + transferMetricsText(for: record)
         } else {
-            Text("Downloading") + transferMetricsText(for: record)
+            Text(MediaDownloadDestination.current.downloadingTitle) + transferMetricsText(for: record)
         }
     }
 
@@ -2422,46 +3016,41 @@ private struct PlozziOSDownloadThumbnail: View {
 
     @ViewBuilder
     var body: some View {
+        let showsMediaEdge = MediaArtworkPlaceholder.Symbol(for: item) == .playback
         switch style {
         case .season:
-            FallbackAsyncImage(
-                references: item.artworkReferences(for: .poster),
-                variant: .posterCard,
-                asyncFallbackURL: {
-                    await ArtworkRouter.shared.artworkURL(.poster, for: item)
-                },
-                pinIdentity: item.stablePresentationID
-            ) {
-                MediaArtworkPlaceholder(glyphSize: 16)
+            SeasonDownloadRowArtwork(showsMediaEdge: showsMediaEdge) {
+                FallbackAsyncImage(
+                    references: item.artworkReferences(for: .poster),
+                    variant: .posterCard,
+                    asyncFallbackURL: {
+                        await ArtworkRouter.shared.artworkURL(.poster, for: item)
+                    },
+                    pinIdentity: item.stablePresentationID
+                ) {
+                    MediaArtworkPlaceholder(glyphSize: 16, symbol: .init(for: item))
+                }
             }
-            .frame(width: 46, height: 68)
-            .clipped()
-            .clipShape(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-            )
-            .plozzMediaEdge(cornerRadius: 6)
 
         case .episode:
-            FallbackAsyncImage(
-                references: item.artworkReferences(for: .episodeThumbnail),
-                variant: .landscapeCard,
-                asyncFallbackURL: {
-                    await ArtworkRouter.shared.artworkURL(.thumbnail, for: item)
-                },
-                pinIdentity: item.stablePresentationID
-            ) {
-                MediaArtworkPlaceholder(glyphSize: 16)
+            let spoilers = appModel.settings.spoilers.settings
+            SeasonEpisodeRowArtwork(showsMediaEdge: showsMediaEdge) {
+                if spoilers.shouldHideThumbnail(for: item), spoilers.mode == .placeholder {
+                    MediaArtworkPlaceholder(glyphSize: 16, symbol: .init(for: item))
+                } else {
+                    FallbackAsyncImage(
+                        references: item.artworkReferences(for: .episodeThumbnail),
+                        variant: .landscapeCard,
+                        asyncFallbackURL: {
+                            await ArtworkRouter.shared.artworkURL(.thumbnail, for: item)
+                        },
+                        pinIdentity: item.stablePresentationID
+                    ) {
+                        MediaArtworkPlaceholder(glyphSize: 16, symbol: .init(for: item))
+                    }
+                    .blur(radius: spoilers.shouldHideThumbnail(for: item) ? 10 : 0)
+                }
             }
-            .frame(width: 80, height: 45)
-            .blur(
-                radius: appModel.settings.spoilers.settings
-                    .shouldHideThumbnail(for: item) ? 10 : 0
-            )
-            .clipped()
-            .clipShape(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-            )
-            .plozzMediaEdge(cornerRadius: 6)
         }
     }
 }
@@ -2502,7 +3091,7 @@ private struct PlozziOSDownloadControl: View {
         case .inProgress(let fraction):
             if let fraction {
                 progressRing(fraction: fraction, color: .primary)
-                    .accessibilityLabel("Downloading")
+                    .accessibilityLabel(Text(MediaDownloadDestination.current.downloadingTitle))
                     .accessibilityValue(
                         Text(
                             fraction,
@@ -2513,7 +3102,7 @@ private struct PlozziOSDownloadControl: View {
                 ProgressView()
                     .controlSize(.small)
                     .tint(.primary)
-                    .accessibilityLabel("Downloading")
+                    .accessibilityLabel(Text(MediaDownloadDestination.current.downloadingTitle))
             }
         case .paused(let fraction):
             if let fraction {
@@ -2651,7 +3240,7 @@ private struct PlozziOSSeasonDownloadPrompt: Identifiable {
     }
 
     enum Scope {
-        case season(String)
+        case season(SeriesDownloadSeasonTitle)
         case show(String)
     }
 
@@ -2661,12 +3250,12 @@ private struct PlozziOSSeasonDownloadPrompt: Identifiable {
     var id: String { batches.map(\.season.id).joined(separator: "|") }
     var count: Int { batches.reduce(0) { $0 + $1.episodes.count } }
 
-    var title: LocalizedStringResource {
+    var title: Text {
         switch scope {
         case .season(let title):
-            "Download \(title)?"
+            Text("Download \(Text(title))?")
         case .show(let title):
-            "Download all of \(title)?"
+            Text("Download all of \(title)?")
         }
     }
 
@@ -3044,7 +3633,10 @@ private struct PlozziOSInlineEpisodeEntry: View {
         ) {
             // Shared with the tvOS cards so a missing episode still looks the same
             // on every platform; this was a bare filled rectangle with no glyph.
-            MediaArtworkPlaceholder(glyphSize: 32)
+            MediaArtworkPlaceholder(
+                glyphSize: 32, symbol: .init(for: episode),
+                cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius
+            )
         }
         .frame(width: cardWidth, height: cardWidth * 9 / 16)
         .overlay {
@@ -3058,7 +3650,8 @@ private struct PlozziOSInlineEpisodeEntry: View {
             )
         )
         .plozzMediaEdge(
-            cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius
+            cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius,
+            isEnabled: MediaArtworkPlaceholder.Symbol(for: episode) == .playback
         )
     }
 

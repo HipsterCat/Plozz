@@ -120,17 +120,21 @@ public struct PlozzGlassCardModifier: ViewModifier {
 /// can show past rounded corners.
 public struct PlozzMediaEdgeModifier: ViewModifier {
     private let cornerRadius: CGFloat
+    private let isEnabled: Bool
     @Environment(\.themePalette) private var palette
 
-    public init(cornerRadius: CGFloat) {
+    public init(cornerRadius: CGFloat, isEnabled: Bool = true) {
         self.cornerRadius = cornerRadius
+        self.isEnabled = isEnabled
     }
 
     public func body(content: Content) -> some View {
         content.overlay {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .inset(by: -0.5)
-                .stroke(palette.mediaEdgeColor, lineWidth: 1.5)
+            if isEnabled {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .inset(by: -0.5)
+                    .stroke(palette.mediaEdgeColor, lineWidth: 1.5)
+            }
         }
     }
 }
@@ -197,8 +201,8 @@ public extension View {
     /// point outside the artwork's rounded rect. Apply it **after** the artwork's
     /// `.clipShape`, passing the same corner radius, so every card shares the same
     /// clean edge and the stroke covers any sub-pixel bleed past the corners.
-    func plozzMediaEdge(cornerRadius: CGFloat) -> some View {
-        modifier(PlozzMediaEdgeModifier(cornerRadius: cornerRadius))
+    func plozzMediaEdge(cornerRadius: CGFloat, isEnabled: Bool = true) -> some View {
+        modifier(PlozzMediaEdgeModifier(cornerRadius: cornerRadius, isEnabled: isEnabled))
     }
 
     /// Styles a `Button` as a Plozz browsing card: the Twozz-ported liquid-glass

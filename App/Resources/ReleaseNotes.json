@@ -2,6 +2,91 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/035",
+      "version": "2026.9.7",
+      "build": 35,
+      "releasedAt": "2026-09-07",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Choose Mixed, Movies, TV Shows, or Personal Videos for network shares",
+            "Avenir font for subtitles"
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            "Browse folders directly from network-share libraries",
+            "Posters now show a clock for pending or processing requests",
+            {
+              "text": "See missing episodes and request their seasons from the download menu",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Clearer labels distinguish device downloads from library requests",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Search now has a dedicated button for opening the Pinned Sidebar",
+              "platforms": ["tvOS"]
+            }
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            "Changing Seerr servers now requires relinking the affected profiles",
+            "Network-share sorting stays consistent as you scroll",
+            "Interrupted network-share scans no longer remove existing titles",
+            {
+              "text": "Search keyboard navigation no longer opens the sidebar unexpectedly",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Downloads resume correctly after switching apps",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Long Play, Request, and Download button labels no longer get cut off",
+              "platforms": ["iOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "release/034",
+      "version": "2026.9.6",
+      "build": 34,
+      "releasedAt": "2026-09-06",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Subtitle Extra Line Position control"
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            "Missing titles in Continue Watching",
+            "Play and Resume buttons on show pages are HOPEFULLY behaving themselves now!",
+            "Library titles incorrectly shown as unavailable",
+            "Subtitle positioning and downloaded subtitles on replay",
+            {
+              "text": "First-generation Siri Remote swipes and edge clicks",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Pinned Sidebar swipe navigation",
+              "platforms": ["tvOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/033",
       "version": "2026.9.3",
       "build": 33,
