@@ -121,15 +121,23 @@ def build_for_extraction(platform_keys: list[str], quiet: bool) -> None:
     env["GIT_CONFIG_PARAMETERS"] = "'safe.bareRepository=all'"
 
     generate_args = ["--bake-only"] if (PROJECT / "project.pbxproj").exists() else []
+    lease_fds = tuple(
+        int(env[name])
+        for name in ("APPLE_BUILD_LEASE_PROOF_FD", "APPLE_BUILD_LEASE_LOCK_FD")
+        if env.get(name)
+    )
     generation = subprocess.run(
         [str(REPO / "tools/generate-project.sh"), *generate_args],
         cwd=REPO,
         env=env,
         text=True,
-        stdout=subprocess.DEVNULL if quiet else None,
+        stdout=subprocess.PIPE if quiet else None,
         stderr=subprocess.STDOUT if quiet else None,
+        pass_fds=lease_fds,
     )
     if generation.returncode != 0:
+        if quiet and generation.stdout:
+            print("\n".join(generation.stdout.splitlines()[-25:]), file=sys.stderr)
         sys.exit("✗ Project generation or canonical package-lock sync failed.")
 
     for key in platform_keys:

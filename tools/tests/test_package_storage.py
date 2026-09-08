@@ -81,6 +81,7 @@ class PackageStorageTests(unittest.TestCase):
         l10n = self.source("tools/l10n-sync.py")
         self.assertIn(".build/package-workspaces/l10n", l10n)
         self.assertIn("tools/generate-project.sh", l10n)
+        self.assertIn("pass_fds=lease_fds", l10n)
         for flag in REQUIRED_FLAGS:
             self.assertIn(flag, l10n)
 
