@@ -2841,7 +2841,7 @@ private struct PlozziOSHeroMetadata: View {
                         RatingBadge(rating: rating)
                     }
                     ForEach(effectiveTechnicalBadges) { badge in
-                        MediaBadgeChip(badge: badge)
+                        MetadataMediaBadgeChip(badge: badge)
                     }
                 }
                 .frame(
