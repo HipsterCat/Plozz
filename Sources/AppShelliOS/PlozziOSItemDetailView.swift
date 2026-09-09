@@ -436,8 +436,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
         let trailerPauseThreshold = PlozziOSHeroMetrics.height(
             style: heroStyle,
             surfaceRole: .detail,
-            dynamicTypeSize: dynamicTypeSize,
-            showsEpisodeStill: showsEpisodeSubjectHero(detail.item)
+            dynamicTypeSize: dynamicTypeSize
         ) / 2
         return ScrollView {
             VStack(alignment: .leading, spacing: 24) {
