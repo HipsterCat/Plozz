@@ -275,6 +275,9 @@ public final class HomeViewModel {
     /// has turned off "Merge libraries on Home"). Tracked so `deinit` can cancel it.
     private nonisolated(unsafe) var unmergedTask: Task<HomeAggregator.UnmergedContent, Never>?
     private nonisolated(unsafe) var topShelfPublishTask: Task<Void, Never>?
+    /// View subscriptions disappear while detail/playback covers Home, but the
+    /// retained model must still receive completion and server-confirmation events.
+    @ObservationIgnored private nonisolated(unsafe) var watchMutationObserver: NSObjectProtocol?
 
     /// Coalesces the burst of `identityIndexDidUpdate` notifications posted while
     /// the index warms: each active account publishes independently, so a fresh
@@ -418,9 +421,22 @@ public final class HomeViewModel {
                 self.isShowingCachedSnapshot = true
             }
         }
+        watchMutationObserver = NotificationCenter.default.addObserver(
+            forName: .mediaItemDidMutate, object: nil, queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if let mutation = MediaItemMutation.from(note) {
+                    self.applyWatchedState(mutation)
+                } else {
+                    self.schedulePlaybackReload()
+                }
+            }
+        }
     }
 
     deinit {
+        if let watchMutationObserver { NotificationCenter.default.removeObserver(watchMutationObserver) }
         aggregationTask?.cancel()
         unmergedTask?.cancel()
         topShelfPublishTask?.cancel()

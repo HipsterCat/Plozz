@@ -40,6 +40,66 @@ final class EmbyProviderParityTests: XCTestCase {
         XCTAssertTrue(provider.kind.usesMediaBrowserAPI)
     }
 
+    func testUndatedNextUpUsesLatestEpisodeActivityWhenSeriesHasNoDate() async throws {
+        for kind in [ProviderKind.jellyfin, .emby] {
+            let stub = StubHTTPClient()
+            stub.stub(pathSuffix: "/Users/u1/Items/Resume", json: """
+            {"Items":[{"Id":"old","Name":"Old movie","Type":"Movie","UserData":{
+              "PlaybackPositionTicks":100000000,"LastPlayedDate":"2026-09-01T00:00:00Z"
+            }}],"TotalRecordCount":1}
+            """)
+            stub.stub(pathSuffix: "/Shows/NextUp", json: """
+            {"Items":[{"Id":"next","Name":"Next episode","Type":"Episode","SeriesId":"show",
+              "UserData":{"PlaybackPositionTicks":0,"Played":false}}],"TotalRecordCount":1}
+            """)
+            stub.stub(pathSuffix: "/Users/u1/Items", requiring: [
+                URLQueryItem(name: "Ids", value: "show")
+            ], json: """
+            {"Items":[{"Id":"show","Type":"Series","UserData":{"Played":false}}]}
+            """)
+            stub.stub(pathSuffix: "/Users/u1/Items", requiring: [
+                URLQueryItem(name: "ParentId", value: "show")
+            ], json: """
+            {"Items":[{"Id":"completed","Type":"Episode","SeriesId":"show",
+              "UserData":{"Played":true,"LastPlayedDate":"2026-09-08T21:00:00Z"}}]}
+            """)
+            let provider = JellyfinProvider(session: makeSession(provider: kind), http: stub)
+            let items = try await provider.continueWatching(limit: 1)
+            let next = try XCTUnwrap(items.first)
+            XCTAssertEqual(next.id, "next", "\(kind): recent next-up must not sink behind old resumes")
+            XCTAssertEqual(next.lastPlayedAt, JellyfinProvider.parseDate("2026-09-08T21:00:00Z"))
+            XCTAssertFalse(next.isPlayed)
+            XCTAssertEqual(next.resumePosition, 0)
+            let query = try XCTUnwrap(stub.queryItems(forPathSuffix: "/Users/u1/Items"))
+            XCTAssertEqual(query.first { $0.name == "ParentId" }?.value, "show")
+            XCTAssertEqual(query.first { $0.name == "SortBy" }?.value, "DatePlayed")
+            XCTAssertEqual(query.first { $0.name == "SortOrder" }?.value, "Descending")
+            XCTAssertEqual(query.first { $0.name == "Limit" }?.value, "1")
+            XCTAssertEqual(query.first { $0.name == "IncludeItemTypes" }?.value, "Episode")
+        }
+    }
+
+    func testNextUpDateDoesNotComeFromAnUnrelatedSeries() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/Users/u1/Items/Resume", json: #"{"Items":[]}"#)
+        stub.stub(pathSuffix: "/Shows/NextUp", json: """
+        {"Items":[{"Id":"next","Type":"Episode","SeriesId":"show","UserData":{"Played":false}}]}
+        """)
+        stub.stub(pathSuffix: "/Users/u1/Items", requiring: [
+            URLQueryItem(name: "Ids", value: "show")
+        ], json: #"{"Items":[{"Id":"show","Type":"Series","UserData":{}}]}"#)
+        stub.stub(pathSuffix: "/Users/u1/Items", requiring: [
+            URLQueryItem(name: "ParentId", value: "show")
+        ], json: """
+        {"Items":[{"Id":"other","Type":"Episode","SeriesId":"another-show",
+          "UserData":{"LastPlayedDate":"2026-09-08T21:00:00Z"}}]}
+        """)
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+        let items = try await provider.continueWatching(limit: 10)
+        XCTAssertEqual(items.map(\.id), ["next"])
+        XCTAssertNil(items.first?.lastPlayedAt)
+    }
+
     func testSubtitleDeliveryPreservesSRTWithoutAddingWebVTTPositioning() async throws {
         for kind in [ProviderKind.jellyfin, .emby] {
             let stub = StubHTTPClient()

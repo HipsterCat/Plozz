@@ -624,15 +624,12 @@ public struct HomeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .mediaItemDidMutate)) { note in
             if let mutation = MediaItemMutation.from(note) {
-                viewModel.applyWatchedState(mutation)
                 if mutation.played != nil {
                     heroRuntime.registerWatchMutation(mutation)
                     if shouldRefreshAsyncWatchHistory {
                         heroRuntime.externalRefreshRevision &+= 1
                     }
                 }
-            } else {
-                Task { await viewModel.load() }
             }
         }
         .onReceive(

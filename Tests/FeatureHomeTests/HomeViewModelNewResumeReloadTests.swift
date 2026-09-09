@@ -311,4 +311,41 @@ final class HomeViewModelNewResumeReloadTests: XCTestCase {
         await Task.yield()
         XCTAssertEqual(provider.librariesCallCount, 1)
     }
+
+    func testOffscreenModelReceivesCompletionAndConfirmationWithoutAHomeView() async throws {
+        let provider = FakeMediaProvider(allItems: [], kind: .emby)
+        let episode = MediaItem(id: "e3", title: "Episode 3", kind: .episode, sourceAccountID: "a")
+        provider.continueWatchingItems = [episode]
+        let vm = makeViewModel(provider: provider)
+        await vm.load()
+        provider.continueWatchingItems = []
+        // No HomeView or .onReceive subscription exists: the persistent model
+        // must keep observing while playback/detail navigation hides Home.
+        MediaItemMutation(
+            itemIDs: ["e3"], scopedItemIDs: ["a:e3"], played: true, resumePosition: 0, item: episode
+        ).post()
+        XCTAssertTrue(cw(vm).isEmpty)
+        await waitUntil { provider.librariesCallCount == 2 && !vm.isRefreshing }
+
+        provider.continueWatchingItems = [
+            MediaItem(id: "e4", title: "Episode 4", kind: .episode, lastPlayedAt: Date())
+        ]
+        try XCTUnwrap(MediaItemMutation(confirmedWatchMutation: WatchMutation(
+            capturedAt: Date(), canonicalMediaID: "show/1/3", played: true, clearResume: true,
+            targets: [.init(accountID: "a", itemID: "e3")], kind: .episode
+        ))).post()
+        await waitUntil { self.cw(vm).map(\.id) == ["e4"] && !vm.isRefreshing }
+        XCTAssertEqual(provider.librariesCallCount, 3)
+    }
+
+    func testNotificationObserverDoesNotRetainHomeModel() async {
+        let provider = FakeMediaProvider(allItems: [])
+        var vm: HomeViewModel? = makeViewModel(provider: provider)
+        weak var retained = vm
+        vm = nil
+        XCTAssertNil(retained)
+        MediaItemMutation(itemIDs: ["episode"], refreshContinueWatching: true).post()
+        await Task.yield()
+        XCTAssertEqual(provider.librariesCallCount, 0)
+    }
 }

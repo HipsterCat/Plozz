@@ -283,6 +283,36 @@ public struct JellyfinProvider: MediaProvider {
             guard let date = Self.parseDate(dto.UserData?.LastPlayedDate) else { continue }
             result[dto.Id] = date
         }
+        let missing = seriesIDs.filter { result[$0] == nil }
+        for start in stride(from: 0, to: missing.count, by: 4) {
+            try Task.checkCancellation()
+            let batch = missing[start..<min(start + 4, missing.count)]
+            let dates = try await withThrowingTaskGroup(of: (String, Date?).self) { group in
+                for seriesID in batch {
+                    group.addTask {
+                        do {
+                            let episode = try await client.lastPlayedEpisode(userID: session.userID, seriesID: seriesID)
+                            return (seriesID, Self.parseDate(episode?.UserData?.LastPlayedDate))
+                        } catch let error as AppError where error == .cancelled {
+                            throw error
+                        } catch is CancellationError {
+                            throw CancellationError()
+                        } catch {
+                            PlozzLog.networking.error(
+                                "Continue Watching episode-recency lookup failed; keeping undated Next Up: \(String(describing: error))"
+                            )
+                            return (seriesID, nil)
+                        }
+                    }
+                }
+                var dates: [String: Date] = [:]
+                for try await (seriesID, date) in group {
+                    dates[seriesID] = date
+                }
+                return dates
+            }
+            result.merge(dates) { existing, _ in existing }
+        }
         return result
     }
 

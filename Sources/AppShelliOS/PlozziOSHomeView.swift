@@ -221,11 +221,6 @@ struct PlozziOSHomeView: View {
         ) {
             await refreshFeaturedStatusLoop()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .mediaItemDidMutate)) { note in
-            if let mutation = MediaItemMutation.from(note) {
-                viewModel.applyWatchedState(mutation)
-            }
-        }
         .onReceive(
             NotificationCenter.default.publisher(
                 for: .universalWatchlistDidChange

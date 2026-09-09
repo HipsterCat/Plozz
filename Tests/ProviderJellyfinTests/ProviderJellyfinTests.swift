@@ -533,6 +533,9 @@ final class JellyfinProviderMappingTests: XCTestCase {
             #"{"Items":[\#(firstBatch)],"TotalRecordCount":50}"#,
             #"{"Items":[{"Id":"\#(missingDateSeriesID)","Name":"Series","Type":"Series"}],"TotalRecordCount":1}"#
         ])
+        stub.stub(pathSuffix: "/Users/u1/Items", requiring: [
+            URLQueryItem(name: "ParentId", value: missingDateSeriesID)
+        ], json: #"{"Items":[]}"#)
         let provider = JellyfinProvider(session: makeSession(), http: stub)
 
         let items = try await provider.continueWatching(limit: Int.max)
@@ -542,7 +545,10 @@ final class JellyfinProviderMappingTests: XCTestCase {
         XCTAssertEqual(items.last?.id, missingDateItemID)
         XCTAssertNil(items.last?.lastPlayedAt)
         let recencyQueries = Array(zip(stub.sentPaths, stub.sentQueryItems))
-            .filter { $0.0.hasSuffix("/Users/u1/Items") }
+            .filter {
+                $0.0.hasSuffix("/Users/u1/Items")
+                    && $0.1.contains { $0.name == "IncludeItemTypes" && $0.value == "Series" }
+            }
             .map { $0.1 }
         XCTAssertEqual(recencyQueries.count, 2)
         XCTAssertEqual(
@@ -556,6 +562,14 @@ final class JellyfinProviderMappingTests: XCTestCase {
         XCTAssertTrue(recencyQueries.allSatisfy {
             !$0.contains { $0.name == "SortBy" }
         })
+        let episodeQueries = Array(zip(stub.sentPaths, stub.sentQueryItems))
+            .filter {
+                $0.0.hasSuffix("/Users/u1/Items")
+                    && $0.1.contains { $0.name == "IncludeItemTypes" && $0.value == "Episode" }
+            }.map(\.1)
+        XCTAssertEqual(episodeQueries.count, 1)
+        XCTAssertEqual(episodeQueries.first?.first { $0.name == "ParentId" }?.value, missingDateSeriesID)
+        XCTAssertEqual(episodeQueries.first?.first { $0.name == "Limit" }?.value, "1")
     }
 
     func testOlderNextUpSeriesMovesBackWithoutBeingRemoved() async throws {
