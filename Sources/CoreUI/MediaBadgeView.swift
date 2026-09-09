@@ -58,7 +58,7 @@ public struct MetadataMediaBadgeChip: View {
 
     public var body: some View {
         MediaBadgeChip(badge: badge)
-            .environment(\.mediaBadgeScale, containerScale * 0.5 * textScale)
+            .environment(\.mediaBadgeScale, containerScale * 0.75 * textScale)
     }
 
     private var textScale: CGFloat {

@@ -25,19 +25,19 @@ final class MediaBadgeSizingTests: XCTestCase {
         )
     }
 
-    func testMetadataBadgesAreHalfTheOriginalSize() {
+    func testMetadataBadgesUseThreeQuarterScale() {
         for badge in badges {
             let original = size(of: MediaBadgeChip(badge: badge)
                 .environment(\.dynamicTypeSize, .large))
             let compact = size(of: MetadataMediaBadgeChip(badge: badge)
                 .environment(\.dynamicTypeSize, .large))
-            let halfScale = size(of: MediaBadgeChip(badge: badge)
-                .environment(\.mediaBadgeScale, 0.5)
+            let expected = size(of: MediaBadgeChip(badge: badge)
+                .environment(\.mediaBadgeScale, 0.75)
                 .environment(\.dynamicTypeSize, .large))
-            XCTAssertEqual(compact.width, halfScale.width, accuracy: 0.5, badge.label)
+            XCTAssertEqual(compact.width, expected.width, accuracy: 0.5, badge.label)
             // Small system fonts use optical spacing, not a linear transform of larger glyphs.
-            XCTAssertLessThanOrEqual(compact.width, original.width * 0.6, badge.label)
-            XCTAssertEqual(compact.height, original.height / 2, accuracy: 1, badge.label)
+            XCTAssertLessThan(compact.width, original.width, badge.label)
+            XCTAssertEqual(compact.height, original.height * 0.75, accuracy: 1, badge.label)
         }
     }
 
@@ -47,13 +47,25 @@ final class MediaBadgeSizingTests: XCTestCase {
             .environment(\.mediaBadgeScale, 0.8)
             .environment(\.dynamicTypeSize, .large))
         let expected = size(of: MediaBadgeChip(badge: badge)
-            .environment(\.mediaBadgeScale, 0.4)
+            .environment(\.mediaBadgeScale, 0.6)
             .environment(\.dynamicTypeSize, .large))
         XCTAssertEqual(reduced.width, expected.width, accuracy: 0.5)
         XCTAssertEqual(reduced.height, expected.height, accuracy: 0.5)
     }
 
     #if os(iOS)
+    func testResolutionAndDolbyMarksAreComparableToMetadataTextHeight() {
+        let textHeight = size(of: Text("2025")
+            .font(.subheadline)
+            .environment(\.dynamicTypeSize, .large)).height
+        for badge in badges.prefix(3) {
+            let badgeHeight = size(of: MetadataMediaBadgeChip(badge: badge)
+                .environment(\.dynamicTypeSize, .large)).height
+            XCTAssertGreaterThanOrEqual(badgeHeight, textHeight * 0.85, badge.label)
+            XCTAssertLessThanOrEqual(badgeHeight, textHeight * 1.2, badge.label)
+        }
+    }
+
     func testBadgeHeightTracksTheMetadataTextSize() {
         let badge = MediaBadge("4K", style: .prominent)
         let normalHeight = size(of: MetadataMediaBadgeChip(badge: badge)
