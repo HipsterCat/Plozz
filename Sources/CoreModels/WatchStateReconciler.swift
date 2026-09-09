@@ -22,6 +22,8 @@ public protocol WatchMutationApplying: Sendable {
     /// for the server's recency stamp so an offline-drained write doesn't falsely
     /// float a stale title to the top of Continue Watching.
     func setResumePosition(_ seconds: TimeInterval, on target: WatchMutationTarget, capturedAt: Date) async throws
+    /// Explicit user dismissal, distinct from clearing a completed item's resume.
+    func removeFromContinueWatching(on target: WatchMutationTarget, capturedAt: Date) async throws
     /// Mirrors a finished watch to Trakt.
     func scrobbleTrakt(_ intent: TraktScrobbleIntent) async throws
     /// Mirrors a finished watch to Simkl.
@@ -36,6 +38,10 @@ public protocol WatchMutationApplying: Sendable {
 }
 
 public extension WatchMutationApplying {
+    func removeFromContinueWatching(on target: WatchMutationTarget, capturedAt: Date) async throws {
+        try await setResumePosition(0, on: target, capturedAt: capturedAt)
+    }
+
     func setPlayed(_ played: Bool, on target: WatchMutationTarget, capturedAt: Date) async throws {
         try await setPlayed(played, on: target)
     }
@@ -417,7 +423,11 @@ public actor WatchStateReconciler {
                         }
                     }
                 } else if mutation.clearResume {
-                    try await applier.setResumePosition(0, on: target, capturedAt: mutation.capturedAt)
+                    if mutation.played == nil {
+                        try await applier.removeFromContinueWatching(on: target, capturedAt: mutation.capturedAt)
+                    } else {
+                        try await applier.setResumePosition(0, on: target, capturedAt: mutation.capturedAt)
+                    }
                     outcome += "clearResume=OK"
                     // The in-progress position is gone (a finish clears resume
                     // everywhere), so drop any recency record guarding it.

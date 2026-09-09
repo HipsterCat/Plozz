@@ -944,17 +944,19 @@ struct MainTabView: View {
     private var nativeTopBarShell: some View {
         TabView(selection: selectedTab) {
             Tab("Home", systemImage: "house.fill", value: MainTab.home) {
-                AnyView(homeTabContent())
+                AnyView(homeTabContent().tvNavigationExitProtectionContent())
             }
 
             if showsWatchlistDestination {
                 Tab("Watchlist", systemImage: "bookmark.fill", value: MainTab.watchlist) {
-                    AnyView(watchlistTabContent(isActive: isActiveTab(.watchlist)))
+                    AnyView(watchlistTabContent(isActive: isActiveTab(.watchlist))
+                        .tvNavigationExitProtectionContent())
                 }
             }
 
             Tab("Search", systemImage: "magnifyingglass", value: MainTab.search) {
                 searchTabContent
+                    .tvNavigationExitProtectionContent()
             }
 
             // Conditional Music tab: present only when at least one signed-in
@@ -963,14 +965,17 @@ struct MainTabView: View {
             if showsMusicDestination {
                 Tab("Music", systemImage: "music.note", value: MainTab.music) {
                     musicTabContent
+                        .tvNavigationExitProtectionContent()
                 }
             }
 
             Tab("Settings", systemImage: "gearshape.fill", value: MainTab.settings) {
                 settingsTabContent
+                    .tvNavigationExitProtectionContent()
             }
         }
         .tabViewStyle(.tabBarOnly)
+        .tvNavigationExitProtection(isEnabled: navigationStyleModel.preventsAccidentalExit)
     }
 
     /// Native tvOS sidebar. Uses the same ordered/hidden library plan as custom
@@ -983,18 +988,19 @@ struct MainTabView: View {
         TabView(selection: nativeSidebarSelection) {
             Tab(value: NativeSidebarDestination.profile) {
                 // Selection immediately raises RootView's existing profile page.
-                AnyView(Color.clear)
+                AnyView(Color.clear.tvNavigationExitProtectionContent())
             } label: {
                 AnyView(Label {
                     Text(verbatim: activeProfile.name)
                         .font(.system(size: 26, weight: .regular))
                 } icon: {
-                    ProfileAvatarView(profile: activeProfile, size: 32)
+                    ProfileAvatarView(profile: activeProfile, size: 44, rendersAsImage: true)
                 })
             }
 
             Tab(value: NativeSidebarDestination.content(.home)) {
-                AnyView(homeTabContent(isActive: activeLibraryNavigationDestination == .home))
+                AnyView(homeTabContent(isActive: activeLibraryNavigationDestination == .home)
+                    .tvNavigationExitProtectionContent())
             } label: {
                 AnyView(homeTabLabel)
             }
@@ -1003,21 +1009,21 @@ struct MainTabView: View {
                 Tab(value: NativeSidebarDestination.content(.watchlist)) {
                     AnyView(watchlistTabContent(
                         isActive: activeLibraryNavigationDestination == .watchlist
-                    ))
+                    ).tvNavigationExitProtectionContent())
                 } label: {
                     AnyView(watchlistTabLabel)
                 }
             }
 
             Tab(value: NativeSidebarDestination.content(.search)) {
-                AnyView(searchTabContent)
+                AnyView(searchTabContent.tvNavigationExitProtectionContent())
             } label: {
                 AnyView(searchTabLabel)
             }
 
             if showsMusicDestination {
                 Tab(value: NativeSidebarDestination.content(.music)) {
-                    AnyView(musicTabContent)
+                    AnyView(musicTabContent.tvNavigationExitProtectionContent())
                 } label: {
                     AnyView(musicTabLabel)
                 }
@@ -1026,7 +1032,7 @@ struct MainTabView: View {
             TabSection("Libraries") {
                 ForEach(railEntries) { entry in
                     Tab(value: NativeSidebarDestination.content(entry.destination)) {
-                        AnyView(libraryDestination(entry))
+                        AnyView(libraryDestination(entry).tvNavigationExitProtectionContent())
                     } label: {
                         AnyView(navigationLibraryLabel(entry))
                     }
@@ -1034,12 +1040,13 @@ struct MainTabView: View {
             }
 
             Tab(value: NativeSidebarDestination.content(.settings)) {
-                AnyView(settingsTabContent)
+                AnyView(settingsTabContent.tvNavigationExitProtectionContent())
             } label: {
                 AnyView(settingsTabLabel)
             }
         }
         .tabViewStyle(.sidebarAdaptable)
+        .tvNavigationExitProtection(isEnabled: navigationStyleModel.preventsAccidentalExit)
     }
 
     /// Plozz's own chrome: the collapsible library rail plus the selected
@@ -1053,7 +1060,8 @@ struct MainTabView: View {
             selection: libraryNavigationSelection,
             onOpenProfileSwitcher: openProfileSwitcher,
             chrome: navigationChrome,
-            content: railDestination
+            content: railDestination,
+            preventsAccidentalExit: navigationStyleModel.preventsAccidentalExit
         )
         .environment(navigationChrome)
     }

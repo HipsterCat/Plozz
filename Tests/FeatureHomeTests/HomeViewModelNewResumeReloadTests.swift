@@ -38,6 +38,28 @@ final class HomeViewModelNewResumeReloadTests: XCTestCase {
         vm.state.value?.continueWatching ?? []
     }
 
+    func testSeasonWatchRemovesOnlyThatSeasonsContinueWatchingEpisodes() async {
+        let earlier = MediaItem(
+            id: "e1", title: "Earlier", kind: .episode, seasonID: "s1",
+            resumePosition: 80, sourceAccountID: "a"
+        )
+        let selected = MediaItem(
+            id: "e2", title: "Selected", kind: .episode, seasonID: "s2",
+            resumePosition: 90, sourceAccountID: "a"
+        )
+        let provider = FakeMediaProvider(allItems: [])
+        provider.continueWatchingItems = [earlier, selected]
+        let vm = makeViewModel(provider: provider)
+        await vm.load()
+        XCTAssertEqual(Set(cw(vm).map(\.id)), ["e1", "e2"])
+        vm.applyWatchedState(MediaItemMutation(
+            itemIDs: ["s2"], scopedItemIDs: ["a:s2"],
+            cascadesToSeasonEpisodes: true, played: true, resumePosition: 0
+        ))
+        XCTAssertEqual(cw(vm).map(\.id), ["e1"])
+        XCTAssertEqual(provider.librariesCallCount, 1)
+    }
+
     func testNewResumeTriggersSilentReloadThatSurfacesTheCard() async {
         let provider = FakeMediaProvider(allItems: [])
         // Home already has one unrelated title on Continue Watching, so it loads to

@@ -27,6 +27,7 @@ struct NavigationRailShell<Content: View>: View {
     let onOpenProfileSwitcher: () -> Void
     let chrome: NavigationChromeModel
     let content: Content
+    var preventsAccidentalExit: Bool = false
 
     /// Scopes appearance-time default focus so the CONTENT is focused first. Without
     /// it the rail — a stack of focusable rows sitting at the leading edge — can win
@@ -142,7 +143,8 @@ struct NavigationRailShell<Content: View>: View {
                         focusRequestToken: focusRequestToken,
                         focusReleaseToken: railReturnToken,
                         opensExpanded: presentation.opensExpanded,
-                        usesPageButtonSurface: presentation.showsPageButton
+                        usesPageButtonSurface: presentation.showsPageButton,
+                        preventsAccidentalExit: preventsAccidentalExit
                     )
                     // Keep the focus-request observer mounted while Search hides
                     // the collapsed rail, but exclude invisible rows from focus.

@@ -28,6 +28,18 @@ public struct MediaItemActionContext: Sendable, Equatable {
 /// which siblings a bulk action touches. Kept free of SwiftUI and providers so
 /// it is fully unit-testable on Linux/CI.
 public enum MediaItemActionCatalog {
+    /// Season containers do not reliably report aggregate watch state. Offer
+    /// both explicit operations, but only when the provider supports watch edits.
+    public static func seasonWatchActions(
+        for item: MediaItem,
+        availableActions: [MediaItemAction]
+    ) -> [MediaItemAction] {
+        guard item.kind == .season,
+              availableActions.contains(.markWatched) || availableActions.contains(.markUnwatched)
+        else { return [] }
+        return [.markWatched, .markUnwatched]
+    }
+
     /// The ordered actions to show for `item`.
     ///
     /// - Parameters:

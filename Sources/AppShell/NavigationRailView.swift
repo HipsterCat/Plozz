@@ -159,6 +159,7 @@ struct NavigationRailView: View {
     var opensExpanded: Bool = false
     /// Search keeps full menu geometry while its shared surface morphs to a capsule.
     var usesPageButtonSurface: Bool = false
+    var preventsAccidentalExit: Bool = false
 
     @Environment(\.themePalette) private var palette
     @Environment(\.colorScheme) private var colorScheme
@@ -308,6 +309,10 @@ struct NavigationRailView: View {
         // through every remaining rail row.
         .focusSection()
         .focusScope(railFocusScope)
+        .tvNavigationExitProtection(
+            isEnabled: preventsAccidentalExit,
+            navigationHasFocus: hasFocus
+        )
         .accessibilityLabel(Text(Self.accessibilityTitle))
         .onChange(of: isExpanded) { _, expanded in
             withAnimation(NavigationRailMetrics.expandAnimation) {

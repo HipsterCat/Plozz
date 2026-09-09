@@ -70,6 +70,9 @@ public final class ItemDetailViewModel {
     /// season is shown/focused and cached so re-focusing a tab is instant. Keyed
     /// by season id. Observed by `SeriesDetailView` to populate its episode rail.
     public private(set) var seasonEpisodes: [String: [MediaItem]] = [:]
+    /// Keep a season edit authoritative over late or stale episode fetches.
+    /// Subsequent individual edits replay after it so they still take precedence.
+    @ObservationIgnored private var seasonWatchMutations: [MediaItemMutation] = []
     /// The episode this series should resume at, as the **server** reports it.
     ///
     /// Season containers cannot be trusted to answer this. Measured on a real
@@ -1516,12 +1519,19 @@ public final class ItemDetailViewModel {
     /// SwiftUI updates just the affected cards and the user's focus stays exactly
     /// where it was.
     public func applyWatchedState(_ mutation: MediaItemMutation) {
+        if let item = state.value?.item, item.kind == .series,
+           mutation.targets(item), mutation.played != nil {
+            seasonWatchMutations.removeAll()
+        } else if mutation.cascadesToSeasonEpisodes || !seasonWatchMutations.isEmpty {
+            seasonWatchMutations.append(mutation)
+        }
         var seriesPlayedCascade: Bool?
         if case var .loaded(detail) = state {
             if detail.item.kind == .series, mutation.targets(detail.item) {
                 seriesPlayedCascade = mutation.played
             }
             detail.item = mutation.applied(to: detail.item)
+            detail.serverResumeEpisode = detail.serverResumeEpisode.map { mutation.applied(to: $0) }
             detail.children = detail.children.map { child in
                 var updated = mutation.applied(to: child)
                 if let seriesPlayedCascade {
@@ -1698,6 +1708,7 @@ public final class ItemDetailViewModel {
         // Drop the old server's per-season episode caches so the rail reloads from
         // the new server (its ids differ); the season list reloads via reload().
         seasonEpisodes = [:]
+        seasonWatchMutations = []
         seasonLoadFailures = []
         preselectedSeasonID = nil
 
@@ -1854,7 +1865,13 @@ public final class ItemDetailViewModel {
                     // "the request failed": both cache `[]` so neither retries on
                     // every focus change, but only the first is an answer.
                     let fetched = try? await provider.children(of: seasonID)
-                    let episodes = (fetched ?? []).filter { !isSeriesContainer || $0.kind == .episode }
+                    let episodes = (fetched ?? []).filter { !isSeriesContainer || $0.kind == .episode }.map { item in
+                        var episode = item
+                        if !isSeriesContainer, episode.kind == .episode, episode.seasonID == nil {
+                            episode.seasonID = seasonID
+                        }
+                        return episode
+                    }
                     guard !Task.isCancelled,
                           let self,
                           self.seasonLoads[seasonID]?.token == token,
@@ -1990,8 +2007,10 @@ public final class ItemDetailViewModel {
     /// Stamps an item with this detail's owning account (if any) so navigation
     /// keeps routing to the right provider.
     private func tagged(_ item: MediaItem) -> MediaItem {
-        guard let activeSourceAccountID else { return item }
-        return item.taggingSource(activeSourceAccountID)
+        let tagged = activeSourceAccountID.map { item.taggingSource($0) } ?? item
+        return seasonWatchMutations.reduce(tagged) { item, mutation in
+            mutation.applied(to: item)
+        }
     }
 
     private func isCurrentSource(

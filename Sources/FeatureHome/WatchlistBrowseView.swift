@@ -91,7 +91,6 @@ public struct WatchlistBrowseView: View {
         .onMoveCommand { _ in
             viewModel.noteHomeNavigationInteraction()
         }
-        .toolbar(.hidden, for: .tabBar)
     }
 
     @ViewBuilder

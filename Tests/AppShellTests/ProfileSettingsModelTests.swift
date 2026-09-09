@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 import CoreModels
 @testable import AppShell
@@ -106,6 +107,33 @@ final class ProfileSettingsModelTests: XCTestCase {
         let themeABack = ObjectIdentifier(model.themeModel)
         XCTAssertNotEqual(themeB, themeABack)
         XCTAssertNotEqual(themeA, themeABack)
+    }
+
+    func testRebuildScopesAccidentalExitPreferenceToActiveProfile() {
+        let primaryNamespace = "ProfileSettingsModelTests.primary.\(UUID().uuidString)"
+        let childNamespace = "ProfileSettingsModelTests.child.\(UUID().uuidString)"
+        let primaryKey = SettingsKey.scoped(
+            "preventsAccidentalExit",
+            namespace: primaryNamespace
+        )
+        let childKey = SettingsKey.scoped(
+            "preventsAccidentalExit",
+            namespace: childNamespace
+        )
+        defer {
+            UserDefaults.standard.removeObject(forKey: primaryKey)
+            UserDefaults.standard.removeObject(forKey: childKey)
+        }
+
+        let model = ProfileSettingsModel(namespace: primaryNamespace)
+        XCTAssertFalse(model.navigationStyleModel.preventsAccidentalExit)
+        model.navigationStyleModel.preventsAccidentalExit = true
+
+        model.rebuild(namespace: childNamespace)
+        XCTAssertFalse(model.navigationStyleModel.preventsAccidentalExit)
+
+        model.rebuild(namespace: primaryNamespace)
+        XCTAssertTrue(model.navigationStyleModel.preventsAccidentalExit)
     }
 
     /// The three models that previously had no injection parameter

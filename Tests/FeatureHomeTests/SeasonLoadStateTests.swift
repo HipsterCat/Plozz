@@ -42,8 +42,14 @@ final class SeasonLoadStateTests: XCTestCase {
 
         await vm.loadEpisodes(for: "s1")
 
-        XCTAssertEqual(vm.seasonLoadState(for: "s1"), .loaded([episode("e1", number: 1), episode("e2", number: 2)]))
+        let expected = [episode("e1", number: 1), episode("e2", number: 2)].map { item in
+            var tagged = item
+            tagged.seasonID = "s1"
+            return tagged
+        }
+        XCTAssertEqual(vm.seasonLoadState(for: "s1"), .loaded(expected))
         XCTAssertEqual(vm.seasonLoadState(for: "s1").authoritativeEpisodes?.count, 2)
+        XCTAssertNil(provider.childrenByParent?["s1"]?.first?.seasonID)
     }
 
     /// A season the server says is empty really is empty — that is an answer, and
