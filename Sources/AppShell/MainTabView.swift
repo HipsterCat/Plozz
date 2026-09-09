@@ -994,7 +994,7 @@ struct MainTabView: View {
                     Text(verbatim: activeProfile.name)
                         .font(.system(size: 26, weight: .regular))
                 } icon: {
-                    ProfileAvatarView(profile: activeProfile, size: 32, rendersAsImage: true)
+                    ProfileAvatarView(profile: activeProfile, size: 44, rendersAsImage: true)
                 })
             }
 
