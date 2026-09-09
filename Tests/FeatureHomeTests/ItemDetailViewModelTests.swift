@@ -1286,6 +1286,74 @@ final class ItemDetailViewModelTests: XCTestCase {
         XCTAssertTrue(vm.episodes(for: season.id)?.allSatisfy(\.isPlayed) ?? false)
     }
 
+    func testSeasonWatchMutationUpdatesOnlyItsEpisodesAndPreservesOrder() async {
+        let series = MediaItem(id: "series", title: "Series", kind: .series)
+        let first = MediaItem(id: "s1", title: "Season 1", kind: .season)
+        let second = MediaItem(id: "s2", title: "Season 2", kind: .season)
+        let episodes = [
+            MediaItem(id: "e1", title: "One", kind: .episode),
+            MediaItem(id: "e2", title: "Two", kind: .episode)
+        ]
+        let provider = FakeMediaProvider(allItems: [series, first, second] + episodes)
+        provider.childrenByParent = [
+            series.id: [first, second],
+            first.id: [MediaItem(id: "earlier", title: "Earlier", kind: .episode)],
+            second.id: episodes
+        ]
+        let vm = ItemDetailViewModel(provider: provider, itemID: series.id, sourceAccountID: "a")
+        await vm.load()
+        await vm.loadEpisodes(for: first.id)
+        await vm.loadEpisodes(for: second.id)
+        for played in [true, false] {
+            vm.applyWatchedState(MediaItemMutation(
+                itemIDs: [second.id], scopedItemIDs: ["a:s2"],
+                cascadesToSeasonEpisodes: true, played: played
+            ))
+            XCTAssertEqual(vm.episodes(for: second.id)?.map(\.id), ["e1", "e2"])
+            XCTAssertEqual(vm.episodes(for: second.id)?.map(\.isPlayed), [played, played])
+            XCTAssertEqual(vm.episodes(for: first.id)?.map(\.isPlayed), [false])
+            XCTAssertEqual(vm.state.value?.children.map(\.id), ["s1", "s2"])
+            XCTAssertEqual(vm.state.value?.children.map(\.isPlayed), [false, played])
+            XCTAssertFalse(vm.state.value?.item.isPlayed ?? true)
+        }
+        vm.suspendEnrichment()
+    }
+
+    func testSeasonWatchEditSurvivesLateFetchAndLaterEpisodeEditWins() async {
+        let series = MediaItem(id: "series", title: "Series", kind: .series)
+        let season = MediaItem(id: "s2", title: "Season 2", kind: .season)
+        let episode = MediaItem(id: "e1", title: "One", kind: .episode)
+        let provider = FakeMediaProvider(allItems: [series, season, episode])
+        provider.childrenByParent = [series.id: [season], season.id: [episode]]
+        let vm = ItemDetailViewModel(provider: provider, itemID: series.id, sourceAccountID: "a")
+        await vm.load()
+        let gate = AsyncGate()
+        provider.childrenGate = [season.id: { _ in await gate.wait() }]
+        let loading = Task { await vm.loadEpisodes(for: season.id) }
+        await waitUntil { provider.childrenCallCount[season.id] == 1 }
+        vm.applyWatchedState(MediaItemMutation(
+            itemIDs: [season.id], scopedItemIDs: ["a:s2"],
+            cascadesToSeasonEpisodes: true, played: true
+        ))
+        gate.open()
+        await loading.value
+        XCTAssertEqual(vm.episodes(for: season.id)?.map(\.isPlayed), [true])
+
+        vm.applyWatchedState(MediaItemMutation(itemIDs: ["e1"], scopedItemIDs: ["a:e1"], played: false))
+        await vm.loadEpisodes(for: season.id, forceRefresh: true)
+        XCTAssertEqual(vm.episodes(for: season.id)?.map(\.isPlayed), [false])
+        vm.applyWatchedState(MediaItemMutation(
+            itemIDs: [season.id], scopedItemIDs: ["a:s2"],
+            cascadesToSeasonEpisodes: true, played: true
+        ))
+        vm.applyWatchedState(MediaItemMutation(
+            itemIDs: [series.id], scopedItemIDs: ["a:series"], played: false
+        ))
+        await vm.loadEpisodes(for: season.id, forceRefresh: true)
+        XCTAssertEqual(vm.episodes(for: season.id)?.map(\.isPlayed), [false])
+        vm.suspendEnrichment()
+    }
+
     func testSwitchToSourceIsNotOverriddenByInitialLocalityPreference() async {
         // After a user explicitly switches servers, a later load() must NOT re-apply
         // the automatic local-first preference and drag them back.

@@ -181,6 +181,10 @@ public struct MediaItemMutation: Sendable, Equatable {
     /// whose full source set we still fold over) — then matching falls back to
     /// `itemIDs`, preserving the original single-server behaviour.
     public let scopedItemIDs: Set<String>
+    /// The targets are season containers; also apply their watch state to
+    /// episodes whose account-scoped `seasonID` matches. Never infer this from
+    /// a bare ID, which could belong to a different media kind.
+    public let cascadesToSeasonEpisodes: Bool
     /// New watched/played state, or `nil` if this mutation doesn't change it.
     public let played: Bool?
     /// New watchlist/favourite state, or `nil` if this mutation doesn't change it.
@@ -211,6 +215,7 @@ public struct MediaItemMutation: Sendable, Equatable {
     public init(
         itemIDs: Set<String>,
         scopedItemIDs: Set<String> = [],
+        cascadesToSeasonEpisodes: Bool = false,
         played: Bool? = nil,
         favorite: Bool? = nil,
         resumePosition: TimeInterval? = nil,
@@ -219,6 +224,7 @@ public struct MediaItemMutation: Sendable, Equatable {
     ) {
         self.itemIDs = itemIDs
         self.scopedItemIDs = scopedItemIDs
+        self.cascadesToSeasonEpisodes = cascadesToSeasonEpisodes
         self.played = played
         self.favorite = favorite
         self.resumePosition = resumePosition
@@ -238,14 +244,17 @@ public struct MediaItemMutation: Sendable, Equatable {
         self.init(
             itemIDs: Set(watchMutation.optimisticTargets.map(\.itemID)),
             scopedItemIDs: Set(watchMutation.optimisticTargets.map(\.id)),
+            cascadesToSeasonEpisodes: watchMutation.kind == .season,
             played: played,
-            resumePosition: watchMutation.resumePosition
+            resumePosition: watchMutation.kind == .season && watchMutation.clearResume
+                ? 0 : watchMutation.resumePosition
         )
     }
 
     private enum Key {
         static let itemIDs = "itemIDs"
         static let scopedItemIDs = "scopedItemIDs"
+        static let cascadesToSeasonEpisodes = "cascadesToSeasonEpisodes"
         static let played = "played"
         static let favorite = "favorite"
         static let resumePosition = "resumePosition"
@@ -280,11 +289,18 @@ public struct MediaItemMutation: Sendable, Equatable {
     /// makes the in-place update robust regardless of how complete the mutation's
     /// own id set was. Account-scoped when ``scopedItemIDs`` is present.
     public func targets(_ item: MediaItem) -> Bool {
+        if targetsSeason(of: item) { return true }
         if !scopedItemIDs.isEmpty {
             if matches(accountID: item.sourceAccountID, itemID: item.id) { return true }
             return item.sources.contains { scopedItemIDs.contains($0.id) }
         }
         return itemIDs.contains(item.id) || item.sources.contains { itemIDs.contains($0.itemID) }
+    }
+
+    private func targetsSeason(of item: MediaItem) -> Bool {
+        guard cascadesToSeasonEpisodes, played != nil,
+              item.kind == .episode, let seasonID = item.seasonID else { return false }
+        return matches(accountID: item.sourceAccountID, itemID: seasonID)
     }
 
     /// Applies this mutation to `item` in place, returning the updated copy. Only
@@ -311,7 +327,11 @@ public struct MediaItemMutation: Sendable, Equatable {
         // the played source(s) in sync means the fold preserves the mutation.
         if !copy.sources.isEmpty {
             copy.sources = copy.sources.map { ref in
-                guard matches(accountID: ref.accountID, itemID: ref.itemID) else { return ref }
+                let isCascadedOrigin = targetsSeason(of: item)
+                    && ref.accountID == item.sourceAccountID && ref.itemID == item.id
+                guard matches(accountID: ref.accountID, itemID: ref.itemID) || isCascadedOrigin else {
+                    return ref
+                }
                 var updated = ref
                 if let played {
                     updated.isPlayed = played
@@ -335,6 +355,7 @@ public struct MediaItemMutation: Sendable, Equatable {
     public func post() {
         var userInfo: [String: Any] = [Key.itemIDs: Array(itemIDs)]
         if !scopedItemIDs.isEmpty { userInfo[Key.scopedItemIDs] = Array(scopedItemIDs) }
+        if cascadesToSeasonEpisodes { userInfo[Key.cascadesToSeasonEpisodes] = true }
         if let played { userInfo[Key.played] = played }
         if let favorite { userInfo[Key.favorite] = favorite }
         if let resumePosition { userInfo[Key.resumePosition] = resumePosition }
@@ -365,6 +386,7 @@ public struct MediaItemMutation: Sendable, Equatable {
         return MediaItemMutation(
             itemIDs: Set(ids),
             scopedItemIDs: scoped,
+            cascadesToSeasonEpisodes: notification.userInfo?[Key.cascadesToSeasonEpisodes] as? Bool ?? false,
             played: played,
             favorite: favorite,
             resumePosition: resumePosition,

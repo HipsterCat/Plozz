@@ -61,6 +61,7 @@ struct SeriesDetailView: View {
     /// never cleared, so moving focus onto a non-previewing control (e.g. the
     /// hero's own Play button) keeps the last meaningful context.
     @State private var heroItem: MediaItem
+    @State private var hasEditedSeasonWatchState = false
     @FocusState private var focusedSeasonID: String?
     @FocusState private var requestSeasonsFocused: Bool
     /// True once focus is *inside* the season bar. While false, only the active
@@ -299,6 +300,9 @@ struct SeriesDetailView: View {
             // advances the resting hero when its Play target becomes watched.
             .onReceive(NotificationCenter.default.publisher(for: .mediaItemDidMutate)) { note in
                 guard let mutation = MediaItemMutation.from(note) else { return }
+                let seasonWasEdited = mutation.cascadesToSeasonEpisodes
+                    && seasons.contains { mutation.targets($0) }
+                if seasonWasEdited { hasEditedSeasonWatchState = true }
                 if mutation.targets(heroItem) {
                     heroItem = mutation.applied(to: heroItem)
                 } else if heroItem.kind == .episode,
@@ -306,7 +310,7 @@ struct SeriesDetailView: View {
                           let played = mutation.played {
                     heroItem.isPlayed = played
                 }
-                guard heroItem.kind == .episode, heroItem.isPlayed else {
+                guard seasonWasEdited || (heroItem.kind == .episode && heroItem.isPlayed) else {
                     return
                 }
                 // The hero advances to the next unwatched episode, but the rail
@@ -316,9 +320,18 @@ struct SeriesDetailView: View {
                 // Marking from the hero has no rail focus to protect, so there the
                 // rail still follows.
                 Task {
+                    if seasonWasEdited, let seasonID = selectedSeasonID {
+                        let source = viewModel.state.value?.item
+                        await viewModel.loadEpisodes(for: seasonID)
+                        guard !Task.isCancelled, selectedSeasonID == seasonID,
+                              viewModel.state.value?.item.id == source?.id,
+                              viewModel.state.value?.item.sourceAccountID == source?.sourceAccountID else {
+                            return
+                        }
+                    }
                     await resolveRestingHero(
                         in: selectedSeasonID,
-                        repointsRail: !browserHoldsFocus
+                        repointsRail: !seasonWasEdited && !browserHoldsFocus
                     )
                 }
             }
@@ -1021,6 +1034,9 @@ struct SeriesDetailView: View {
                 .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(PlozzSeasonTabStyle(isSelected: isSelected))
+        .contextMenu {
+            SeasonWatchStateMenuContent(season: season)
+        }
         // No system focus ring — the pill + scale is the focus treatment.
         .focusEffectDisabled()
         .focused($focusedSeasonID, equals: season.id)
@@ -1666,7 +1682,8 @@ struct SeriesDetailView: View {
             pool = seasons.isEmpty ? stampedLooseEpisodes : []
         }
 
-        if let resume = initialEpisode ?? (initialSeasonID == nil ? viewModel.serverResumeEpisode : nil),
+        if !hasEditedSeasonWatchState,
+                  let resume = initialEpisode ?? (initialSeasonID == nil ? viewModel.serverResumeEpisode : nil),
                   let loaded = SeriesEpisodeEntry.episode(
                       matching: resume,
                       in: pool

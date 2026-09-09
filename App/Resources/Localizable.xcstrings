@@ -222152,6 +222152,12 @@
         }
       }
     },
+    "Mark Season Unwatched" : {
+
+    },
+    "Mark Season Watched" : {
+
+    },
     "Maximum Resolution: %lldp" : {
       "localizations" : {
         "ar" : {
