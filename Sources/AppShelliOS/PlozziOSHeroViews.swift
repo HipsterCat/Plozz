@@ -2576,87 +2576,7 @@ private struct PlozziOSDetailHeroForeground: View {
     }
 }
 
-private struct PlozziOSHeroActionButtonStyle: ButtonStyle {
-    enum Kind {
-        case primary
-        case secondary
-    }
-
-    let kind: Kind
-    var circular = false
-    @Environment(\.themePalette) private var palette
-
-    func makeBody(configuration: Configuration) -> some View {
-        styledLabel(configuration)
-            .contentShape(circular ? AnyShape(Circle()) : AnyShape(Capsule()))
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .opacity(configuration.isPressed ? 0.86 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-    }
-
-    @ViewBuilder
-    private func styledLabel(_ configuration: Configuration) -> some View {
-        if circular {
-            configuration.label
-                .foregroundStyle(
-                    kind == .primary
-                        ? palette.backgroundBase
-                        : palette.primaryText
-                )
-                .frame(width: 48, height: 48)
-                .background {
-                    Circle()
-                        .fill(backgroundColor)
-                        .overlay {
-                            if kind == .secondary {
-                                Circle()
-                                    .strokeBorder(
-                                        palette.primaryText.opacity(0.2),
-                                        lineWidth: 1
-                                    )
-                            }
-                        }
-                }
-        } else {
-            configuration.label
-            .lineLimit(nil)
-            .fixedSize(horizontal: false, vertical: true)
-            .font(.headline.weight(.semibold))
-            .foregroundStyle(
-                kind == .primary
-                    ? palette.backgroundBase
-                    : palette.primaryText
-            )
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .frame(minHeight: 48)
-            .background {
-                Capsule()
-                    .fill(
-                        kind == .primary
-                            ? palette.primaryText
-                            : palette.cardSurface.opacity(0.92)
-                    )
-                    .overlay {
-                        if kind == .secondary {
-                            Capsule()
-                                .strokeBorder(
-                                    palette.primaryText.opacity(0.2),
-                                    lineWidth: 1
-                                )
-                        }
-                    }
-            }
-            .contentShape(Capsule())
-        }
-    }
-
-    private var backgroundColor: Color {
-        kind == .primary
-            ? palette.primaryText
-            : palette.cardSurface.opacity(0.92)
-    }
-}
+private typealias PlozziOSHeroActionButtonStyle = TouchHeroActionButtonStyle
 
 private struct PlozziOSHeroMetadata: View {
     enum Mode {
@@ -2721,7 +2641,9 @@ private struct PlozziOSHeroMetadata: View {
 
     var body: some View {
         let contextParts = usesCompactDetailLayout
-            ? factComponents + effectiveGenres
+            ? factComponents + HeroContentPolicy.compactDetailGenres(
+                focused: presentation, root: rootPresentation
+            )
             : effectiveGenres
         VStack(
             alignment: style == .compactPortrait ? .center : .leading,
@@ -2801,17 +2723,24 @@ private struct PlozziOSHeroMetadata: View {
             }
 
             if let descriptionText {
-                Text(descriptionText.overviewMarkdownWithLegibleLinks(
-                    textColor: palette.primaryText,
-                    accent: palette.accent
-                ))
-                    .font(usesCompactDetailLayout ? .body : .subheadline)
-                    .foregroundStyle(
-                        usesCompactDetailLayout
-                            ? palette.primaryText.opacity(0.92)
-                            : palette.secondaryText
+                if usesCompactDetailLayout {
+                    ExpandableOverviewText(
+                        text: descriptionText,
+                        title: subjectTitle ?? presentation.title,
+                        lineLimit: 3,
+                        font: .body,
+                        alignment: .center,
+                        style: .inline
                     )
-                    .lineLimit(usesCompactDetailLayout ? 2 : 3)
+                    .frame(maxWidth: PlozziOSPageLayout.heroTextMaxWidth(for: style))
+                } else {
+                    Text(descriptionText.overviewMarkdownWithLegibleLinks(
+                        textColor: palette.primaryText,
+                        accent: palette.accent
+                    ))
+                    .font(.subheadline)
+                    .plozzForeground(.secondary)
+                    .lineLimit(3)
                     .frame(
                         maxWidth: PlozziOSPageLayout.heroTextMaxWidth(
                             for: style
@@ -2823,6 +2752,7 @@ private struct PlozziOSHeroMetadata: View {
                     .multilineTextAlignment(
                         style == .compactPortrait ? .center : .leading
                     )
+                }
             }
 
             if mode == .home, !effectiveRatings.isEmpty {
