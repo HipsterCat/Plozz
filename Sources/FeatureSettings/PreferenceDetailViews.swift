@@ -139,6 +139,19 @@ struct AppearanceDetailView: View {
             VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
                 CompactNavigationPicker(selection: $navigation.style)
 
+                #if os(tvOS)
+                SettingsDetailGroup(
+                    title: "Leaving Plozz",
+                    description: "The Back button won't close the app."
+                ) {
+                    Toggle(
+                        "Prevent Accidental Exit",
+                        isOn: $navigation.preventsAccidentalExit
+                    )
+                    .toggleStyle(SettingsSwitchToggleStyle())
+                }
+                #endif
+
                 SettingsDetailGroup(
                     title: "Hide or Reorder Navigation"
                 ) {

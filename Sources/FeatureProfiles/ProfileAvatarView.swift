@@ -17,10 +17,12 @@ import CoreUI
 public struct ProfileAvatarView: View {
     public let profile: Profile
     public let size: CGFloat
+    public let rendersAsImage: Bool
 
-    public init(profile: Profile, size: CGFloat) {
+    public init(profile: Profile, size: CGFloat, rendersAsImage: Bool = false) {
         self.profile = profile
         self.size = size
+        self.rendersAsImage = rendersAsImage
     }
 
     public var body: some View {
@@ -28,7 +30,17 @@ public struct ProfileAvatarView: View {
             if let urlString = profile.avatarImageURL?.trimmingCharacters(in: .whitespaces),
                !urlString.isEmpty,
                let url = URL(string: urlString) {
-                FallbackAsyncImage(urls: [url], variant: Self.variant(for: size)) {
+                FallbackAsyncImage(
+                    references: [.remote(url)],
+                    variant: Self.variant(for: size),
+                    content: { image in
+                        if rendersAsImage {
+                            nativePhotoImage(image)
+                        } else {
+                            ArtworkFillImage(image)
+                        }
+                    }
+                ) {
                     // Shown only when the photo genuinely fails to load — keeps the
                     // tile recognizable instead of an empty circle.
                     emojiOrSymbolFallback
@@ -45,8 +57,9 @@ public struct ProfileAvatarView: View {
     /// non-photo avatar and as the fallback when a borrowed photo URL fails.
     @ViewBuilder
     private var emojiOrSymbolFallback: some View {
-        if let emoji = profile.avatarEmoji?.trimmingCharacters(in: .whitespaces),
-           !emoji.isEmpty {
+        if rendersAsImage {
+            nativeFallbackImage
+        } else if let emoji {
             emojiTile(emoji)
         } else {
             symbolFallback
@@ -59,11 +72,7 @@ public struct ProfileAvatarView: View {
     /// background is the chosen colour when set, otherwise a neutral surface.
     private func emojiTile(_ emoji: String) -> some View {
         ZStack {
-            if let index = profile.avatarEmojiColorIndex {
-                Circle().fill(ProfileTileColor.color(forIndex: index))
-            } else {
-                Circle().fill(Self.neutralEmojiBackground)
-            }
+            Circle().fill(emojiBackground)
             Text(emoji)
                 .font(.system(size: size * 0.55))
                 .minimumScaleFactor(0.5)
@@ -75,6 +84,71 @@ public struct ProfileAvatarView: View {
     /// colours.
     private static var neutralEmojiBackground: Color {
         Color.gray.opacity(0.35)
+    }
+
+    private var emoji: String? {
+        let value = profile.avatarEmoji?.trimmingCharacters(in: .whitespaces)
+        return value?.isEmpty == false ? value : nil
+    }
+
+    private var emojiBackground: Color {
+        profile.avatarEmojiColorIndex.map(ProfileTileColor.color(forIndex:))
+            ?? Self.neutralEmojiBackground
+    }
+
+    // Native tab labels on tvOS 26 extract the Image but discard its surrounding
+    // view modifiers. Encode the size, crop and colors in the image itself.
+    func nativePhotoImage(_ image: Image) -> Image {
+        nativeImage { context, bounds in
+            let resolved = context.resolve(image)
+            let scale = max(
+                bounds.width / resolved.size.width,
+                bounds.height / resolved.size.height
+            )
+            let width = resolved.size.width * scale
+            let height = resolved.size.height * scale
+            context.draw(resolved, in: CGRect(
+                x: bounds.midX - width / 2,
+                y: bounds.midY - height / 2,
+                width: width,
+                height: height
+            ))
+        }
+    }
+
+    var nativeFallbackImage: Image {
+        nativeImage { context, bounds in
+            let center = CGPoint(x: bounds.midX, y: bounds.midY)
+            if let emoji {
+                context.fill(Path(ellipseIn: bounds), with: .color(emojiBackground))
+                context.draw(
+                    Text(verbatim: emoji).font(.system(size: size * 0.55)),
+                    at: center
+                )
+            } else {
+                context.fill(Path(ellipseIn: bounds), with: .color(ProfileTileColor.color(for: profile)))
+                context.draw(
+                    Text(Image(systemName: profile.avatarSymbol))
+                        .font(.system(size: size * 0.5, weight: .semibold))
+                        .foregroundStyle(ProfileTileColor.legibleForeground(for: profile)),
+                    at: center
+                )
+            }
+        }
+    }
+
+    private func nativeImage(
+        draw: @escaping (inout GraphicsContext, CGRect) -> Void
+    ) -> Image {
+        Image(
+            size: CGSize(width: size, height: size),
+            label: Text(verbatim: profile.name)
+        ) { context in
+            let bounds = CGRect(x: 0, y: 0, width: size, height: size)
+            context.clip(to: Path(ellipseIn: bounds))
+            draw(&context, bounds)
+        }
+        .renderingMode(.original)
     }
 
     /// Picks a cache variant sized to the avatar: a crisp source for the large

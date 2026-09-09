@@ -76,6 +76,30 @@ final class MediaItemVersionsCodableTests: XCTestCase {
 // MARK: - MediaItemMutation (optional played / favourite)
 
 final class MediaItemMutationOptionalTests: XCTestCase {
+    func testConfirmedEpisodeRequestsRefreshWithoutReapplyingWatchedState() throws {
+        var confirmation = WatchMutation(
+            capturedAt: Date(), canonicalMediaID: "episode", played: true, clearResume: true,
+            targets: [.init(accountID: "a", itemID: "e3")], kind: .episode
+        )
+        let mutation = try XCTUnwrap(MediaItemMutation(confirmedWatchMutation: confirmation))
+        XCTAssertTrue(mutation.refreshContinueWatching)
+        XCTAssertEqual(mutation.scopedItemIDs, ["a:e3"])
+        XCTAssertNil(mutation.played)
+        XCTAssertNil(mutation.resumePosition)
+        let newer = MediaItem(id: "e3", title: "Episode", kind: .episode, resumePosition: 120, sourceAccountID: "a")
+        XCTAssertEqual(mutation.applied(to: newer).resumePosition, 120)
+        let note = Notification(
+            name: .mediaItemDidMutate,
+            userInfo: ["itemIDs": ["e3"], "scopedItemIDs": ["a:e3"], "refreshContinueWatching": true]
+        )
+        XCTAssertEqual(MediaItemMutation.from(note), mutation)
+        confirmation.played = false
+        XCTAssertNil(MediaItemMutation(confirmedWatchMutation: confirmation))
+        confirmation.played = true
+        confirmation.kind = .movie
+        XCTAssertNil(MediaItemMutation(confirmedWatchMutation: confirmation))
+    }
+
     func testWatchlistOnlyMutationLeavesPlayedNil() {
         let m = MediaItemMutation(itemIDs: ["a"], favorite: true)
         XCTAssertNil(m.played)

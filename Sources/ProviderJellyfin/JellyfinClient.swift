@@ -415,6 +415,28 @@ public struct JellyfinClient: Sendable {
         return result
     }
 
+    /// Series-level UserData often has no LastPlayedDate. Read the latest episode
+    /// activity under that exact series rather than treating it as never watched.
+    func lastPlayedEpisode(userID: String, seriesID: String) async throws -> BaseItemDto? {
+        let endpoint = Endpoint(
+            path: "/Users/\(userID)/Items",
+            queryItems: [
+                URLQueryItem(name: "ParentId", value: seriesID),
+                URLQueryItem(name: "IncludeItemTypes", value: "Episode"),
+                URLQueryItem(name: "Recursive", value: "true"),
+                URLQueryItem(name: "SortBy", value: "DatePlayed"),
+                URLQueryItem(name: "SortOrder", value: "Descending"),
+                URLQueryItem(name: "Limit", value: "1"),
+                URLQueryItem(name: "EnableImages", value: "false"),
+                URLQueryItem(name: "EnableUserData", value: "true"),
+                URLQueryItem(name: "EnableTotalRecordCount", value: "false")
+            ],
+            headers: authHeaders
+        )
+        let items = try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL).Items
+        return items.first { $0.Type == "Episode" && $0.SeriesId == seriesID }
+    }
+
     /// `/Users/{id}/Items?PersonIds=…` — everything in the viewer's library
     /// featuring a person, newest first.
     ///

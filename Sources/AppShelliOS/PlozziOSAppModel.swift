@@ -1682,32 +1682,23 @@ final class PlozziOSAppModel {
         )
         publishPlaybackMutation(
             mutation,
-            itemID: item.id,
+            item: item,
             watchedPercent: watchedPercent
         )
         let reconciler = watchReconciler
         Task {
-            if let accountID {
-                await reconciler.endLiveSession(
-                    accountID: accountID,
-                    itemID: item.id
-                )
-            }
-            if let mutation {
-                await reconciler.enqueue(mutation)
-            }
-            await reconciler.drain()
+            await reconciler.finishLiveSession(accountID: accountID, itemID: item.id, mutation: mutation)
         }
     }
 
     private func publishPlaybackMutation(
         _ mutation: WatchMutation?,
-        itemID: String,
+        item: MediaItem,
         watchedPercent: Double
     ) {
         guard let mutation else { return }
         var itemIDs = Set(mutation.optimisticTargets.map(\.itemID))
-        itemIDs.insert(itemID)
+        itemIDs.insert(item.id)
         MediaItemMutation(
             itemIDs: itemIDs,
             scopedItemIDs: Set(mutation.optimisticTargets.map(\.id)),
@@ -1715,7 +1706,8 @@ final class PlozziOSAppModel {
             resumePosition: mutation.resumePosition,
             playedPercentage: mutation.played == true
                 ? 1
-                : max(0, min(1, watchedPercent / 100))
+                : max(0, min(1, watchedPercent / 100)),
+            item: item
         ).post()
     }
 
@@ -1829,6 +1821,10 @@ final class PlozziOSAppModel {
             applier: applier,
             onPersistenceFailure: {
                 PlozzLog.app.error("iOS durable watch outbox write failed")
+            },
+            onServerStateApplied: { mutation in
+                guard let refresh = MediaItemMutation(confirmedWatchMutation: mutation) else { return }
+                Task { @MainActor in refresh.post() }
             }
         )
     }

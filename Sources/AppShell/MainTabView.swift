@@ -1284,13 +1284,14 @@ struct MainTabView: View {
         TabView(selection: selectedTab) {
             ForEach(topBarDestinations, id: \.storageValue) { destination in
                 Tab(value: mainTab(for: destination)) {
-                    topBarDestinationContent(destination)
+                    AnyView(topBarDestinationContent(destination).tvNavigationExitProtectionContent())
                 } label: {
                     rootNavigationLabel(for: destination)
                 }
             }
         }
         .tabViewStyle(.tabBarOnly)
+        .tvNavigationExitProtection(isEnabled: navigationStyleModel.preventsAccidentalExit)
     }
 
     /// Native tvOS sidebar. Uses the same ordered/hidden library plan as custom
@@ -1303,25 +1304,26 @@ struct MainTabView: View {
         TabView(selection: nativeSidebarSelection) {
             Tab(value: NativeSidebarDestination.profile) {
                 // Selection immediately raises RootView's existing profile page.
-                AnyView(Color.clear)
+                AnyView(Color.clear.tvNavigationExitProtectionContent())
             } label: {
                 AnyView(Label {
                     Text(verbatim: activeProfile.name)
                         .font(.system(size: 26, weight: .regular))
                 } icon: {
-                    ProfileAvatarView(profile: activeProfile, size: 32)
+                    ProfileAvatarView(profile: activeProfile, size: 44, rendersAsImage: true)
                 })
             }
 
             ForEach(sidebarDestinations, id: \.storageValue) { destination in
                 Tab(value: NativeSidebarDestination.content(destination)) {
-                    sidebarDestinationContent(destination)
+                    AnyView(sidebarDestinationContent(destination).tvNavigationExitProtectionContent())
                 } label: {
                     rootNavigationLabel(for: destination)
                 }
             }
         }
         .tabViewStyle(.sidebarAdaptable)
+        .tvNavigationExitProtection(isEnabled: navigationStyleModel.preventsAccidentalExit)
     }
 
     /// Plozz's own chrome: the collapsible library rail plus the selected
@@ -1334,7 +1336,8 @@ struct MainTabView: View {
             selection: libraryNavigationSelection,
             onOpenProfileSwitcher: openProfileSwitcher,
             chrome: navigationChrome,
-            content: railContent
+            content: railContent,
+            preventsAccidentalExit: navigationStyleModel.preventsAccidentalExit
         )
         .environment(navigationChrome)
     }

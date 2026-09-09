@@ -183,12 +183,16 @@ let package = Package(
         // their products, so the direct declarations were removed (SwiftPM flagged
         // them as unused). AetherEngine owns their version alignment.
 
-        // Sentry (getsentry/sentry-cocoa) — powers the OPT-IN, off-by-default
+        // Sentry's official binary-only package powers the OPT-IN, off-by-default
         // crash reporter (Settings ▸ Help & Diagnostics ▸ Share Crash Reports).
-        // Prebuilt binary xcframework (no build-time compilation of the SDK).
+        // It preserves the static prebuilt SDK while avoiding the main package's
+        // unused dynamic, ARM64e, no-UI, and Objective-C binary variants.
         // Nothing is sent unless the user opts in AND a DSN was baked into the
         // build; see the `CrashReporting` target for the privacy-hardened config.
-        .package(url: "https://github.com/getsentry/sentry-cocoa", from: "9.19.0"),
+        .package(
+            url: "https://github.com/getsentry/sentry-apple-binaries",
+            exact: "9.27.0"
+        ),
 
         // SMBClient — pure-Swift, MIT SMB client over NWConnection. Declared here
         // for the isolated **MediaTransportSMB** adapter and ProviderShare's
@@ -469,7 +473,7 @@ let package = Package(
         .target(
             name: "CrashReporting",
             dependencies: [
-                .product(name: "Sentry", package: "sentry-cocoa"),
+                .product(name: "Sentry-Static", package: "sentry-apple-binaries"),
             ]
         ),
 

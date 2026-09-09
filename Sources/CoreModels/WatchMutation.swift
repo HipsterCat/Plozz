@@ -107,6 +107,8 @@ public struct WatchMutation: Codable, Hashable, Sendable, Identifiable {
     public var played: Bool?
     /// When `true`, finishing also clears the resume point everywhere (a finished
     /// title shouldn't keep a stale resume on any server).
+    /// With no `played` flag or `resumePosition`, this instead represents the
+    /// user's explicit "Remove from Continue Watching" action.
     public var clearResume: Bool
 
     /// Servers still needing this write. The reconciler removes a target as it

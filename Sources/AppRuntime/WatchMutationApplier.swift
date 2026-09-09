@@ -125,6 +125,19 @@ public struct AppShellWatchMutationApplier: WatchMutationApplying {
     }
 
     public func setResumePosition(_ seconds: TimeInterval, on target: WatchMutationTarget, capturedAt: Date) async throws {
+        try await writeResumePosition(seconds, on: target, capturedAt: capturedAt, dismiss: false)
+    }
+
+    public func removeFromContinueWatching(on target: WatchMutationTarget, capturedAt: Date) async throws {
+        try await writeResumePosition(0, on: target, capturedAt: capturedAt, dismiss: true)
+    }
+
+    private func writeResumePosition(
+        _ seconds: TimeInterval,
+        on target: WatchMutationTarget,
+        capturedAt: Date,
+        dismiss: Bool
+    ) async throws {
         guard await isActive() else { throw AppError.serverUnreachable }
         guard let provider = await resolveProvider(target.accountID) else {
             FanoutDiagnostics.emit("write.setResume acct=\(target.accountID) item=\(target.itemID) -> provider=nil (unreachable/unresolved, will retry)")
@@ -147,7 +160,7 @@ public struct AppShellWatchMutationApplier: WatchMutationApplying {
         // because the server refused it. The endpoint is undocumented on Plex, so a
         // refusal must degrade to the approximation rather than fail the write and
         // leave it retrying forever.
-        if seconds == 0, let dismisser = provider as? ContinueWatchingRemovable {
+        if dismiss, let dismisser = provider as? ContinueWatchingRemovable {
             do {
                 try await dismisser.removeFromContinueWatching(itemID: target.itemID)
                 FanoutDiagnostics.emit("write.removeFromCW acct=\(target.accountID) item=\(target.itemID) -> OK (position kept)")

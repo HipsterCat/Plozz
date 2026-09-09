@@ -592,19 +592,20 @@ public struct PlexClient: Sendable {
         ).MediaContainer.Hub ?? []
     }
 
-    /// `GET /hubs/home/continueWatching` — the **actual** Continue Watching hub
-    /// the Plex apps render, as opposed to the older `/library/onDeck` feed.
+    /// `GET /hubs/continueWatching/items` returns both resumes and next episodes
+    /// from the Continue Watching hub. The `/hubs/home/continueWatching` route
+    /// can return only resumes, silently omitting untouched successors.
     ///
-    /// The two are not the same list and are not meant to be. The hub is the one
-    /// that honours Plex's "Remove from Continue Watching": dismissing a title
+    /// Unlike the legacy `/library/onDeck` feed, this hub honours Plex's
+    /// "Remove from Continue Watching": dismissing a title
     /// records an exclusion the hub applies and `onDeck` knows nothing about, so a
     /// dismissed title keeps its `viewOffset` and keeps coming back through
     /// `onDeck` forever.
     ///
-    /// Older servers may not route the `home` variant; the provider falls back to
+    /// Older servers may not route the `items` variant; the provider falls back to
     /// the plain hub and then the legacy feed only when an endpoint fails.
-    func continueWatchingHub(limit: Int, homeVariant: Bool = true) async throws -> [PlexMetadata] {
-        let path = homeVariant ? "/hubs/home/continueWatching" : "/hubs/continueWatching"
+    func continueWatchingHub(limit: Int, itemsVariant: Bool = true) async throws -> [PlexMetadata] {
+        let path = itemsVariant ? "/hubs/continueWatching/items" : "/hubs/continueWatching"
         if limit == Int.max {
             return try await exhaustiveResumeFeed(
                 path: path,
