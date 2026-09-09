@@ -2959,12 +2959,7 @@ private struct PlozziOSDetailSummary: View {
         let description = HeroContentPolicy.detailDescription(focused: focused, root: root)
         if description != nil || certificate != nil || !facts.isEmpty
             || !genres.isEmpty || !ratings.isEmpty || !badges.isEmpty {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("About")
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(palette.primaryText)
-                    .accessibilityAddTraits(.isHeader)
-
+            VStack(alignment: .center, spacing: 20) {
                 PlozziOSDetailContext(
                     certificate: certificate,
                     facts: facts,
@@ -2979,17 +2974,19 @@ private struct PlozziOSDetailSummary: View {
                     .font(.body)
                     .foregroundStyle(palette.primaryText.opacity(0.92))
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 400)
                 }
                 AdaptiveMediaMetadataRow(
                     facts: [],
                     ratings: ratings,
-                    badges: badges
+                    badges: badges,
+                    centered: true
                 )
             }
-            .multilineTextAlignment(.leading)
-            .frame(maxWidth: 500, alignment: .leading)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: 500, alignment: .center)
             .padding(.horizontal, PlozziOSPageLayout.horizontalInset(for: .compactPortrait))
-            .padding(.top, 28)
+            .padding(.top, 20)
             .padding(.bottom, 24)
             .frame(maxWidth: .infinity, alignment: .center)
             .background(palette.backgroundBase)
@@ -3005,7 +3002,7 @@ private struct PlozziOSDetailContext: View {
 
     var body: some View {
         if certificate != nil || !facts.isEmpty || !genres.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .center, spacing: 6) {
                 if certificate != nil || !facts.isEmpty {
                     HStack(spacing: 10) {
                         if let certificate {
