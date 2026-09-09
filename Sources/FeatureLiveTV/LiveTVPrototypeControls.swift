@@ -41,7 +41,8 @@ struct PrototypeBrowseToolbar: View {
                 }
                 .focused($focused, equals: .filters)
                 .buttonStyle(PrototypeButtonStyle(
-                    selected: model.category != nil || model.guideOnly || model.source != nil,
+                    selected: model.category != nil || model.guideOnly || model.source != nil
+                        || model.language != nil || model.country != nil || model.favoritesOnly,
                     padded: false, surface: .control
                 ))
                 .accessibilityIdentifier("live-tv-category")
@@ -114,16 +115,23 @@ struct PrototypeSheetContent: View {
                         .navigationTitle("Live TV sources")
                     }
                 case .program(let program):
-                    PrototypeProgramDetails(
-                        program: program, model: model,
-                        guideSourceName: imports.guideSources.first {
-                            $0.id == imports.selectedSourceByChannel[program.channelID]
-                        }?.source.name
-                    ) {
-                        tune(program.channelID)
-                        dismiss()
+                    if let channel = model.channel(id: program.channelID),
+                       imports.isProgramSearchResultAvailable(program, catalog: model) {
+                        LiveTVProgramDetailsView(
+                            program: program, channelName: channel.name, now: model.now,
+                            guideSourceName: imports.guideSources.first {
+                                $0.id == imports.selectedSourceByChannel[program.channelID]
+                            }?.source.name,
+                            isFavorite: model.favoriteIDs.contains(program.channelID),
+                            toggleFavorite: { model.toggleFavorite(program.channelID) }
+                        ) {
+                            guard imports.isProgramSearchResultAvailable(program, catalog: model) else { return }
+                            tune(program.channelID)
+                            dismiss()
+                        }
+                    } else {
+                        ContentUnavailableView("Programme unavailable", systemImage: "calendar.badge.exclamationmark")
                     }
-                    .navigationTitle("Program details")
                 }
             }
             .toolbar {
@@ -143,8 +151,8 @@ private struct PrototypeGuideTimeForm: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        Form {
-            Section {
+        LiveTVSettingsPage(title: "Guide time") {
+            SettingsSectionGroup {
                 Text(guideStart, format: .dateTime.weekday(.wide).month(.abbreviated).day())
                 Button("Earlier", systemImage: "chevron.backward") {
                     guideOffset = max(-86_400, guideOffset - 7_200)
@@ -162,6 +170,7 @@ private struct PrototypeGuideTimeForm: View {
                 .disabled(guideOffset >= 604_800)
             }
         }
+        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
     }
 }
 
@@ -169,8 +178,8 @@ private struct PrototypeFilterForm: View {
     @Bindable var model: LiveTVPrototypeModel
 
     var body: some View {
-        Form {
-            Section {
+        LiveTVSettingsPage(title: "Categories") {
+            SettingsSectionGroup {
                 PrototypeSelectionLink(
                     title: "Category", selection: $model.category,
                     options: [nil] + model.categories.map(Optional.some)
@@ -178,12 +187,38 @@ private struct PrototypeFilterForm: View {
                     if let category { Text(category) }
                     else { Text("All categories") }
                 }
+                PrototypeSelectionLink(
+                    title: "Language", selection: $model.language,
+                    options: [nil] + model.languages.map(Optional.some)
+                ) { language in
+                    if let language { Text(language) }
+                    else { Text("All languages") }
+                }
+                PrototypeSelectionLink(
+                    title: "Country", selection: $model.country,
+                    options: [nil] + model.countries.map(Optional.some)
+                ) { country in
+                    if let country { Text(country) }
+                    else { Text("All countries") }
+                }
+                Toggle("Favorites only", isOn: $model.favoritesOnly)
+                Toggle("Channels with a guide", isOn: $model.guideOnly)
+                PrototypeSelectionLink(title: "Sort", selection: $model.sort, options: LiveTVPrototypeSort.allCases) {
+                    if $0 == .channelNumber { Text("Channel number") }
+                    else { Text("Name") }
+                }
             }
-            Section {
-                Button("All categories") { model.category = nil }
+            SettingsSectionGroup {
+                Button("Reset filters") { model.resetFilters() }
+                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
                 Text("\(model.visibleChannels.count) matching channels")
             }
         }
+        #if os(tvOS)
+        .toggleStyle(SettingsSwitchToggleStyle(flushLeading: false))
+        #elseif os(iOS)
+        .toggleStyle(SettingsTouchSwitchToggleStyle())
+        #endif
     }
 }
 
@@ -195,40 +230,44 @@ struct PrototypeSelectionLink<Option: Hashable, OptionLabel: View>: View {
 
     var body: some View {
         NavigationLink {
-            PrototypeSelectionList(selection: $selection, options: options, optionLabel: optionLabel)
+            PrototypeSelectionList(title: title, selection: $selection, options: options, optionLabel: optionLabel)
                 .navigationTitle(title)
         } label: {
-            HStack {
-                Text(title)
-                Spacer()
-                optionLabel(selection).foregroundStyle(.secondary)
-            }
+            SettingsRowLabel(icon: nil, title: Text(title), trailing: {
+                optionLabel(selection).settingsRowSecondary()
+            })
         }
+        .buttonStyle(SettingsFocusButtonStyle(size: .contained))
     }
 }
 
 struct PrototypeSelectionList<Option: Hashable, OptionLabel: View>: View {
+    let title: LocalizedStringKey
     @Binding var selection: Option
     let options: [Option]
     @ViewBuilder let optionLabel: (Option) -> OptionLabel
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        List(options, id: \.self) { option in
-            Button {
-                selection = option
-                dismiss()
-            } label: {
-                HStack {
-                    optionLabel(option)
-                    Spacer()
-                    if option == selection {
-                        Image(systemName: "checkmark")
+        ScrollView {
+            SettingsSectionGroup {
+                ForEach(options, id: \.self) { option in
+                    Button {
+                        selection = option
+                        dismiss()
+                    } label: {
+                        HStack {
+                            optionLabel(option)
+                            Spacer()
+                            if option == selection { SettingsSelectionIndicator() }
+                        }
                     }
+                    .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                    .accessibilityAddTraits(option == selection ? .isSelected : [])
                 }
             }
-            .accessibilityAddTraits(option == selection ? .isSelected : [])
         }
+        .navigationTitle(title)
     }
 }
 
@@ -366,33 +405,4 @@ struct PrototypeGuideSourceStatus: View {
     }
 }
 
-private struct PrototypeProgramDetails: View {
-    let program: LiveTVPrototypeProgram
-    let model: LiveTVPrototypeModel
-    let guideSourceName: String?
-    let tune: () -> Void
-
-    var body: some View {
-        Form {
-            Section {
-                Text(program.title).font(.title2.bold())
-                Text(program.subtitle)
-                Text(program.start, format: .dateTime.month().day().hour().minute())
-                if let channel = model.channel(id: program.channelID) {
-                    Label(channel.name, systemImage: channel.symbol)
-                }
-                if let guideSourceName { Text("Guide: \(guideSourceName)").font(.caption) }
-            } footer: {
-                Text("Watching tunes the channel live, not this program from the beginning.")
-            }
-            Section {
-                Button("Watch channel live", systemImage: "play.fill", action: tune)
-                Button(
-                    model.favoriteIDs.contains(program.channelID) ? "Remove from Favorites" : "Add to Favorites",
-                    systemImage: "star"
-                ) { model.toggleFavorite(program.channelID) }
-            }
-        }
-    }
-}
 #endif

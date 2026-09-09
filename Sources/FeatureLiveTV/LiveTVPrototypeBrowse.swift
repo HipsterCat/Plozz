@@ -35,6 +35,8 @@ struct PrototypeBrowser: View {
     let loadFailed: Bool
     let reload: () -> Void
     var hideChannel: ((LiveTVPrototypeChannel, LiveTVGuideRowID) -> Void)?
+    var libraryCatalog: PrototypeLibraryCatalogRevision?
+    var loadLibraryGuide: ((Set<String>, DateInterval) -> Void)?
     @State private var scrollID: LiveTVGuideRowID?
     @State private var pendingFocus: PrototypeBrowseFocus?
     @State private var restorationFallback: PrototypeBrowseFocus?
@@ -50,6 +52,8 @@ struct PrototypeBrowser: View {
 
     var body: some View {
         let guideRequest = serverGuideRequest
+        let cachedWindowRequest = cachedGuideRequest
+        let generatedWindowRequest = libraryGuideRequest
         GeometryReader { geometry in
             let focusReturnTarget = returnTarget
             VStack(spacing: PrototypeLayout.gap) {
@@ -278,6 +282,35 @@ struct PrototypeBrowser: View {
                 from: guideRequest.from, to: guideRequest.to, into: model
             )
         }
+        .task(id: cachedWindowRequest) {
+            guard let cachedWindowRequest else { return }
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+            } catch is CancellationError {
+                return
+            } catch {
+                assertionFailure("Unexpected guide window delay failure")
+                return
+            }
+            guard !Task.isCancelled else { return }
+            await imports.loadGuideWindow(
+                channelIDs: cachedWindowRequest.channelIDs,
+                range: cachedWindowRequest.range, into: model
+            )
+        }
+        .task(id: generatedWindowRequest) {
+            guard let generatedWindowRequest else { return }
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+            } catch is CancellationError {
+                return
+            } catch {
+                assertionFailure("Unexpected library guide delay failure")
+                return
+            }
+            guard !Task.isCancelled else { return }
+            loadLibraryGuide?(generatedWindowRequest.channelIDs, generatedWindowRequest.range)
+        }
         .onDisappear { hasFocus = false }
     }
 
@@ -297,6 +330,26 @@ struct PrototypeBrowser: View {
 
     private var guideStart: Date {
         timeAnchor.addingTimeInterval(guideOffset)
+    }
+
+    private var cachedGuideRequest: PrototypeGuideWindowRequest? {
+        guard isPresented, scenePhase == .active, imports.supportsDurableCatalog else { return nil }
+        return PrototypeGuideWindowRequest(
+            rows: model.guideChannels.map(\.id),
+            anchor: scrollID ?? confirmedFocus?.rowID ?? selectedRowID,
+            from: guideStart, to: guideStart.addingTimeInterval(TimeInterval(guideHours) * 3_600),
+            sources: imports.guideSources, enabledSourceIDs: imports.enabledSourceIDs,
+            mappings: imports.mappingOverrides
+        )
+    }
+
+    private var libraryGuideRequest: PrototypeLibraryGuideRequest? {
+        guard isPresented, scenePhase == .active, let libraryCatalog else { return nil }
+        return PrototypeLibraryGuideRequest(
+            catalog: libraryCatalog, rows: model.guideChannels.map(\.id),
+            anchor: scrollID ?? confirmedFocus?.rowID ?? selectedRowID,
+            from: guideStart, to: guideStart.addingTimeInterval(TimeInterval(guideHours) * 3_600)
+        )
     }
 
     private var allChannelsHidden: Bool {

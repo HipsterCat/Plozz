@@ -4,6 +4,34 @@ import XCTest
 @testable import FeatureLiveTVCore
 
 final class LiveTVPlaylistParserTests: XCTestCase {
+    func testDiscoversBothHeaderConventionsAndPreservesCountryAndLanguages() throws {
+        let input = """
+        #EXTM3U url-tvg="../guide.xml.gz, https://other.test/extra.xml" x-tvg-url="../guide.xml.gz"
+        #EXTINF:-1 tvg-id="station" tvg-language="English;Spanish" tvg-country="US,CA",Station
+        https://example.test/live.m3u8
+        """
+        let parsed = try LiveTVPlaylistParser(baseURL: URL(string: "https://example.test/lists/catalog.m3u")).parse(input)
+        XCTAssertEqual(parsed.declaredGuideURLs.map(\.absoluteString), [
+            "https://example.test/guide.xml.gz", "https://other.test/extra.xml"
+        ])
+        XCTAssertEqual(parsed.channels.first?.languages, ["English", "Spanish"])
+        XCTAssertEqual(parsed.channels.first?.countries, ["US", "CA"])
+    }
+
+    func testGuideDiscoveryOriginPolicyRejectsCrossOriginCredentialsAndDowngrades() throws {
+        let origin = try XCTUnwrap(URL(string: "https://example.test/source"))
+        for address in [
+            "https://evil.test/guide", "http://example.test/guide", "https://example.test:8443/guide",
+            "https://name:password@example.test/guide", "https://example.test.evil.test/guide"
+        ] {
+            XCTAssertFalse(LiveTVSourceOriginPolicy.permits(try XCTUnwrap(URL(string: address)), from: origin))
+        }
+        XCTAssertTrue(LiveTVSourceOriginPolicy.permits(try XCTUnwrap(URL(string: "https://example.test/guide")), from: origin))
+        XCTAssertTrue(LiveTVSourceOriginPolicy.permits(
+            origin, from: try XCTUnwrap(URL(string: "http://example.test/source"))
+        ))
+    }
+
     func testRejectsHLSMediaSegmentsInsteadOfImportingThemAsChannels() {
         let input = """
         #EXTM3U

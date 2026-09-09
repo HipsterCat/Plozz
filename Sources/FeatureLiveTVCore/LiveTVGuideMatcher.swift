@@ -3,9 +3,11 @@ import Foundation
 
 public struct LiveTVGuideMatcher: Sendable {
     private let provider: LiveTVGuideProvider?
+    private let aliasSet: LiveTVGuideAliasSet?
 
-    public init(provider: LiveTVGuideProvider? = nil) {
+    public init(provider: LiveTVGuideProvider? = nil, aliasSet: LiveTVGuideAliasSet? = nil) {
         self.provider = provider
+        self.aliasSet = aliasSet
     }
 
     public func match(
@@ -17,12 +19,15 @@ public struct LiveTVGuideMatcher: Sendable {
 
     func matching(
         channels: [LiveTVPrototypeChannel],
-        guideChannels: [String: [String]]
+        guideChannels: [String: [String]],
+        overrides: [String: String] = [:]
     ) -> (channelsByGuideID: [String: [LiveTVPrototypeChannel]], assignments: [String: LiveTVGuideMatch]) {
         let identities = channels.reduce(into: [String: LiveTVStreamIdentity]()) {
             $0[$1.id] = LiveTVStreamIdentity(url: $1.streamURL)
         }
+        let allChannels = channels
         let channels = channels.filter { channel in
+            if overrides[channel.id] != nil { return true }
             let identity = identities[channel.id]
             if let provider, let actual = identity?.provider, provider != actual { return false }
             if provider != nil, let region = identity?.region, region != "us" { return false }
@@ -36,7 +41,21 @@ public struct LiveTVGuideMatcher: Sendable {
         )
         var result: [String: [LiveTVPrototypeChannel]] = [:]
         var assignments: [String: LiveTVGuideMatch] = [:]
+        for channel in allChannels {
+            if let id = overrides[channel.id], guideChannels[id] != nil {
+                result[id, default: []].append(channel)
+                assignments[channel.id] = LiveTVGuideMatch(guideChannelID: id, method: .userConfirmed)
+            }
+        }
+        for channel in channels where assignments[channel.id] == nil && overrides[channel.id] == nil {
+            if let id = channel.guideID, guideChannels[id] != nil,
+               shareOneIdentity(playlistIDs[id]?.map(\.1) ?? []) {
+                result[id, default: []].append(channel)
+                assignments[channel.id] = LiveTVGuideMatch(guideChannelID: id, method: .exactID)
+            }
+        }
         for channel in channels {
+            guard assignments[channel.id] == nil, overrides[channel.id] == nil else { continue }
             let identity = identities[channel.id]
             if let provider, identity?.provider == provider, let id = identity?.nativeID,
                guideChannels[id] != nil {
@@ -47,19 +66,20 @@ public struct LiveTVGuideMatcher: Sendable {
 
         for guideID in guideChannels.keys {
             if let exact = playlistIDs[guideID] {
-                let available = exact.map(\.1).filter { assignments[$0.id] == nil }
+                guard shareOneIdentity(exact.map(\.1)) else { continue }
+                let available = exact.map(\.1).filter { assignments[$0.id] == nil && overrides[$0.id] == nil }
                 result[guideID, default: []].append(contentsOf: available)
                 for channel in available {
                     assignments[channel.id] = LiveTVGuideMatch(guideChannelID: guideID, method: .exactID)
                 }
                 continue
             }
-            if provider == nil, let aliasID = verifiedAliases.first(where: {
+            if provider == nil, aliasSet == .iptvOrgToEPGShareUS2Version1, let aliasID = verifiedAliases.first(where: {
                 $0.value == guideID
             })?.key,
                let aliases = playlistIDs[aliasID] {
                 let available = aliases.map(\.1).filter {
-                    assignments[$0.id] == nil && identities[$0.id]?.provider == nil
+                    assignments[$0.id] == nil && overrides[$0.id] == nil && identities[$0.id]?.provider == nil
                 }
                 result[guideID, default: []].append(contentsOf: available)
                 for channel in available {
@@ -71,7 +91,8 @@ public struct LiveTVGuideMatcher: Sendable {
         let matchedIDs = Set(result.values.flatMap { $0.map(\.id) })
         let unmatched = channels.filter {
             let identity = identities[$0.id]
-            return !matchedIDs.contains($0.id) && identity?.nativeID == nil && identity?.provider == provider
+            return !matchedIDs.contains($0.id) && overrides[$0.id] == nil
+                && identity?.nativeID == nil && identity?.provider == provider
         }
         let playlistNames = Dictionary(
             grouping: unmatched,
@@ -92,7 +113,8 @@ public struct LiveTVGuideMatcher: Sendable {
                   Set(guideMatches.map(\.id)).count == 1,
                   let guide = guideMatches.first,
                   playlistMatches.allSatisfy({ channel in
-                      sourceRegionsAreCompatible(channel.guideID, guide.id)
+                      hasIndependentIdentityEvidence(channel: channel, guideID: guide.id, guideName: guide.name)
+                          && sourceRegionsAreCompatible(channel.guideID, guide.id)
                           && affiliateCallSignsAreCompatible(
                               playlistID: channel.guideID, playlistName: channel.name,
                               guideID: guide.id, guideName: guide.name
@@ -117,9 +139,37 @@ public struct LiveTVGuideMatcher: Sendable {
     }
 
     private func shareOneIdentity(_ channels: [LiveTVPrototypeChannel]) -> Bool {
+        guard !channels.isEmpty else { return false }
         guard channels.count != 1 else { return true }
         guard let guideID = channels.first?.guideID, !guideID.isEmpty else { return false }
-        return channels.allSatisfy { $0.guideID == guideID }
+        func variantName(_ channel: LiveTVPrototypeChannel) -> String {
+            normalizedDisplayName(channel.guideName ?? channel.name).replacingOccurrences(
+                of: #"\s+(?:uhd|fhd|hd|sd)$"#, with: "", options: .regularExpression
+            )
+        }
+        guard let first = channels.first else { return false }
+        return channels.allSatisfy {
+            $0.guideID == guideID && variantName($0) == variantName(first)
+                && $0.country == first.country
+        }
+    }
+
+    private func hasIndependentIdentityEvidence(
+        channel: LiveTVPrototypeChannel, guideID: String, guideName: String
+    ) -> Bool {
+        if let callSign = affiliateCallSign(in: channel.guideID ?? ""),
+           callSign == affiliateCallSign(in: guideID) { return true }
+        if let region = sourceRegion(in: channel.guideID),
+           region == sourceRegion(in: guideID),
+           let playlistID = channel.guideID {
+            func station(_ value: String) -> String {
+                value.replacingOccurrences(
+                    of: #"\.[A-Za-z]{2}(?:\d+)?(?:@.*)?$"#, with: "", options: .regularExpression
+                ).lowercased().filter { $0.isLetter || $0.isNumber }
+            }
+            return !station(playlistID).isEmpty && station(playlistID) == station(guideID)
+        }
+        return false
     }
 
     public func normalizedDisplayName(_ input: String) -> String {
@@ -236,5 +286,11 @@ public struct LiveTVGuideMatcher: Sendable {
         else { return nil }
         return String(upper[range])
     }
+}
+
+/// Opt-in, versioned aliases for one verified playlist/guide pair. Generic user
+/// playlists never inherit aliases merely because a station name resembles one.
+public enum LiveTVGuideAliasSet: Equatable, Sendable {
+    case iptvOrgToEPGShareUS2Version1
 }
 #endif

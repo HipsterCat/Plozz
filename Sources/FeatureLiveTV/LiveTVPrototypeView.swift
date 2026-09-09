@@ -9,9 +9,10 @@ public enum LiveTVPrototypeEntry {
 }
 
 public struct LiveTVPrototypePlayback {
+    public let paneID: UUID
     public let channel: LiveTVPrototypeChannel
-    public let streamURL: URL
-    public let httpHeaders: [String: String]
+    public let input: LiveChannelInput
+    public let authenticatedHTTPResolver: any AuthenticatedHTTPResourceResolving
     public let previousChannel: () -> Void
     public let nextChannel: () -> Void
     public let isFavorite: Bool
@@ -25,6 +26,21 @@ public struct LiveTVPrototypePlayback {
     public let playbackUpdate: @MainActor (LiveTVPlaybackUpdate) -> Void
     public let playbackFailed: @MainActor () -> Void
     public let preparingChannelName: String?
+    public let isMultiview: Bool
+    public let isAudible: Bool
+    public let openMultiview: () -> Void
+    public let canOpenMultiview: Bool
+    public let isPlaybackActive: Bool
+    public let isAuthorized: Bool
+    public let countsAsWatching: Bool
+    public let externalContinuationChanged: @MainActor (Bool) -> Void
+    public let restorePlayer: @MainActor () async -> Bool
+    public let stopPlayback: @MainActor () -> Void
+}
+
+private struct PrototypeExternalPlayback: Equatable {
+    let paneID: UUID
+    let preparedID: UUID
 }
 
 private struct PrototypeSearchBookmark {
@@ -34,11 +50,24 @@ private struct PrototypeSearchBookmark {
     let timelineOffset: CGFloat
 }
 
+private enum PrototypeSearchScope: Hashable {
+    case channels, programs
+}
+
+private enum PrototypeEnrollmentCommitError: Error {
+    case authorizationChanged, configurationChanged
+}
+
 public struct LiveTVPrototypeView<PlayerContent: View>: View {
     @State private var model: LiveTVPrototypeModel
     @State private var preview: LiveTVPreviewController
     @State private var imports: LiveTVPrototypeImportModel
     @State private var playback: LiveTVPlaybackCoordinator
+    @State private var playbackResolvers: LiveTVPlaybackResolverContext
+    @State private var sourceAuthority: LiveTVPlaybackSourceAuthority
+    @State private var appliedSourceAuthorizationID: String?
+    @State private var multiview: LiveTVMultiviewCoordinator
+    @State private var enrollment = LiveTVServerEnrollmentCoordinator()
     @State private var sources: LiveTVSourceManagementModel?
     @State private var sourceApplicationFailed = false
     @State private var reloadRequest = 0
@@ -46,6 +75,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
     @State private var selectedChannelID: String?
     @State private var selectedRowID: LiveTVGuideRowID?
     @State private var isSearching = false
+    @State private var searchScope: PrototypeSearchScope = .channels
     @State private var searchFocusRequest = 0
     @State private var searchOrigin: PrototypeSearchBookmark?
     @State private var topRequest = 0
@@ -61,7 +91,15 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
     @State private var timeAnchor = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970 / 1_800) * 1_800)
     @State private var pendingTuneID: String?
     @State private var pendingServerConnection = false
-    @State private var playPauseRequest = 0
+    @State private var externalPlayback: PrototypeExternalPlayback?
+    @State private var multiviewPickerIsPresented = false
+    @State private var managesLibraryChannels = false
+    @State private var libraryGuideIssue: LibraryChannelError?
+    @State private var portableIdentityHold: LiveTVPlaybackIdentityHold
+    @State private var pendingPortableReload = false
+    @State private var scanBinding: LiveTVScanCatalogBinding
+    @State private var showsScanSources = false
+    @State private var pendingScanOfferSourceID: String?
     @Environment(\.themePalette) private var palette
     @Environment(\.plozzNavigationContentInset) private var navigationInset
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
@@ -71,10 +109,22 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
     @Environment(\.layoutDirection) private var layoutDirection
     @Environment(\.locale) private var locale
     private let isActive: Bool
+    private let profileID: String
+    private let allowsPlayback: Bool
+    private let playbackUnavailableReason: LocalizedStringResource?
+    private let restoreDestination: @MainActor () async -> Bool
     private let usesNativeFullscreen: Bool
     private let viewSettingsStore: (any LiveTVViewSettingsStoring)?
+    private let sourceStore: (any LiveTVSourcesStoring)?
+    private let enrollmentSuppression: LiveTVServerEnrollmentSuppressionStore
+    private let libraryService: LibraryChannelService?
+    private let libraryHistory: LibraryChannelHistorySettings?
+    private let libraryIssue: LibraryChannelError?
+    private let reloadLibrary: (() -> Void)?
+    private let libraryIsAuthorized: @MainActor @Sendable () -> Bool
     private let didConfigurePlaylist: () -> Void
     private let serverProviderResolver: LiveTVServerProviderResolver
+    private let authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)?
     private let serverChoices: [LiveTVServerChoice]
     private let serverAuthorizationID: String
     private let isProfileAuthorized: @MainActor @Sendable () -> Bool
@@ -96,13 +146,53 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         connectServer: (() -> Void)? = nil,
         didConfigurePlaylist: @escaping () -> Void = {},
         onExpandedChange: @escaping (Bool) -> Void = { _ in },
+        allowsPlayback: Bool = true,
+        playbackUnavailableReason: LocalizedStringResource? = nil,
+        restoreDestination: @escaping @MainActor () async -> Bool = { false },
+        catalogCache: LiveTVIndexedCache? = nil,
+        sourceLoader: (any LiveTVSourceLoading)? = nil,
+        importModel: LiveTVPrototypeImportModel? = nil,
+        profileID: String = ProfileStore.defaultProfileID,
+        preferencesNamespace: String?,
+        libraryService: LibraryChannelService? = nil,
+        libraryHistory: LibraryChannelHistorySettings? = nil,
+        libraryIssue: LibraryChannelError? = nil,
+        reloadLibrary: (() -> Void)? = nil,
+        libraryIsAuthorized: @escaping @MainActor @Sendable () -> Bool = { true },
+        sourceApprovalContext: @escaping @MainActor @Sendable () -> LiveTVSourceApprovalContext? = { nil },
         @ViewBuilder player: @escaping (LiveTVPrototypePlayback) -> PlayerContent
     ) {
         self.isActive = isActive
+        self.profileID = profileID
+        _portableIdentityHold = State(initialValue: LiveTVPlaybackIdentityHold(profileID: profileID))
+        self.allowsPlayback = allowsPlayback
+        self.playbackUnavailableReason = playbackUnavailableReason
+        self.restoreDestination = restoreDestination
         self.usesNativeFullscreen = usesNativeFullscreen
         self.viewSettingsStore = viewSettingsStore
+        self.sourceStore = sourceStore
+        self.enrollmentSuppression = LiveTVServerEnrollmentSuppressionStore(
+            profileID: profileID, namespace: preferencesNamespace
+        )
+        self.libraryService = libraryService
+        self.libraryHistory = libraryHistory
+        self.libraryIssue = libraryIssue
+        self.reloadLibrary = reloadLibrary
+        self.libraryIsAuthorized = libraryIsAuthorized
+        let sourceAuthority = LiveTVPlaybackSourceAuthority(
+            profileID: profileID,
+            approvals: LiveTVSourceApprovalStore(profileID: profileID, namespace: preferencesNamespace),
+            sourceStore: sourceStore, context: sourceApprovalContext
+        )
+        _sourceAuthority = State(initialValue: sourceAuthority)
         let resolver: LiveTVServerProviderResolver = serverProviderResolver ?? { _ in nil }
         self.serverProviderResolver = resolver
+        self.authenticatedHTTPResolver = authenticatedHTTPResolver
+        let resolverContext = LiveTVPlaybackResolverContext(
+            serverProviderResolver: resolver, authenticatedHTTPResolver: authenticatedHTTPResolver
+        )
+        _playbackResolvers = State(initialValue: resolverContext)
+        let currentResolver: LiveTVServerProviderResolver = { resolverContext.provider(for: $0) }
         self.isProfileAuthorized = isProfileAuthorized
         self.serverChoices = serverChoices
         self.serverAuthorizationID = serverAuthorizationID
@@ -112,7 +202,10 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             LiveTVSourceManagementModel(store: $0, canMutate: { false })
         }
         _sources = State(initialValue: sources)
-        let imports = LiveTVPrototypeImportModel(configuration: .empty, serverProviderResolver: resolver)
+        let imports = importModel ?? LiveTVPrototypeImportModel(
+            configuration: .empty, loader: sourceLoader ?? LiveTVSourceLoader(),
+            serverProviderResolver: currentResolver, cache: catalogCache
+        )
         _imports = State(initialValue: imports)
         self.onExpandedChange = onExpandedChange
         self.player = player
@@ -123,30 +216,73 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             channels: [], preferencesStore: preferencesStore
         )
         _model = State(initialValue: model)
+        let scanBinding = LiveTVScanCatalogBinding(
+            profileID: profileID, model: model,
+            coordinator: LiveTVChannelScanCoordinator(store: LiveTVChannelHealthStore(
+                namespace: profileID
+            )),
+            authorization: sourceAuthority.authorization
+        )
+        _scanBinding = State(initialValue: scanBinding)
         #if os(tvOS)
         let preview = LiveTVPreviewController(model: model)
         #else
         let preview = LiveTVPreviewController(model: model, followsFocus: false)
         #endif
         _preview = State(initialValue: preview)
+        let libraryResolver: @MainActor @Sendable (
+            LiveTVPrototypeChannel
+        ) throws -> LiveTVLibraryChannelReference? = { [weak libraryService] channel in
+            guard let libraryService, channel.source == .plozz, libraryIsAuthorized(),
+                  let definition = libraryService.definitions.first(where: {
+                      $0.catalogID == channel.id && $0.isEnabled
+                  }) else { return nil }
+            _ = try libraryService.slot(channelID: definition.id, at: Date())
+            let context = try libraryService.playbackContext(catalogID: channel.id)
+            guard let authorizationID = context.authorizationID else {
+                throw LiveTVPlaybackPreparationError.authorizationChanged
+            }
+            return LiveTVLibraryChannelReference(channelID: context.channelID, authorizationID: authorizationID)
+        }
+        let preparation = LiveTVPlaybackPreparation(
+            serverProviderResolver: currentResolver, authenticatedHTTPResolver: resolverContext,
+            libraryChannelResolver: libraryResolver
+        )
+        let authorizes: @MainActor @Sendable (
+            LiveTVPrototypeChannel, LiveTVServerChannelReference?
+        ) -> Bool = { channel, reference in
+            isProfileAuthorized() && (sources?.hasLoaded ?? true)
+                && (channel.source != .plozz || libraryIsAuthorized())
+                && sourceAuthority.allows(channel, configuration: sources?.configuration ?? imports.configuration)
+                && LiveTVPlaybackCatalogAuthorization.allows(
+                    channel, reference: reference, model: model, imports: imports,
+                    configuration: sources?.configuration ?? imports.configuration,
+                    libraryService: libraryService
+                )
+        }
         _playback = State(initialValue: LiveTVPlaybackCoordinator(
             model: model, preview: preview,
-            preparation: LiveTVPlaybackPreparation(
-                serverProviderResolver: resolver, authenticatedHTTPResolver: authenticatedHTTPResolver
-            ),
+            preparation: preparation,
             reference: { imports.serverChannelReferences[$0] },
-            isAuthorized: { channel, reference in
-                isProfileAuthorized() && (sources?.hasLoaded ?? true)
-                    && LiveTVPlaybackCatalogAuthorization.allows(
-                    channel, reference: reference, model: model, imports: imports,
-                    configuration: sources?.configuration ?? imports.configuration
-                )
-            },
+            isAuthorized: authorizes,
             isGuideOnly: { channelID in
                 guard let reference = imports.serverChannelReferences[channelID] else { return false }
                 return imports.serverSources.first(where: { $0.id == reference.sourceID })?
                     .availability?.status == .unsupportedPlaybackMode
             }
+        ))
+        _multiview = State(initialValue: LiveTVMultiviewCoordinator(
+            primary: preparation,
+            makePreparation: {
+                LiveTVPlaybackPreparation(
+                    serverProviderResolver: currentResolver,
+                    authenticatedHTTPResolver: resolverContext,
+                    libraryChannelResolver: libraryResolver
+                )
+            },
+            reference: { imports.serverChannelReferences[$0] },
+            authorizes: authorizes,
+            recordWatched: { _ = model.recordWatched($0) }
         ))
     }
 
@@ -161,36 +297,22 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                 navigationInset: navigationInset, largeText: typeSize.isAccessibilitySize,
                 isSearching: isSearching
             )
-            let videoFrame = preview.isExpanded ? layout.bounds : layout.videoFrame
+            let expanded = preview.isExpanded || multiview.isEnabled
             ZStack(alignment: .topLeading) {
                 palette.backgroundBase.ignoresSafeArea()
 
-                // This is the only player construction site. Its identity is
-                // unchanged when the guide moves away or another channel tunes.
-                if let prepared = playback.preparation.current {
-                    let presentationID = playback.presentationID
-                    player(LiveTVPrototypePlayback(
-                        channel: prepared.channel, streamURL: prepared.resolvedURL,
-                        httpHeaders: prepared.httpHeaders,
-                        previousChannel: { changeChannel(by: -1) },
-                        nextChannel: { changeChannel(by: 1) },
-                        isFavorite: model.favoriteIDs.contains(prepared.channel.id),
-                        canToggleFavorite: model.preferencesIssue != .loadFailed,
-                        onToggleFavorite: { model.toggleFavorite(prepared.channel.id) },
-                        isExpanded: preview.isExpanded,
-                        returnToGuide: {
-                            guard playback.ownsPlayerPresentation(presentationID) else { return }
-                            returnToGuide()
-                        },
-                        playPauseRequest: playPauseRequest,
-                        playbackStarted: { playback.confirmWatching(prepared.id) },
-                        reportingID: prepared.id,
-                        playbackUpdate: { playback.report($0, for: prepared.id) },
-                        playbackFailed: { playback.playbackFailed(prepared.id) },
-                        preparingChannelName: playback.preparation.preparingChannelID.flatMap {
-                            model.channel(id: $0)?.name
-                        }
-                    ))
+                // Stable pane IDs retain renderers through single/multiple layouts and promotion.
+                ForEach(multiview.panes) { pane in
+                    if let prepared = pane.preparation.current {
+                        let videoFrame = multiview.isEnabled
+                            ? LiveTVMultiviewGeometry.frame(
+                                for: pane.id, panes: multiview.panes.map(\.id),
+                                primary: multiview.primaryPaneID, layout: multiview.layout,
+                                corner: multiview.corner, insetSize: multiview.insetSize,
+                                expanded: multiview.expandedPaneID, size: geometry.size
+                            )
+                            : (expanded ? layout.bounds : layout.videoFrame)
+                        player(playbackInput(for: pane, prepared: prepared))
                     .environment(\.themePalette, ThemePalette.dark)
                     .frame(width: videoFrame.width, height: videoFrame.height)
                     .clipped()
@@ -203,15 +325,21 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                             ],
                             startPoint: .leading, endPoint: .trailing
                         )
-                        .opacity(preview.isExpanded || layout.compact ? 0 : 1)
+                        .opacity(expanded || layout.compact ? 0 : 1)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                     }
                     .position(
-                        x: layoutDirection == .rightToLeft ? geometry.size.width - videoFrame.midX : videoFrame.midX,
+                        x: !multiview.isEnabled && layoutDirection == .rightToLeft
+                            ? geometry.size.width - videoFrame.midX : videoFrame.midX,
                         y: videoFrame.midY
                     )
                     .animation(reduceMotion ? nil : .easeInOut(duration: 0.32), value: preview.isExpanded)
+                    .zIndex(multiview.isEnabled && pane.id != multiview.primaryPaneID ? 1 : 0)
+                    .opacity(multiview.expandedPaneID == nil || multiview.expandedPaneID == pane.id ? 1 : 0)
+                    .allowsHitTesting(!multiview.isEnabled)
+                    .accessibilityHidden(multiview.isEnabled)
+                    }
                 }
 
                 PrototypePreviewScrim(layout: layout, reduceTransparency: reduceTransparency)
@@ -221,7 +349,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                             ? geometry.size.width - layout.bounds.midX : layout.bounds.midX,
                         y: layout.bounds.midY
                     )
-                    .opacity(preview.isExpanded ? 0 : 1)
+                    .opacity(expanded ? 0 : 1)
                     .animation(reduceMotion ? nil : .easeInOut(duration: 0.32), value: preview.isExpanded)
 
                 guideContent(layout, canvasWidth: geometry.size.width)
@@ -229,13 +357,23 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                 .focusSection()
                 #endif
                 .frame(width: geometry.size.width, height: geometry.size.height)
-                .opacity(preview.isExpanded ? 0 : 1)
-                .offset(y: preview.isExpanded && !reduceMotion ? geometry.size.height * 0.55 : 0)
-                .disabled(preview.isExpanded || !isActive)
-                .allowsHitTesting(!preview.isExpanded && isActive)
-                .accessibilityHidden(preview.isExpanded || !isActive)
+                .opacity(expanded ? 0 : 1)
+                .offset(y: expanded && !reduceMotion ? geometry.size.height * 0.55 : 0)
+                .disabled(expanded || !isActive)
+                .allowsHitTesting(!expanded && isActive)
+                .accessibilityHidden(expanded || !isActive)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.32), value: preview.isExpanded)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isSearching)
+                if multiview.isEnabled {
+                    LiveTVMultiviewOverlay(
+                        coordinator: multiview,
+                        channels: model.unhiddenCatalogChannels, favoriteIDs: model.favoriteIDs,
+                        exit: { leaveMultiview() },
+                        returnToGuide: { leaveMultiview(); returnToGuide() },
+                        pickerVisibilityChanged: { multiviewPickerIsPresented = $0 }
+                    )
+                    .zIndex(2)
+                }
             }
         }
         .environment(\.themePalette, palette)
@@ -249,11 +387,118 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                 )
             }
         }
+        .overlay(alignment: .bottomLeading) {
+            if isActive, !allowsPlayback, !model.channels.isEmpty, let playbackUnavailableReason {
+                Label {
+                    Text(playbackUnavailableReason)
+                } icon: {
+                    Image(systemName: "wifi.slash")
+                }
+                .font(.callout)
+                .padding()
+                .background(palette.backgroundBase, in: RoundedRectangle(cornerRadius: 12))
+                .padding()
+                .allowsHitTesting(false)
+            }
+        }
         #if os(tvOS)
         .onPlayPauseCommand {
-            if isActive && !preview.isExpanded { playPauseRequest &+= 1 }
+            if isActive && (!preview.isExpanded || multiview.isEnabled) {
+                multiview.requestPlayPause()
+            }
         }
         #endif
+    }
+
+    private func playbackInput(
+        for pane: LiveTVMultiviewPane, prepared: LiveTVPreparedStream
+    ) -> LiveTVPrototypePlayback {
+        let presentationID = playback.presentationID
+        return LiveTVPrototypePlayback(
+            paneID: pane.id,
+            channel: prepared.channel, input: prepared.input,
+            authenticatedHTTPResolver: playbackResolvers,
+            previousChannel: { changeChannel(by: -1) },
+            nextChannel: { changeChannel(by: 1) },
+            isFavorite: model.favoriteIDs.contains(prepared.channel.id),
+            canToggleFavorite: model.preferencesIssue != .loadFailed,
+            onToggleFavorite: { model.toggleFavorite(prepared.channel.id) },
+            isExpanded: preview.isExpanded && !multiview.isEnabled,
+            returnToGuide: {
+                guard playback.ownsPlayerPresentation(presentationID) else { return }
+                returnToGuide()
+            },
+            playPauseRequest: pane.playPauseRequest,
+            playbackStarted: {
+                if multiview.isEnabled {
+                    multiview.confirmWatching(pane.id, preparedID: prepared.id)
+                } else {
+                    playback.confirmWatching(prepared.id)
+                }
+            },
+            reportingID: prepared.id,
+            playbackUpdate: { multiview.report($0, paneID: pane.id, preparedID: prepared.id) },
+            playbackFailed: {
+                if multiview.isEnabled {
+                    multiview.playbackFailed(pane.id, preparedID: prepared.id)
+                } else {
+                    playback.playbackFailed(prepared.id)
+                }
+            },
+            preparingChannelName: pane.preparation.preparingChannelID.flatMap {
+                model.channel(id: $0)?.name
+            },
+            isMultiview: multiview.isEnabled,
+            isAudible: pane.id == multiview.audiblePaneID,
+            openMultiview: {
+                guard !hasAuthorizedExternalPlayback, activity.acceptsInteraction,
+                      multiview.begin() else { return }
+                updatePlaybackAvailability()
+            },
+            canOpenMultiview: !multiview.isEnabled && !hasAuthorizedExternalPlayback,
+            isPlaybackActive: activity.isPlaybackActive,
+            isAuthorized: !sourceApplicationFailed
+                && authorizesPlayback(prepared),
+            countsAsWatching: countsAsWatching(paneID: pane.id),
+            externalContinuationChanged: {
+                updateExternalPlayback($0, paneID: pane.id, preparedID: prepared.id)
+            },
+            restorePlayer: { await restorePlayer(paneID: pane.id, preparedID: prepared.id) },
+            stopPlayback: { stopPlayer(paneID: pane.id, preparedID: prepared.id) }
+        )
+    }
+
+    private func stopPlayer(paneID: UUID, preparedID: UUID) {
+        guard let pane = multiview.panes.first(where: { $0.id == paneID }),
+              pane.preparation.current?.id == preparedID else { return }
+        if externalPlayback == PrototypeExternalPlayback(paneID: paneID, preparedID: preparedID) {
+            externalPlayback = nil
+        }
+        if multiview.isEnabled, multiview.panes.count > 1 {
+            multiview.remove(paneID)
+            if multiview.panes.count == 1 { leaveMultiview() }
+        } else {
+            playback.stop()
+            multiview.stop()
+        }
+        updatePlaybackAvailability()
+    }
+
+    private func countsAsWatching(paneID: UUID) -> Bool {
+        let isExternal = hasAuthorizedExternalPlayback && externalPlayback?.paneID == paneID
+        let visible = sheet == nil && !multiviewPickerIsPresented && (multiview.isEnabled
+            ? multiview.expandedPaneID == nil || multiview.expandedPaneID == paneID
+            : preview.isExpanded || !isSearching)
+        return activity.countsAsWatching(
+            isUserRequested: isExternal || multiview.isEnabled || preview.isExpanded || preview.isHoldingWatchedChannel,
+            isPictureVisible: visible, isExternallyPresented: isExternal
+        )
+    }
+
+    private func leaveMultiview() {
+        if let retained = multiview.exit() { playback.adoptPreparation(retained) }
+        playback.setInteractionActive(activity.acceptsInteraction)
+        updatePreviewAvailability()
     }
 
     private var presentedContent: some View {
@@ -317,16 +562,7 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
     private var loadingContent: some View {
         presentedContent
         .task(id: isActive ? reloadRequest : -1) {
-            guard isActive, loadedRequest != reloadRequest else { return }
-            if let sources {
-                sources.reload()
-                guard sources.hasLoaded, applySourceConfiguration() else {
-                    playback.validateAuthorization()
-                    return
-                }
-            }
-            await imports.reload(into: model)
-            if !Task.isCancelled { loadedRequest = reloadRequest }
+            await reloadCatalog()
         }
         .task(id: preview.pendingRequest) {
             guard let request = preview.pendingRequest else { return }
@@ -357,8 +593,45 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
 
     private var playbackObservedContent: some View {
         loadingContent
+        .onChange(of: scanBinding.coordinator.scanHiddenChannelIDs) { _, _ in
+            scanBinding.synchronizeVisibility()
+        }
+        .onChange(of: holdsPlaybackIdentity, initial: true) { _, holding in
+            portableIdentityHold.update(holding)
+            if !holding, pendingPortableReload {
+                pendingPortableReload = false
+                loadedRequest = nil
+                reloadRequest &+= 1
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .plozzLiveTVPortableStateDidApply)) { notification in
+            guard notification.object as? String == profileID else { return }
+            model.reloadPreferences()
+            refreshSourceAuthority()
+            if holdsPlaybackIdentity {
+                pendingPortableReload = true
+            } else {
+                loadedRequest = nil
+                reloadRequest &+= 1
+            }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .plozzLiveTVPortableStateDidChange)
+                .receive(on: DispatchQueue.main)
+        ) { notification in
+            guard notification.object as? String == profileID else { return }
+            refreshSourceAuthority()
+        }
+        .onChange(of: libraryCatalogRevision, initial: true) { _, revision in
+            guard let revision else { return }
+            publishLibraryGuide(
+                channelIDs: Set(revision.channels.prefix(PrototypeGuideWindowRequest.rowLimit).map(\.id)),
+                range: DateInterval(start: timeAnchor, duration: 6 * 3_600)
+            )
+        }
         .onChange(of: playback.preparation.current?.id) { _, _ in
             playback.synchronizePlayerState()
+            updatePlaybackAvailability()
         }
         .onChange(of: playback.preparation.isPreparing) { _, _ in
             playback.synchronizePlayerState()
@@ -371,19 +644,39 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         }
         .onChange(of: model.channels) { _, _ in
             playback.validateAuthorization()
+            multiview.validateAuthorization()
+            updatePlaybackAvailability()
         }
         .onChange(of: imports.serverChannelReferences) { _, _ in
             playback.validateAuthorization()
+            multiview.validateAuthorization()
+            updatePlaybackAvailability()
         }
         .onChange(of: sources?.mutationRevision) { _, _ in
             guard applySourceConfiguration() else { return }
             loadedRequest = nil
             reloadRequest &+= 1
         }
+        .onChange(of: sourceAuthority.contextIdentity) { _, _ in
+            scanBinding.deactivate()
+            refreshSourceAuthority()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .plozzLiveTVSourceApprovalsDidChange)) { _ in
+            scanBinding.deactivate()
+            refreshSourceAuthority()
+        }
         .onChange(of: serverAuthorizationID) { _, _ in
+            enrollment.invalidate()
+            playbackResolvers.update(
+                serverProviderResolver: serverProviderResolver,
+                authenticatedHTTPResolver: authenticatedHTTPResolver
+            )
             playback.validateAuthorization()
+            multiview.validateAuthorization()
             do {
-                try imports.setServerProviderResolver(serverProviderResolver, into: model)
+                try imports.setServerProviderResolver(
+                    { [playbackResolvers] in playbackResolvers.provider(for: $0) }, into: model
+                )
                 playback.validateAuthorization()
                 sourceApplicationFailed = false
                 loadedRequest = nil
@@ -391,7 +684,9 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             } catch {
                 sourceApplicationFailed = true
                 playback.stop()
+                multiview.stop()
             }
+            updatePlaybackAvailability()
         }
     }
 
@@ -405,6 +700,10 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         .onChange(of: guideHasFocus) { _, _ in updatePreviewAvailability() }
         .onChange(of: sheet?.id) { _, _ in
             if sheet != nil { playback.cancelWatch() }
+            else {
+                managesLibraryChannels = false
+                showsScanSources = false
+            }
             updatePreviewAvailability()
             focusInitialChannelIfNeeded()
         }
@@ -419,15 +718,24 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             updatePlaybackAvailability()
         }
         .onChange(of: isProfileAuthorized(), initial: true) { _, _ in
+            if !isProfileAuthorized() { enrollment.invalidate() }
+            updatePlaybackAvailability()
+        }
+        .onChange(of: allowsPlayback, initial: true) { _, _ in
             updatePlaybackAvailability()
         }
         .onChange(of: isActive, initial: true) { _, active in
             if !active {
+                enrollment.invalidate()
                 loadedRequest = nil
                 pendingServerConnection = false
                 pendingTuneID = nil
                 sheet = nil
-                playback.stop()
+                if !hasAuthorizedExternalPlayback {
+                    leaveMultiview()
+                    multiview.setActive(false)
+                    playback.stop()
+                }
             }
             if active {
                 model.reloadPreferences()
@@ -446,9 +754,19 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
 
     private func handleDisappearance() {
         let preservesFullscreen = isActive && isProfileAuthorized() && usesNativeFullscreen && preview.isExpanded
-        guard !preservesFullscreen else { return }
+        guard !preservesFullscreen, !hasAuthorizedExternalPlayback else { return }
+        enrollment.invalidate()
+        leaveMultiview()
+        multiview.setActive(false)
         playback.setActive(false)
+        scanBinding.deactivate()
+        portableIdentityHold.update(false)
         onExpandedChange(false)
+    }
+
+    private var holdsPlaybackIdentity: Bool {
+        multiview.panes.contains { $0.preparation.current != nil || $0.preparation.isPreparing }
+            || playback.pendingWatchChannelID != nil
     }
 
     @ViewBuilder
@@ -462,16 +780,34 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         retry: { loadedRequest = nil; reloadRequest &+= 1 }
                     )
                 }
+            } else if model.channels.isEmpty, blockedPlaylistCount > 0 {
+                PrototypeGuidePlacement(frame: layout.contentFrame, canvasWidth: canvasWidth) {
+                    ContentUnavailableView {
+                        Label("Source approval needed", systemImage: "lock")
+                    } description: {
+                        Text("Ask a parent to approve your IPTV sources. One approval covers every channel in a source.")
+                    } actions: {
+                        Button("Manage sources") { sheet = .sources }
+                    }
+                }
             } else if let sources,
+                      model.channels.isEmpty,
                       sources.configuration.playlists.isEmpty && sources.configuration.servers.isEmpty {
                 PrototypeGuidePlacement(frame: layout.contentFrame, canvasWidth: canvasWidth) {
                     LiveTVSetupWelcome(
                         addPlaylist: { sheet = .addPlaylist },
                         useServer: { sheet = .serverSetup },
-                        issue: sources.mutationIssue?.message
+                        issue: sources.mutationIssue?.message ?? libraryGuideIssue?.message ?? libraryIssue?.message,
+                        serverStatuses: enrollment.statuses.filter { $0.phase != .idle },
+                        createChannel: canManageLibraryChannels ? {
+                            managesLibraryChannels = true
+                            sheet = .sources
+                        } : nil,
+                        retryLibrary: libraryGuideIssue != nil || libraryIssue != nil ? reloadLibrary : nil
                     )
                 }
             } else if let sources,
+                      model.channels.isEmpty,
                       !sources.configuration.playlists.contains(where: \.isEnabled),
                       !sources.configuration.servers.contains(where: \.isEnabled) {
                 PrototypeGuidePlacement(frame: layout.contentFrame, canvasWidth: canvasWidth) {
@@ -500,8 +836,11 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                     close: closeSearch, editing: { controlsActive = true }
                 ) { dismissSearch in
                     VStack(alignment: .leading, spacing: PrototypeLayout.smallGap) {
-                        PrototypeSearchSummary(channelCount: model.visibleChannels.count, category: model.category)
-                        guideBrowser(closeSearch: dismissSearch)
+                        searchScopePicker
+                        if searchScope == .channels {
+                            PrototypeSearchSummary(channelCount: model.visibleChannels.count, category: model.category)
+                        }
+                        searchResults(closeSearch: dismissSearch)
                     }
                     .ignoresSafeArea(.container, edges: [.bottom, .trailing])
                     .environment(\.themePalette, palette)
@@ -532,7 +871,11 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             case .addPlaylist:
                 LiveTVSourceAccessGate(model: sources) {
                     LiveTVPlaylistEditor { input in
+                        let previous = Set(sources.configuration.playlists.map(\.id))
                         try sources.savePlaylist(input: input)
+                        pendingScanOfferSourceID = sources.configuration.playlists.last {
+                            !previous.contains($0.id)
+                        }?.id
                         didConfigurePlaylist()
                     }
                 }
@@ -556,8 +899,39 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         topRequest &+= 1
                         sheet = nil
                     },
-                    didConfigurePlaylist: didConfigurePlaylist
+                    didConfigurePlaylist: didConfigurePlaylist,
+                    createChannel: canManageLibraryChannels ? { managesLibraryChannels = true } : nil,
+                    scanChannels: { showsScanSources = true },
+                    scanCoordinator: scanBinding.coordinator,
+                    didImportPlaylist: { pendingScanOfferSourceID = $0 }
                 )
+                .navigationDestination(isPresented: $managesLibraryChannels) {
+                    if let libraryService, let libraryHistory {
+                        LiveTVSourceAccessGate(model: sources) {
+                            LibraryChannelManagementView(service: libraryService, history: libraryHistory)
+                        }
+                        .navigationDestination(isPresented: $showsScanSources) {
+                            LiveTVSourceAccessGate(model: sources) {
+                                if scanBinding.issue != nil {
+                                    LiveTVSettingsPage(title: "Check channels") {
+                                        SettingsSectionGroup {
+                                            Text("Channel checks are unavailable. Your channel preferences are unchanged.")
+                                            Button("Retry", action: scanBinding.retry)
+                                                .buttonStyle(PrototypeButtonStyle())
+                                        }
+                                    }
+                                } else {
+                                    LiveTVScanSourcesView(
+                                        coordinator: scanBinding.coordinator,
+                                        sourceNames: Dictionary(uniqueKeysWithValues: imports.configuration.playlists.map {
+                                            ($0.id, $0.name)
+                                        })
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
         }
@@ -569,18 +943,126 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         sheet = nil
     }
 
+    private var libraryCatalogRevision: PrototypeLibraryCatalogRevision? {
+        libraryService.map { PrototypeLibraryCatalogRevision(service: $0, isAuthorized: libraryIsAuthorized()) }
+    }
+
+    private var canManageLibraryChannels: Bool {
+        libraryService?.isLoaded == true && libraryHistory != nil && libraryIsAuthorized()
+    }
+
+    private func publishLibraryGuide(channelIDs: Set<String>, range: DateInterval) {
+        guard let libraryService else { return }
+        installCatalogHooks()
+        do {
+            let channels = libraryIsAuthorized() ? libraryService.channels : []
+            let allowed = Set(channels.map(\.id))
+            let programs = allowed.isEmpty ? [] : try libraryService.programmes(
+                channelIDs: channelIDs.intersection(allowed), from: range.start, to: range.end
+            )
+            try imports.setGeneratedCatalog(channels: channels, programs: programs, into: model)
+            libraryGuideIssue = nil
+        } catch {
+            libraryGuideIssue = (error as? LibraryChannelError) ?? .storageFailed
+            do {
+                try imports.setGeneratedCatalog(channels: [], programs: [], into: model)
+            } catch {
+                sourceApplicationFailed = true
+                playback.stop()
+                multiview.stop()
+                HandoffDiagnostics.emit("LIVE_TV event=libraryCatalogRetirementFailed")
+            }
+        }
+        playback.validateAuthorization()
+        multiview.validateAuthorization()
+        updatePlaybackAvailability()
+    }
+
+    private func reloadCatalog() async {
+        guard isActive, loadedRequest != reloadRequest else { return }
+        installCatalogHooks()
+        let request = reloadRequest
+        if let sources {
+            sources.reload()
+            guard sources.hasLoaded, applySourceConfiguration() else {
+                playback.validateAuthorization()
+                return
+            }
+        }
+        async let enrolled = enrollAuthorizedServers()
+        await imports.reload(into: model)
+        let added = await enrolled
+        guard !Task.isCancelled, request == reloadRequest, isProfileAuthorized() else { return }
+        if !added.isEmpty, let sources {
+            sources.reload()
+            guard sources.hasLoaded, applySourceConfiguration() else { return }
+            await imports.reloadServers(into: model)
+        }
+        if !Task.isCancelled, request == reloadRequest { loadedRequest = request }
+    }
+
+    private func enrollAuthorizedServers() async -> [String] {
+        guard let sourceStore, sources?.hasLoaded == true, isProfileAuthorized(),
+              !serverChoices.isEmpty else { return [] }
+        return await enrollment.refresh(
+            choices: serverChoices, resolver: serverProviderResolver,
+            configuration: { try sourceStore.load() },
+            suppressedAccountIDs: { try enrollmentSuppression.suppressedAccountIDs() },
+            apply: { updated in
+                guard isProfileAuthorized() else {
+                    throw PrototypeEnrollmentCommitError.authorizationChanged
+                }
+                let current = try sourceStore.load()
+                let suppressed = try enrollmentSuppression.suppressedAccountIDs()
+                guard updated.playlists == current.playlists,
+                      current.servers.allSatisfy({ updated.servers.contains($0) }),
+                      updated.servers.allSatisfy({ source in
+                          current.servers.contains(source) || !suppressed.contains(source.accountID)
+                      }) else {
+                    throw PrototypeEnrollmentCommitError.configurationChanged
+                }
+                try updated.validate()
+                try sourceStore.save(updated)
+            }
+        )
+    }
+
     @discardableResult
     private func applySourceConfiguration() -> Bool {
         guard let sources, sources.hasLoaded else { return false }
         do {
-            try imports.applyConfiguration(sources.configuration, into: model)
+            let authorization = try sourceAuthority.authorization(configuration: sources.configuration)
+            try imports.applyConfiguration(authorization.filtering(sources.configuration), into: model)
+            appliedSourceAuthorizationID = authorization.identity
             playback.validateAuthorization()
+            multiview.validateAuthorization()
             sourceApplicationFailed = false
+            updatePlaybackAvailability()
             return true
         } catch {
             sourceApplicationFailed = true
+            externalPlayback = nil
+            multiview.setActive(false)
             playback.stop()
+            updatePlaybackAvailability()
             return false
+        }
+    }
+
+    private func refreshSourceAuthority() {
+        guard let sources else { return }
+        let previousConfiguration = sources.configuration
+        sources.reload()
+        guard sources.hasLoaded else {
+            sourceApplicationFailed = true
+            updatePlaybackAvailability()
+            return
+        }
+        let previous = appliedSourceAuthorizationID
+        guard applySourceConfiguration() else { return }
+        if previous != appliedSourceAuthorizationID || previousConfiguration != sources.configuration {
+            loadedRequest = nil
+            reloadRequest &+= 1
         }
     }
 
@@ -614,6 +1096,28 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                     .font(.caption)
                     .foregroundStyle(palette.secondaryText)
             }
+            if blockedPlaylistCount > 0 && !isSearching {
+                Text("Some IPTV sources need parental approval in Sources.")
+                    .font(.caption)
+                    .foregroundStyle(palette.secondaryText)
+            }
+            if let issue = libraryGuideIssue ?? libraryIssue, !isSearching {
+                HStack {
+                    Text(issue.message)
+                        .font(.caption)
+                        .foregroundStyle(palette.secondaryText)
+                    if let reloadLibrary {
+                        Button("Retry Plozz channels", action: reloadLibrary)
+                            .buttonStyle(PrototypeButtonStyle())
+                    }
+                }
+                if let pendingScanOfferSourceID, !isSearching {
+                    LiveTVScanImportOffer(
+                        coordinator: scanBinding.coordinator, sourceID: pendingScanOfferSourceID,
+                        skip: { self.pendingScanOfferSourceID = nil }
+                    )
+                }
+            }
             HStack(alignment: .top, spacing: PrototypeLayout.sectionGap) {
                 if layout.sidebarWidth > 0 {
                     PrototypeBrowseSidebar(
@@ -637,7 +1141,12 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
                         )
                         .disabled(blocksBrowseControls)
                     }
-                    guideBrowser(closeSearch: closeSearch)
+                    if isSearching {
+                        searchScopePicker
+                        searchResults(closeSearch: closeSearch)
+                    } else {
+                        guideBrowser(closeSearch: closeSearch)
+                    }
                 }
                 .frame(width: layout.guideWidth + layout.guideTrailingExtension)
                 .padding(.trailing, -layout.guideTrailingExtension)
@@ -679,15 +1188,55 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
             isLoading: model.channels.isEmpty && (imports.catalogPhase == .idle || imports.catalogPhase == .loading),
             loadFailed: imports.catalogPhase == .failed,
             reload: { reloadRequest += 1 },
-            hideChannel: hideChannel
+            hideChannel: hideChannel,
+            libraryCatalog: libraryCatalogRevision,
+            loadLibraryGuide: publishLibraryGuide
         )
     }
 
+    private var searchScopePicker: some View {
+        Picker("Search in", selection: $searchScope) {
+            Text("Channels").tag(PrototypeSearchScope.channels)
+            Text("Programs").tag(PrototypeSearchScope.programs)
+        }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 640, alignment: .leading)
+        .accessibilityIdentifier("live-tv-search-scope")
+        .onChange(of: searchScope) { _, _ in
+            focusedProgram = nil
+            playback.focus(nil)
+        }
+    }
+
+    @ViewBuilder
+    private func searchResults(closeSearch: @escaping () -> Void) -> some View {
+        if searchScope == .channels {
+            guideBrowser(closeSearch: closeSearch)
+        } else if model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ContentUnavailableView {
+                Label("Search programs", systemImage: "magnifyingglass")
+            } description: {
+                Text("Search for a program in your available guide.")
+            }
+        } else {
+            ScrollView {
+                LiveTVProgramSearchView(
+                    imports: imports, model: model, query: model.query,
+                    watch: { tune($0.id) },
+                    showDetails: { sheet = .program($0) }
+                )
+                .padding(PrototypeLayout.sectionGap)
+            }
+            .accessibilityIdentifier("live-tv-program-search-results")
+        }
+    }
+
     private var hidesAppNavigation: Bool {
+        if multiview.isEnabled { return isActive }
         #if os(tvOS)
-        preview.suppressesNavigation(isActive: isActive, isSearching: isSearching)
+        return preview.suppressesNavigation(isActive: isActive, isSearching: isSearching)
         #else
-        preview.suppressesNavigation(isActive: isActive)
+        return preview.suppressesNavigation(isActive: isActive)
         #endif
     }
 
@@ -717,6 +1266,12 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         (selectedChannelID ?? model.playingChannelID).flatMap { model.channel(id: $0) }
     }
 
+    private var blockedPlaylistCount: Int {
+        guard let sources, sources.hasLoaded, !sourceApplicationFailed else { return 0 }
+        let enabled = Set(sources.configuration.playlists.filter(\.isEnabled).map(\.id))
+        return enabled.subtracting(imports.configuration.playlists.map(\.id)).count
+    }
+
     private var heroProgram: LiveTVPrototypeProgram? {
         if let focusedProgram, focusedProgram.channelID == heroChannel?.id { return focusedProgram }
         return heroChannel.flatMap { model.currentProgram(for: $0.id) }
@@ -737,17 +1292,104 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
         let canFollowFocus = true
         #endif
         preview.setBrowsingActive(
-            isActive && playback.canAutoPreview && scenePhase == .active
-                && sheet == nil && !controlsActive && canFollowFocus
+            activity.acceptsInteraction && playback.canAutoPreview
+                && sheet == nil && !controlsActive && canFollowFocus && !multiview.isEnabled
         )
     }
 
     private func updatePlaybackAvailability() {
-        let active = isActive && scenePhase != .background && isProfileAuthorized()
+        if externalPlayback != nil && !hasAuthorizedExternalPlayback { externalPlayback = nil }
+        let active = activity.isPlaybackActive
+        scanBinding.setActive(
+            isActive && scenePhase == .active && isProfileAuthorized()
+                && !sourceApplicationFailed && allowsPlayback && (sources?.hasLoaded ?? true)
+        )
+        if !active && multiview.isEnabled { leaveMultiview() }
+        multiview.setActive(active)
         playback.setActive(active)
-        playback.setInteractionActive(active && scenePhase == .active)
+        playback.setInteractionActive(activity.acceptsInteraction && !multiview.isEnabled)
         updatePreviewAvailability()
-        if active && scenePhase == .active { playback.focus(selectedChannelID) }
+        if activity.acceptsInteraction { playback.focus(selectedChannelID) }
+    }
+
+    private func installCatalogHooks() {
+        imports.beforeCatalogPublication = { [weak scanBinding] configuration, channels in
+            scanBinding?.updateCatalog(configuration, channels: channels)
+        }
+        imports.beforeSourceRefresh = { [weak scanBinding] in scanBinding?.invalidate($0) }
+        imports.generatedProgramLoader = { [weak libraryService, libraryIsAuthorized] channelIDs, range in
+            guard let libraryService, libraryIsAuthorized() else {
+                throw LibraryChannelError.authorizationChanged
+            }
+            return try libraryService.programmes(
+                channelIDs: channelIDs, from: range.start, to: range.end
+            )
+        }
+    }
+
+    private func authorizesPlayback(_ prepared: LiveTVPreparedStream) -> Bool {
+        // Parent updates can discard new init candidates; use the installed State owners.
+        let channel = prepared.channel
+        guard isProfileAuthorized(), sources?.hasLoaded ?? true,
+              channel.source != .plozz || libraryIsAuthorized(),
+              sourceAuthority.allows(channel, configuration: sources?.configuration ?? imports.configuration),
+              LiveTVPlaybackCatalogAuthorization.allows(
+                channel, reference: prepared.serverReference, model: model, imports: imports,
+                configuration: sources?.configuration ?? imports.configuration,
+                libraryService: libraryService
+              ) else { return false }
+        if case .libraryChannel(let id, let authorizationID) = prepared.input {
+            return prepared.authorizationID == authorizationID
+                && libraryService?.playbackAuthorizationID(channelID: id) == authorizationID
+        }
+        return true
+    }
+
+    private var activity: LiveTVPlaybackActivity {
+        LiveTVPlaybackActivity(
+            isDestinationActive: isActive, isSceneActive: scenePhase == .active,
+            isInBackground: scenePhase == .background,
+            isAuthorized: isProfileAuthorized() && !sourceApplicationFailed && (sources?.hasLoaded ?? true),
+            allowsPlayback: allowsPlayback,
+            hasAuthorizedExternalPresentation: hasAuthorizedExternalPlayback
+        )
+    }
+
+    private var hasAuthorizedExternalPlayback: Bool {
+        guard allowsPlayback, !sourceApplicationFailed, !multiview.isEnabled, multiview.panes.count == 1,
+              let externalPlayback,
+              let pane = multiview.panes.first(where: { $0.id == externalPlayback.paneID }),
+              let prepared = pane.preparation.current, prepared.id == externalPlayback.preparedID else {
+            return false
+        }
+        return authorizesPlayback(prepared)
+    }
+
+    private func updateExternalPlayback(_ continuing: Bool, paneID: UUID, preparedID: UUID) {
+        let identity = PrototypeExternalPlayback(paneID: paneID, preparedID: preparedID)
+        if !continuing {
+            if externalPlayback == identity { externalPlayback = nil }
+            updatePlaybackAvailability()
+            return
+        }
+        guard allowsPlayback, !sourceApplicationFailed, !multiview.isEnabled,
+              let pane = multiview.panes.first(where: { $0.id == paneID }),
+              let prepared = pane.preparation.current, prepared.id == preparedID,
+              authorizesPlayback(prepared) else { return }
+        externalPlayback = identity
+        updatePlaybackAvailability()
+    }
+
+    private func restorePlayer(paneID: UUID, preparedID: UUID) async -> Bool {
+        guard allowsPlayback, !sourceApplicationFailed,
+              let pane = multiview.panes.first(where: { $0.id == paneID }),
+              let prepared = pane.preparation.current, prepared.id == preparedID,
+              authorizesPlayback(prepared) else { return false }
+        if !isActive, !(await restoreDestination()) { return false }
+        guard pane.preparation.current?.id == preparedID, allowsPlayback, !sourceApplicationFailed,
+              authorizesPlayback(prepared) else { return false }
+        preview.watch(prepared.channel.id)
+        return true
     }
 
     private func returnToGuide() {
@@ -851,12 +1493,19 @@ public struct LiveTVPrototypeView<PlayerContent: View>: View {
     }
 
     private func tune(_ id: String, origin: LiveTVGuideRowID? = nil) {
-        guard isActive, scenePhase == .active, isProfileAuthorized() else {
+        guard activity.acceptsInteraction else {
             HandoffDiagnostics.emit("LIVE_TV event=watchIgnored reason=inactiveDestination")
             return
         }
         if !preview.isExpanded {
-            channelSequence = LiveTVChannelSequence(channels: model.guideChannels.map(\.channel))
+            let channels: [LiveTVPrototypeChannel]
+            if isSearching && searchScope == .programs {
+                let allowed = model.programmeSearchChannelIDs
+                channels = model.unhiddenCatalogChannels.filter { allowed.contains($0.id) }
+            } else {
+                channels = model.guideChannels.map(\.channel)
+            }
+            channelSequence = LiveTVChannelSequence(channels: channels)
         }
         let selectedOrigin = !preview.isExpanded && selectedRowID?.channelID == id ? selectedRowID : nil
         playback.watch(id, origin: origin ?? selectedOrigin)

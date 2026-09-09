@@ -2,19 +2,27 @@
 import CryptoKit
 import Foundation
 
-public struct LiveTVPlaylistImport: Sendable {
+public struct LiveTVPlaylistImport: Codable, Sendable {
     public let channels: [LiveTVPrototypeChannel]
     public let entryCount: Int
     public let skippedEntryCount: Int
+    public let declaredGuideURLs: [URL]
+    public let permitsPersistence: Bool
+    public let originURL: URL?
 
     public init(
         channels: [LiveTVPrototypeChannel],
         entryCount: Int,
-        skippedEntryCount: Int
+        skippedEntryCount: Int,
+        declaredGuideURLs: [URL] = [],
+        permitsPersistence: Bool = true, originURL: URL? = nil
     ) {
         self.channels = channels
         self.entryCount = entryCount
         self.skippedEntryCount = skippedEntryCount
+        self.declaredGuideURLs = declaredGuideURLs
+        self.permitsPersistence = permitsPersistence
+        self.originURL = originURL
     }
 }
 
@@ -27,6 +35,10 @@ public enum LiveTVSourceImportError: Error, Equatable, Sendable {
     case streamManifest
     case invalidGuide
     case guideTooLarge
+    case cacheFailed
+    case unsafeGuideOrigin
+    case guideWithoutPlaylist
+    case authenticationRequired, temporarilyUnavailable, tooManyRequests, redirectBlocked
 
     public var userDescription: LocalizedStringResource {
         switch self {
@@ -46,6 +58,20 @@ public enum LiveTVSourceImportError: Error, Equatable, Sendable {
             "The Live TV guide isn't a supported XMLTV file."
         case .guideTooLarge:
             "The Live TV guide is too large to import safely."
+        case .cacheFailed:
+            "Your saved Live TV catalog couldn't be updated. The previous catalog has been kept."
+        case .unsafeGuideOrigin:
+            "This playlist declares a guide on another origin. Add that guide address explicitly in Sources to allow it."
+        case .guideWithoutPlaylist:
+            "This address contains a programme guide, not playable channels. Add it to an existing playlist's guide sources."
+        case .authenticationRequired:
+            "This source rejected access. Check its address or credentials in Sources."
+        case .temporarilyUnavailable:
+            "This source is temporarily unavailable. Previously loaded channels and listings have been kept."
+        case .tooManyRequests:
+            "This source is limiting requests. Wait before refreshing again."
+        case .redirectBlocked:
+            "This source redirects outside its allowed origin. Add the destination address explicitly if you trust it."
         }
     }
 
@@ -109,6 +135,24 @@ public struct LiveTVPlaylistParser: Sendable {
         var skippedEntryCount = 0
         var fallbackNumber = 0
         var importedIDs = Set<String>()
+        guard firstContentLine.utf8.count <= Self.maximumLineBytes else {
+            throw LiveTVSourceImportError.responseTooLarge
+        }
+        let header = firstContentLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        let headerAttributes = parseAttributes(String(header.dropFirst("#EXTM3U".count)))
+        var declaredGuideURLs: [URL] = []
+        for key in ["url-tvg", "x-tvg-url"] {
+            for address in (headerAttributes[key] ?? "").split(separator: ",") {
+                if let url = supportedURL(
+                    address.trimmingCharacters(in: .whitespacesAndNewlines), relativeTo: baseURL
+                ), !declaredGuideURLs.contains(url) {
+                    guard declaredGuideURLs.count < 32 else {
+                        throw LiveTVSourceImportError.responseTooLarge
+                    }
+                    declaredGuideURLs.append(url)
+                }
+            }
+        }
 
         for (index, rawLine) in rawLines.enumerated() {
             if index.isMultiple(of: 128) {
@@ -203,7 +247,9 @@ public struct LiveTVPlaylistParser: Sendable {
                     logoNeedsDarkBackground: logoURL.map(Self.darkLogoURLs.contains) ?? false,
                     guideID: tvgID,
                     guideName: guideName,
-                    httpHeaders: entry.headers
+                    httpHeaders: entry.headers,
+                    language: clean(entry.attributes["tvg-language"]),
+                    country: clean(entry.attributes["tvg-country"]), groups: groups
                 )
             )
         }
@@ -217,7 +263,8 @@ public struct LiveTVPlaylistParser: Sendable {
         return LiveTVPlaylistImport(
             channels: channels,
             entryCount: entryCount,
-            skippedEntryCount: skippedEntryCount
+            skippedEntryCount: skippedEntryCount,
+            declaredGuideURLs: declaredGuideURLs, originURL: baseURL
         )
     }
 

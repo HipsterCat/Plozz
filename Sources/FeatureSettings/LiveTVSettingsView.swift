@@ -57,6 +57,13 @@ public struct LiveTVSettingsView: View {
                 Toggle("With guide listings", isOn: $settings.guideOnly)
             }
 
+            SettingsSectionGroup("Playback") {
+                Toggle("Stop without Wi-Fi or Ethernet", isOn: $settings.wifiOnly)
+                Text("Stops Live TV after detecting a change away from Wi-Fi or Ethernet. Brief cellular data use may occur during the change. Cellular playback is allowed when this setting is off.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
             SettingsSectionGroup("Channels") {
                 NavigationLink {
                     LiveTVHiddenChannelsView(model: hiddenChannelsModel)

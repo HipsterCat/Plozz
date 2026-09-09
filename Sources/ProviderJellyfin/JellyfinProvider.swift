@@ -1528,7 +1528,7 @@ public struct JellyfinProvider: MediaProvider {
 
     // MARK: - Mapping
 
-    private func authenticatedPlaybackLocator(
+    func authenticatedPlaybackLocator(
         itemID: String,
         source: MediaSourceInfo,
         playSessionID: String?,
@@ -1645,7 +1645,7 @@ public struct JellyfinProvider: MediaProvider {
         )
     }
 
-    private func map(item dto: BaseItemDto) -> MediaItem {
+    func map(item dto: BaseItemDto) -> MediaItem {
         let kind = Self.kind(forItemType: dto.`Type`)
         if self.kind == .emby {
             PlozzLog.playback.debug(
@@ -2052,7 +2052,7 @@ public struct JellyfinProvider: MediaProvider {
         return ratings
     }
 
-    private func map(stream dto: MediaStreamDto) -> MediaTrack {
+    func map(stream dto: MediaStreamDto) -> MediaTrack {
         let isSubtitle = dto.`Type` == "Subtitle"
         return MediaTrack(
             id: dto.Index,
@@ -2072,7 +2072,7 @@ public struct JellyfinProvider: MediaProvider {
     /// subtitles so the player can inject them into the native picker even on
     /// direct play. Image-based subs (PGS/VOBSUB) get no text delivery source;
     /// their engine-decoded bitmap cues keep their authored placement.
-    private func map(
+    func map(
         subtitleStream dto: MediaStreamDto,
         itemID: String,
         sourceID: String

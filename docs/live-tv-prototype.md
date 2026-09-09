@@ -1,8 +1,9 @@
 # Live TV prototype
 
 A native, Debug-only Live TV destination for iterating on a physical Apple TV,
-iPhone and iPad. It combines configured IPTV playlists and authorized server
-channels, using Plozz's existing AetherEngine (`PlozzigenVideoEngine`) integration.
+iPhone and iPad. It combines configured IPTV playlists, authorized server
+channels and scheduled library channels, using Plozz's existing AetherEngine
+(`PlozzigenVideoEngine`) integration.
 It lives
 inside Plozz's actual navigation instead of replacing the application root.
 Release navigation and onboarding remain unchanged.
@@ -48,8 +49,7 @@ Additional launch arguments:
 The former `--live-tv-guide` flag is no longer needed: channels and their guide
 are one screen, including when no listings exist.
 
-The entry route, live host, UI and public test catalog are compiled out of
-Release builds.
+The entry route, live host and UI are compiled out of Release builds.
 
 ## Try
 
@@ -219,12 +219,14 @@ is no prior in-memory history to migrate on the first updated launch.
 - **Sources** adds, edits, pauses and removes playlists and connected servers.
   Playlist checks finish before saving, and stale editors cannot overwrite a
   newer source. Guides are optional and can be added, removed or reordered later.
-  The playlist address must describe a channel list, not an HLS master or media
-  manifest. Channel entries can themselves point to HLS streams.
+  The address can describe an M3U channel list or a direct HLS stream. A direct
+  master or media manifest imports one channel, not one channel per segment.
+  Channel-list entries can also point to HLS streams.
   Source details retain playlist/skipped-entry counts, guide matches, loaded
   listings and per-feed failures; the guide overview shows loaded coverage.
-  Settings can edit the same secure configuration without pretending to have
-  live import statistics. Open Live TV to load sources and inspect those results.
+  Settings restores authorized cached channels and guide statistics without
+  starting network requests merely by opening Sources. Refresh sources loads
+  fresh data there; source changes refresh the retained Settings catalog.
   Failed sources do not block successful ones or erase their last-good data.
   **With guide listings** filters populated channels without changing source
   authorization or stopping a hidden, deliberately watched channel.
@@ -274,19 +276,79 @@ is no prior in-memory history to migrate on the first updated launch.
 
 ### Connected-server Live TV and standalone setup
 
-Jellyfin and Emby adapters discover authorized channels, load native guide data,
-and open explicitly owned live-stream sessions. Plex supports available lineup
-and guide discovery, but tuning is deliberately unavailable until a complete
-ordinary-client acquisition/release contract is substantiated. Setup identifies
-guide-only Plex sources before they are added; it does not promise playback.
-No adapter invokes administrative, device-wide session termination.
+Jellyfin, Emby and Plex adapters discover authorized channels, load native guide
+data, and open explicitly owned live-stream sessions. Plex tunes the selected
+DVR/channel, negotiates a consumer through the playback decision API, and uses
+the returned HLS consumer path or an individually identified universal
+transcode. A current guide programme is not fabricated or required by Plozz.
+No adapter invokes administrative or device-wide session termination.
+
+The provider-neutral `LiveTVServerEnrollmentCoordinator` accepts the existing
+authorized account choices and resolver. Composition calls `refresh` at login,
+profile activation and refresh, then reloads source catalogs. Configuration and
+removed-account suppression are read again before each source is saved, so a
+concurrent remove, manual add, rename or disable wins. Call `invalidate` before
+changing profile/account authorization. Source IDs are stable account-derived
+identities; secret tokens and server-user credentials remain in the existing
+account resolver, not source configuration.
 
 Checking a server is metadata-only and never acquires a tuner. The chooser
 distinguishes missing tuner setup, no channels, permissions, an unreachable
-service, unsupported APIs and guide-only playback limitations. It uses only
+service, explicit subscription requirements, unsupported APIs and guide-only
+playback limitations. It uses only
 accounts available to the current profile, including effective Plex Home
 credentials, and rejects stale results after profile or authorization changes.
 Source configuration uses the existing household parental-PIN policy.
+
+Plex gives each pane/tune a fresh playback UUID, carried on tune, consumer
+decision/start, timeline reports and scoped transcode stop. A detached allocation
+request is observed to completion even after cancellation, then rolled back
+using the same identity. Provider retirement fences late opens. Heartbeats run
+every ten seconds; close serializes behind outstanding reports, sends the
+owned viewer's stopped timeline, and stops only its own transcoder identity.
+Stopping one viewer never deletes the shared live-session UUID.
+
+#### Server API evidence and verification boundary
+
+The [official Plex Media Server OpenAPI](https://developer.plex.tv/pms/)
+(embedded schema 1.2.2, inspected September 8, 2026) documents channel tune,
+live-session/consumer HLS, universal decision/start, and `POST /:/timeline`.
+The timeline contract explicitly specifies a separate
+`X-Plex-Session-Identifier` for simultaneous playback on one client and a
+ten-second LAN/WAN cadence. It does **not** document a consumer DELETE endpoint:
+none is invented here. Session-specific universal stop and the live stopped
+timeline are additionally corroborated by independent existing clients,
+including [Rivulet's playback client](https://github.com/l984-451/Rivulet/blob/6985966892ba00dcbeb1822a6360142fc5764b19/RivuletCore/Plex/PlexNetworkManager.swift)
+and [live timeline implementation](https://github.com/l984-451/Rivulet/blob/6985966892ba00dcbeb1822a6360142fc5764b19/Rivulet/Services/LiveTV/PlexLiveTimelineKeepalive.swift).
+These are API-behavior references, not a claim of local real-server testing.
+
+[Plex's permission documentation](https://support.plex.tv/articles/115007689648-watching-live-tv/)
+limits Live TV sharing to permitted Plex Home users. OTA viewing must not be
+rejected merely because the owner lacks Plex Pass.
+[Emby's Live TV setup](https://emby.media/support/articles/Live-TV.html) requires
+Premiere; [its user-authenticated Info API](https://dev.emby.media/reference/RestAPI/LiveTvService/getLivetvInfo.html)
+exposes enabled users, while its [Open](https://dev.emby.media/reference/RestAPI/MediaInfoService/postLivestreamsOpen.html)
+and [Close](https://dev.emby.media/reference/RestAPI/MediaInfoService/postLivestreamsClose.html)
+contracts identify individual stream handles. Missing entitlement metadata is
+not evidence that Premiere is missing. An explicit HTTP 402 is distinguished
+from permission denial; fixtures for this status do not assert which server
+versions emit it.
+
+Jellyfin's [API reference](https://api.jellyfin.org/) and
+[official LiveTv controller](https://github.com/jellyfin/jellyfin/blob/master/Jellyfin.Api/Controllers/LiveTvController.cs)
+identify the authenticated `LiveTvAccess` policy on channel/Info requests.
+Discovery does not require its administrative tuner-configuration endpoints.
+
+Focused deterministic selectors: `PlexLiveTVTests`, `JellyfinLiveTVTests`
+(including independent Emby response shapes), `LiveTVServerEnrollmentTests`,
+`LiveTVServerImportTests`, `LiveTVServerProbeTests`, and
+`LiveTVServerGuideImportTests`. Fixtures cover no-guide tuning, permission and
+subscription states, cancellation/retirement, same-tuner independent viewers,
+failed handoff cleanup and concurrent source opt-outs. These are not integration
+tests against a configured server. No supported-server-version matrix or
+physical tuner contention, long-running renewal, remote streaming or
+Home-user two-viewer release result is claimed without authorized real-server
+verification.
 
 Native guides bypass XMLTV name matching. The browser requests the displayed
 two-/six-hour window for a bounded neighborhood of at most 12 rows; recently
@@ -302,25 +364,26 @@ first entry can temporarily expose a hidden Live TV destination; later launches
 respect navigation customization, including Settings-only layouts. Builds
 without the Debug-only destination do not honor standalone admission.
 
-### Required follow-up: channel scanning
+### Channel scanning
 
-Channel scanning is a committed product follow-up, deliberately **not implemented
-in this UI pass**. After importing a source, offer an optional scan without
-blocking browsing or playback; also expose manual scans/rescans through Sources
-and the browsing controls.
+After importing a source, an optional scan can check channel availability
+without blocking browsing or playback. Sources exposes Scan channels,
+Scan results, Show hidden and Rescan channels. Browsing also exposes Check
+channels. Importing a playlist does not start probes automatically.
 
-Keep results per profile/source/channel and stream identity. Hide confirmed
-broken links reversibly rather than deleting playlist entries, Favorites or
-guide mappings. Provide results, Show hidden, Restore and Rescan actions. Leave
-timeouts, offline checks, authentication/geo restrictions and unsupported
-playback cases visible as uncertain; one failed request must not remove a channel.
-An HTTP 200 master playlist alone is not evidence of a working HLS stream.
+Results belong to the profile, source, channel and stream identity. Confirmed
+missing links can be hidden reversibly without deleting playlist entries,
+Favorites or guide mappings. Restore is separate from manually hiding a channel.
+Timeouts, offline checks, authentication/geo restrictions and unsupported
+playback remain uncertain; one failed request does not remove a channel.
+An HTTP 200 master playlist alone is not evidence of playable media, and
+reachability checks are not decoder compatibility tests.
 
-Use bounded concurrency, response sizes, request deadlines and retries, with
-progress and cancellation. Fence results when a source refreshes or the profile
-changes, and never log raw URLs or credentials. Start with imported IPTV links,
-not network discovery or tuner-consuming Plex/Jellyfin/Emby scans. Scanning must
-not commandeer the playing engine or interrupt the current channel.
+Concurrency, response sizes, deadlines and retries are bounded, with progress
+and cancellation. Source refreshes, authorization changes and profile changes
+fence old results. Each profile has one active scan owner. Scans inspect imported
+IPTV links, not network discovery or tuner-consuming Plex/Jellyfin/Emby streams,
+and do not commandeer the playing engine.
 
 ### Audible previews and seamless viewing
 
@@ -328,8 +391,9 @@ On Apple TV, resting on a different channel for **600 ms** requests its preview.
 Rapid scrolling cancels pending requests; moving between programs on the same
 channel does not restart the delay or retune. The delay is **not** a stream
 startup guarantee: network, source, keyframe and decoder startup follow it.
-There is only one active player, with sound on while browsing. No second decoder
-is opened to fake an instant crossfade. A server change can prepare a replacement
+Ordinary guide preview and fullscreen viewing share one active player, with
+sound on while browsing. No second decoder is opened to fake an instant
+crossfade. A server change can prepare a replacement
 session while the current feed remains visible, then retire the old owned session.
 Tuner contention offers an explicit stop-current-and-retry action rather than
 silently interrupting playback. Cleanup attempts completing cannot guarantee
@@ -379,8 +443,9 @@ Loading/failure states remain local and nonfocusable in the preview, with an
 opaque placeholder until the new source actually produces a first frame.
 Opening a failed preview exposes the existing full retry/close UI.
 Leaving the Live TV destination releases playback and invalidates pending tunes,
-including when a native tab keeps its view alive. App backgrounding retains the
-existing foreground-only teardown/reload policy.
+including when a native tab keeps its view alive. Ordinary playback tears down
+on background entry; explicit mobile PiP/AirPlay follows the authorization-gated
+continuation policy below.
 
 ## Developer test inputs and artwork
 
@@ -467,15 +532,48 @@ matched programs, supporting feeds that interleave channel declarations and
 listings without keeping all unmatched programs in memory. Plain XML and gzip
 are accepted. Normal external XMLTV DOCTYPE headers are accepted without
 retrieving the DTD; entity declarations remain rejected.
-Custom-source setup is available in Debug. Persistent guide caching remains
-planned; current guide data and backend playback handles are runtime-only.
+Custom-source setup is available in Debug. The production importer uses an
+encrypted, indexed catalog and guide cache. Guide windows and program searches
+fetch only the requested channel IDs and time range; a large import does not
+publish its entire schedule into observable UI state. Cached data is bound to
+the current source URL and profile authority. Changing credentials cannot
+restore streams or guide data from the previous source binding. A failed
+refresh retains the last good generation for an unchanged, still-authorized
+source. Backend playback handles remain runtime-only.
 
 ## Boundaries
 
-Manual guide mapping, Plex tuning, generated library channels, cross-device
-source sync, persistent guide caching, Multiview, Xtream-compatible login,
-catch-up, PiP, AirPlay integration, programme-rating restrictions and recording
-management remain planned. Source-configuration PIN protection is not a
+The Debug integration includes manual guide mapping, durable channel identity,
+generated library channels, indexed program search, channel checks and two-pane
+Multiview. Multiview retains each player's decoder and prepared stream through
+side-by-side/corner layout changes, audio selection and returning to one player.
+Its hardware decoder capacity, mixed HDR/SDR behavior and long-running resource
+use still need real-device acceptance; controlled fixtures are not proof of
+those guarantees.
+
+Generated channels use immutable schedules and seek into the current program
+when joined, rather than resuming an ordinary movie or episode session. Library
+history defaults to Off. With consent, sufficient actual watched coverage can
+produce a canonical watched completion through the existing profile outbox.
+Generated completion never writes resume position or sends a legacy
+playback-stop event. Pending completions retain runtime consent and account
+authorization checks; restoring an outbox cannot recreate an expired grant.
+
+Optional portable Live TV state covers channel preferences, matching hints and
+generated definitions/snapshots, not source URLs, imported playlist bytes,
+credentials, parental approvals, history grants or channel health. Incomplete
+snapshot transfers remain pending. Identity changes are deferred while
+playback holds their identities, while authorization revocation takes effect
+immediately. Each device still configures and authorizes its own sources.
+
+Channel checks use bounded probes and keep unsupported, blocked and uncertain
+results distinct. Only confidently missing streams can be automatically hidden;
+restoring a scan-hidden channel does not change a manual hide. Scanner network
+permissions do not grant the media engine a transport capability it lacks.
+
+Xtream-compatible login, DVB-I, DASH-specific integration, catch-up,
+programme-rating restrictions and recording management are outside this
+implementation. Source-configuration PIN protection is not a
 programme-content rating filter. Real tuner installations remain a validation
 gate beyond controlled provider fixtures. Many streams still lack a confidently identified schedule;
 more name guesses are not a substitute for accurate provider/region mapping.
@@ -532,13 +630,19 @@ visible. Two manual retries remain available; they do not replenish automatic
 recovery's budget. Startup is bounded at 30 seconds and sustained activity/stall
 at 60 seconds, leaving room for Aether's own recovery before failing visibly.
 
-This prototype is foreground-only. Brief inactivity pauses the current feed
-and cancels pending tunes without releasing the current server lease. Actual
-background entry or leaving Live TV closes the owned stream and leaves playback
-for the guide. Returning to active browsing follows the Auto preview preference;
-touch browsing still requires selecting a channel. Stop, failure, backgrounding
-and replacement invalidate outstanding loads and seeks. Ordinary VOD playback
-and its lifecycle remain unchanged.
+Brief inactivity pauses the current feed and cancels pending tunes without
+releasing the current server lease. Background entry or leaving Live TV closes
+ordinary playback; an explicitly authorized mobile PiP/AirPlay continuation
+retains its exact player and preparation until it ends or loses authority.
+Returning to active browsing follows the Auto preview preference; touch browsing
+still requires selecting a channel. Stop, failure, authorization changes and
+replacement invalidate outstanding loads and seeks. Ordinary VOD playback and
+its lifecycle remain unchanged.
+
+Mobile cellular playback is allowed by default. The optional "Stop without
+Wi-Fi or Ethernet" control stops playback after detecting a network change.
+The engine does not expose per-request cellular restrictions, so this is not
+a guarantee of zero cellular bytes during a handoff.
 
 Debug diagnostics use the existing `HandoffDiagnostics` bounded playback journal
 and `PlozzLog` recent-log ring, tagged `LIVE_TV` with `engine=AetherEngine`.

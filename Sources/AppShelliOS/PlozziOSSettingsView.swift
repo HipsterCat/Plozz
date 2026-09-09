@@ -661,7 +661,9 @@ private struct PlozziOSSettingsSplitView: View {
                         connectServer: onAddServer,
                         didConfigurePlaylist: {
                             _ = appModel.recordSuccessfulIPTVSetup()
-                        }
+                        },
+                        isPresented: selection == .liveTV,
+                        isProfileAuthorized: { [appModel] in appModel.isLiveTVProfileAuthorized }
                     ))
                 }
             )
@@ -959,7 +961,8 @@ private struct PlozziOSSettingsCompactMenu: View {
                                 connectServer: onAddServer,
                                 didConfigurePlaylist: {
                                     _ = appModel.recordSuccessfulIPTVSetup()
-                                }
+                                },
+                                isProfileAuthorized: { [appModel] in appModel.isLiveTVProfileAuthorized }
                             ))
                         }
                     )

@@ -1257,6 +1257,13 @@ public struct SettingsView: View {
                     }
                 }
 
+                #if DEBUG
+                SettingsPanel(title: "Live TV") {
+                    LiveTVPortableSyncSettings()
+                    LiveTVPortableSyncPendingSettings()
+                }
+                #endif
+
                 if let onSetUpAnotherDevice {
                     SettingsPanel(contentPadding: .settingsPanelRowContent) {
                         setUpAnotherDeviceRow(onSetUpAnotherDevice)

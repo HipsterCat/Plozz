@@ -5,6 +5,7 @@ struct JellyfinLiveTVInfo: Decodable, Sendable {
         let Status: String?
     }
     let IsEnabled: Bool?
+    let EnabledUsers: [String]?
     let Services: [Service]?
 }
 

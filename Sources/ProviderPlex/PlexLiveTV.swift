@@ -7,21 +7,18 @@ extension PlexProvider: ServerLiveTVProviding {
         do {
             let providers = try await liveTVEPGs()
             if providers.isEmpty {
-                let response = try await liveTVContainer(path: "/livetv/dvrs")
-                let configured = !(response.DVR ?? response.Dvr ?? []).isEmpty
-                return ServerLiveTVAvailability(
-                    status: configured ? .unsupportedAPI : .notConfigured,
-                    supportsGuide: false
-                )
+                return ServerLiveTVAvailability(status: .notConfigured, supportsGuide: false)
             }
             let channels = try await liveTVReferences(providers: providers)
             return ServerLiveTVAvailability(
-                status: channels.isEmpty ? .noChannels : .unsupportedPlaybackMode,
+                status: channels.isEmpty ? .noChannels : .available,
                 channelCount: channels.count,
                 supportsGuide: providers.contains { $0.gridPath != nil }
             )
         } catch ServerLiveTVError.permissionDenied {
             return ServerLiveTVAvailability(status: .permissionDenied, supportsGuide: false)
+        } catch ServerLiveTVError.subscriptionRequired {
+            return ServerLiveTVAvailability(status: .subscriptionRequired, supportsGuide: false)
         } catch AppError.notFound {
             return ServerLiveTVAvailability(status: .unsupportedAPI, supportsGuide: false)
         }
@@ -81,10 +78,181 @@ extension PlexProvider: ServerLiveTVProviding {
     }
 
     public func openLiveTVChannel(id: String) async throws -> any LiveTVStreamLease {
-        // PMS documents tuning and session playlists, but not a complete ordinary
-        // client consumer-acquisition/release contract. Discovery is useful on its
-        // own; neither an invented playlist nor admin session termination is safe.
-        throw ServerLiveTVError.unsupportedPlaybackMode
+        try Task.checkCancellation()
+        guard await !liveTVLeases.isRetired else { throw CancellationError() }
+        let references = try await liveTVReferences(providers: liveTVEPGs())
+        guard let reference = references.first(where: { $0.channel.id == id }),
+              let number = reference.channel.number,
+              !number.isEmpty, number.utf8.count <= 64,
+              number.utf8.allSatisfy({
+                  (48...57).contains($0) || (65...90).contains($0)
+                      || (97...122).contains($0) || [45, 46, 95].contains($0)
+              }) else {
+            throw ServerLiveTVError.invalidChannel
+        }
+        let dvrID = reference.provider.dvrID
+        try Task.checkCancellation()
+        guard await !liveTVLeases.isRetired else { throw CancellationError() }
+        let playbackID = UUID().uuidString
+        let openingClient = client
+        let resources = PlexLiveTVResources(
+            client: openingClient, playbackID: playbackID, store: liveTVLeases
+        )
+        do {
+            // Keep observing a successful allocation even when the caller is
+            // cancelled. Losing its response would lose the owned tuner handle.
+            let data = try await Task.detached {
+                try await openingClient.liveTVSessionRequest(
+                    path: "/livetv/dvrs/\(dvrID)/channels/\(number)/tune",
+                    method: .post, playbackID: playbackID
+                )
+            }.value
+            let tuned = try PlexLiveTVPlaybackDocument(data: data)
+            await resources.adopt(sessionPath: tuned.sessionPath, ratingKey: tuned.ratingKey)
+            guard tuned.status == nil || tuned.status == 0 || tuned.status == 200 else {
+                throw ServerLiveTVError.tunerUnavailable
+            }
+            guard let sessionPath = tuned.sessionPath else { throw AppError.invalidResponse }
+            try Task.checkCancellation()
+            guard await !liveTVLeases.isRetired else { throw CancellationError() }
+            let query = Self.liveTVDecisionQuery(sessionPath: sessionPath, playbackID: playbackID)
+                + openingClient.liveTVPlaybackIdentityQuery
+            let decisionData = try await Task.detached {
+                try await openingClient.liveTVSessionRequest(
+                    path: "/video/:/transcode/universal/decision",
+                    query: query, playbackID: playbackID
+                )
+            }.value
+            let decision = try PlexLiveTVPlaybackDocument(data: decisionData)
+            guard decision.sessionPath == nil || decision.sessionPath == sessionPath else {
+                throw AppError.invalidResponse
+            }
+            try Task.checkCancellation()
+            guard await !liveTVLeases.isRetired else { throw CancellationError() }
+            let resource: AuthenticatedHTTPResource
+            if let key = decision.directPlaylist, decision.decisionCode == 1000 {
+                resource = try liveTVConsumerResource(
+                    key, sessionPath: sessionPath, playbackID: playbackID
+                )
+            } else {
+                guard decision.decisionCode == 1001 else {
+                    throw ServerLiveTVError.noCompatibleStream
+                }
+                resource = try AuthenticatedHTTPResource(
+                    pathBase: .configuredBaseURL, path: "video/:/transcode/universal/start.m3u8",
+                    queryItems: query.filter { $0.name != "session" }.map {
+                        try AuthenticatedHTTPQueryItem(name: $0.name, value: $0.value)
+                    }
+                )
+            }
+            // Resolve the server-issued consumer, rather than guessing one from
+            // the shared tuner UUID. For transcoding this starts our own job.
+            let playlist = try await Task.detached {
+                try await openingClient.liveTVSessionRequest(
+                    path: "/" + resource.path,
+                    query: resource.queryItems.map { URLQueryItem(name: $0.name, value: $0.value) }
+                        + [URLQueryItem(name: "session", value: playbackID)],
+                    playbackID: playbackID
+                )
+            }.value
+            guard playlist.count <= 2_097_152,
+                  String(data: playlist.prefix(128), encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#EXTM3U") == true else {
+                throw AppError.invalidResponse
+            }
+            try Task.checkCancellation()
+            let source = PlaybackSource.authenticatedHTTP(try AuthenticatedHTTPPlaybackLocator(
+                provider: .plex, accountID: accountID, credentialRevision: credentialRevision,
+                itemID: id, deliveryMode: .hls, formatHint: MediaFormatHint(container: "m3u8"),
+                resource: resource, playSessionID: playbackID
+            ))
+            guard await liveTVLeases.register(resources) else { throw CancellationError() }
+            try Task.checkCancellation()
+            await resources.startHeartbeat()
+            return PlexLiveTVLease(playbackSource: source, resources: resources)
+        } catch {
+            await resources.close()
+            throw error
+        }
+    }
+
+    private static func liveTVDecisionQuery(
+        sessionPath: String, playbackID: String
+    ) -> [URLQueryItem] {
+        [
+            URLQueryItem(name: "path", value: sessionPath),
+            URLQueryItem(name: "mediaIndex", value: "0"),
+            URLQueryItem(name: "partIndex", value: "0"),
+            URLQueryItem(name: "protocol", value: "hls"),
+            URLQueryItem(name: "directPlay", value: "1"),
+            URLQueryItem(name: "directStream", value: "1"),
+            URLQueryItem(name: "directStreamAudio", value: "1"),
+            URLQueryItem(name: "hasMDE", value: "1"),
+            URLQueryItem(name: "offset", value: "0"),
+            URLQueryItem(name: "context", value: "streaming"),
+            URLQueryItem(name: "session", value: playbackID),
+            URLQueryItem(name: "transcodeSessionId", value: playbackID)
+        ]
+    }
+
+    private func liveTVConsumerResource(
+        _ value: String, sessionPath: String, playbackID: String
+    ) throws -> AuthenticatedHTTPResource {
+        guard let components = URLComponents(string: value),
+              components.user == nil, components.password == nil, components.fragment == nil,
+              !value.hasPrefix("//"), !value.contains("\\") else {
+            throw AppError.invalidResponse
+        }
+        if components.scheme != nil || components.host != nil {
+            guard let scheme = components.scheme, let host = components.host,
+                  let configured = URLComponents(url: client.baseURL, resolvingAgainstBaseURL: false),
+                  let configuredScheme = configured.scheme, let configuredHost = configured.host,
+                  configured.user == nil, configured.password == nil,
+                  configured.query == nil, configured.fragment == nil else {
+                throw AppError.invalidResponse
+            }
+            do {
+                guard try NetworkOrigin(scheme: scheme, host: host, port: components.port)
+                    == NetworkOrigin(
+                        scheme: configuredScheme, host: configuredHost, port: configured.port
+                    ) else { throw AppError.invalidResponse }
+            } catch is MediaSourceModelError {
+                throw AppError.invalidResponse
+            }
+        }
+        let prefix = sessionPath + "/"
+        let suffix = "/index.m3u8"
+        let basePath = URLComponents(url: client.baseURL, resolvingAgainstBaseURL: false)?
+            .percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? ""
+        var apiPath = components.percentEncodedPath
+        if !basePath.isEmpty, apiPath.hasPrefix("/" + basePath + "/") {
+            apiPath = String(apiPath.dropFirst(basePath.count + 1))
+        }
+        guard apiPath.hasPrefix(prefix), apiPath.hasSuffix(suffix) else {
+            throw AppError.invalidResponse
+        }
+        let consumer = String(apiPath.dropFirst(prefix.count).dropLast(suffix.count))
+        guard PlexLiveTVPlaybackDocument.validHandle(consumer) else { throw AppError.invalidResponse }
+        let identity = client.liveTVPlaybackIdentityQuery
+        let identityNames = Set(identity.map { $0.name.lowercased() })
+        var query = try (components.queryItems ?? []).compactMap { item -> AuthenticatedHTTPQueryItem? in
+            // The resolver supplies this account's current credentials.
+            let name = item.name.lowercased()
+            if ["x-plex-session-identifier", "session", "transcodesessionid"].contains(name) {
+                guard item.value == playbackID else { throw AppError.invalidResponse }
+                return nil
+            }
+            if name == "x-plex-token" { return nil }
+            if name == "x-plex-client-identifier", item.value != session.deviceID {
+                throw AppError.invalidResponse
+            }
+            if identityNames.contains(name) { return nil }
+            return try AuthenticatedHTTPQueryItem(name: item.name, value: item.value)
+        }
+        query += try identity.map { try AuthenticatedHTTPQueryItem(name: $0.name, value: $0.value) }
+        return try AuthenticatedHTTPResource(
+            pathBase: .configuredBaseURL, path: String(apiPath.dropFirst()), queryItems: query
+        )
     }
 
     private func liveTVContainer(
@@ -97,9 +265,12 @@ extension PlexProvider: ServerLiveTVProviding {
     }
 
     private func liveTVEPGs() async throws -> [PlexLiveTVEPG] {
+        try Task.checkCancellation()
+        guard await !liveTVLeases.isRetired else { throw CancellationError() }
         let container = try await liveTVContainer(path: "/media/providers")
+        if container.allowTuners?.boolean == false { throw ServerLiveTVError.permissionDenied }
         var seen: Set<String> = []
-        return (container.MediaProvider ?? []).compactMap { provider in
+        return try (container.MediaProvider ?? []).compactMap { provider in
             guard let identifier = provider.identifier,
                   identifier.hasPrefix("tv.plex.providers.epg."),
                   identifier.utf8.count < 256,
@@ -110,11 +281,17 @@ extension PlexProvider: ServerLiveTVProviding {
                   provider.protocols?.split(whereSeparator: { $0 == "," || $0 == " " })
                     .contains("livetv") == true,
                   seen.insert(identifier).inserted else { return nil }
+            let parts = identifier.split(separator: ":", omittingEmptySubsequences: false)
+            guard parts.count == 2, let dvrID = parts.last, !dvrID.isEmpty,
+                  dvrID.utf8.allSatisfy({ (48...57).contains($0) }),
+                  provider.parentID == nil || provider.parentID?.string == String(dvrID) else {
+                throw AppError.invalidResponse
+            }
             let expectedGridPath = "/\(identifier)/grid"
             let gridPath = provider.Feature?.first {
                 $0.type == "grid" && $0.key == expectedGridPath
             }?.key
-            return PlexLiveTVEPG(identifier: identifier, gridPath: gridPath)
+            return PlexLiveTVEPG(identifier: identifier, dvrID: String(dvrID), gridPath: gridPath)
         }
     }
 
@@ -283,6 +460,7 @@ extension PlexProvider: ServerLiveTVProviding {
 
 private struct PlexLiveTVEPG: Sendable {
     let identifier: String
+    let dvrID: String
     let gridPath: String?
 }
 

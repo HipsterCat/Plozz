@@ -216,6 +216,69 @@ final class JellyfinLiveTVTests: XCTestCase {
         XCTAssertEqual(locator.provider, .emby)
     }
 
+    func testEmbyAuthorizedNativeLineupTunesWithoutGuideOrAdministrativeDiscovery() async throws {
+        // Independent Emby-shaped fixture: numeric item identity and already-open
+        // live source, not a relabeled Jellyfin RequiresOpening fixture.
+        let http = LiveTVFixtureHTTP([
+            "/LiveTv/Info": [.init(json: #"{"IsEnabled":true,"EnabledUsers":["fixture-user"]}"#)],
+            "/LiveTv/Channels": [.init(json: """
+            {"Items":[{"Id":"847","Name":"Emby antenna","ChannelNumber":"5.2",
+              "ChannelType":"TV"}],"TotalRecordCount":1}
+            """)],
+            "/Items/847/PlaybackInfo": [.init(json: """
+            {"PlaySessionId":"emby-viewer","MediaSources":[{
+              "Id":"emby-source","LiveStreamId":"emby-own-consumer",
+              "RequiresOpening":false,"SupportsDirectStream":true,
+              "Container":"ts","MediaStreams":[{"Type":"Video"}]}]}
+            """)]
+        ])
+        let provider = provider(http, kind: .emby)
+        let available = try await provider.liveTVAvailability()
+        XCTAssertEqual(available.status, .available)
+        XCTAssertEqual(available.channelCount, 1)
+        let channels = try await provider.liveTVChannels()
+        XCTAssertNil(channels.first?.currentProgramme)
+        let lease = try await provider.openLiveTVChannel(id: "847")
+        await lease.close()
+        guard case .authenticatedHTTP(let locator) = lease.playbackSource else {
+            return XCTFail("Expected account-scoped Emby stream")
+        }
+        XCTAssertEqual(locator.provider, .emby)
+        XCTAssertEqual(locator.resource.path, "Videos/847/stream.ts")
+        XCTAssertEqual(locator.playSessionID, "emby-viewer")
+        let requests = await http.requests
+        XCTAssertFalse(requests.contains { $0.path == "/LiveStreams/Open" })
+        XCTAssertFalse(requests.contains { $0.path.contains("TunerHosts") || $0.path.contains("Configuration") })
+        XCTAssertEqual(requests.first { $0.path == "/LiveStreams/Close" }?.query("LiveStreamId"), "emby-own-consumer")
+    }
+
+    func testEmbyEnabledUsersRestrictionDoesNotBecomeEmptyLineup() async throws {
+        let http = LiveTVFixtureHTTP([
+            "/LiveTv/Info": [.init(json: #"{"IsEnabled":true,"EnabledUsers":["other-user"]}"#)]
+        ])
+        let availability = try await provider(http, kind: .emby).liveTVAvailability()
+        XCTAssertEqual(availability.status, .permissionDenied)
+        let requests = await http.requests
+        XCTAssertEqual(requests.map(\.path), ["/LiveTv/Info"])
+    }
+
+    func testEmbyExplicitEntitlementResponseIsNotPermissionDeniedOrUnconfigured() async throws {
+        // Protocol error fixture, not evidence that every Emby version returns 402.
+        let http = LiveTVFixtureHTTP(["/LiveTv/Info": [.init(status: 402)]])
+        let availability = try await provider(http, kind: .emby).liveTVAvailability()
+        XCTAssertEqual(availability.status, .subscriptionRequired)
+        XCTAssertFalse(availability.supportsPlayback)
+    }
+
+    func testMissingEmbySubscriptionMetadataDoesNotInventEntitlementFailure() async throws {
+        let http = LiveTVFixtureHTTP([
+            "/LiveTv/Info": [.init(json: #"{"IsEnabled":true,"EnabledUsers":["fixture-user"]}"#)],
+            "/LiveTv/Channels": [.init(json: #"{"Items":[],"TotalRecordCount":0}"#)]
+        ])
+        let availability = try await provider(http, kind: .emby).liveTVAvailability()
+        XCTAssertEqual(availability.status, .noChannels)
+    }
+
     func testCancellationWaitsForLateOpenAndRollsItBack() async throws {
         let gate = LiveTVFixtureGate()
         let http = playbackHTTP(gate: gate)

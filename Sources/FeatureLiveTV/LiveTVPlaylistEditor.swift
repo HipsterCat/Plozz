@@ -28,7 +28,8 @@ struct LiveTVPlaylistEditor: View {
         @Bindable var model = model
         LiveTVSettingsPage(title: "IPTV source") {
             SettingsSectionGroup("Playlist") {
-                LiveTVAddressField(title: "M3U playlist URL", text: $model.playlistAddress)
+                LiveTVAddressField(title: "Playlist or live HLS URL", text: $model.playlistAddress)
+                    .accessibilityIdentifier("live-tv-playlist-url")
                 TextField("Name (optional)", text: $model.name)
             }
             .disabled(model.isChecking)

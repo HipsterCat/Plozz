@@ -149,6 +149,7 @@ struct LiveTVServerAvailabilitySummary: View {
         case .notConfigured: "Live TV not configured"
         case .noChannels: "No channels returned"
         case .permissionDenied: "Live TV access denied"
+        case .subscriptionRequired: "Live TV subscription required"
         case .serviceUnavailable: "Live TV unavailable"
         case .unsupportedAPI: "Unsupported server"
         case .unsupportedPlaybackMode: "Guide only"
@@ -165,6 +166,8 @@ struct LiveTVServerAvailabilitySummary: View {
             "Check the server's channels and this account's permissions."
         case .permissionDenied:
             "Ask the server administrator to enable Live TV for this account."
+        case .subscriptionRequired:
+            "Check the server's Live TV subscription, then try again."
         case .serviceUnavailable:
             "Check the server connection and try again."
         case .unsupportedAPI:

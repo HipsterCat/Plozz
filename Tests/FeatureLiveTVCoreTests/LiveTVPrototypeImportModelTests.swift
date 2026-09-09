@@ -1,4 +1,6 @@
+import CoreModels
 import Foundation
+import Observation
 import XCTest
 @testable import FeatureLiveTVCore
 
@@ -13,6 +15,106 @@ private extension LiveTVPrototypeImportModel {
 
 @MainActor
 final class LiveTVPrototypeImportModelTests: XCTestCase {
+    func testSuppliedGuideIDsRemainConfiguredAcrossPlaylistDiscovery() async {
+        let sources = testSources()
+        let loader = ImportLoaderStub(channels: [LiveTVPrototypeCatalog.channels[0]])
+        let imports = LiveTVPrototypeImportModel(sources: sources, loader: loader)
+        XCTAssertEqual(imports.configuration.playlists.first?.guideSourceIDs, sources.map(\.id))
+        await imports.reload(into: LiveTVPrototypeModel(channels: []))
+        XCTAssertEqual(imports.guideSources.map(\.id), sources.map(\.id))
+        XCTAssertEqual(imports.enabledSourceIDs, Set(sources.map(\.id)))
+        let loads = await loader.guideLoads
+        XCTAssertEqual(loads, sources.count)
+    }
+
+    func testGuideImportUsesTheCatalogClockForRetentionAndWindowQueries() async {
+        let now = Date(timeIntervalSince1970: 1_767_225_600)
+        let channel = LiveTVPrototypeCatalog.channels[0]
+        let program = LiveTVPrototypeProgram(
+            id: "clock-program", channelID: channel.id, title: "Clock schedule", subtitle: "",
+            start: now.addingTimeInterval(-60), end: now.addingTimeInterval(3_600)
+        )
+        let loader = ImportLoaderStub(channels: [channel], programs: [program])
+        let imports = LiveTVPrototypeImportModel(sources: [.us2], loader: loader)
+        let model = LiveTVPrototypeModel(now: now, channels: [])
+        await imports.reload(into: model)
+        let guideDate = await loader.submittedGuideDate
+        XCTAssertEqual(guideDate, now)
+        XCTAssertEqual(model.currentProgram(for: channel.id), program)
+    }
+
+    func testCatalogHooksRunSynchronouslyBeforeRefreshAndPublication() async throws {
+        let channels = Array(LiveTVPrototypeCatalog.channels.prefix(2))
+        let imports = LiveTVPrototypeImportModel(sources: [.us2], loader: ImportLoaderStub(channels: channels))
+        let model = LiveTVPrototypeModel(channels: [])
+        var events: [String] = []
+        imports.beforeSourceRefresh = { ids in
+            XCTAssertEqual(ids, ["prototype"])
+            events.append("refresh")
+        }
+        imports.beforeCatalogPublication = { [weak imports] configuration, proposed in
+            if events == ["refresh"] { XCTAssertTrue(model.channels.isEmpty) }
+            XCTAssertEqual(configuration, imports?.configuration)
+            events.append("publish")
+            model.setScanHiddenChannelIDs(Set(proposed.prefix(1).map(\.id)))
+        }
+        await imports.reload(into: model)
+        XCTAssertEqual(events.first, "refresh")
+        XCTAssertEqual(model.channels, channels)
+        XCTAssertEqual(model.visibleChannels.map(\.id), [channels[1].id])
+        try imports.applyConfiguration(.empty, into: model)
+        XCTAssertEqual(events.suffix(2), ["refresh", "publish"])
+        XCTAssertTrue(model.channels.isEmpty)
+        XCTAssertTrue(model.scanHiddenChannelIDs.isEmpty)
+    }
+
+    func testAuthorizationLossCallsRetirementHookAndCannotResurrectGeneratedData() async throws {
+        var authorized = true
+        let imports = LiveTVPrototypeImportModel(catalogIsAuthorized: { authorized })
+        let model = LiveTVPrototypeModel(channels: [])
+        let generated = LiveTVPrototypeChannel(
+            id: "generated", number: 1, name: "Generated", category: "Test", symbol: "tv",
+            accent: 0, source: .plozz, tagline: ""
+        )
+        try imports.setGeneratedCatalog(channels: [generated], programs: [], into: model)
+        model.setScanHiddenChannelIDs([generated.id])
+        var cleared = false
+        imports.beforeCatalogPublication = { configuration, channels in
+            XCTAssertEqual(configuration, .empty)
+            XCTAssertTrue(channels.isEmpty)
+            cleared = true
+        }
+        authorized = false
+        await imports.restoreCachedCatalog(into: model)
+        XCTAssertTrue(cleared)
+        XCTAssertTrue(model.channels.isEmpty)
+        XCTAssertTrue(model.scanHiddenChannelIDs.isEmpty)
+        XCTAssertTrue(imports.configuredSourceIDByChannel.isEmpty)
+        authorized = true
+        try imports.applyConfiguration(.empty, into: model)
+        XCTAssertTrue(model.channels.isEmpty)
+    }
+
+    func testGuideCoverageFacetPreservesPublicObservation() async {
+        let changed = expectation(description: "Coverage count remains observable")
+        let imports = LiveTVPrototypeImportModel(
+            sources: [.us2], loader: ImportLoaderStub(
+                channels: [LiveTVPrototypeCatalog.channels[0]],
+                programs: [.init(
+                    id: "program", channelID: LiveTVPrototypeCatalog.channels[0].id, title: "Title",
+                    subtitle: "", start: Date(), end: Date().addingTimeInterval(3_600)
+                )]
+            )
+        )
+        withObservationTracking {
+            _ = imports.programCount
+        } onChange: {
+            changed.fulfill()
+        }
+        await imports.reload(into: LiveTVPrototypeModel(channels: []))
+        await fulfillment(of: [changed], timeout: 1)
+    }
+
     func testChannelsPublishBeforeGuideAndGuideFailureDoesNotRemoveThem() async {
         let model = LiveTVPrototypeModel(channels: [])
         let channels = LiveTVPrototypeCatalog.channels
@@ -125,7 +227,7 @@ final class LiveTVPrototypeImportModelTests: XCTestCase {
         XCTAssertEqual(imports.gapState(for: channels[0]), .noListings)
     }
 
-    func testHigherConfidenceWinsAndDisablingRemovesItsContributionImmediately() async throws {
+    func testExplicitSourcePriorityWinsAndDisablingRemovesItsContributionImmediately() async throws {
         let channel = LiveTVPrototypeCatalog.channels[0]
         let now = Date()
         let sources = Array(testSources().prefix(2))
@@ -135,10 +237,10 @@ final class LiveTVPrototypeImportModelTests: XCTestCase {
         let imports = LiveTVPrototypeImportModel(sources: sources, loader: loader)
         let model = LiveTVPrototypeModel(now: now, channels: [])
         await imports.reload(into: model)
-        XCTAssertEqual(model.currentProgram(for: channel.id)?.title, "Native match")
+        XCTAssertEqual(model.currentProgram(for: channel.id)?.title, "Name match")
         await loader.setFailure(sources[1].url)
         await imports.reload(into: model)
-        XCTAssertEqual(model.currentProgram(for: channel.id)?.title, "Native match")
+        XCTAssertEqual(model.currentProgram(for: channel.id)?.title, "Name match")
         XCTAssertEqual(imports.failedSourceCount, 1)
         XCTAssertNotNil(imports.guideSources[1].lastRefresh)
         try imports.setSourceEnabled(sources[1].id, enabled: false, into: model)
@@ -391,6 +493,7 @@ private actor ImportLoaderStub: LiveTVSourceLoading {
     let beforeGuide: @Sendable () async -> Void
     private(set) var guideLoads = 0
     private(set) var submittedChannelCount = 0
+    private(set) var submittedGuideDate: Date?
 
     init(
         channels: [LiveTVPrototypeChannel], programs: [LiveTVPrototypeProgram] = [],
@@ -414,6 +517,7 @@ private actor ImportLoaderStub: LiveTVSourceLoading {
     ) async throws -> LiveTVGuideImport {
         guideLoads += 1
         submittedChannelCount = channels.count
+        submittedGuideDate = now
         await beforeGuide()
         if guideFails { throw Failure.unavailable }
         return LiveTVGuideImport(

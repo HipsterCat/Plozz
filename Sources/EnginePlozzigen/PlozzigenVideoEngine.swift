@@ -244,6 +244,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     private let engine: AEEngine
     private let networkFileResolver: (any MediaTransportNetworkFileResolving)?
     private let authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)?
+    private var liveOutputPolicy = LiveChannelOutputPolicy()
     private var cancellables = Set<AnyCancellable>()
     private var progressTimer: Task<Void, Never>?
     /// A foreground reload reports its error directly to `PlayerViewModel`.
@@ -349,6 +350,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
             matchContentEnabled: true,
             audioBridgeMode: channels > 6 ? .lossless : .surroundCompat
         )
+        Self.applyLiveOutputPolicy(liveOutputPolicy, to: &options)
         // Build the native WebVTT renditions so subtitles can travel into a
         // Picture in Picture window, where our own overlay cannot follow: it is a
         // view in this app's hierarchy and the window only carries what is in the
@@ -473,10 +475,9 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
 
         var stage = "engine.load"
         do {
-            try await engine.load(
-                url: url,
-                options: Self.liveLoadOptions(httpHeaders: httpHeaders)
-            )
+            var options = Self.liveLoadOptions(httpHeaders: httpHeaders)
+            Self.applyLiveOutputPolicy(liveOutputPolicy, to: &options)
+            try await engine.load(url: url, options: options)
             guard liveAttemptGate.accepts(liveGeneration) else { return }
             if case .error(let message) = engine.state {
                 reportLiveFailure(
@@ -523,6 +524,14 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         await engine.seekToLiveEdge()
     }
 
+    public var supportsConcurrentPlayback: Bool { true }
+
+    public func configureLiveOutput(_ policy: LiveChannelOutputPolicy) {
+        liveOutputPolicy = policy
+        engine.volume = policy.isAudible ? 1 : 0
+        engine.deactivatesAudioSessionOnStop = !policy.sharesAudioSession
+    }
+
     nonisolated static func liveLoadOptions(
         httpHeaders: [String: String]
     ) -> LoadOptions {
@@ -537,6 +546,11 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
             nativeRemoteHLS: true,
             nativeRemoteHLSIngestFallback: true
         )
+    }
+
+    nonisolated static func applyLiveOutputPolicy(_ policy: LiveChannelOutputPolicy, to options: inout LoadOptions) {
+        options.suppressDisplayCriteria = policy.suppressesDisplayMatching
+        options.matchContentEnabled = !policy.suppressesDisplayMatching
     }
 
     private nonisolated static func activateLiveAudioSession() throws {
@@ -728,7 +742,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         sourceFormatCancellable = nil
         progressTimer?.cancel()
         progressTimer = nil
-        engine.stop(resetDisplayCriteria: resetDisplayCriteria)
+        engine.stop(resetDisplayCriteria: resetDisplayCriteria && !liveOutputPolicy.sharesAudioSession)
         status = .idle
         intendsPause = true
         isPaused = true

@@ -23,7 +23,7 @@ public struct LiveTVWatchFailure: Identifiable, Equatable, Sendable {
 @MainActor
 @Observable
 public final class LiveTVPlaybackCoordinator {
-    public let preparation: LiveTVPlaybackPreparation
+    public private(set) var preparation: LiveTVPlaybackPreparation
     public private(set) var pendingWatchChannelID: String?
     public private(set) var watchFailure: LiveTVWatchFailure?
     public private(set) var isActive = true
@@ -212,6 +212,26 @@ public final class LiveTVPlaybackCoordinator {
         preparation.stop()
         preview.stop()
         retirePresentation()
+    }
+
+    /// Multiview promotes an already playing owner; no stream is reopened.
+    @discardableResult
+    public func adoptPreparation(_ replacement: LiveTVPlaybackPreparation) -> Bool {
+        guard isActive else { return false }
+        replacement.validateAuthorization()
+        if let current = replacement.current, !authorizes(current.channel, current.serverReference) {
+            replacement.failCurrent(id: current.id, reason: .sourceUnavailable)
+        }
+        cancelWatch()
+        cancelPreviewPreparation()
+        preparation = replacement
+        reportTail = nil
+        reportID = nil
+        suppressedPreviewChannelID = nil
+        if let current = replacement.current { preview.watch(current.channel.id) }
+        synchronizePlayerState()
+        acceptedWatchID = UUID()
+        return replacement.current != nil
     }
 
     private func suppressPreview(of channelID: String?) {
@@ -419,12 +439,18 @@ public enum LiveTVPlaybackCatalogAuthorization {
         reference: LiveTVServerChannelReference?,
         model: LiveTVPrototypeModel,
         imports: LiveTVPrototypeImportModel,
-        configuration: LiveTVSourcesConfiguration
+        configuration: LiveTVSourcesConfiguration,
+        libraryService: LibraryChannelService? = nil
     ) -> Bool {
         guard let live = model.channel(id: channel.id),
               live.source == channel.source, live.configuredSourceID == channel.configuredSourceID,
-              live.streamURL == channel.streamURL, live.httpHeaders == channel.httpHeaders,
-              let sourceID = imports.configuredSourceIDByChannel[channel.id] else { return false }
+              live.streamURL == channel.streamURL, live.httpHeaders == channel.httpHeaders else { return false }
+        if channel.source == .plozz {
+            return reference == nil && libraryService?.channels.contains {
+                $0.id == channel.id && $0.configuredSourceID == channel.configuredSourceID
+            } == true
+        }
+        guard let sourceID = imports.configuredSourceIDByChannel[channel.id] else { return false }
         if let reference {
             return reference.sourceID == sourceID
                 && imports.serverChannelReferences[channel.id] == reference

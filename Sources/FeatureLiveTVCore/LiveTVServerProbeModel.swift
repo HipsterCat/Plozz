@@ -44,7 +44,8 @@ public final class LiveTVServerProbeModel {
         }
         guard pendingRequest == request, !Task.isCancelled else { return }
         guard let context = resolver?(request.choice.id),
-              context.accountID == request.choice.id else {
+              context.accountID == request.choice.id, context.kind == request.choice.kind,
+              !context.authorizationID.isEmpty else {
             failure = .accountUnavailable
             pendingRequest = nil
             return
@@ -54,6 +55,7 @@ public final class LiveTVServerProbeModel {
             guard pendingRequest == request, !Task.isCancelled else { return }
             guard let current = resolver?(request.choice.id),
                   current.accountID == context.accountID,
+                  current.kind == context.kind,
                   current.authorizationID == context.authorizationID else {
                 failure = .accountUnavailable
                 pendingRequest = nil
@@ -64,6 +66,13 @@ public final class LiveTVServerProbeModel {
             pendingRequest = nil
         } catch {
             guard pendingRequest == request, !Task.isCancelled else { return }
+            guard let current = resolver?(request.choice.id),
+                  current.accountID == context.accountID, current.kind == context.kind,
+                  current.authorizationID == context.authorizationID else {
+                failure = .accountUnavailable
+                pendingRequest = nil
+                return
+            }
             failure = LiveTVServerImportError.sanitized(error, fallback: .serviceUnavailable)
             pendingRequest = nil
         }
@@ -72,7 +81,8 @@ public final class LiveTVServerProbeModel {
     public func checkedChoice() throws -> LiveTVServerChoice {
         guard canAdd, let choice, let authorizationID,
               let current = resolver?(choice.id),
-              current.accountID == choice.id, current.authorizationID == authorizationID else {
+              current.accountID == choice.id, current.kind == choice.kind,
+              current.authorizationID == authorizationID else {
             failure = .accountUnavailable
             throw LiveTVServerImportError.accountUnavailable
         }

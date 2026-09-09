@@ -3,6 +3,44 @@ import XCTest
 @testable import CoreModels
 
 final class LiveTVSourcesStoreTests: XCTestCase {
+    func testLegacyGuideURLsDecodeIntoStableSourceIDsAndRoundTrip() throws {
+        let data = Data("""
+        {
+            "id":"legacy", "name":"Existing", "playlistURL":"https://example.test/list.m3u",
+            "guideURLs":["https://example.test/primary.xml","https://example.test/fallback.xml"]
+        }
+        """.utf8)
+        let source = try JSONDecoder().decode(LiveTVPlaylistSource.self, from: data)
+        XCTAssertEqual(source.guideSourceIDs, ["legacy.guide.0", "legacy.guide.1"])
+        XCTAssertTrue(source.discoversPlaylistGuides)
+        XCTAssertEqual(source.guideLookbackDays, 1)
+        XCTAssertEqual(source.guideLookaheadDays, 7)
+        XCTAssertNoThrow(try source.validate())
+        let roundTrip = try JSONDecoder().decode(LiveTVPlaylistSource.self, from: JSONEncoder().encode(source))
+        XCTAssertEqual(roundTrip, source)
+    }
+
+    func testImportedFileReferencesAreOpaqueAndCannotBeUsedAsRemoteAddresses() throws {
+        let id = UUID()
+        let locator = "plozz-playlist://" + id.uuidString.lowercased()
+        let source = LiveTVPlaylistSource(
+            id: id.uuidString, name: "Imported", playlistURL: try XCTUnwrap(URL(string: locator))
+        )
+        XCTAssertNoThrow(try source.validate())
+        XCTAssertEqual(source.importedPlaylistID, id)
+        XCTAssertNil(LiveTVPlaylistSource.sourceURL(from: locator))
+        let secure = LiveTVSecureStoreDouble()
+        let store = LiveTVSourcesStore(secureStore: secure, namespace: "import-profile")
+        try store.save(.init(playlists: [source]))
+        XCTAssertEqual(try store.load().playlists, [source])
+        for address in [locator + "/file.m3u", locator + "?token=secret", "file:///provider/list.m3u"] {
+            let invalid = LiveTVPlaylistSource(
+                id: id.uuidString, name: "Invalid", playlistURL: try XCTUnwrap(URL(string: address))
+            )
+            XCTAssertThrowsError(try invalid.validate())
+        }
+    }
+
     func testManagedServersRoundTripOnlyNonsecretAccountReferencesWithPlaylists() throws {
         let secure = LiveTVSecureStoreDouble()
         let configuration = LiveTVSourcesConfiguration(

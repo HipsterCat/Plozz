@@ -5,6 +5,35 @@ import XCTest
 
 @MainActor
 final class LiveTVPlaybackCoordinatorTests: XCTestCase {
+    func testAdoptingMultiviewOwnerRetainsPreparedIdentityAndNormalStopOwnership() async throws {
+        let fixture = CoordinatorFixture()
+        let retained = LiveTVPlaybackPreparation()
+        let channel = try XCTUnwrap(fixture.model.channel(id: "iptv"))
+        _ = await retained.prepare(channel, isAuthorized: { true }, accept: { true })
+        let preparedID = retained.current?.id
+        XCTAssertTrue(fixture.coordinator.adoptPreparation(retained))
+        XCTAssertTrue(fixture.coordinator.preparation === retained)
+        XCTAssertEqual(retained.current?.id, preparedID)
+        XCTAssertEqual(fixture.model.playingChannelID, "iptv")
+        XCTAssertTrue(fixture.preview.isExpanded)
+        fixture.coordinator.setActive(false)
+        XCTAssertNil(retained.current)
+        await retained.close()
+    }
+
+    func testAdoptingMultiviewOwnerRechecksCurrentCatalogNotOnlyItsOriginalClosure() async throws {
+        let fixture = CoordinatorFixture()
+        let retained = LiveTVPlaybackPreparation()
+        let channel = try XCTUnwrap(fixture.model.channel(id: "iptv"))
+        _ = await retained.prepare(channel, isAuthorized: { true }, accept: { true })
+        fixture.scope.enabledSources.remove("playlist")
+        XCTAssertFalse(fixture.coordinator.adoptPreparation(retained))
+        XCTAssertTrue(fixture.coordinator.preparation === retained)
+        XCTAssertNil(retained.current)
+        XCTAssertEqual(retained.failure, .sourceUnavailable)
+        await retained.close()
+    }
+
     func testCancelledWatchCannotReopenFullscreenOrReplacePreviousFeed() async throws {
         let entered = expectation(description: "Watch opens")
         let gate = CoordinatorFixtureGate()

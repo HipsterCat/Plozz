@@ -1,4 +1,5 @@
 #if canImport(AVFoundation)
+import CoreModels
 import Foundation
 
 /// Live status is supplied by the engine, never reconstructed from AVPlayer hints.
@@ -54,12 +55,55 @@ public struct LiveChannelEngineSnapshot: Equatable, Sendable {
     }
 }
 
+/// Process-wide audio and display ownership for independently retained live players.
+public struct LiveChannelOutputPolicy: Equatable, Sendable {
+    public var isAudible: Bool
+    public var sharesAudioSession: Bool
+    public var suppressesDisplayMatching: Bool
+
+    public init(
+        isAudible: Bool = true,
+        sharesAudioSession: Bool = false,
+        suppressesDisplayMatching: Bool = false
+    ) {
+        self.isAudible = isAudible
+        self.sharesAudioSession = sharesAudioSession
+        self.suppressesDisplayMatching = suppressesDisplayMatching
+    }
+}
+
 /// Implemented in EnginePlozzigen and injected by the app to avoid a feature/engine dependency cycle.
 @MainActor
 public protocol LiveChannelEngine: VideoEngine {
     var liveSnapshot: LiveChannelEngineSnapshot { get }
     var onLiveSourceReset: (@MainActor () -> Void)? { get set }
+    /// A scheduled media boundary resets tracks/cues, not the channel or decoder owner.
+    var onProgrammeChanged: (@MainActor () -> Void)? { get set }
+    var supportsConcurrentPlayback: Bool { get }
+    var recoverableProgrammeIssue: LibraryChannelError? { get }
+    func configureLiveOutput(_ policy: LiveChannelOutputPolicy)
+    func setWatching(_ isWatching: Bool)
+    func loadChannel(_ input: LiveChannelInput) async throws
     func loadLive(url: URL, httpHeaders: [String: String]) async
     func seekToLiveEdge() async
+}
+
+public extension LiveChannelEngine {
+    var supportsConcurrentPlayback: Bool { false }
+    var recoverableProgrammeIssue: LibraryChannelError? { nil }
+    var onProgrammeChanged: (@MainActor () -> Void)? {
+        get { nil }
+        set {}
+    }
+    func configureLiveOutput(_ policy: LiveChannelOutputPolicy) {}
+    func setWatching(_ isWatching: Bool) {}
+    func loadChannel(_ input: LiveChannelInput) async throws {
+        switch input {
+        case .stream(let url, let headers):
+            await loadLive(url: url, httpHeaders: headers)
+        case .libraryChannel:
+            throw LiveChannelInputError.unsupportedSource
+        }
+    }
 }
 #endif

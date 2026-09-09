@@ -12,6 +12,11 @@ extension JellyfinProvider: ServerLiveTVProviding {
             guard info.IsEnabled != false else {
                 return ServerLiveTVAvailability(status: .notConfigured)
             }
+            if let users = info.EnabledUsers, !users.contains(where: {
+                Self.liveTVUserIdentity($0) == Self.liveTVUserIdentity(session.userID)
+            }) {
+                return ServerLiveTVAvailability(status: .permissionDenied)
+            }
             let channels = try await liveTVChannels()
             let unavailable = !(info.Services ?? []).isEmpty
                 && (info.Services ?? []).allSatisfy { $0.Status == "Unavailable" }
@@ -21,6 +26,8 @@ extension JellyfinProvider: ServerLiveTVProviding {
             )
         } catch ServerLiveTVError.permissionDenied {
             return ServerLiveTVAvailability(status: .permissionDenied)
+        } catch ServerLiveTVError.subscriptionRequired {
+            return ServerLiveTVAvailability(status: .subscriptionRequired)
         } catch AppError.notFound {
             return ServerLiveTVAvailability(status: .unsupportedAPI, supportsGuide: false)
         }
@@ -48,6 +55,7 @@ extension JellyfinProvider: ServerLiveTVProviding {
                     categories: programme.Genres
                 )
             }
+
             return ServerLiveTVChannel(
                 id: id,
                 name: item.Name?.nilIfLiveTVEmpty ?? id,
@@ -60,6 +68,14 @@ extension JellyfinProvider: ServerLiveTVProviding {
                 currentProgramme: current?.channelID == id ? current : nil
             )
         }
+    }
+
+    private static func liveTVUserIdentity(_ value: String) -> String {
+        let compact = value.replacingOccurrences(of: "-", with: "").lowercased()
+        guard compact.utf8.count == 32, compact.utf8.allSatisfy({
+            (48...57).contains($0) || (97...102).contains($0)
+        }) else { return value }
+        return compact
     }
 
     public func liveTVGuide(

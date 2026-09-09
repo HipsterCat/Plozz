@@ -8,7 +8,8 @@ enum LiveTVConfiguredSources {
         source.guideURLs.enumerated().map { index, url in
             let preset = source.id == "free-us" ? LiveTVGuideSource.recognizedSources.first { $0.url == url } : nil
             return LiveTVGuideSource(
-                id: preset?.id ?? "guide-\(digest(source.id + "\u{1F}" + url.absoluteString))",
+                id: preset?.id ?? (source.guideSourceIDs.indices.contains(index)
+                    ? source.guideSourceIDs[index] : "\(source.id).guide.\(index)"),
                 name: preset?.name ?? "\(source.name) · Guide \(index + 1)",
                 url: url, provider: LiveTVGuideSource.provider(for: url)
             )
@@ -27,10 +28,12 @@ enum LiveTVConfiguredSources {
                     tagline: channel.tagline, logoURL: channel.logoURL, streamURL: channel.streamURL,
                     logoNeedsDarkBackground: channel.logoNeedsDarkBackground,
                     guideID: channel.guideID, guideName: channel.guideName, httpHeaders: channel.httpHeaders,
-                    playlistSourceID: sourceID
+                    playlistSourceID: sourceID, language: channel.language, country: channel.country, groups: channel.groups
                 )
             },
-            entryCount: playlist.entryCount, skippedEntryCount: playlist.skippedEntryCount
+            entryCount: playlist.entryCount, skippedEntryCount: playlist.skippedEntryCount,
+            declaredGuideURLs: playlist.declaredGuideURLs, permitsPersistence: playlist.permitsPersistence,
+            originURL: playlist.originURL
         )
     }
 
@@ -40,12 +43,12 @@ enum LiveTVConfiguredSources {
                 LiveTVPrototypeProgram(
                     id: "iptv-program-\(digest(sourceID + "\u{1F}" + $0.id))",
                     channelID: $0.channelID, title: $0.title, subtitle: $0.subtitle,
-                    start: $0.start, end: $0.end
+                    start: $0.start, end: $0.end, details: $0.details
                 )
             },
             matchedChannelCount: guide.matchedChannelCount, guideChannelCount: guide.guideChannelCount,
             programCount: guide.programCount, coverageStart: guide.coverageStart, coverageEnd: guide.coverageEnd,
-            matches: guide.matches
+            matches: guide.matches, guideChannels: guide.guideChannels
         )
     }
 

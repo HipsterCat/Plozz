@@ -34,6 +34,8 @@ private struct LiveTVSettingsSourcesScope<Content: View>: View {
         profileID: String,
         preferencesNamespace: String?,
         accountsProviders: AccountsProvidersModel,
+        isPresented: @escaping @MainActor () -> Bool,
+        isProfileAuthorized: @escaping @MainActor () -> Bool,
         connectServer: @escaping () -> Void,
         didConfigurePlaylist: @escaping () -> Void
     ) {
@@ -44,7 +46,9 @@ private struct LiveTVSettingsSourcesScope<Content: View>: View {
                 preferencesNamespace: preferencesNamespace,
                 accountsProviders: accountsProviders,
                 connectServer: connectServer,
-                didConfigurePlaylist: didConfigurePlaylist
+                didConfigurePlaylist: didConfigurePlaylist,
+                isPresented: isPresented(),
+                isProfileAuthorized: { isPresented() && isProfileAuthorized() }
             ))
         })
     }
@@ -347,6 +351,8 @@ struct MainTabView: View {
     private var lastfm: LastFmService { syncServices.lastfm }
     let mediaItemActionHandler: any MediaItemActionHandling
     let enqueueWatchMutation: (WatchMutation) -> Void
+    let completeLibraryChannelPlayback: @MainActor @Sendable (MediaItem, UUID) throws -> Void
+    let isLiveTVProfileAuthorized: @MainActor () -> Bool
     let watchBridge: WatchOutboxBridge
     /// Snapshot of the durable outbox's not-yet-confirmed plays, so Home's Continue
     /// Watching row reflects in-app plays the servers haven't recorded yet
@@ -908,6 +914,8 @@ struct MainTabView: View {
             profileID: activeProfile.id,
             preferencesNamespace: liveTVPreferencesNamespace,
             accountsProviders: accountsProviders,
+            isPresented: { isActiveTab(.settings) },
+            isProfileAuthorized: isLiveTVProfileAuthorized,
             connectServer: onAddAccount,
             didConfigurePlaylist: onConfiguredIPTVPlaylist
         )
@@ -1199,6 +1207,8 @@ struct MainTabView: View {
                 authenticatedHTTPResolver: authenticatedHTTPResolver,
                 connectServer: onAddAccount,
                 didConfigurePlaylist: onConfiguredIPTVPlaylist,
+                completeLibraryChannelPlayback: completeLibraryChannelPlayback,
+                isProfileAuthorized: isLiveTVProfileAuthorized,
                 usesNativeNavigation: true
             ))
         #endif
@@ -1235,6 +1245,8 @@ struct MainTabView: View {
                 authenticatedHTTPResolver: authenticatedHTTPResolver,
                 connectServer: onAddAccount,
                 didConfigurePlaylist: onConfiguredIPTVPlaylist,
+                completeLibraryChannelPlayback: completeLibraryChannelPlayback,
+                isProfileAuthorized: isLiveTVProfileAuthorized,
                 usesNativeNavigation: true
             ))
         #endif
@@ -1364,6 +1376,8 @@ struct MainTabView: View {
                 authenticatedHTTPResolver: authenticatedHTTPResolver,
                 connectServer: onAddAccount,
                 didConfigurePlaylist: onConfiguredIPTVPlaylist,
+                completeLibraryChannelPlayback: completeLibraryChannelPlayback,
+                isProfileAuthorized: isLiveTVProfileAuthorized,
                 onExpandedChange: updateLiveTVChrome
             )
             .opacity(showsLiveTV ? 1 : 0)

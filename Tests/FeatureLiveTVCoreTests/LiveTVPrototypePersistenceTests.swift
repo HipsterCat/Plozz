@@ -1,10 +1,142 @@
 import CoreModels
 import Foundation
+import Observation
 import XCTest
 @testable import FeatureLiveTVCore
 
 @MainActor
 final class LiveTVPrototypePersistenceTests: XCTestCase {
+    func testScanHidingIsTransientAndAppliesToEveryCatalogProjection() throws {
+        let store = PreferencesFixtureStore()
+        let model = LiveTVPrototypeModel(channels: channels, preferencesStore: store)
+        model.toggleFavorite("0")
+        XCTAssertTrue(model.hideChannel(channels[1]))
+        let saved = store.value
+        let saves = store.saves
+        model.setScanHiddenChannelIDs(["0", "2"])
+        XCTAssertEqual(model.visibleChannels.map(\.id), ["3"])
+        XCTAssertEqual(model.unhiddenCatalogChannels.map(\.id), ["3"])
+        XCTAssertEqual(model.programmeSearchChannelIDs, ["3"])
+        XCTAssertEqual(model.hiddenChannelIDs, ["1"])
+        XCTAssertEqual(model.favoriteIDs, ["0"])
+        XCTAssertEqual(model.channels, channels)
+        XCTAssertEqual(store.value, saved)
+        XCTAssertEqual(store.saves, saves)
+        let revision = model.catalogRevision
+        model.setScanHiddenChannelIDs(["0", "2"])
+        XCTAssertEqual(model.catalogRevision, revision)
+        model.query = "No channel matches"
+        XCTAssertEqual(model.unhiddenCatalogChannels.map(\.id), ["3"])
+        XCTAssertEqual(model.programmeSearchChannelIDs, ["3"])
+        model.setScanHiddenChannelIDs([])
+        XCTAssertEqual(model.unhiddenCatalogChannels.map(\.id), ["0", "2", "3"])
+        XCTAssertTrue(model.visibleChannels.isEmpty)
+        XCTAssertTrue(LiveTVPrototypeModel(channels: channels, preferencesStore: store).scanHiddenChannelIDs.isEmpty)
+    }
+
+    func testPreferenceAndGuideFacetsPreserveObservationThroughPublicProperties() async throws {
+        let model = LiveTVPrototypeModel(channels: channels, preferencesStore: PreferencesFixtureStore())
+        let favoriteChanged = expectation(description: "Favorite getter observes its facet")
+        let guideChanged = expectation(description: "Guide getter observes its facet")
+        withObservationTracking {
+            _ = model.favoriteIDs
+        } onChange: {
+            favoriteChanged.fulfill()
+        }
+        withObservationTracking {
+            _ = model.guideChannelCount
+        } onChange: {
+            guideChanged.fulfill()
+        }
+        model.toggleFavorite("0")
+        try model.replacePrograms([.init(
+            id: "programme", channelID: "0", title: "Programme", subtitle: "",
+            start: model.now, end: model.now.addingTimeInterval(3_600)
+        )])
+        await fulfillment(of: [favoriteChanged, guideChanged], timeout: 1)
+    }
+
+    func testCatalogPickerAppliesSourceApprovalManualHidingAndScanHidingWithoutBrowseFilters() throws {
+        let suite = "LiveTVCatalogPickerTests-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let source = LiveTVPlaylistSource(
+            id: "allowed", name: "Allowed", playlistURL: try XCTUnwrap(URL(string: "https://example.test/list.m3u"))
+        )
+        let profile = Profile(id: "picker-profile", name: "Picker")
+        let approval = LiveTVSourceApprovalStore(defaults: defaults, profileID: profile.id)
+            .authorizationFailClosed(
+                context: .init(profile: profile, parentalPIN: nil, activeAccountIDs: []),
+                configuration: .init(playlists: [source])
+            )
+        let supplied = channels.enumerated().map {
+            $0.element.replacingIdentity(id: $0.element.id, sourceID: $0.offset == 3 ? "unapproved" : "allowed")
+        }
+        let model = LiveTVPrototypeModel(channels: supplied, preferencesStore: PreferencesFixtureStore())
+        XCTAssertTrue(model.hideChannel(supplied[1]))
+        model.query = "No matching channel"
+        model.favoritesOnly = true
+        XCTAssertTrue(model.visibleChannels.isEmpty)
+        XCTAssertEqual(model.catalogChannels(authorizedBy: approval, excluding: ["2"]).map(\.id), ["0"])
+    }
+
+    func testUnhiddenCatalogPickerIgnoresBrowseFiltersAndNeverReintroducesRemovedChannels() throws {
+        let store = PreferencesFixtureStore()
+        let model = LiveTVPrototypeModel(channels: channels, preferencesStore: store)
+        XCTAssertTrue(model.hideChannel(channels[1]))
+        model.toggleFavorite("0")
+        model.query = "No channel matches this query"
+        model.category = "Missing category"
+        model.source = .plex
+        model.playlistSourceID = "missing-source"
+        model.language = "Missing language"
+        model.country = "Missing country"
+        model.guideOnly = true
+        model.favoritesOnly = true
+        model.sort = .name
+        XCTAssertTrue(model.visibleChannels.isEmpty)
+        XCTAssertEqual(model.unhiddenCatalogChannels.map(\.id), ["0", "2", "3"])
+        try model.replaceChannels([channels[3]])
+        XCTAssertEqual(model.unhiddenCatalogChannels.map(\.id), ["3"])
+        XCTAssertTrue(model.favoriteIDs.contains("0"))
+    }
+
+    func testIdentityMigrationKeepsFavoritesOrderRecentsHidingAndMetadata() throws {
+        let store = PreferencesFixtureStore()
+        store.value = LiveTVPreferences(
+            favoriteIDs: ["old", "other"], recentChannelIDs: ["old"],
+            hiddenChannels: [.init(id: "old", name: "Saved name")], favoriteOrder: ["other", "old"],
+            favoriteChannels: [.init(id: "old", name: "Saved name")],
+            channelOverrides: ["old": .init(name: "Custom", category: "News")]
+        )
+        let model = LiveTVPrototypeModel(channels: [], preferencesStore: store)
+        XCTAssertTrue(model.migrateChannelIDs(["old": "durable"]))
+        XCTAssertEqual(store.value.favoriteIDs, ["durable", "other"])
+        XCTAssertEqual(store.value.favoriteOrder, ["other", "durable"])
+        XCTAssertEqual(store.value.recentChannelIDs, ["durable"])
+        XCTAssertEqual(store.value.hiddenChannelIDs, ["durable"])
+        XCTAssertEqual(store.value.channelOverrides["durable"]?.name, "Custom")
+        XCTAssertEqual(model.unavailableFavorites.last?.name, "Saved name")
+    }
+
+    func testBrowseAndCustomMetadataPersistWithoutPlaybackOrQuery() {
+        let store = PreferencesFixtureStore()
+        let model = LiveTVPrototypeModel(channels: channels, preferencesStore: store)
+        XCTAssertTrue(model.setMetadataOverride(.init(name: "My news", language: "English", country: "US"), channelID: "0"))
+        model.language = "English"
+        model.country = "US"
+        model.sort = .name
+        model.query = "news"
+        model.tune("0")
+        let restored = LiveTVPrototypeModel(channels: channels, preferencesStore: store)
+        XCTAssertEqual(restored.language, "English")
+        XCTAssertEqual(restored.country, "US")
+        XCTAssertEqual(restored.sort, .name)
+        XCTAssertEqual(restored.visibleChannels.map(\.name), ["My news"])
+        XCTAssertEqual(restored.query, "")
+        XCTAssertNil(restored.playingChannelID)
+    }
+
     func testSavedPreferencesSurviveAnInitiallyEmptyOrTemporarilyUnavailableCatalog() throws {
         let store = PreferencesFixtureStore()
         store.value = LiveTVPreferences(favoriteIDs: ["1"], recentChannelIDs: ["2", "1"])

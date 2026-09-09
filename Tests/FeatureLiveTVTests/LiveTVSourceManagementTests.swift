@@ -7,6 +7,26 @@ import XCTest
 
 @MainActor
 final class LiveTVSourceManagementTests: XCTestCase {
+    func testImportedSourceEditsPreserveOpaqueIdentityAndRejectStaleChanges() throws {
+        let id = UUID()
+        let locator = try XCTUnwrap(URL(string: "plozz-playlist://" + id.uuidString.lowercased()))
+        let original = LiveTVPlaylistSource(id: id.uuidString, name: "Imported", playlistURL: locator)
+        let store = SourceManagementTestStore()
+        let model = LiveTVSourceManagementModel(store: store, canMutate: { true })
+        model.reload()
+        try model.saveImportedPlaylist(original)
+        var updated = original
+        updated.name = "Renamed import"
+        updated.guideURLs = [try XCTUnwrap(URL(string: "https://example.test/guide.xml"))]
+        try model.saveImportedPlaylist(updated, replacing: original)
+        XCTAssertEqual(store.snapshot.playlists, [updated])
+        XCTAssertEqual(updated.importedPlaylistID, id)
+        XCTAssertThrowsError(try model.saveImportedPlaylist(original, replacing: original))
+        model.authorizeMutations { false }
+        XCTAssertThrowsError(try model.saveImportedPlaylist(original, replacing: updated))
+        XCTAssertEqual(store.snapshot.playlists, [updated])
+    }
+
     func testEmptyStorageDoesNotEnablePublicFeeds() {
         let store = SourceManagementTestStore()
         let model = LiveTVSourceManagementModel(store: store)

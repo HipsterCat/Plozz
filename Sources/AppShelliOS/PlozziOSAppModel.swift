@@ -46,6 +46,17 @@ final class PlozziOSAppModel {
     }
 
     var canEnterApp: Bool { admissionContext.canEnterApp }
+    var isLiveTVProfileAuthorized: Bool {
+        let profile = profiles.activeProfile
+        return canEnterApp && !mustChooseProfile
+            && (!requiresLaunchProfileSelection || didCompleteLaunchProfileSelection)
+            && lockedSwitch == nil && parentalSwitch == nil
+            && pendingIdentityAccount == nil && pendingLibrarySelection == nil
+            && pendingFirstRunStep == nil && profileOnboardingStep == nil
+            && plexHomeUsers.pendingPlexPINRequest == nil
+            && (!profile.isLocked || isUnlockedThisRun(profile.id))
+            && !profile.awaitsIdentity(amongAccounts: accountsProviders.activeAccountIDs)
+    }
     var allowsStandalonePlayback: Bool { admissionContext.explicitStandaloneChoice }
     var pendingStandaloneLiveTVEntry: Bool { appAdmission.pendingLiveTVEntry }
 
@@ -111,6 +122,14 @@ final class PlozziOSAppModel {
     /// `PlozziOSAppModel+CloudSync`.
     @ObservationIgnored
     private(set) lazy var cloudSync: CloudConfigSyncService? = Self.makeCloudSync(for: self)
+
+    #if DEBUG
+    @ObservationIgnored
+    private(set) lazy var liveTVPortableSync: LiveTVPortableSyncBridge? =
+        Self.makeLiveTVPortableSync(profiles: profiles)
+    @ObservationIgnored
+    var liveTVPortableSyncLifecycle: LiveTVPortableSyncLifecycle?
+    #endif
 
     /// Debounces bursts of local config edits into a single cloud publish.
     @ObservationIgnored
@@ -1038,6 +1057,9 @@ final class PlozziOSAppModel {
         accountsProviders.reloadAccounts()
         plexHomeUsers.resetAllForDebug()
         profiles.resetToPristineDefaultForDebugging()
+        #if DEBUG
+        resetLiveTVPortableSync()
+        #endif
         if accountsProviders.accounts.isEmpty { appAdmission.resetForDebugging() }
         pendingLibrarySelection = nil
         pendingFirstRunStep = nil
@@ -1689,6 +1711,39 @@ final class PlozziOSAppModel {
         Task {
             await reconciler.finishLiveSession(accountID: accountID, itemID: item.id, mutation: mutation)
         }
+    }
+
+    /// Broadcast completion never owns an ordinary playback/resume session.
+    func completeLibraryChannelPlayback(for item: MediaItem, authorizationID: UUID) throws {
+        #if DEBUG
+        try Task.checkCancellation()
+        let profileID = profiles.activeProfileID
+        let namespace = profiles.activeNamespace
+        guard isLiveTVProfileAuthorized,
+              LibraryChannelHistorySettings.shared(namespace: namespace).authorizationID == authorizationID,
+              let accountID = item.sourceAccountID,
+              accountsProviders.resolvedActiveAccounts.contains(where: { $0.account.id == accountID })
+        else { throw LibraryChannelError.authorizationChanged }
+        let accountAuthorization = accountsProviders.liveTVAuthorizationID
+        guard let completion = WatchMutationFactory.libraryChannelCompletion(
+            item: item,
+            accountID: accountID,
+            additionalSources: identityIndex.identitySourcesProvider(item),
+            crossServerSync: settings.playback.settings.syncWatchAcrossServers
+        ) else { throw LibraryChannelError.mediaChanged }
+        let mutation = completion.requiringAuthorization(owner: self) { @MainActor owner in
+            owner.isLiveTVProfileAuthorized
+                && owner.profiles.activeProfileID == profileID
+                && owner.profiles.activeNamespace == namespace
+                && owner.accountsProviders.liveTVAuthorizationID == accountAuthorization
+                && LibraryChannelHistorySettings.shared(namespace: namespace).authorizationID == authorizationID
+                && owner.accountsProviders.resolvedActiveAccounts.contains { $0.account.id == accountID }
+        }
+        publishPlaybackMutation(mutation, item: item, watchedPercent: 100)
+        applyWatchMutation(mutation)
+        #else
+        throw LibraryChannelError.authorizationChanged
+        #endif
     }
 
     private func publishPlaybackMutation(

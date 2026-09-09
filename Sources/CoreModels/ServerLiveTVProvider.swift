@@ -22,6 +22,7 @@ public struct ServerLiveTVAvailability: Equatable, Sendable {
         case notConfigured
         case noChannels
         case permissionDenied
+        case subscriptionRequired
         case serviceUnavailable
         case unsupportedAPI
         case unsupportedPlaybackMode
@@ -137,6 +138,8 @@ public protocol LiveTVStreamLease: Sendable {
 
 public enum ServerLiveTVError: Error, Equatable, Sendable {
     case permissionDenied
+    case subscriptionRequired
+    case guideRequired
     case unsupportedAPI
     case unsupportedPlaybackMode
     case tunerUnavailable

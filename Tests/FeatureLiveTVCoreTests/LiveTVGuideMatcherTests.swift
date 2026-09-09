@@ -54,7 +54,7 @@ final class LiveTVGuideMatcherTests: XCTestCase {
                 guideID: "3ABNProclaimNetwork.us@SD"
             ),
         ]
-        let result = LiveTVGuideMatcher().match(
+        let result = LiveTVGuideMatcher(aliasSet: .iptvOrgToEPGShareUS2Version1).match(
             channels: channels,
             guideChannels: [
                 "3ABN.us2": ["3ABN"],
@@ -114,16 +114,9 @@ final class LiveTVGuideMatcherTests: XCTestCase {
         ]
         let guide = ["station": ["Movies"]]
         let result = LiveTVGuideMatcher(provider: .plex).matching(channels: channels, guideChannels: guide)
-        XCTAssertEqual(result.channelsByGuideID["station"]?.map(\.id), ["plex"])
-        XCTAssertEqual(result.assignments["plex"]?.method, .providerName)
-        XCTAssertEqual(
-            LiveTVGuideMatcher(provider: .samsung).match(channels: channels, guideChannels: guide)["station"]?.map(\.id),
-            ["samsung"]
-        )
-        XCTAssertEqual(
-            LiveTVGuideMatcher().match(channels: channels, guideChannels: guide)["station"]?.map(\.id),
-            ["unknown"]
-        )
+        XCTAssertTrue(result.assignments.isEmpty)
+        XCTAssertTrue(LiveTVGuideMatcher(provider: .samsung).match(channels: channels, guideChannels: guide).isEmpty)
+        XCTAssertTrue(LiveTVGuideMatcher().match(channels: channels, guideChannels: guide).isEmpty)
     }
 
     func testUSGuideRejectsExplicitForeignSamsungFeedsEvenWithUSPlaylistIDs() {

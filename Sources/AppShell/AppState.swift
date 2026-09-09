@@ -63,6 +63,21 @@ public final class AppState {
     }
 
     public var canEnterApp: Bool { admissionContext.canEnterApp }
+    var isLiveTVProfileAuthorized: Bool {
+        guard canEnterApp, case .ready = state else { return false }
+        let profile = profilesModel.activeProfile
+        return !profileFlow.isChoosingProfile
+            && profileFlow.pendingLockedProfile == nil
+            && profileFlow.pendingParentalSwitch == nil
+            && profileFlow.pendingIdentityAccountID == nil
+            && profileFlow.pendingSetupProfile == nil
+            && profileFlow.pendingLockOfferProfile == nil
+            && !profileFlow.isPickingAppearanceForNewProfile
+            && !profileFlow.hasResumableSetup
+            && plexHomeUsers.pendingPlexPINRequest == nil
+            && (!profile.isLocked || profileFlow.isUnlockedThisRun(profile.id))
+            && !profile.awaitsIdentity(amongAccounts: accountsProviders.activeAccountIDs)
+    }
     public var allowsStandalonePlayback: Bool { admissionContext.explicitStandaloneChoice }
     public var pendingStandaloneLiveTVEntry: Bool { appAdmission.pendingLiveTVEntry }
 
@@ -641,6 +656,14 @@ public final class AppState {
     /// state location can be resolved. See `AppState+CloudSync`.
     @ObservationIgnored
     public private(set) lazy var cloudSync: CloudConfigSyncService? = Self.makeCloudSync(for: self)
+
+    #if DEBUG
+    @ObservationIgnored
+    public private(set) lazy var liveTVPortableSync: LiveTVPortableSyncBridge? =
+        Self.makeLiveTVPortableSync(profiles: profilesModel)
+    @ObservationIgnored
+    var liveTVPortableSyncLifecycle: LiveTVPortableSyncLifecycle?
+    #endif
 
     /// Debounces bursts of local config edits into a single cloud publish.
     @ObservationIgnored
@@ -2382,6 +2405,9 @@ public final class AppState {
         }
         plexHomeUsers.resetAllForDebug()
         profilesModel.resetToPristineDefaultForDebugging()
+        #if DEBUG
+        resetLiveTVPortableSync()
+        #endif
         appAdmission.resetForDebugging()
         var recents = lastServerStore
         recents.recentServers = []

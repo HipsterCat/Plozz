@@ -6,7 +6,8 @@ import SwiftUI
 @main
 struct SearchFixtureApp: App {
     init() {
-        if ProcessInfo.processInfo.arguments.contains("--source-fixture") {
+        if ProcessInfo.processInfo.arguments.contains("--source-fixture")
+            || ProcessInfo.processInfo.arguments.contains("--live-root-fixture") {
             URLProtocol.registerClass(SourceSmokeNetworkBlocker.self)
         }
     }
@@ -19,6 +20,10 @@ struct SearchFixtureApp: App {
                 SourceOnboardingFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--navigation-fixture") {
                 NavigationRailFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--multiview-fixture") {
+                MultiviewFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--live-root-fixture") {
+                LiveTVRootFixture()
             } else {
                 Color.black.ignoresSafeArea()
             }

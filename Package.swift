@@ -649,6 +649,7 @@ let package = Package(
                 // one implementation instead of two 560-line copies.
                 "FeatureHomeCore",
                 "FeatureLiveTVCore",
+                "FeaturePlayback",
                 "FeatureWatchlistCore",
                 "MediaTransportCore",
                 "MediaTransportFTP",

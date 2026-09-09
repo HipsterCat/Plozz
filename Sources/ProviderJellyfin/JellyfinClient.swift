@@ -667,7 +667,8 @@ public struct JellyfinClient: Sendable {
         recursive: Bool,
         startIndex: Int,
         limit: Int,
-        sort: CoreModels.SortDescriptor
+        sort: CoreModels.SortDescriptor,
+        fields: String = "PrimaryImageAspectRatio,ProviderIds"
     ) async throws -> ItemsResponse {
         var queryItems = [
             URLQueryItem(name: "ParentId", value: parentID),
@@ -678,7 +679,7 @@ public struct JellyfinClient: Sendable {
             // Minimal fields keep the first-page payload small for a fast grid;
             // ProviderIds is included so the aggregated cross-server library
             // browse can collapse a title that lives on multiple servers.
-            URLQueryItem(name: "Fields", value: "PrimaryImageAspectRatio,ProviderIds"),
+            URLQueryItem(name: "Fields", value: fields),
             URLQueryItem(name: "ImageTypeLimit", value: "1"),
             URLQueryItem(name: "EnableTotalRecordCount", value: "true")
         ]
@@ -853,6 +854,7 @@ public struct JellyfinClient: Sendable {
         switch response.statusCode {
         case 200..<300: return data
         case 401: throw AppError.unauthorized
+        case 402: throw ServerLiveTVError.subscriptionRequired
         case 403: throw ServerLiveTVError.permissionDenied
         case 404: throw AppError.notFound
         case 409: throw ServerLiveTVError.tunerUnavailable

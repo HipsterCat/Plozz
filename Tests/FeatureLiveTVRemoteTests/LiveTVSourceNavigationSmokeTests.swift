@@ -12,7 +12,7 @@ final class LiveTVSourceNavigationSmokeTests: XCTestCase {
         assertNoSourcesOrNetwork(in: app)
 
         guard select(app.buttons.containing(.staticText, identifier: "Add an IPTV playlist").firstMatch, in: app) else { return }
-        XCTAssertTrue(app.textFields["M3U playlist URL"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["live-tv-playlist-url"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.textFields["Name (optional)"].exists)
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(welcome.waitForExistence(timeout: 5))
@@ -44,7 +44,7 @@ final class LiveTVSourceNavigationSmokeTests: XCTestCase {
         XCTAssertFalse(app.staticTexts["No guide? No problem."].exists)
         XCUIRemote.shared.press(.right)
         guard select(addPlaylist, in: app) else { return }
-        XCTAssertTrue(app.textFields["M3U playlist URL"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["live-tv-playlist-url"].waitForExistence(timeout: 5))
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(addPlaylist.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Auto preview"].exists)
@@ -63,8 +63,8 @@ final class LiveTVSourceNavigationSmokeTests: XCTestCase {
         expectation(for: saved, evaluatedWith: app.staticTexts["fixture-source-metrics"])
         waitForExpectations(timeout: 5)
         guard select(app.buttons["live-tv-edit-source-fixture"], in: app) else { return }
-        XCTAssertTrue(app.textFields["M3U playlist URL"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.textFields["M3U playlist URL"].value as? String, "https://example.invalid/fixture.m3u")
+        XCTAssertTrue(app.textFields["live-tv-playlist-url"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textFields["live-tv-playlist-url"].value as? String, "https://example.invalid/fixture.m3u")
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(app.buttons["live-tv-remove-source-fixture"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Manage sources"].exists)
@@ -81,7 +81,7 @@ final class LiveTVSourceNavigationSmokeTests: XCTestCase {
         XCTAssertTrue(addPlaylist.waitForExistence(timeout: 5))
         assertNoPublicChannelOffer(in: app)
         guard select(addPlaylist, in: app) else { return }
-        XCTAssertTrue(app.textFields["M3U playlist URL"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["live-tv-playlist-url"].waitForExistence(timeout: 5))
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(addPlaylist.waitForExistence(timeout: 5))
         XCUIRemote.shared.press(.menu)

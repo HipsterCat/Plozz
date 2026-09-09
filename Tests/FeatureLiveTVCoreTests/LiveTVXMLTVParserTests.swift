@@ -7,6 +7,37 @@ import zlib
 final class LiveTVXMLTVParserTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_767_225_600)
 
+    func testMissingEndUsesOnlyBoundedSameChannelSuccessorAndRetainsProvenance() throws {
+        let xml = """
+        <tv><channel id="g"><display-name>Station</display-name></channel>
+        <programme channel="g" start="20260101000000 +0000"><title>Inferred</title><desc>Details</desc><category>Science</category><language>en</language><rating><value>PG</value></rating></programme>
+        <programme channel="other" start="20260101001500 +0000" stop="20260101003000 +0000"><title>Other channel</title></programme>
+        <programme channel="g" start="20260101010000 +0000" stop="20260101020000 +0000"><title>Next</title></programme>
+        <programme channel="g" start="20260101030000 +0000"><title>Unbounded final</title></programme>
+        </tv>
+        """
+        let result = try LiveTVXMLTVParser().parseXML(
+            data: Data(xml.utf8), channels: [makeChannel(id: "app", name: "Station", guideID: "g")], now: now
+        )
+        XCTAssertEqual(result.programs.map(\.title), ["Inferred", "Next"])
+        XCTAssertEqual(result.programs[0].end, result.programs[1].start)
+        XCTAssertEqual(result.programs[0].details?.endWasInferred, true)
+        XCTAssertEqual(result.programs[0].details?.description, "Details")
+        XCTAssertEqual(result.programs[0].details?.rating, "PG")
+        XCTAssertEqual(result.programs[0].details?.categories, ["Science"])
+        XCTAssertEqual(result.programs[0].details?.languages, ["en"])
+    }
+
+    func testMissingManualGuideStationNeverFallsBackToAnExactOrNameMatch() throws {
+        let xml = Data("<tv><channel id=\"g\"><display-name>Station</display-name></channel></tv>".utf8)
+        let result = try LiveTVXMLTVParser().parseXML(
+            data: xml, channels: [makeChannel(id: "app", name: "Station", guideID: "g")], now: now,
+            overrides: ["app": "removed-station"]
+        )
+        XCTAssertTrue(result.matches.isEmpty)
+    }
+
+
     func testParsesChunksEntitiesOffsetsAndMapsToApplicationChannelID() throws {
         let xml = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -18,7 +49,7 @@ final class LiveTVXMLTVParserTests: XCTestCase {
           </programme>
         </tv>
         """
-        let channel = makeChannel(id: "app-channel", name: "News HD", guideID: "playlist.id")
+        let channel = makeChannel(id: "app-channel", name: "News HD", guideID: "guide.one")
         let result = try LiveTVXMLTVParser().parseXML(
             data: Data(xml.utf8),
             channels: [channel],
@@ -49,7 +80,7 @@ final class LiveTVXMLTVParserTests: XCTestCase {
         """
         let result = try LiveTVXMLTVParser().parseXML(
             data: Data(xml.utf8),
-            channels: [makeChannel(id: "gap-app", name: "Gap TV", guideID: "other")],
+            channels: [makeChannel(id: "gap-app", name: "Gap TV", guideID: "gap")],
             now: now
         )
         XCTAssertEqual(result.programs.map(\.title), ["First", "Second"])
@@ -88,7 +119,7 @@ final class LiveTVXMLTVParserTests: XCTestCase {
         """
         let result = try LiveTVXMLTVParser().parseXML(
             data: Data(xml.utf8),
-            channels: [makeChannel(id: "old-app", name: "Old TV", guideID: nil)],
+            channels: [makeChannel(id: "old-app", name: "Old TV", guideID: "old")],
             now: now
         )
         XCTAssertEqual(result.matchedChannelCount, 1)
@@ -154,13 +185,13 @@ final class LiveTVXMLTVParserTests: XCTestCase {
         """
         let result = try LiveTVXMLTVParser().parseXML(
             data: Data(xml.utf8),
-            channels: [makeChannel(id: "station-app", name: "Station", guideID: nil)],
+            channels: [makeChannel(id: "station-app", name: "Station", guideID: "late")],
             now: now
         )
         XCTAssertEqual(result.programs.map(\.title), ["Before Metadata", "After Metadata"])
         XCTAssertEqual(
             result.matches["station-app"],
-            LiveTVGuideMatch(guideChannelID: "late", method: .displayName)
+            LiveTVGuideMatch(guideChannelID: "late", method: .exactID)
         )
     }
 

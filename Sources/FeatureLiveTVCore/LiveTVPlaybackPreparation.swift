@@ -3,16 +3,35 @@ import CoreModels
 import Foundation
 import Observation
 
+public struct LiveTVLibraryChannelReference: Equatable, Sendable {
+    public let channelID: UUID
+    public let authorizationID: String
+
+    public init(channelID: UUID, authorizationID: String) {
+        self.channelID = channelID
+        self.authorizationID = authorizationID
+    }
+}
+
 /// Runtime-only player input. Resolved URLs and headers may contain credentials.
 public struct LiveTVPreparedStream: Identifiable, Equatable, Sendable {
     public let id: UUID
     public let channel: LiveTVPrototypeChannel
-    public let resolvedURL: URL
-    public let httpHeaders: [String: String]
+    public let input: LiveChannelInput
     public let authorizationID: String?
     public let serverReference: LiveTVServerChannelReference?
 
-    /// The account whose live lease this stream owns; nil for standalone IPTV.
+    public var resolvedURL: URL? {
+        guard case .stream(let url, _) = input else { return nil }
+        return url
+    }
+
+    public var httpHeaders: [String: String] {
+        guard case .stream(_, let headers) = input else { return [:] }
+        return headers
+    }
+
+    /// The account whose tuner lease this stream owns; nil for IPTV and library channels.
     public var accountID: String? { serverReference?.accountID }
 }
 
@@ -33,6 +52,8 @@ public enum LiveTVPlaybackPreparationError: Error, Equatable, Sendable {
     case authorizationChanged
     case credentialsExpired
     case permissionDenied
+    case subscriptionRequired
+    case guideRequired
     case tunerUnavailable
     case unsupportedPlaybackMode
     case noCompatibleStream
@@ -44,6 +65,7 @@ public enum LiveTVPlaybackPreparationError: Error, Equatable, Sendable {
     case invalidResponse
     case preparationFailed
     case playbackFailed
+    case libraryUnavailable(LibraryChannelError)
 
     public var userDescription: LocalizedStringResource {
         switch self {
@@ -57,6 +79,10 @@ public enum LiveTVPlaybackPreparationError: Error, Equatable, Sendable {
             "Your server session has expired. Sign in again to watch this channel."
         case .permissionDenied:
             "This server account doesn't have permission to watch Live TV."
+        case .subscriptionRequired:
+            "This server requires an active subscription for Live TV."
+        case .guideRequired:
+            "Configure this channel's guide on the server before watching."
         case .tunerUnavailable:
             "No tuner is currently available. Keep watching or try again later."
         case .unsupportedPlaybackMode:
@@ -79,15 +105,20 @@ public enum LiveTVPlaybackPreparationError: Error, Equatable, Sendable {
             "This channel couldn't be prepared. Try again."
         case .playbackFailed:
             "This channel stopped playing. Try again or choose another channel."
+        case .libraryUnavailable(let error):
+            error.message
         }
     }
 
     fileprivate static func sanitized(_ error: any Error, resolving: Bool) -> Self? {
         if error is CancellationError { return nil }
         if let error = error as? Self { return error }
+        if let error = error as? LibraryChannelError { return .libraryUnavailable(error) }
         if let error = error as? ServerLiveTVError {
             switch error {
             case .permissionDenied: return .permissionDenied
+            case .subscriptionRequired: return .subscriptionRequired
+            case .guideRequired: return .guideRequired
             case .tunerUnavailable: return .tunerUnavailable
             case .unsupportedAPI, .unsupportedPlaybackMode: return .unsupportedPlaybackMode
             case .noCompatibleStream: return .noCompatibleStream
@@ -130,6 +161,9 @@ public final class LiveTVPlaybackPreparation {
 
     @ObservationIgnored private var serverProviderResolver: LiveTVServerProviderResolver
     @ObservationIgnored private var authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)?
+    @ObservationIgnored private let libraryChannelResolver: @MainActor @Sendable (
+        LiveTVPrototypeChannel
+    ) throws -> LiveTVLibraryChannelReference?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var currentBinding: Binding?
     @ObservationIgnored private var preparingBinding: Binding?
@@ -140,10 +174,14 @@ public final class LiveTVPlaybackPreparation {
 
     public init(
         serverProviderResolver: @escaping LiveTVServerProviderResolver = { _ in nil },
-        authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)? = nil
+        authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)? = nil,
+        libraryChannelResolver: @escaping @MainActor @Sendable (
+            LiveTVPrototypeChannel
+        ) throws -> LiveTVLibraryChannelReference? = { _ in nil }
     ) {
         self.serverProviderResolver = serverProviderResolver
         self.authenticatedHTTPResolver = authenticatedHTTPResolver
+        self.libraryChannelResolver = libraryChannelResolver
     }
 
     deinit {
@@ -230,17 +268,18 @@ public final class LiveTVPlaybackPreparation {
                 try requireCurrent(requestID, binding: binding)
                 currentBinding = binding
                 current = LiveTVPreparedStream(
-                    id: existing.id, channel: channel, resolvedURL: existing.resolvedURL,
-                    httpHeaders: existing.httpHeaders, authorizationID: existing.authorizationID,
+                    id: existing.id, channel: channel, input: existing.input, authorizationID: existing.authorizationID,
                     serverReference: serverReference
                 )
                 finishPreparation(requestID)
                 return true
             }
 
-            let url: URL
-            let headers: [String: String]
-            if let reference = serverReference, let context = binding.context {
+            let input: LiveChannelInput
+            if let library = binding.library {
+                input = .libraryChannel(id: library.channelID, authorizationID: library.authorizationID)
+            } else if let reference = serverReference, let context = binding.context {
+                let url: URL
                 let opened = try await context.provider.openLiveTVChannel(id: reference.channelID)
                 let owned = PreparedLiveTVLeaseOwner(opened)
                 candidate = owned
@@ -264,15 +303,16 @@ public final class LiveTVPlaybackPreparation {
                 case .networkFile, .dlnaResource:
                     throw LiveTVPlaybackPreparationError.unsupportedPlaybackMode
                 }
-                headers = [:]
+                input = .stream(url: url, httpHeaders: [:])
             } else {
                 guard let streamURL = channel.streamURL else {
                     throw LiveTVPlaybackPreparationError.channelUnavailable
                 }
-                url = streamURL
-                headers = channel.httpHeaders
+                input = .stream(url: streamURL, httpHeaders: channel.httpHeaders)
             }
-            try Self.validate(url: url, headers: headers)
+            if case .stream(let url, let headers) = input {
+                try Self.validate(url: url, headers: headers)
+            }
             try requireCurrent(requestID, binding: binding)
             guard accept() else {
                 finishPreparation(requestID)
@@ -287,8 +327,7 @@ public final class LiveTVPlaybackPreparation {
             currentLease = candidate
             currentBinding = binding
             current = LiveTVPreparedStream(
-                id: requestID, channel: channel, resolvedURL: url,
-                httpHeaders: headers, authorizationID: binding.context?.authorizationID,
+                id: requestID, channel: channel, input: input, authorizationID: binding.authorizationID,
                 serverReference: serverReference
             )
             finishPreparation(requestID)
@@ -306,6 +345,11 @@ public final class LiveTVPlaybackPreparation {
             discardUnauthorizedCurrent()
             return false
         }
+    }
+
+    /// Cancel an uncommitted handoff without stopping the current stream.
+    public func cancelPendingPreparation() {
+        cancelPreparation()
     }
 
     /// Clears observable player input immediately. Even a non-cooperative open
@@ -399,7 +443,10 @@ public final class LiveTVPlaybackPreparation {
         let channel: LiveTVPrototypeChannel
         let reference: LiveTVServerChannelReference?
         let context: LiveTVAuthorizedServerProvider?
+        let library: LiveTVLibraryChannelReference?
         let isAuthorized: @MainActor @Sendable () -> Bool
+
+        var authorizationID: String? { context?.authorizationID ?? library?.authorizationID }
     }
 
     private struct StoppedWork {
@@ -443,16 +490,42 @@ public final class LiveTVPlaybackPreparation {
                   reference.authorizationID == context.authorizationID else {
                 throw LiveTVPlaybackPreparationError.authorizationChanged
             }
-            return Binding(channel: channel, reference: reference, context: context, isAuthorized: isAuthorized)
+            return Binding(
+                channel: channel, reference: reference, context: context,
+                library: nil, isAuthorized: isAuthorized
+            )
         }
         guard channel.source == .iptv || channel.source == .plozz else {
             throw LiveTVPlaybackPreparationError.accountUnavailable
         }
-        return Binding(channel: channel, reference: nil, context: nil, isAuthorized: isAuthorized)
+        let library: LiveTVLibraryChannelReference?
+        if channel.source == .plozz {
+            guard let resolved = try libraryChannelResolver(channel) else {
+                throw LiveTVPlaybackPreparationError.sourceUnavailable
+            }
+            guard !resolved.authorizationID.isEmpty else {
+                throw LiveTVPlaybackPreparationError.authorizationChanged
+            }
+            library = resolved
+        } else {
+            library = nil
+        }
+        return Binding(
+            channel: channel, reference: nil, context: nil,
+            library: library, isAuthorized: isAuthorized
+        )
     }
 
     private func authorizationFailure(_ binding: Binding) -> LiveTVPlaybackPreparationError? {
         guard binding.isAuthorized() else { return .sourceUnavailable }
+        if let library = binding.library {
+            do {
+                guard let current = try libraryChannelResolver(binding.channel) else { return .sourceUnavailable }
+                guard current == library else { return .authorizationChanged }
+            } catch {
+                return LiveTVPlaybackPreparationError.sanitized(error, resolving: false)
+            }
+        }
         guard let expected = binding.context, let reference = binding.reference else { return nil }
         guard let live = serverProviderResolver(reference.accountID),
               live.accountID == expected.accountID else { return .accountUnavailable }
@@ -478,8 +551,13 @@ public final class LiveTVPlaybackPreparation {
               existing.channel.source == binding.channel.source,
               existing.channel.configuredSourceID == binding.channel.configuredSourceID,
               existing.serverReference == binding.reference,
-              existing.authorizationID == binding.context?.authorizationID else { return false }
+              existing.authorizationID == binding.authorizationID else { return false }
         if binding.reference == nil {
+            if let library = binding.library {
+                return existing.input == .libraryChannel(
+                    id: library.channelID, authorizationID: library.authorizationID
+                )
+            }
             return existing.channel.streamURL == binding.channel.streamURL
                 && existing.httpHeaders == binding.channel.httpHeaders
         }

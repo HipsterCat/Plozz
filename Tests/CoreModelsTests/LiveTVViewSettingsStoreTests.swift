@@ -18,6 +18,7 @@ final class LiveTVViewSettingsStoreTests: XCTestCase {
         XCTAssertFalse(settings.keepWatchingWhileBrowsing)
         XCTAssertFalse(settings.favoritesOnly)
         XCTAssertFalse(settings.guideOnly)
+        XCTAssertFalse(settings.wifiOnly)
     }
 
     func testAllValuesRoundTripAcrossStoreInstances() {
@@ -27,7 +28,8 @@ final class LiveTVViewSettingsStoreTests: XCTestCase {
             autoPreview: false,
             keepWatchingWhileBrowsing: true,
             favoritesOnly: true,
-            guideOnly: true
+            guideOnly: true,
+            wifiOnly: true
         )
 
         LiveTVViewSettingsStore(defaults: defaults).save(settings)
@@ -138,6 +140,25 @@ final class LiveTVViewSettingsStoreTests: XCTestCase {
             LiveTVViewSettingsStore(defaults: defaults, namespace: namespace).load(),
             LiveTVViewSettings(sortByName: true)
         )
+    }
+
+    func testCellularIsAllowedByDefaultForEveryProfileAndWifiOnlyIsScoped() {
+        let defaults = makeDefaults()
+        let primary = LiveTVViewSettingsStore(defaults: defaults)
+        let child = LiveTVViewSettingsStore(defaults: defaults, namespace: "child")
+        XCTAssertFalse(primary.load().wifiOnly)
+        XCTAssertFalse(child.load().wifiOnly)
+        child.save(LiveTVViewSettings(wifiOnly: true))
+        XCTAssertTrue(LiveTVViewSettingsStore(defaults: defaults, namespace: "child").load().wifiOnly)
+        XCTAssertFalse(primary.load().wifiOnly)
+        child.save(LiveTVViewSettings(wifiOnly: false))
+        XCTAssertFalse(child.load().wifiOnly)
+    }
+
+    func testMalformedWifiOnlyDoesNotChangeCellularDefault() {
+        let defaults = makeDefaults()
+        defaults.set("wifi", forKey: LiveTVViewSettingsStore.wifiOnlyKey)
+        XCTAssertFalse(LiveTVViewSettingsStore(defaults: defaults).load().wifiOnly)
     }
 
     func testInvalidPostWatchValueFallsBackWithoutDiscardingExistingSettings() {

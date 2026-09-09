@@ -1,7 +1,7 @@
 #if DEBUG
 import Foundation
 
-public enum LiveTVGuideProvider: String, Sendable {
+public enum LiveTVGuideProvider: String, Codable, Sendable {
     case pluto, samsung, plex
 }
 
@@ -48,13 +48,13 @@ public struct LiveTVGuideSource: Identifiable, Equatable, Sendable {
     }
 }
 
-public enum LiveTVGuideMatchMethod: Int, Comparable, Sendable {
-    case displayName, providerName, verifiedAlias, exactID, nativeID
+public enum LiveTVGuideMatchMethod: Int, Codable, Comparable, Sendable {
+    case displayName, providerName, verifiedAlias, nativeID, exactID, userConfirmed
 
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 }
 
-public struct LiveTVGuideMatch: Equatable, Sendable {
+public struct LiveTVGuideMatch: Codable, Equatable, Sendable {
     public let guideChannelID: String
     public let method: LiveTVGuideMatchMethod
 

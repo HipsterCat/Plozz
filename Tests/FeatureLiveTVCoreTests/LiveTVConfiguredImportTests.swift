@@ -5,6 +5,25 @@ import XCTest
 
 @MainActor
 final class LiveTVConfiguredImportTests: XCTestCase {
+    func testOnlySafeDeclaredGuidesAreDiscoveredAfterChannelsPublish() async throws {
+        let playlist = source()
+        let safe = URL(string: "https://example.test/discovered.xml")!
+        let text = m3u.replacingOccurrences(
+            of: "#EXTM3U", with: "#EXTM3U url-tvg=\"\(safe.absoluteString),https://other.test/guide.xml\""
+        )
+        let loader = ConfiguredImportLoader(playlists: [playlist.playlistURL: text], guides: [:])
+        let imports = LiveTVPrototypeImportModel(
+            configuration: .init(playlists: [playlist]), loader: loader
+        )
+        let model = LiveTVPrototypeModel(channels: [])
+        await imports.reload(into: model)
+        XCTAssertEqual(model.channels.count, 1)
+        XCTAssertEqual(imports.guideSources.map(\.source.url), [safe])
+        XCTAssertEqual(imports.guideDiscoveryFailures[playlist.id], .unsafeGuideOrigin)
+        let calls = await loader.calls
+        XCTAssertEqual(calls.guides, [safe])
+    }
+
     func testDefaultImporterNeverSelectsOrLoadsPublicFeeds() async {
         let loader = ConfiguredImportLoader()
         let imports = LiveTVPrototypeImportModel(loader: loader)

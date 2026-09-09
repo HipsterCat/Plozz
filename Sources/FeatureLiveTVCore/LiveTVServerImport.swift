@@ -90,7 +90,8 @@ extension LiveTVPrototypeImportModel {
                 ) else { continue }
                 updateServerStatus(source.id) { $0.availability = availability }
                 switch availability.status {
-                case .notConfigured, .noChannels, .permissionDenied, .serviceUnavailable, .unsupportedAPI:
+                case .notConfigured, .noChannels, .permissionDenied, .subscriptionRequired,
+                     .serviceUnavailable, .unsupportedAPI:
                     if availability.status != .serviceUnavailable {
                         cachedServerCatalogs[source.id] = nil
                         removeServerGuideWindows(source.id)
@@ -101,6 +102,7 @@ extension LiveTVPrototypeImportModel {
                         $0.lastRefresh = Date()
                         switch availability.status {
                         case .permissionDenied: $0.failure = .permissionDenied
+                        case .subscriptionRequired: $0.failure = .subscriptionRequired
                         case .serviceUnavailable: $0.failure = .serviceUnavailable
                         case .unsupportedAPI: $0.failure = .unsupportedAPI
                         default: $0.failure = nil
@@ -167,7 +169,7 @@ extension LiveTVPrototypeImportModel {
                     source, context: context, request: request, sourceRevision: sourceRevision, into: model
                 ) else { continue }
                 let failure = LiveTVServerImportError.sanitized(error, fallback: .serviceUnavailable)
-                if failure == .permissionDenied {
+                if failure == .permissionDenied || failure == .subscriptionRequired || failure == .accountUnavailable {
                     cachedServerCatalogs[source.id] = nil
                     removeServerGuideWindows(source.id)
                     try? publishPlaylists(into: model)

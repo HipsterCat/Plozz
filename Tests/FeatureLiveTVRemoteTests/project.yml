@@ -18,6 +18,7 @@ targets:
       - SearchFixtureApp.swift
       - SourceOnboardingFixture.swift
       - NavigationRailFixture.swift
+      - MultiviewFixture.swift
     dependencies:
       - package: Plozz
         product: FeatureLiveTV
@@ -31,6 +32,8 @@ targets:
         product: AppShell
       - package: Plozz
         product: CoreUI
+      - package: Plozz
+        product: FeaturePlayback
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.SearchTestHost
@@ -62,6 +65,7 @@ targets:
       - LiveTVSearchRemoteTests.swift
       - LiveTVSourceNavigationSmokeTests.swift
       - NavigationRailRemoteTests.swift
+      - LiveTVMultiviewRemoteTests.swift
     dependencies:
       - target: LiveTVSearchFixture
     settings:

@@ -201,6 +201,8 @@ final class LiveTVPlaybackPreparationTests: XCTestCase {
     func testProviderFailuresKeepPreciseSafeCategoriesAndDoNotRetry() async throws {
         for (serverError, expected) in [
             (ServerLiveTVError.permissionDenied, LiveTVPlaybackPreparationError.permissionDenied),
+            (.subscriptionRequired, .subscriptionRequired),
+            (.guideRequired, .guideRequired),
             (.tunerUnavailable, .tunerUnavailable),
             (.unsupportedPlaybackMode, .unsupportedPlaybackMode),
             (.noCompatibleStream, .noCompatibleStream)
@@ -222,6 +224,195 @@ final class LiveTVPlaybackPreparationTests: XCTestCase {
         let owner = owner(scope)
         _ = await prepare(owner, channel: channel(), reference: reference(), scope: scope)
         XCTAssertEqual(owner.failure, .credentialsExpired)
+    }
+
+    func testConnectingServerAfterStandaloneEntryReusesPreparationWithoutStoppingIPTV() async throws {
+        let candidate = try lease()
+        let provider = PreparationFixtureProvider(["one": [.init(lease: candidate)]])
+        let scope = PreparationFixtureScope(provider: provider)
+        let context = LiveTVPlaybackResolverContext(
+            serverProviderResolver: { _ in nil }, authenticatedHTTPResolver: nil
+        )
+        let owner = LiveTVPlaybackPreparation(
+            serverProviderResolver: { context.provider(for: $0) }, authenticatedHTTPResolver: context
+        )
+        let previous = await seedIPTV(owner, scope: scope)
+        context.update(
+            serverProviderResolver: { scope.resolve($0) },
+            authenticatedHTTPResolver: PreparationFixtureResolver()
+        )
+        XCTAssertEqual(owner.current?.id, previous)
+        let accepted = await prepare(owner, channel: channel(), reference: reference(), scope: scope)
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(owner.current?.serverReference, reference())
+        XCTAssertNotEqual(owner.current?.id, previous)
+        await owner.close()
+    }
+
+    func testResolverReplacementFencesAnAlreadyResolvingServerCandidate() async throws {
+        let candidate = try lease()
+        let provider = PreparationFixtureProvider(["one": [.init(lease: candidate)]])
+        let scope = PreparationFixtureScope(provider: provider)
+        let entered = expectation(description: "Old resolver entered")
+        let gate = PreparationFixtureGate()
+        let context = LiveTVPlaybackResolverContext(
+            serverProviderResolver: { scope.resolve($0) },
+            authenticatedHTTPResolver: PreparationFixtureResolver(["one": .init(entered: entered, gate: gate)])
+        )
+        let owner = LiveTVPlaybackPreparation(
+            serverProviderResolver: { context.provider(for: $0) }, authenticatedHTTPResolver: context
+        )
+        let previous = await seedIPTV(owner, scope: scope)
+        let operation = Task {
+            await prepare(owner, channel: channel(), reference: reference(), scope: scope)
+        }
+        await fulfillment(of: [entered], timeout: 2)
+        context.update(serverProviderResolver: { _ in nil }, authenticatedHTTPResolver: nil)
+        await gate.release()
+        let accepted = await operation.value
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(owner.current?.id, previous)
+        XCTAssertEqual(owner.failure, .authorizationChanged)
+        await owner.close()
+        let closes = await candidate.closeCalls
+        XCTAssertEqual(closes, 1)
+    }
+
+    func testResolverReplacementRejectsOldTransportEvenWhenAccountAuthorityIsUnchanged() async throws {
+        let candidate = try lease()
+        let provider = PreparationFixtureProvider(["one": [.init(lease: candidate)]])
+        let scope = PreparationFixtureScope(provider: provider)
+        let entered = expectation(description: "Old transport entered")
+        let gate = PreparationFixtureGate()
+        let context = LiveTVPlaybackResolverContext(
+            serverProviderResolver: { scope.resolve($0) },
+            authenticatedHTTPResolver: PreparationFixtureResolver(["one": .init(entered: entered, gate: gate)])
+        )
+        let owner = LiveTVPlaybackPreparation(
+            serverProviderResolver: { context.provider(for: $0) }, authenticatedHTTPResolver: context
+        )
+        let previous = await seedIPTV(owner, scope: scope)
+        let operation = Task {
+            await prepare(owner, channel: channel(), reference: reference(), scope: scope)
+        }
+        await fulfillment(of: [entered], timeout: 2)
+        context.update(
+            serverProviderResolver: { scope.resolve($0) },
+            authenticatedHTTPResolver: PreparationFixtureResolver()
+        )
+        await gate.release()
+        let accepted = await operation.value
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(owner.current?.id, previous)
+        XCTAssertEqual(owner.failure, .authorizationChanged)
+        await owner.close()
+        let closes = await candidate.closeCalls
+        XCTAssertEqual(closes, 1)
+    }
+
+    func testLibraryPreparationUsesTypedIdentityWithoutInventingAStreamURL() async throws {
+        let lookup = LibraryPreparationFixtureLookup()
+        let id = try XCTUnwrap(lookup.channelID)
+        let source = LiveTVPrototypeChannel(
+            id: "library:\(id)", number: 1, name: "Comedy", category: "Plozz",
+            symbol: "tv", accent: 0, source: .plozz, tagline: "",
+            configuredSourceID: UUID().uuidString
+        )
+        let owner = LiveTVPlaybackPreparation(libraryChannelResolver: { _ in lookup.reference })
+        let first = await owner.prepare(source, isAuthorized: { true }, accept: { true })
+        XCTAssertTrue(first)
+        XCTAssertEqual(owner.current?.input, .libraryChannel(id: id, authorizationID: lookup.authorizationID))
+        XCTAssertEqual(owner.current?.authorizationID, lookup.authorizationID)
+        XCTAssertNil(owner.current?.resolvedURL)
+        XCTAssertEqual(owner.current?.httpHeaders, [:])
+        let preparedID = owner.current?.id
+        let repeated = await owner.prepare(source, isAuthorized: { true }, accept: { true })
+        XCTAssertTrue(repeated)
+        XCTAssertEqual(owner.current?.id, preparedID)
+        lookup.channelID = nil
+        owner.validateAuthorization()
+        XCTAssertNil(owner.current)
+        await owner.close()
+    }
+
+    func testLibraryCredentialChangeRevokesPreparedIdentityBeforeRetuning() async throws {
+        let lookup = LibraryPreparationFixtureLookup()
+        let id = try XCTUnwrap(lookup.channelID)
+        let channel = LiveTVPrototypeChannel(
+            id: "library:\(id)", number: 1, name: "Comedy", category: "Plozz",
+            symbol: "tv", accent: 0, source: .plozz, tagline: "",
+            configuredSourceID: UUID().uuidString
+        )
+        let owner = LiveTVPlaybackPreparation(libraryChannelResolver: { _ in lookup.reference })
+        let accepted = await owner.prepare(channel, isAuthorized: { true }, accept: { true })
+        XCTAssertTrue(accepted)
+        let firstID = try XCTUnwrap(owner.current?.id)
+
+        lookup.authorizationID = "new-generation"
+        owner.validateAuthorization()
+        XCTAssertNil(owner.current)
+        XCTAssertEqual(owner.failure, .authorizationChanged)
+
+        let replacement = await owner.prepare(channel, isAuthorized: { true }, accept: { true })
+        XCTAssertTrue(replacement)
+        XCTAssertNotEqual(owner.current?.id, firstID)
+        XCTAssertEqual(owner.current?.authorizationID, lookup.authorizationID)
+        await owner.close()
+    }
+
+    func testLibraryCredentialChangeDuringAcceptanceKeepsPreviousChannel() async throws {
+        let lookup = LibraryPreparationFixtureLookup()
+        let id = try XCTUnwrap(lookup.channelID)
+        let channel = LiveTVPrototypeChannel(
+            id: "library:\(id)", number: 1, name: "Comedy", category: "Plozz",
+            symbol: "tv", accent: 0, source: .plozz, tagline: "",
+            configuredSourceID: UUID().uuidString
+        )
+        let owner = LiveTVPlaybackPreparation(libraryChannelResolver: { _ in lookup.reference })
+        let previous = await seedIPTV(owner, scope: PreparationFixtureScope())
+        let accepted = await owner.prepare(channel, isAuthorized: { true }) {
+            lookup.authorizationID = "new-generation"
+            return true
+        }
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(owner.current?.id, previous)
+        XCTAssertEqual(owner.failure, .authorizationChanged)
+        await owner.close()
+    }
+
+    func testLibraryPreparationRejectsMissingAuthorizationStamp() async throws {
+        let lookup = LibraryPreparationFixtureLookup()
+        lookup.authorizationID = ""
+        let id = try XCTUnwrap(lookup.channelID)
+        let channel = LiveTVPrototypeChannel(
+            id: "library:\(id)", number: 1, name: "Comedy", category: "Plozz",
+            symbol: "tv", accent: 0, source: .plozz, tagline: "",
+            configuredSourceID: UUID().uuidString
+        )
+        let owner = LiveTVPlaybackPreparation(libraryChannelResolver: { _ in lookup.reference })
+        let previous = await seedIPTV(owner, scope: PreparationFixtureScope())
+        let accepted = await owner.prepare(channel, isAuthorized: { true }, accept: { true })
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(owner.current?.id, previous)
+        XCTAssertEqual(owner.failure, .authorizationChanged)
+        await owner.close()
+    }
+
+    func testUnavailableLibraryScheduleKeepsTheCurrentNetworkChannel() async throws {
+        let owner = LiveTVPlaybackPreparation(libraryChannelResolver: { _ in
+            throw LibraryChannelError.snapshotUnavailable
+        })
+        let previous = await seedIPTV(owner, scope: PreparationFixtureScope())
+        let source = LiveTVPrototypeChannel(
+            id: "library:\(UUID())", number: 1, name: "Comedy", category: "Plozz",
+            symbol: "tv", accent: 0, source: .plozz, tagline: "",
+            configuredSourceID: UUID().uuidString
+        )
+        let accepted = await owner.prepare(source, isAuthorized: { true }, accept: { true })
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(owner.current?.id, previous)
+        XCTAssertEqual(owner.failure, .libraryUnavailable(.snapshotUnavailable))
+        await owner.close()
     }
 
     func testFailedResolutionClosesCandidateAndNeverExposesSensitiveErrorText() async throws {
@@ -735,7 +926,7 @@ final class LiveTVPlaybackPreparationTests: XCTestCase {
         )
         XCTAssertTrue(accepted)
         XCTAssertNotEqual(owner.current?.id, previousID)
-        XCTAssertEqual(owner.current?.resolvedURL.path, "/new")
+        XCTAssertEqual(owner.current?.resolvedURL?.path, "/new")
         owner.stop()
     }
 
@@ -1112,6 +1303,136 @@ final class LiveTVPlaybackPreparationTests: XCTestCase {
         await owner.close()
     }
 
+    private func multiview(
+        _ scope: PreparationFixtureScope, primary: LiveTVPlaybackPreparation
+    ) -> LiveTVMultiviewCoordinator {
+        let profile = scope.profileID
+        let authorizationID = scope.authorizationID
+        return LiveTVMultiviewCoordinator(
+            primary: primary, makePreparation: { self.owner(scope) },
+            reference: {
+                LiveTVServerChannelReference(
+                    sourceID: "server-source", accountID: "account",
+                    authorizationID: authorizationID, channelID: String($0.dropFirst(3))
+                )
+            },
+            authorizes: { channel, _ in scope.authorizes(channel, initiatingProfile: profile) },
+            recordWatched: { _ in }
+        )
+    }
+
+    func testMultiviewExitKeepsSelectedLeaseAndGatesAdmissionUntilRetiredCleanup() async throws {
+        let closing = expectation(description: "First pane closing")
+        let closeGate = PreparationFixtureGate()
+        let first = try lease("one", closeEntered: closing, closeGate: closeGate)
+        let second = try lease("two")
+        let provider = PreparationFixtureProvider([
+            "one": [.init(lease: first)], "two": [.init(lease: second)]
+        ])
+        let scope = PreparationFixtureScope(provider: provider)
+        let primary = owner(scope)
+        _ = await prepare(primary, channel: channel(), reference: reference(), scope: scope)
+        let coordinator = multiview(scope, primary: primary)
+        coordinator.begin()
+        await coordinator.add(channel("two"))?.value
+        let survivor = coordinator.panes[1]
+        coordinator.selectAudio(survivor.id)
+        XCTAssertTrue(coordinator.exit() === survivor.preparation)
+        await fulfillment(of: [closing], timeout: 2)
+        let selectedCloses = await second.closeCalls
+        XCTAssertEqual(selectedCloses, 0)
+        XCTAssertTrue(coordinator.begin())
+        XCTAssertFalse(coordinator.canAdd)
+        XCTAssertNil(coordinator.add(channel("three")))
+        let opens = await provider.opens
+        XCTAssertEqual(opens, ["one", "two"])
+        await closeGate.release()
+        await coordinator.close()
+        let firstCloses = await first.closeCalls
+        let secondCloses = await second.closeCalls
+        XCTAssertEqual(firstCloses, 1)
+        XCTAssertEqual(secondCloses, 1)
+    }
+
+    func testMultiviewRemovedPendingPaneClosesLateLeaseWithoutDisturbingPrimary() async throws {
+        let opening = expectation(description: "Second pane opening")
+        let gate = PreparationFixtureGate()
+        let first = try lease("one")
+        let second = try lease("two")
+        let provider = PreparationFixtureProvider([
+            "one": [.init(lease: first)], "two": [.init(lease: second, entered: opening, gate: gate)]
+        ])
+        let scope = PreparationFixtureScope(provider: provider)
+        let primary = owner(scope)
+        _ = await prepare(primary, channel: channel(), reference: reference(), scope: scope)
+        let preparedID = primary.current?.id
+        let coordinator = multiview(scope, primary: primary)
+        coordinator.begin()
+        let pending = coordinator.add(channel("two"))
+        await fulfillment(of: [opening], timeout: 2)
+        coordinator.remove(coordinator.panes[1].id)
+        await gate.release()
+        await pending?.value
+        XCTAssertEqual(coordinator.panes.count, 1)
+        XCTAssertEqual(primary.current?.id, preparedID)
+        let beforeClose = await first.closeCalls
+        XCTAssertEqual(beforeClose, 0)
+        await coordinator.close()
+        let firstCloses = await first.closeCalls
+        let secondCloses = await second.closeCalls
+        XCTAssertEqual(firstCloses, 1)
+        XCTAssertEqual(secondCloses, 1)
+    }
+
+    func testMultiviewSourceRevocationStopsBothOwnersAndRemovesRequestedMetadata() async throws {
+        let first = try lease("one")
+        let second = try lease("two")
+        let provider = PreparationFixtureProvider([
+            "one": [.init(lease: first)], "two": [.init(lease: second)]
+        ])
+        let scope = PreparationFixtureScope(provider: provider)
+        let primary = owner(scope)
+        _ = await prepare(primary, channel: channel(), reference: reference(), scope: scope)
+        let coordinator = multiview(scope, primary: primary)
+        coordinator.begin()
+        await coordinator.add(channel("two"))?.value
+        scope.enabledSources.remove("server-source")
+        coordinator.validateAuthorization()
+        XCTAssertTrue(coordinator.panes.allSatisfy { $0.channel == nil })
+        XCTAssertTrue(coordinator.panes.allSatisfy { $0.preparation.current == nil })
+        await coordinator.close()
+        let firstCloses = await first.closeCalls
+        let secondCloses = await second.closeCalls
+        XCTAssertEqual(firstCloses, 1)
+        XCTAssertEqual(secondCloses, 1)
+    }
+
+    func testMultiviewFailedPaneDoesNotReleaseOrReopenSibling() async throws {
+        let first = try lease("one")
+        let second = try lease("two")
+        let provider = PreparationFixtureProvider([
+            "one": [.init(lease: first)], "two": [.init(lease: second)]
+        ])
+        let scope = PreparationFixtureScope(provider: provider)
+        let primary = owner(scope)
+        _ = await prepare(primary, channel: channel(), reference: reference(), scope: scope)
+        let preparedID = primary.current?.id
+        let coordinator = multiview(scope, primary: primary)
+        coordinator.begin()
+        await coordinator.add(channel("two"))?.value
+        let secondPane = coordinator.panes[1]
+        coordinator.playbackFailed(secondPane.id, preparedID: try XCTUnwrap(secondPane.preparation.current?.id))
+        await secondPane.preparation.close()
+        XCTAssertEqual(primary.current?.id, preparedID)
+        let firstClosesBeforeExit = await first.closeCalls
+        let secondCloses = await second.closeCalls
+        let opens = await provider.opens
+        XCTAssertEqual(firstClosesBeforeExit, 0)
+        XCTAssertEqual(secondCloses, 1)
+        XCTAssertEqual(opens, ["one", "two"])
+        await coordinator.close()
+    }
+
     func testDeinitializingOwnerReleasesItsCurrentLease() async throws {
         let closed = expectation(description: "Destroyed owner releases lease")
         let candidate = try lease(closed: closed)
@@ -1153,6 +1474,15 @@ private final class PreparationFixtureScope {
 
     func authorizes(_ channel: LiveTVPrototypeChannel, initiatingProfile: String) -> Bool {
         profileID == initiatingProfile && enabledSources.contains(channel.configuredSourceID ?? "")
+    }
+}
+
+@MainActor
+private final class LibraryPreparationFixtureLookup {
+    var channelID: UUID? = UUID()
+    var authorizationID = "original-generation"
+    var reference: LiveTVLibraryChannelReference? {
+        channelID.map { LiveTVLibraryChannelReference(channelID: $0, authorizationID: authorizationID) }
     }
 }
 

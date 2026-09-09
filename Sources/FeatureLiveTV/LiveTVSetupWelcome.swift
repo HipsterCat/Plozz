@@ -1,11 +1,15 @@
 #if DEBUG
 import CoreUI
+import FeatureLiveTVCore
 import SwiftUI
 
 struct LiveTVSetupWelcome: View {
     let addPlaylist: () -> Void
     let useServer: () -> Void
     var issue: LocalizedStringResource? = nil
+    var serverStatuses: [LiveTVServerEnrollmentStatus] = []
+    var createChannel: (() -> Void)?
+    var retryLibrary: (() -> Void)?
     @Environment(\.themePalette) private var palette
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -30,6 +34,14 @@ struct LiveTVSetupWelcome: View {
                             symbol: "server.rack",
                             action: useServer
                         )
+                        if let createChannel {
+                            LiveTVSetupChoice(
+                                title: "Create a Plozz channel",
+                                detail: "Schedule movies and episodes from your libraries",
+                                symbol: "calendar.badge.plus",
+                                action: createChannel
+                            )
+                        }
                     }
                     if let issue {
                         Label {
@@ -37,6 +49,13 @@ struct LiveTVSetupWelcome: View {
                         } icon: {
                             Image(systemName: "exclamationmark.triangle")
                         }
+                        if let retryLibrary {
+                            Button("Retry Plozz channels", action: retryLibrary)
+                                .buttonStyle(SettingsFocusButtonStyle(size: .contained))
+                        }
+                    }
+                    ForEach(serverStatuses) { status in
+                        LiveTVEnrollmentStatusRow(status: status)
                     }
                 }
                 .frame(maxWidth: 1_160, alignment: .leading)
@@ -48,6 +67,23 @@ struct LiveTVSetupWelcome: View {
         .background(palette.backgroundBase)
         .foregroundStyle(palette.primaryText)
         .accessibilityIdentifier("live-tv-source-welcome")
+    }
+}
+
+private struct LiveTVEnrollmentStatusRow: View {
+    let status: LiveTVServerEnrollmentStatus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(status.choice.name).font(.headline)
+            if status.phase == .loading {
+                ProgressView("Checking Live TV access...")
+            } else if let failure = status.failure {
+                Text(failure.userDescription).settingsRowSecondary()
+            } else if let availability = status.availability {
+                LiveTVServerAvailabilitySummary(availability: availability)
+            }
+        }
     }
 }
 

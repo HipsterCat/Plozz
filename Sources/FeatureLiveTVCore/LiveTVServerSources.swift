@@ -42,11 +42,16 @@ public struct LiveTVServerChannelReference: Equatable, Sendable {
 public enum LiveTVServerImportError: Error, Equatable, Sendable {
     case accountUnavailable, permissionDenied, unsupportedAPI, unsupportedPlaybackMode
     case tunerUnavailable, serviceUnavailable, invalidCatalog, invalidGuide
+    case subscriptionRequired, guideRequired
+    case configurationNotSaved
 
     public var userDescription: LocalizedStringResource {
         switch self {
         case .accountUnavailable: "This server account isn't available to the current profile."
         case .permissionDenied: "This server account doesn't have permission to use Live TV."
+        case .subscriptionRequired: "This server requires an active subscription for Live TV."
+        case .guideRequired: "This server requires a configured guide before this channel can play."
+        case .configurationNotSaved: "The discovered Live TV source couldn't be saved. Try again."
         case .unsupportedAPI: "This server doesn't support the Live TV API used by Plozz."
         case .unsupportedPlaybackMode: "This server's Live TV playback mode isn't supported."
         case .tunerUnavailable: "No tuner is currently available on this server."
@@ -58,9 +63,20 @@ public enum LiveTVServerImportError: Error, Equatable, Sendable {
 
     static func sanitized(_ error: any Error, fallback: Self) -> Self {
         if let error = error as? Self { return error }
+        if error is DecodingError { return fallback == .invalidGuide ? .invalidGuide : .invalidCatalog }
+        if let error = error as? AppError {
+            switch error {
+            case .unauthorized, .invalidCredentials: return .accountUnavailable
+            case .notFound: return .unsupportedAPI
+            case .invalidResponse, .decoding: return fallback == .invalidGuide ? .invalidGuide : .invalidCatalog
+            default: return fallback
+            }
+        }
         guard let error = error as? ServerLiveTVError else { return fallback }
         switch error {
         case .permissionDenied: return .permissionDenied
+        case .subscriptionRequired: return .subscriptionRequired
+        case .guideRequired: return .guideRequired
         case .unsupportedAPI: return .unsupportedAPI
         case .unsupportedPlaybackMode, .noCompatibleStream: return .unsupportedPlaybackMode
         case .tunerUnavailable: return .tunerUnavailable

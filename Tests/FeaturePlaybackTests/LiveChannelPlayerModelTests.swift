@@ -1,4 +1,5 @@
 #if DEBUG && canImport(UIKit)
+import AVFoundation
 import CoreModels
 import CoreNetworking
 import Observation
@@ -6,6 +7,15 @@ import SwiftUI
 import UIKit
 import XCTest
 @testable import FeaturePlayback
+
+private final class LiveChannelObservationChanges: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedCount = 0
+
+    var count: Int { lock.withLock { recordedCount } }
+
+    func record() { lock.withLock { recordedCount += 1 } }
+}
 
 @MainActor
 final class LiveChannelPlayerModelTests: XCTestCase {
@@ -49,6 +59,82 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         XCTAssertNotNil(engine.onLiveSourceReset)
         XCTAssertEqual(model.phase, .playing)
         XCTAssertFalse(model.showsActivityIndicator)
+    }
+
+    func testPlaybackFacetInvalidatesPhaseWithoutInvalidatingTrackMenu() async {
+        let engine = LiveEngineSpy()
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+        await model.start()
+        let phaseChanges = LiveChannelObservationChanges()
+        let trackChanges = LiveChannelObservationChanges()
+        withObservationTracking {
+            _ = model.phase
+        } onChange: {
+            phaseChanges.record()
+        }
+        withObservationTracking {
+            _ = model.audioTracks
+        } onChange: {
+            trackChanges.record()
+        }
+
+        model.togglePlayPause()
+
+        XCTAssertEqual(model.phase, .paused)
+        XCTAssertEqual(phaseChanges.count, 1)
+        XCTAssertEqual(trackChanges.count, 0)
+    }
+
+    func testTrackFacetInvalidatesListsSelectionsAndProgrammeResetWithoutUnrelatedPhaseChanges() async {
+        let engine = LiveEngineSpy()
+        engine.audioTracks = [.init(id: 1, kind: .audio, displayTitle: "English", language: "eng")]
+        engine.currentAudioTrackID = 1
+        let model = LiveChannelPlayerModel(
+            engine: engine, input: .libraryChannel(id: UUID(), authorizationID: "observation-fixture")
+        )
+        defer { model.stop() }
+        await model.start()
+        let originalSubtitles = model.subtitles
+        let phaseChanges = LiveChannelObservationChanges()
+        let trackChanges = LiveChannelObservationChanges()
+        let selectionChanges = LiveChannelObservationChanges()
+        withObservationTracking {
+            _ = model.phase
+        } onChange: {
+            phaseChanges.record()
+        }
+        withObservationTracking {
+            _ = model.audioTracks
+        } onChange: {
+            trackChanges.record()
+        }
+        withObservationTracking {
+            _ = model.selectedAudioID
+        } onChange: {
+            selectionChanges.record()
+        }
+        let french = MediaTrack(id: 2, kind: .audio, displayTitle: "French", language: "fra")
+        engine.audioTracks.append(french)
+        engine.onTracksChanged?()
+        model.selectAudio(french)
+
+        XCTAssertEqual(trackChanges.count, 1)
+        XCTAssertEqual(selectionChanges.count, 1)
+        XCTAssertEqual(model.selectedAudioID, 2)
+        XCTAssertEqual(phaseChanges.count, 0)
+        let resetChanges = LiveChannelObservationChanges()
+        withObservationTracking {
+            _ = model.audioTracks
+            _ = model.selectedAudioID
+        } onChange: {
+            resetChanges.record()
+        }
+        engine.onProgrammeChanged?()
+        XCTAssertEqual(resetChanges.count, 1)
+        XCTAssertTrue(model.audioTracks.isEmpty)
+        XCTAssertNil(model.selectedAudioID)
+        XCTAssertTrue(model.subtitles === originalSubtitles)
     }
 
     func testLiveSessionStartsAtFirstFrameAndReportsStateAndHeartbeat() async {
@@ -1146,7 +1232,7 @@ private struct LiveFullscreenHarness: View {
 #endif
 
 @MainActor
-private final class LiveEngineSpy: LiveChannelEngine {
+final class LiveEngineSpy: LiveChannelEngine {
     let outputView = UIView()
     var liveSnapshot = LiveChannelEngineSnapshot(
         phase: .playing, firstFrameReady: true, position: 100,
@@ -1160,6 +1246,15 @@ private final class LiveEngineSpy: LiveChannelEngine {
     var furthestObservedPosition: TimeInterval { 0 }
     var audioTracks: [MediaTrack] = []
     var subtitleTracks: [MediaTrack] = []
+    var currentAudioTrackID: Int?
+    var selectedSubtitleID: Int?
+    var continuesPlaybackInBackground = false
+    var externalPlaybackRouteName: String?
+    var onPresentationLayerChanged: (() -> Void)?
+    var nativeSubtitlesActive = false
+    func pictureInPicturePlayerLayer() -> AVPlayerLayer? { nil }
+    func setPictureInPictureActive(_ active: Bool) { continuesPlaybackInBackground = active }
+    func setNativeSubtitlesActive(_ active: Bool) { nativeSubtitlesActive = active }
     var onProgress: (@MainActor () -> Void)?
     var onFailure: (@MainActor (AppError) -> Void)?
     var onEnded: (@MainActor () -> Void)?
@@ -1168,8 +1263,13 @@ private final class LiveEngineSpy: LiveChannelEngine {
     var onSubtitleCues: (@MainActor ([SubtitleCue]) -> Void)?
     var onSecondarySubtitleCues: (@MainActor ([SubtitleCue]) -> Void)?
     var onLiveSourceReset: (@MainActor () -> Void)?
+    var onProgrammeChanged: (@MainActor () -> Void)?
+    var recoverableProgrammeIssue: LibraryChannelError?
     var onLoad: (@MainActor () async -> Void)?
     var onGoLive: (@MainActor () -> Void)?
+    var loadedInputs: [LiveChannelInput] = []
+    var inputLoadError: Error?
+    var watching = false
     var liveLoads = 0
     var cancelledLoads: [Bool] = []
     var loadedURLs: [URL] = []
@@ -1183,6 +1283,24 @@ private final class LiveEngineSpy: LiveChannelEngine {
     var stopCount = 0
     var goLiveCount = 0
     var genericSeekCount = 0
+    var outputPolicy = LiveChannelOutputPolicy()
+    var onOutputPolicy: (@MainActor (LiveChannelOutputPolicy) -> Void)?
+    var supportsConcurrentPlayback: Bool { true }
+
+    func configureLiveOutput(_ policy: LiveChannelOutputPolicy) {
+        outputPolicy = policy
+        onOutputPolicy?(policy)
+    }
+
+    func setWatching(_ isWatching: Bool) { watching = isWatching }
+
+    func loadChannel(_ input: LiveChannelInput) async throws {
+        loadedInputs.append(input)
+        if let inputLoadError { throw inputLoadError }
+        if case .stream(let url, let headers) = input {
+            await loadLive(url: url, httpHeaders: headers)
+        }
+    }
 
     func loadLive(url: URL, httpHeaders: [String: String]) async {
         liveLoads += 1
@@ -1220,8 +1338,8 @@ private final class LiveEngineSpy: LiveChannelEngine {
         onGoLive?()
         liveSnapshot.behindLiveSeconds = 0
     }
-    func selectAudioTrack(_ track: MediaTrack?) {}
-    func selectSubtitleTrack(_ track: MediaTrack?) {}
+    func selectAudioTrack(_ track: MediaTrack?) { currentAudioTrackID = track?.id }
+    func selectSubtitleTrack(_ track: MediaTrack?) { selectedSubtitleID = track?.id }
     func makeVideoOutputView() -> UIView { outputView }
 }
 #endif

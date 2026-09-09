@@ -31,7 +31,11 @@ struct SourceOnboardingFixture: View {
                     LiveTVSourcesView(store: sources)
                 }
             } else {
-                LiveTVPrototypeView(sourceStore: sources) { _ in
+                LiveTVPrototypeView(
+                    sourceStore: sources, profileID: profiles.activeProfileID,
+                    preferencesNamespace: profiles.activeNamespace,
+                    sourceApprovalContext: { [profiles] in LiveTVSourceApprovalContext(profiles: profiles) }
+                ) { _ in
                     Text("Unexpected playback")
                         .accessibilityIdentifier("fixture-unexpected-playback")
                 }
@@ -49,7 +53,7 @@ struct SourceOnboardingFixture: View {
     }
 }
 
-private struct SourceSmokeProfiles: ProfilePersisting {
+struct SourceSmokeProfiles: ProfilePersisting {
     private let profile = Profile(id: "source-smoke", name: "Source smoke")
     func loadProfiles() -> [Profile] { [profile] }
     func saveProfiles(_ profiles: [Profile]) {}
@@ -62,14 +66,16 @@ private struct SourceSmokeProfiles: ProfilePersisting {
     func migrateLegacyIfNeeded(defaultName: String, defaultActiveAccountIDs: [String]) -> [Profile] { [profile] }
 }
 
-private final class SourceSmokeStore: LiveTVSourcesStoring, @unchecked Sendable {
+final class SourceSmokeStore: LiveTVSourcesStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var configuration = LiveTVSourcesConfiguration.empty
     private var writes = 0
 
-    init() {
-        if ProcessInfo.processInfo.arguments.contains("--configured-sources") {
-            configuration = LiveTVSourcesConfiguration(playlists: [
+    init(configuration: LiveTVSourcesConfiguration? = nil) {
+        if let configuration {
+            self.configuration = configuration
+        } else if ProcessInfo.processInfo.arguments.contains("--configured-sources") {
+            self.configuration = LiveTVSourcesConfiguration(playlists: [
                 LiveTVPlaylistSource(
                     id: "fixture", name: "Fixture IPTV",
                     playlistURL: URL(string: "https://example.invalid/fixture.m3u")!
@@ -95,7 +101,7 @@ private struct SourceSmokeViewSettings: LiveTVViewSettingsStoring {
     func save(_ settings: LiveTVViewSettings) {}
 }
 
-private struct SourceSmokePreferences: LiveTVPreferencesStoring {
+struct SourceSmokePreferences: LiveTVPreferencesStoring {
     func load() throws -> LiveTVPreferences { .empty }
     func save(_ preferences: LiveTVPreferences) throws {}
 }

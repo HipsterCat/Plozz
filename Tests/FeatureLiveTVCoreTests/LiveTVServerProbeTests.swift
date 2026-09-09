@@ -40,6 +40,28 @@ final class LiveTVServerProbeTests: XCTestCase {
         XCTAssertFalse(model.canAdd)
     }
 
+    func testSubscriptionRequiredIsNotPresentedAsAddableOrUnconfigured() async throws {
+        let provider = ProbeTestProvider(result: .init(status: .subscriptionRequired))
+        let context = ProbeTestContext(provider: provider)
+        let model = LiveTVServerProbeModel(resolver: context.resolver)
+        model.beginCheck(context.choice)
+        await model.perform(try XCTUnwrap(model.pendingRequest))
+        XCTAssertEqual(model.availability?.status, .subscriptionRequired)
+        XCTAssertFalse(model.canAdd)
+    }
+
+    func testProviderKindAndEmptyAuthorizationCannotApproveAnotherIdentity() async throws {
+        let provider = ProbeTestProvider(result: .init(status: .available, channelCount: 4))
+        let context = ProbeTestContext(provider: provider)
+        let model = LiveTVServerProbeModel { id in
+            .init(accountID: id, authorizationID: "", kind: .plex, provider: provider)
+        }
+        model.beginCheck(context.choice)
+        await model.perform(try XCTUnwrap(model.pendingRequest))
+        XCTAssertEqual(model.failure, .accountUnavailable)
+        XCTAssertFalse(model.canAdd)
+    }
+
     func testRevokedAccountCannotPublishLateAvailability() async throws {
         let provider = ProbeTestProvider()
         let context = ProbeTestContext(provider: provider)
