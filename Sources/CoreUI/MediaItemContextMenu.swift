@@ -116,29 +116,52 @@ public extension View {
 
 // MARK: - The menu
 
-public struct SeasonWatchStateMenuContent: View {
+/// Short Select chooses the season; press-and-hold opens its watch-state menu.
+public struct SeasonWatchStateMenu<MenuLabel: View>: View {
     private let season: MediaItem
+    private let action: () -> Void
+    private let label: MenuLabel
     @Environment(\.mediaItemActionHandler) private var handler
 
-    public init(season: MediaItem) {
+    public init(
+        for season: MediaItem,
+        action: @escaping () -> Void,
+        @ViewBuilder label: () -> MenuLabel
+    ) {
         self.season = season
+        self.action = action
+        self.label = label()
     }
 
     public var body: some View {
+        let handler = handler
         let actions = MediaItemActionCatalog.seasonWatchActions(
             for: season,
             availableActions: handler?.actions(for: season, context: .none) ?? []
         )
-        ForEach(actions) { action in
-            Button {
-                handler?.perform(action, on: season, context: .none)
-            } label: {
-                if action == .markWatched {
-                    Label("Mark Season Watched", systemImage: action.systemImage)
-                } else {
-                    Label("Mark Season Unwatched", systemImage: action.systemImage)
+        if actions.isEmpty {
+            Button(action: action) { label }
+        } else {
+            Menu {
+                ForEach(actions) { menuAction in
+                    Button {
+                        handler?.perform(menuAction, on: season, context: .none)
+                    } label: {
+                        if menuAction == .markWatched {
+                            Label("Mark Season Watched", systemImage: menuAction.systemImage)
+                        } else {
+                            Label("Mark Season Unwatched", systemImage: menuAction.systemImage)
+                        }
+                    }
                 }
+            } label: {
+                label
+            } primaryAction: {
+                action()
             }
+            #if os(tvOS)
+            .menuStyle(.button)
+            #endif
         }
     }
 }

@@ -1026,7 +1026,7 @@ struct SeriesDetailView: View {
         // never momentarily unfocusable during initial load.
         let activeID = selectedSeasonID ?? seasons.first?.id
         let isFocusable = seasonBarEngaged || season.id == activeID
-        return Button {
+        return SeasonWatchStateMenu(for: season) {
             select(season)
         } label: {
             Text(season.title)
@@ -1034,9 +1034,6 @@ struct SeriesDetailView: View {
                 .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(PlozzSeasonTabStyle(isSelected: isSelected))
-        .contextMenu {
-            SeasonWatchStateMenuContent(season: season)
-        }
         // No system focus ring — the pill + scale is the focus treatment.
         .focusEffectDisabled()
         .focused($focusedSeasonID, equals: season.id)
