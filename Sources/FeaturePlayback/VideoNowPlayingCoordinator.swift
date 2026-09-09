@@ -31,7 +31,9 @@ protocol VideoNowPlayingHost: AnyObject {
 /// either platform's overlay. Artwork and clock tasks never retain the player.
 @MainActor
 final class VideoNowPlayingCoordinator {
-    typealias ArtworkLoader = @MainActor ([ArtworkReference]) async -> MPMediaItemArtwork?
+    typealias ArtworkLoader = @MainActor (
+        MediaItem, @escaping @MainActor (MPMediaItemArtwork) -> Void
+    ) async -> Void
 
     private weak var host: (any VideoNowPlayingHost)?
     private let publisher: any NowPlayingPublishing
@@ -41,7 +43,7 @@ final class VideoNowPlayingCoordinator {
     private var artworkTask: Task<Void, Never>?
     private var artworkGeneration = UUID()
     private var artwork: MPMediaItemArtwork?
-    private var references: [ArtworkReference] = []
+    private var artworkIsComplete = false
     private var item: MediaItem?
     private var title = ""
     private var subtitle = ""
@@ -68,7 +70,7 @@ final class VideoNowPlayingCoordinator {
         startPosition = position.isFinite ? max(0, position) : 0
         if changedItem {
             artwork = nil
-            references = Self.artworkReferences(for: item)
+            artworkIsComplete = false
             cancelArtwork()
         }
         // A fallback may finish loading after another player took ownership.
@@ -79,7 +81,7 @@ final class VideoNowPlayingCoordinator {
     }
 
     func activate() {
-        guard item != nil else { return }
+        guard let item else { return }
         if !publisher.isActive {
             publisher.activate(
                 onCommand: { [weak self] in self?.handle($0) },
@@ -87,17 +89,19 @@ final class VideoNowPlayingCoordinator {
             )
         }
         refresh()
-        if artwork == nil, artworkTask == nil, !references.isEmpty {
+        if !artworkIsComplete, artworkTask == nil {
             let generation = artworkGeneration
-            let references = references
             let loader = artworkLoader
             artworkTask = Task { [weak self] in
-                let image = await loader(references)
-                guard !Task.isCancelled, let self,
-                      self.artworkGeneration == generation, self.publisher.isActive else { return }
-                self.artwork = image
+                await loader(item) { [weak self] image in
+                    guard !Task.isCancelled, let self,
+                          self.artworkGeneration == generation, self.publisher.isActive else { return }
+                    self.artwork = image
+                    self.refresh()
+                }
+                guard let self, self.artworkGeneration == generation else { return }
+                self.artworkIsComplete = self.artwork != nil
                 self.artworkTask = nil
-                self.refresh()
             }
         }
         if startsClock, clockTask == nil {
@@ -153,6 +157,7 @@ final class VideoNowPlayingCoordinator {
         clockTask = nil
         cancelArtwork()
         artwork = nil
+        artworkIsComplete = false
         item = nil
         publisher.invalidate()
     }
@@ -211,22 +216,14 @@ final class VideoNowPlayingCoordinator {
     }
 
     static func artworkReferences(for item: MediaItem) -> [ArtworkReference] {
-        if item.kind == .episode { return item.seriesArtworkReferences() }
-        let references = item.artworkReferences(for: .detailBackdrop) + item.artworkReferences(for: .poster)
-        var seen = Set<ArtworkReference>()
-        return references.filter { seen.insert($0).inserted }
+        NowPlayingVideoArtwork.references(for: item)
     }
 
-    private static func loadArtwork(_ references: [ArtworkReference]) async -> MPMediaItemArtwork? {
-        #if canImport(UIKit)
-        for reference in references {
-            guard !Task.isCancelled else { return nil }
-            if let image = await ArtworkImageCache.shared.image(for: reference, variant: .landscapeCard) {
-                return NowPlayingSession.artwork(from: image)
-            }
-        }
-        #endif
-        return nil
+    private static func loadArtwork(
+        _ item: MediaItem,
+        onUpdate: @escaping @MainActor (MPMediaItemArtwork) -> Void
+    ) async {
+        await NowPlayingVideoArtwork.load(for: item, onUpdate: onUpdate)
     }
 
     deinit {

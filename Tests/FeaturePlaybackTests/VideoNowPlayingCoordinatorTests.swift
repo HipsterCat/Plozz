@@ -1,5 +1,6 @@
 import AVFoundation
 import MediaPlayer
+import UIKit
 import CoreModels
 import CoreUI
 import XCTest
@@ -147,13 +148,13 @@ final class VideoNowPlayingCoordinatorTests: XCTestCase {
         var completion: CheckedContinuation<MPMediaItemArtwork?, Never>?
         let sut = VideoNowPlayingCoordinator(
             host: host, publisher: publisher, startsClock: false,
-            artworkLoader: { _ in
+            artworkLoader: { _, onUpdate in
                 let result = await withCheckedContinuation { continuation in
                     completion = continuation
                     began.fulfill()
                 }
+                if let result { onUpdate(result) }
                 finished.fulfill()
-                return result
             }
         )
         let item = MediaItem(id: "movie", title: "Movie", kind: .movie,
@@ -161,10 +162,75 @@ final class VideoNowPlayingCoordinatorTests: XCTestCase {
         sut.begin(item: item, title: "Movie", subtitle: "", position: 0)
         await fulfillment(of: [began], timeout: 1)
         sut.end()
-        completion?.resume(returning: nil)
+        completion?.resume(returning: NowPlayingSession.artwork(from: UIImage(systemName: "film")!))
         await fulfillment(of: [finished], timeout: 1)
         XCTAssertFalse(publisher.isActive)
         XCTAssertTrue(publisher.info.isEmpty)
+    }
+
+    func testProgressiveArtworkCannotOverwriteAnotherItemOrOwner() async throws {
+        let host = NowPlayingHostSpy()
+        let publisher = VideoNowPlayingPublisherSpy()
+        let firstStarted = expectation(description: "First artwork loader")
+        let nextStarted = expectation(description: "Next artwork loader")
+        var callbacks: [String: @MainActor (MPMediaItemArtwork) -> Void] = [:]
+        let sut = VideoNowPlayingCoordinator(
+            host: host, publisher: publisher, startsClock: false,
+            artworkLoader: { item, onUpdate in
+                callbacks[item.id] = onUpdate
+                (item.id == "movie" ? firstStarted : nextStarted).fulfill()
+            }
+        )
+        sut.begin(item: movie(), title: "Movie", subtitle: "", position: 0)
+        await fulfillment(of: [firstStarted], timeout: 1)
+        let plain = NowPlayingSession.artwork(from: UIImage(systemName: "film")!)
+        callbacks["movie"]?(plain)
+        XCTAssertTrue(publisher.info[MPMediaItemPropertyArtwork] as? MPMediaItemArtwork === plain)
+
+        sut.begin(item: MediaItem(id: "next", title: "Next", kind: .movie),
+                  title: "Next", subtitle: "", position: 0)
+        await fulfillment(of: [nextStarted], timeout: 1)
+        let next = NowPlayingSession.artwork(from: UIImage(systemName: "play")!)
+        callbacks["next"]?(next)
+        callbacks["movie"]?(plain)
+        XCTAssertTrue(publisher.info[MPMediaItemPropertyArtwork] as? MPMediaItemArtwork === next)
+        publisher.resign()
+        callbacks["next"]?(next)
+        XCTAssertTrue(publisher.info.isEmpty)
+        sut.end()
+    }
+
+    func testResumeRetriesLogoLoadCancelledAfterPlainArtwork() async {
+        let host = NowPlayingHostSpy()
+        let publisher = VideoNowPlayingPublisherSpy()
+        let started = expectation(description: "Initial artwork")
+        let retried = expectation(description: "Artwork retried after ownership returns")
+        var completion: CheckedContinuation<Void, Never>?
+        var attempts = 0
+        let plain = NowPlayingSession.artwork(from: UIImage(systemName: "film")!)
+        let sut = VideoNowPlayingCoordinator(
+            host: host, publisher: publisher, startsClock: false,
+            artworkLoader: { _, onUpdate in
+                attempts += 1
+                onUpdate(plain)
+                if attempts == 1 {
+                    await withCheckedContinuation {
+                        completion = $0
+                        started.fulfill()
+                    }
+                } else {
+                    retried.fulfill()
+                }
+            }
+        )
+        sut.begin(item: movie(), title: "Movie", subtitle: "", position: 0)
+        await fulfillment(of: [started], timeout: 1)
+        publisher.resign()
+        completion?.resume()
+        sut.activate()
+        await fulfillment(of: [retried], timeout: 1)
+        XCTAssertEqual(attempts, 2)
+        sut.end()
     }
 
     private func movie() -> MediaItem {
@@ -175,7 +241,7 @@ final class VideoNowPlayingCoordinatorTests: XCTestCase {
         _ host: NowPlayingHostSpy, _ publisher: VideoNowPlayingPublisherSpy
     ) -> VideoNowPlayingCoordinator {
         VideoNowPlayingCoordinator(host: host, publisher: publisher, startsClock: false,
-                                   artworkLoader: { _ in nil })
+                                   artworkLoader: { _, _ in })
     }
 }
 
