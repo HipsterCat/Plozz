@@ -449,6 +449,10 @@ public final class AppState {
             applier: applier,
             onPersistenceFailure: {
                 PlozzLog.app.error("Durable watch outbox write failed")
+            },
+            onServerStateApplied: { mutation in
+                guard let refresh = MediaItemMutation(confirmedWatchMutation: mutation) else { return }
+                Task { @MainActor in refresh.post() }
             }
         )
     }
@@ -509,11 +513,9 @@ public final class AppState {
         Task { await reconciler.beginLiveSession(accountID: accountID, itemID: itemID) }
     }
 
-    /// Ends the live session for `(accountID, itemID)` and enqueues the optional
-    /// final convergence `mutation`, **in that order**, so the just-played server
-    /// is no longer deferred and its final resume/played write goes out. Sequenced
-    /// in a single task so the end always precedes the enqueue's drain. `accountID`
-    /// is optional so a barely-started/untargeted stop still flushes deferred work.
+    /// Queues the final convergence mutation before ending the live session, so
+    /// an old progress checkpoint cannot drain over the just-finished episode.
+    /// `accountID` is optional so a barely-started/untargeted stop still flushes deferred work.
     public func finishLiveWatchSession(accountID: String?, itemID: String, watchedPercent: Double, mutation: WatchMutation?, item: MediaItem? = nil) {
         let reconciler = watchReconciler
         // (a) Index state captured at the moment of stop — the value the fan-out
@@ -522,13 +524,7 @@ public final class AppState {
         FanoutDiagnostics.emit(FanoutDiagnostics.indexStateLine(identityIndex.identitySnapshotStore.current, phase: "stop-index"))
         publishOptimisticWatchState(itemID: itemID, mutation: mutation, watchedPercent: watchedPercent, item: item)
         Task {
-            if let accountID {
-                await reconciler.endLiveSession(accountID: accountID, itemID: itemID)
-            }
-            if let mutation {
-                await reconciler.enqueue(mutation)
-                await reconciler.drain()
-            }
+            await reconciler.finishLiveSession(accountID: accountID, itemID: itemID, mutation: mutation)
         }
     }
 

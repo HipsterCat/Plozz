@@ -22,6 +22,8 @@ public protocol WatchMutationApplying: Sendable {
     /// for the server's recency stamp so an offline-drained write doesn't falsely
     /// float a stale title to the top of Continue Watching.
     func setResumePosition(_ seconds: TimeInterval, on target: WatchMutationTarget, capturedAt: Date) async throws
+    /// Explicit user dismissal, distinct from clearing a completed item's resume.
+    func removeFromContinueWatching(on target: WatchMutationTarget, capturedAt: Date) async throws
     /// Mirrors a finished watch to Trakt.
     func scrobbleTrakt(_ intent: TraktScrobbleIntent) async throws
     /// Mirrors a finished watch to Simkl.
@@ -36,6 +38,10 @@ public protocol WatchMutationApplying: Sendable {
 }
 
 public extension WatchMutationApplying {
+    func removeFromContinueWatching(on target: WatchMutationTarget, capturedAt: Date) async throws {
+        try await setResumePosition(0, on: target, capturedAt: capturedAt)
+    }
+
     func setPlayed(_ played: Bool, on target: WatchMutationTarget, capturedAt: Date) async throws {
         try await setPlayed(played, on: target)
     }
@@ -73,6 +79,7 @@ public actor WatchStateReconciler {
     /// record can never override a genuine later play made on another client.
     private let resumeRecencyTTL: TimeInterval
     private let onPersistenceFailure: @Sendable () -> Void
+    private let onServerStateApplied: @Sendable (WatchMutation) -> Void
 
     private var state: WatchOutboxState
     private var isDraining = false
@@ -96,7 +103,8 @@ public actor WatchStateReconciler {
         traktTTL: TimeInterval = 48 * 3600,
         clockTTL: TimeInterval = 30 * 24 * 3600,
         resumeRecencyTTL: TimeInterval = 30 * 60,
-        onPersistenceFailure: @escaping @Sendable () -> Void = {}
+        onPersistenceFailure: @escaping @Sendable () -> Void = {},
+        onServerStateApplied: @escaping @Sendable (WatchMutation) -> Void = { _ in }
     ) {
         self.store = store
         self.applier = applier
@@ -105,6 +113,7 @@ public actor WatchStateReconciler {
         self.clockTTL = clockTTL
         self.resumeRecencyTTL = resumeRecencyTTL
         self.onPersistenceFailure = onPersistenceFailure
+        self.onServerStateApplied = onServerStateApplied
         self.state = store.load()
     }
 
@@ -129,6 +138,16 @@ public actor WatchStateReconciler {
     /// that were deferred *because* it was playing now converge. Idempotent.
     public func endLiveSession(accountID: String, itemID: String) async {
         liveSessions.remove(WatchMutationTarget(accountID: accountID, itemID: itemID).id)
+        await drain()
+    }
+
+    /// Replace queued progress with the final stop before lifting the live guard.
+    /// Draining first would write the old checkpoint back over a finished episode.
+    public func finishLiveSession(accountID: String?, itemID: String, mutation: WatchMutation?) async {
+        if let mutation { enqueue(mutation) }
+        if let accountID {
+            liveSessions.remove(WatchMutationTarget(accountID: accountID, itemID: itemID).id)
+        }
         await drain()
     }
 
@@ -362,6 +381,7 @@ public actor WatchStateReconciler {
         ))
 
         var remaining: [WatchMutationTarget] = []
+        var applied: [WatchMutationTarget] = []
         for target in mutation.targets {
             // Never write to a target that is the live in-app playback session:
             // defer it (keep it queued) so a mid-play drain can't disturb the
@@ -403,7 +423,11 @@ public actor WatchStateReconciler {
                         }
                     }
                 } else if mutation.clearResume {
-                    try await applier.setResumePosition(0, on: target, capturedAt: mutation.capturedAt)
+                    if mutation.played == nil {
+                        try await applier.removeFromContinueWatching(on: target, capturedAt: mutation.capturedAt)
+                    } else {
+                        try await applier.setResumePosition(0, on: target, capturedAt: mutation.capturedAt)
+                    }
                     outcome += "clearResume=OK"
                     // The in-progress position is gone (a finish clears resume
                     // everywhere), so drop any recency record guarding it.
@@ -412,6 +436,9 @@ public actor WatchStateReconciler {
                 FanoutDiagnostics.emit(FanoutDiagnostics.drainTargetLine(
                     target,
                     outcome: outcome.isEmpty ? "noop(no state to write)" : outcome.trimmingCharacters(in: .whitespaces)))
+                if mutation.played != nil || mutation.resumePosition != nil || mutation.clearResume {
+                    applied.append(target)
+                }
             } catch {
                 remaining.append(target)
                 FanoutDiagnostics.emit(FanoutDiagnostics.drainTargetLine(
@@ -420,6 +447,17 @@ public actor WatchStateReconciler {
             }
         }
         mutation.targets = remaining
+
+        // The optimistic stop notification precedes these writes. Tell Home
+        // when the feed can actually advance, before any slow tracker mirrors.
+        // Superseded writes must not replay older presentation state.
+        if !applied.isEmpty,
+           mutation.capturedAt >= (state.clock[mutation.coalesceKey] ?? .distantPast) {
+            var confirmed = mutation
+            confirmed.targets = applied
+            confirmed.optimisticTargets = applied
+            onServerStateApplied(confirmed)
+        }
 
         if mutation.traktPending, let intent = mutation.trakt {
             let key = mutation.traktIdempotencyKey(dayBucket: WatchMutation.dayBucket(for: mutation.capturedAt))

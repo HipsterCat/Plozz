@@ -1186,13 +1186,6 @@ private struct PlozziOSWatchlistLandingView: View {
         ) { _ in
             watchlistIntentRevision &+= 1
         }
-        .onReceive(
-            NotificationCenter.default.publisher(for: .mediaItemDidMutate)
-        ) { note in
-            if let mutation = MediaItemMutation.from(note) {
-                viewModel.applyWatchedState(mutation)
-            }
-        }
         .navigationTitle("Watchlist")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

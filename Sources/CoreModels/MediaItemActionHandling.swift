@@ -211,6 +211,9 @@ public struct MediaItemMutation: Sendable, Equatable {
     /// along costs nothing and removes the question entirely. `nil` from senders
     /// that genuinely have only ids, such as a context-menu toggle.
     public let item: MediaItem?
+    /// A completed episode's server write landed. Refresh its Next Up feed
+    /// without replaying an old optimistic watched-state change.
+    public let refreshContinueWatching: Bool
 
     public init(
         itemIDs: Set<String>,
@@ -220,7 +223,8 @@ public struct MediaItemMutation: Sendable, Equatable {
         favorite: Bool? = nil,
         resumePosition: TimeInterval? = nil,
         playedPercentage: Double? = nil,
-        item: MediaItem? = nil
+        item: MediaItem? = nil,
+        refreshContinueWatching: Bool = false
     ) {
         self.itemIDs = itemIDs
         self.scopedItemIDs = scopedItemIDs
@@ -230,6 +234,7 @@ public struct MediaItemMutation: Sendable, Equatable {
         self.resumePosition = resumePosition
         self.playedPercentage = playedPercentage
         self.item = item
+        self.refreshContinueWatching = refreshContinueWatching
     }
 
     /// Reconstructs the optimistic UI portion of a durable outbox mutation. This
@@ -251,6 +256,17 @@ public struct MediaItemMutation: Sendable, Equatable {
         )
     }
 
+    public init?(confirmedWatchMutation: WatchMutation) {
+        guard confirmedWatchMutation.kind == .episode,
+              confirmedWatchMutation.played == true,
+              !confirmedWatchMutation.targets.isEmpty else { return nil }
+        self.init(
+            itemIDs: Set(confirmedWatchMutation.targets.map(\.itemID)),
+            scopedItemIDs: Set(confirmedWatchMutation.targets.map(\.id)),
+            refreshContinueWatching: true
+        )
+    }
+
     private enum Key {
         static let itemIDs = "itemIDs"
         static let scopedItemIDs = "scopedItemIDs"
@@ -260,6 +276,7 @@ public struct MediaItemMutation: Sendable, Equatable {
         static let resumePosition = "resumePosition"
         static let playedPercentage = "playedPercentage"
         static let item = "item"
+        static let refreshContinueWatching = "refreshContinueWatching"
     }
 
     /// Account-scoped key for one physical copy, matching ``MediaSourceRef/id``.
@@ -364,6 +381,7 @@ public struct MediaItemMutation: Sendable, Equatable {
         // observers are all in-process, and a round trip through Data would cost a
         // needless encode on the main thread at the moment playback stops.
         if let item { userInfo[Key.item] = item }
+        if refreshContinueWatching { userInfo[Key.refreshContinueWatching] = true }
         NotificationCenter.default.post(
             name: .mediaItemDidMutate,
             object: nil,
@@ -380,7 +398,8 @@ public struct MediaItemMutation: Sendable, Equatable {
         let favorite = notification.userInfo?[Key.favorite] as? Bool
         let resumePosition = notification.userInfo?[Key.resumePosition] as? TimeInterval
         let playedPercentage = notification.userInfo?[Key.playedPercentage] as? Double
-        guard played != nil || favorite != nil || resumePosition != nil || playedPercentage != nil else {
+        let refreshContinueWatching = notification.userInfo?[Key.refreshContinueWatching] as? Bool ?? false
+        guard played != nil || favorite != nil || resumePosition != nil || playedPercentage != nil || refreshContinueWatching else {
             return nil
         }
         return MediaItemMutation(
@@ -391,7 +410,8 @@ public struct MediaItemMutation: Sendable, Equatable {
             favorite: favorite,
             resumePosition: resumePosition,
             playedPercentage: playedPercentage,
-            item: notification.userInfo?[Key.item] as? MediaItem
+            item: notification.userInfo?[Key.item] as? MediaItem,
+            refreshContinueWatching: refreshContinueWatching
         )
     }
 }
