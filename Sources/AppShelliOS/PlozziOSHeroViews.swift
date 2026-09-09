@@ -2957,36 +2957,39 @@ private struct PlozziOSDetailSummary: View {
             focused: focused, root: root, override: technicalBadgesOverride
         )
         let description = HeroContentPolicy.detailDescription(focused: focused, root: root)
-        if description != nil || certificate != nil || !facts.isEmpty
-            || !genres.isEmpty || !ratings.isEmpty || !badges.isEmpty {
-            VStack(alignment: .center, spacing: 20) {
+        let hasContext = certificate != nil || !facts.isEmpty || !genres.isEmpty
+        let hasMediaGroups = !ratings.isEmpty || !badges.isEmpty
+        if description != nil || hasContext || hasMediaGroups {
+            VStack(alignment: .leading, spacing: 16) {
                 PlozziOSDetailContext(
                     certificate: certificate,
                     facts: facts,
                     genres: genres
                 )
-
                 if let description {
-                    Text(description.overviewMarkdownWithLegibleLinks(
-                        textColor: palette.primaryText,
-                        accent: palette.accent
-                    ))
-                    .font(.body)
-                    .foregroundStyle(palette.primaryText.opacity(0.92))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: 400)
+                    if hasContext { PlozzDivider() }
+                    PlozziOSDetailInfoGroup(title: Text("Overview")) {
+                        Text(description.overviewMarkdownWithLegibleLinks(
+                            textColor: palette.primaryText,
+                            accent: palette.accent
+                        ))
+                        .font(.body)
+                        .foregroundStyle(palette.primaryText.opacity(0.92))
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                AdaptiveMediaMetadataRow(
-                    facts: [],
-                    ratings: ratings,
-                    badges: badges,
-                    centered: true
-                )
+                if hasMediaGroups {
+                    if hasContext || description != nil { PlozzDivider() }
+                    PlozziOSDetailMediaGroups(ratings: ratings, badges: badges)
+                }
             }
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: 500, alignment: .center)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
+            .plozzSurface(.raised, cornerRadius: 24)
+            .frame(maxWidth: 500)
             .padding(.horizontal, PlozziOSPageLayout.horizontalInset(for: .compactPortrait))
-            .padding(.top, 20)
+            .padding(.top, 12)
             .padding(.bottom, 24)
             .frame(maxWidth: .infinity, alignment: .center)
             .background(palette.backgroundBase)
@@ -3002,7 +3005,7 @@ private struct PlozziOSDetailContext: View {
 
     var body: some View {
         if certificate != nil || !facts.isEmpty || !genres.isEmpty {
-            VStack(alignment: .center, spacing: 6) {
+            VStack(alignment: .leading, spacing: 6) {
                 if certificate != nil || !facts.isEmpty {
                     HStack(spacing: 10) {
                         if let certificate {
@@ -3021,6 +3024,90 @@ private struct PlozziOSDetailContext: View {
                         .font(.subheadline)
                         .foregroundStyle(palette.primaryText.opacity(0.8))
                         .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+}
+
+private struct PlozziOSDetailInfoGroup<Content: View>: View {
+    @Environment(\.themePalette) private var palette
+    let title: Text
+    let content: Content
+
+    init(title: Text, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            title
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(palette.primaryText.opacity(0.75))
+                .accessibilityAddTraits(.isHeader)
+            content
+        }
+    }
+}
+
+private struct PlozziOSDetailMediaGroups: View {
+    let ratings: [ExternalRating]
+    let badges: [MediaBadge]
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 24) {
+                PlozziOSDetailRatingsGroup(ratings: ratings, wraps: false)
+                PlozziOSDetailFormatsGroup(badges: badges, wraps: false)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+
+            VStack(alignment: .leading, spacing: 16) {
+                PlozziOSDetailRatingsGroup(ratings: ratings, wraps: true)
+                if !ratings.isEmpty && !badges.isEmpty { PlozzDivider() }
+                PlozziOSDetailFormatsGroup(badges: badges, wraps: true)
+            }
+        }
+    }
+}
+
+private struct PlozziOSDetailRatingsGroup: View {
+    let ratings: [ExternalRating]
+    let wraps: Bool
+
+    var body: some View {
+        if !ratings.isEmpty {
+            PlozziOSDetailInfoGroup(title: Text("Ratings")) {
+                if wraps {
+                    WrappingHStackLayout(spacing: 12, lineSpacing: 8, balancesLastRow: true) {
+                        ForEach(ratings) { RatingBadge(rating: $0) }
+                    }
+                } else {
+                    HStack(spacing: 12) {
+                        ForEach(ratings) { RatingBadge(rating: $0) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct PlozziOSDetailFormatsGroup: View {
+    let badges: [MediaBadge]
+    let wraps: Bool
+
+    var body: some View {
+        if !badges.isEmpty {
+            PlozziOSDetailInfoGroup(title: Text("Picture & sound")) {
+                if wraps {
+                    WrappingHStackLayout(spacing: 12, lineSpacing: 8, balancesLastRow: true) {
+                        ForEach(badges) { MetadataMediaBadgeChip(badge: $0) }
+                    }
+                } else {
+                    HStack(spacing: 12) {
+                        ForEach(badges) { MetadataMediaBadgeChip(badge: $0) }
+                    }
                 }
             }
         }
