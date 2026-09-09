@@ -147,9 +147,9 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
     /// `onDeck` keeps offering forever. Reading the hub is therefore what makes
     /// this row agree with Plex rather than merely resemble it.
     ///
-    /// The fallback is not a formality: only newer servers route the `home`
-    /// variant, and a viewer on an older one must still get a row. The plain hub
-    /// is tried next, and `onDeck` last.
+    /// Use the hub's `/items` endpoint, not `/hubs/home/continueWatching`, which
+    /// can omit untouched next episodes. Older servers may not route `/items`;
+    /// the plain hub is tried next, and `onDeck` last.
     public func continueWatching(limit: Int) async throws -> [MediaItem] {
         let (items, endpoint) = try await resumeFeed(limit: limit)
         let seriesDates = try await seriesLastPlayedDatesBestEffort(for: items)
@@ -169,7 +169,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
     /// dismissed titles.
     private func resumeFeed(limit: Int) async throws -> ([PlexMetadata], String) {
         do {
-            return (try await client.continueWatchingHub(limit: limit, homeVariant: true), "/hubs/home/continueWatching")
+            return (try await client.continueWatchingHub(limit: limit, itemsVariant: true), "/hubs/continueWatching/items")
         } catch let cancellation as CancellationError {
             throw cancellation
         } catch AppError.cancelled {
@@ -178,10 +178,10 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
             throw pagingFailure.underlying
         } catch {
             try Task.checkCancellation()
-            PlozzLog.networking.error("Plex home Continue Watching hub unavailable; trying the plain hub")
+            PlozzLog.networking.error("Plex Continue Watching items unavailable; trying the plain hub")
         }
         do {
-            return (try await client.continueWatchingHub(limit: limit, homeVariant: false), "/hubs/continueWatching")
+            return (try await client.continueWatchingHub(limit: limit, itemsVariant: false), "/hubs/continueWatching")
         } catch let cancellation as CancellationError {
             throw cancellation
         } catch AppError.cancelled {

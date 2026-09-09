@@ -206,7 +206,7 @@ final class ContinueWatchingDiagnosticsDiffTests: XCTestCase {
         let line = ContinueWatchingDiagnostics.feedVersusHubLine(
             feed: [row("1", "Kept"), row("2", "Dismissed")],
             hub: [row("1", "Kept")],
-            hubEndpoint: "/hubs/home/continueWatching"
+            hubEndpoint: "/hubs/continueWatching/items"
         )
         XCTAssertTrue(line.contains("feedOnly=1"))
         XCTAssertTrue(line.contains("FEED-ONLY"))
@@ -224,7 +224,7 @@ final class ContinueWatchingDiagnosticsDiffTests: XCTestCase {
         )
         XCTAssertTrue(
             ContinueWatchingDiagnostics
-                .feedVersusHubLine(feed: [dismissed], hub: [], hubEndpoint: "/hubs/home/continueWatching")
+                .feedVersusHubLine(feed: [dismissed], hub: [], hubEndpoint: "/hubs/continueWatching/items")
                 .contains("<<SHOWN-BY-US-BUT-NOT-BY-PLEX")
         )
     }
@@ -233,7 +233,7 @@ final class ContinueWatchingDiagnosticsDiffTests: XCTestCase {
         let line = ContinueWatchingDiagnostics.feedVersusHubLine(
             feed: [row("1", "A"), row("2", "B")],
             hub: [row("2", "B"), row("1", "A")],
-            hubEndpoint: "/hubs/home/continueWatching"
+            hubEndpoint: "/hubs/continueWatching/items"
         )
         XCTAssertTrue(line.contains("feedOnly=0"))
         XCTAssertTrue(line.contains("hubOnly=0"))
@@ -245,7 +245,7 @@ final class ContinueWatchingDiagnosticsDiffTests: XCTestCase {
         let line = ContinueWatchingDiagnostics.feedVersusHubLine(
             feed: [],
             hub: [row("9", "Missing from our row")],
-            hubEndpoint: "/hubs/home/continueWatching"
+            hubEndpoint: "/hubs/continueWatching/items"
         )
         XCTAssertTrue(line.contains("hubOnly=1"))
         XCTAssertTrue(line.contains("<<PLEX-SHOWS-IT-WE-DO-NOT"))

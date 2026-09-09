@@ -52,7 +52,7 @@ final class PlexCompletionVersusDismissalTests: XCTestCase {
 
     func testNextEpisodeWithOldResumeRanksAheadOfOtherShowsAfterSeriesActivity() async throws {
         let http = PlexCompletionHTTPClient()
-        await http.respond(to: "/hubs/home/continueWatching", json: """
+        await http.respond(to: "/hubs/continueWatching/items", json: """
         {"MediaContainer":{"size":1,"Metadata":[
           {"ratingKey":"e5","type":"episode","title":"Episode 5","index":5,"parentIndex":1,
            "grandparentRatingKey":"900","viewOffset":133500,"lastViewedAt":1650000000}
