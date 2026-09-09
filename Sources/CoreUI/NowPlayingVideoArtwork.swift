@@ -1,4 +1,5 @@
 #if canImport(UIKit) && canImport(MediaPlayer)
+import AVFoundation
 import CoreModels
 import MediaPlayer
 import MetadataKit
@@ -78,33 +79,23 @@ public enum NowPlayingVideoArtwork {
         // ourselves instead of shrinking the logo to survive a crop of wide art.
         let side = min(background.size.width, background.size.height)
         return MPMediaItemArtwork(boundsSize: CGSize(width: side, height: side)) { size in
-            composite(background: background, logo: image, coverage: logo?.coverage ?? 1, size: size)
+            composite(background: background, logo: image, size: size)
         }
     }
 
-    /// Use the Continue Watching picture-band budget, without its chrome.
-    static func logoRect(imageSize: CGSize, coverage: Double, canvas: CGSize) -> CGRect {
-        let box = ContinueWatchingCardShape.logoBox(
-            cardWidth: canvas.width,
-            stage: min(canvas.height, canvas.width * 9 / 16),
-            edgeInset: 0
-        )
-        let fitted = HeroLogoFit.fittedSize(
-            for: imageSize,
-            maxWidth: box.width,
-            maxHeight: box.height,
-            coverage: coverage
-        )
-        return CGRect(
-            x: (canvas.width - fitted.width) / 2,
-            y: (canvas.height - fitted.height) / 2,
-            width: fitted.width,
-            height: fitted.height
+    /// Maximize the prepared ink inside the full canvas, not a hero's equal-area
+    /// budget. Keep this composition at every size: the system can make its tiny
+    /// thumbnail by downsampling the large artwork without another callback.
+    static func logoRect(imageSize: CGSize, canvas: CGSize) -> CGRect {
+        AVMakeRect(
+            aspectRatio: imageSize,
+            insideRect: CGRect(origin: .zero, size: canvas)
+                .insetBy(dx: canvas.width * 0.04, dy: canvas.height * 0.08)
         )
     }
 
     private static func composite(
-        background: UIImage, logo: UIImage?, coverage: Double, size: CGSize
+        background: UIImage, logo: UIImage?, size: CGSize
     ) -> UIImage {
         let format = UIGraphicsImageRendererFormat.preferred()
         format.scale = 1
@@ -124,7 +115,7 @@ public enum NowPlayingVideoArtwork {
                 blur: size.height * 0.022,
                 color: UIColor.black.withAlphaComponent(0.48).cgColor
             )
-            logo.draw(in: logoRect(imageSize: logo.size, coverage: coverage, canvas: size))
+            logo.draw(in: logoRect(imageSize: logo.size, canvas: size))
         }
     }
 }
