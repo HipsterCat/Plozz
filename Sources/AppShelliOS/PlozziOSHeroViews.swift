@@ -2822,31 +2822,11 @@ private struct PlozziOSHeroMetadata: View {
                       !factComponents.isEmpty
                         || !effectiveRatings.isEmpty
                         || !effectiveTechnicalBadges.isEmpty {
-                WrappingHStackLayout(
-                    alignment: style == .compactPortrait ? .center : .leading,
-                    spacing: 12,
-                    lineSpacing: 8
-                ) {
-                    if !factComponents.isEmpty {
-                        // Full strength, matching tvOS: these sit in a row with
-                        // the ratings and capability chips, so a dimmer tier read
-                        // as faded beside them.
-                        Text(factComponents.joined(separator: "  ·  "))
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(palette.primaryText)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                    ForEach(effectiveRatings) { rating in
-                        RatingBadge(rating: rating)
-                    }
-                    ForEach(effectiveTechnicalBadges) { badge in
-                        MetadataMediaBadgeChip(badge: badge)
-                    }
-                }
-                .frame(
-                    maxWidth: .infinity,
-                    alignment: style == .compactPortrait ? .center : .leading
+                AdaptiveMediaMetadataRow(
+                    facts: factComponents,
+                    ratings: effectiveRatings,
+                    badges: effectiveTechnicalBadges,
+                    centered: style == .compactPortrait
                 )
             }
         }
