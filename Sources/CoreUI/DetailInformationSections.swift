@@ -1366,4 +1366,35 @@ struct WatchProviderLogo: Identifiable, Hashable {
     let url: URL
 }
 
+// STEAL: almost correct and at least very clear information layout. still some changes are required later
+
+#if DEBUG
+#Preview("Information sections") {
+    DetailInformationSections(
+        item: MediaItem(
+            id: "preview-paradiso",
+            title: "Cinema Paradiso",
+            kind: .movie,
+            overview: "A filmmaker recalls his childhood, when he fell in love with the movies at his village's theater and formed a deep friendship with the theater's projectionist.",
+            productionYear: 1988,
+            officialRating: "PG",
+            genres: ["Drama", "Romance"],
+            people: [
+                MediaPerson(id: "a1", name: "Philippe Noiret", role: "Alfredo", kind: "Actor"),
+                MediaPerson(id: "a2", name: "Jacques Perrin", kind: "Actor"),
+                MediaPerson(id: "d1", name: "Giuseppe Tornatore", kind: "Director")
+            ],
+            runtime: 124 * 60,
+            ratings: [
+                ExternalRating(source: .rottenTomatoes, value: 90, scale: .percent),
+                ExternalRating(source: .tmdb, value: 8.4, scale: .outOfTen)
+            ]
+        ),
+        horizontalInset: 80
+    )
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
+
 #endif

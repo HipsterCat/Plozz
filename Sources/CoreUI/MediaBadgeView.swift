@@ -497,4 +497,27 @@ public struct DolbyDoubleD: Shape {
     }
 }
 
+// STEAL: yes we also need these and many others badge variants. looks okay
+
+#if DEBUG
+#Preview("Badge row") {
+    MediaBadgeRow(badges: [
+        MediaBadge("PG", style: .rating),
+        MediaBadge("SD", style: .prominent),
+        MediaBadge("SDR", style: .sdr),
+        MediaBadge("Dolby Atmos", style: .dolby)
+    ])
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+
+#Preview("Badge chip") {
+    MediaBadgeChip(badge: MediaBadge("4K", style: .prominent))
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+}
+#endif
+
 #endif

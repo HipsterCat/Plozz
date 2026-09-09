@@ -187,12 +187,37 @@ public struct ReleaseNotesCatalog: Codable, Equatable, Sendable {
     }
 
     public static func load(from bundle: Bundle = .main) throws -> Self {
-        guard let url = bundle.url(forResource: "ReleaseNotes", withExtension: "json") else {
-            throw ReleaseNotesCatalogError.missingResource
+        if let url = bundle.url(forResource: "ReleaseNotes", withExtension: "json") {
+            return try Self(data: Data(contentsOf: url))
         }
 
-        return try Self(data: Data(contentsOf: url))
+        #if DEBUG
+        if let url = devReleaseNotesURL() {
+            return try Self(data: Data(contentsOf: url))
+        }
+        #endif
+
+        throw ReleaseNotesCatalogError.missingResource
     }
+
+    #if DEBUG
+    /// Preview hosts and stale generated projects may not copy the app-owned
+    /// catalog into `Bundle.main`. Fall back to the checked-in source file so
+    /// local runs degrade gracefully instead of trapping.
+    private static func devReleaseNotesURL() -> URL? {
+        if let override = ProcessInfo.processInfo.environment["PLOZZ_RELEASE_NOTES_PATH"] {
+            let url = URL(fileURLWithPath: override)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let candidates = [
+            cwd.appendingPathComponent("App/Resources/ReleaseNotes.json"),
+            cwd.deletingLastPathComponent().appendingPathComponent("App/Resources/ReleaseNotes.json"),
+        ]
+        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+    #endif
 
     public static let empty = Self(schemaVersion: 1, releases: [], validated: ())
 
@@ -411,7 +436,9 @@ public final class ReleaseNotesModel {
                 ) as? String
             )
         } catch {
-            assertionFailure("Invalid bundled release notes: \(error.localizedDescription)")
+            #if DEBUG
+            print("ReleaseNotesModel: unavailable (\(error.localizedDescription))")
+            #endif
             return ReleaseNotesModel(
                 catalog: .empty,
                 currentReleaseID: nil,

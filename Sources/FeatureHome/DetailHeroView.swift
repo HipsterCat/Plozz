@@ -2104,4 +2104,34 @@ private struct SeriesDetailHeroBackdrop: View {
         .animation(.smooth(duration: 0.9), value: receded)
     }
 }
+
+#if DEBUG
+#Preview("Credit line") {
+    DetailHeroCreditLine(
+        label: "Starring",
+        values: ["Philippe Noiret", "Jacques Perrin", "Salvatore Cascio"]
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+    .background(.windowBackground)
+}
+
+#Preview("Facts row") {
+    DetailHeroFactsRow(
+        facts: ["1988", "2h 4m", "Drama", "Romance"],
+        ratings: [
+            ExternalRating(source: .rottenTomatoes, value: 90, scale: .percent),
+            ExternalRating(source: .tmdb, value: 8.4, scale: .outOfTen)
+        ],
+        featureBadges: [
+            MediaBadge("PG", style: .rating),
+            MediaBadge("SD", style: .prominent),
+            MediaBadge("SDR", style: .sdr)
+        ]
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.windowBackground)
+}
+#endif
 #endif

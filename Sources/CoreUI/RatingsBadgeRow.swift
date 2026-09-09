@@ -349,4 +349,26 @@ public struct RatingTile: View {
     }
 }
 
+// STEAL: Great look of compact icon ratings
+
+#if DEBUG
+#Preview("Ratings row") {
+    RatingsBadgeRow(ratings: [
+        ExternalRating(source: .rottenTomatoes, value: 90, scale: .percent),
+        ExternalRating(source: .tmdb, value: 8.4, scale: .outOfTen),
+        ExternalRating(source: .imdb, value: 8.5, scale: .outOfTen)
+    ])
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+
+#Preview("Rating badge") {
+    RatingBadge(rating: ExternalRating(source: .rottenTomatoes, value: 90, scale: .percent))
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+}
+#endif
+
 #endif

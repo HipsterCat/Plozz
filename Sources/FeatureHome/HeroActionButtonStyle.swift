@@ -39,4 +39,29 @@ struct HeroActionButtonStyle: ViewModifier {
         }
     }
 }
+
+// STEAL: Great button choice, lets take it for closer split compare
+
+#if DEBUG
+#Preview("Hero actions") {
+    HStack(spacing: 16) {
+        Button("Play", systemImage: "play.fill") {}
+            .modifier(HeroActionButtonStyle(prominent: true))
+        Button("Trailer", systemImage: "film") {}
+            .modifier(HeroActionButtonStyle(prominent: false))
+        Button("Watchlist", systemImage: "plus") {}
+            .labelStyle(.iconOnly)
+            .modifier(HeroActionButtonStyle(prominent: false, circular: true))
+        Button("Watched", systemImage: "eye") {}
+            .labelStyle(.iconOnly)
+            .modifier(HeroActionButtonStyle(prominent: false, circular: true))
+        Button("More", systemImage: "ellipsis") {}
+            .labelStyle(.iconOnly)
+            .modifier(HeroActionButtonStyle(prominent: false, circular: true))
+    }
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 #endif
