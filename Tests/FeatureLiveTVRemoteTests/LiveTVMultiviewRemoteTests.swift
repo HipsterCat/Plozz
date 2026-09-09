@@ -3,6 +3,169 @@ import UIKit
 
 final class LiveTVMultiviewRemoteTests: XCTestCase {
     @MainActor
+    func testNativePlayerFocusIsRenderedAcrossControlsAndHUDReturn() {
+        continueAfterFailure = true
+        let app = launchVisualFixture()
+        defer { app.terminate() }
+        if app.buttons["Pause"].exists { select(app.buttons["Pause"], in: app) }
+        let controls: [(String, XCUIElement)] = [
+            ("previous", app.buttons["Previous Channel"]),
+            ("play", app.buttons["Play"]),
+            ("next", app.buttons["Next Channel"]),
+            ("favorite", app.buttons["live-channel-favorite"]),
+            ("multiview", app.buttons["live-channel-multiview"]),
+            ("tracks", app.buttons["live-channel-tracks"])
+        ]
+        for (name, target) in controls {
+            let anchor = name == "next" ? app.buttons["Previous Channel"] : app.buttons["Next Channel"]
+            assertRenderedFocus(target, anchor: anchor, name: "player-\(name)", in: app)
+        }
+        select(app.buttons["live-channel-tracks"], in: app)
+        capture("player-track-menu", in: app)
+        selectMenuItem("Off", in: app)
+        assertRenderedFocus(
+            app.buttons["live-channel-tracks"], anchor: app.buttons["Next Channel"],
+            name: "player-tracks-return", in: app
+        )
+        select(app.buttons["Play"], in: app)
+        let revealSurface = app.descendants(matching: .any)["live-channel-reveal-surface"].firstMatch
+        for cycle in 1...2 {
+            let hidden = NSPredicate { _, _ in
+                !app.buttons["live-channel-tracks"].exists && revealSurface.exists
+            }
+            XCTAssertEqual(
+                XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hidden, object: nil)], timeout: 15),
+                .completed, "Playing HUD must hide without losing its video owner"
+            )
+            capture("player-hud-hidden-\(cycle)", in: app)
+            XCUIRemote.shared.press(.down)
+            XCTAssertTrue(app.buttons["Pause"].waitForExistence(timeout: 5), app.debugDescription)
+            XCTAssertFalse(revealSurface.exists, "Visible controls must remove the native reveal focus surface")
+            let focused = focusedElement(in: app)
+            guard focused.exists, focused.elementType == .button else {
+                XCTFail("Revealing the HUD must focus a visible control: \(nativeFocus(in: app))")
+                return
+            }
+            let identifier = focused.identifier
+            let label = focused.label
+            let frame = focused.frame
+            let beforeFocus = nativeFocus(in: app)
+            let before = capture("player-hud-revealed-\(cycle)", in: app)
+            let direction: XCUIRemote.Button = identifier == "live-channel-tracks" ? .down
+                : identifier == "live-channel-multiview" ? .left : .right
+            XCUIRemote.shared.press(direction)
+            let moved = focusedElement(in: app)
+            XCTAssertTrue(moved.exists && moved.elementType == .button)
+            XCTAssertTrue(moved.identifier != identifier || moved.label != label, "Remote input must move control focus")
+            XCTAssertFalse(revealSurface.exists)
+            XCTAssertTrue(app.buttons["Pause"].exists)
+            let after = capture("player-hud-moved-\(cycle)", in: app)
+            let change = pixelDifference(before, after, region: frame.insetBy(dx: -8, dy: -8), screen: app.frame)
+            let evidence = XCTAttachment(string:
+                "HUD cycle \(cycle), \(label): changed pixel fraction=\(change.fraction), mean RGB delta=\(change.mean)\n" +
+                "Revealed: \(beforeFocus)\nMoved: \(nativeFocus(in: app))"
+            )
+            evidence.name = "player-hud-return-focus-\(cycle)-pixel-evidence"
+            evidence.lifetime = .keepAlways
+            add(evidence)
+            XCTAssertGreaterThan(
+                change.fraction, 0.03,
+                "The initially focused HUD control must visibly differ after native directional movement"
+            )
+        }
+        XCTAssertEqual(app.staticTexts["multiview-fixture-player-1"].label, "Engine 1 loads 1")
+    }
+
+    @MainActor
+    func testMultiviewToolbarFocusIsRendered() {
+        continueAfterFailure = true
+        let app = launchVisualFixture()
+        defer { app.terminate() }
+        select(app.buttons["live-channel-multiview"], in: app)
+        for name in ["add", "layout", "replace", "expand", "done"] {
+            let anchor = name == "layout" ? app.buttons["live-multiview-done"] : app.buttons["live-multiview-layout"]
+            assertRenderedFocus(
+                app.buttons["live-multiview-\(name)"], anchor: anchor,
+                name: "multiview-single-\(name)", in: app
+            )
+        }
+        select(app.buttons["live-multiview-add"], in: app)
+        select(app.descendants(matching: .any)["live-multiview-channel-sports-2"].firstMatch, in: app)
+        selectAudio("Sports 2", in: app)
+        for name in ["audio", "promote", "remove"] {
+            assertRenderedFocus(
+                app.buttons["live-multiview-\(name)"], anchor: app.buttons["live-multiview-layout"],
+                name: "multiview-pair-\(name)", in: app
+            )
+        }
+        assertMetrics("Engines 2 loads 2 stops 0 audible 1", in: app)
+    }
+
+    @MainActor
+    func testMultiviewFocusedPanesKeepVideoReadableInBothLayouts() {
+        continueAfterFailure = true
+        let app = launchVisualFixture()
+        defer { app.terminate() }
+        select(app.buttons["live-channel-multiview"], in: app)
+        select(app.buttons["live-multiview-add"], in: app)
+        select(app.descendants(matching: .any)["live-multiview-channel-sports-2"].firstMatch, in: app)
+        assertMetrics("Engines 2 loads 2 stops 0 audible 1", in: app)
+        for layout in ["side-by-side", "corner"] {
+            if layout == "corner" {
+                select(app.buttons["live-multiview-layout"], in: app)
+                selectMenuItem("Corner", in: app)
+                assertCornerLayout(in: app)
+            }
+            for (index, channel) in ["Sports 1", "Sports 2"].enumerated() {
+                let anchor = layout == "corner" && channel == "Sports 2"
+                    ? app.buttons["live-multiview-remove"] : app.buttons["live-multiview-layout"]
+                assertRenderedFocus(
+                    pane(channel, in: app), anchor: anchor,
+                    name: "\(layout)-\(channel)", preservesVideo: true,
+                    visualSurface: app.otherElements["multiview-fixture-video-\(index + 1)"], in: app
+                )
+            }
+        }
+        assertMetrics("Engines 2 loads 2 stops 0 audible 1", in: app)
+    }
+
+    @MainActor
+    func testPaneDirectionsFromDoneAndAcrossEveryCornerKeepNativeContextMenus() {
+        continueAfterFailure = false
+        let app = launchVisualFixture()
+        defer { app.terminate() }
+        select(app.buttons["live-channel-multiview"], in: app)
+        select(app.buttons["live-multiview-done"], in: app, activate: false)
+        XCUIRemote.shared.press(.down)
+        assertNativeFocus(pane("Sports 1", in: app), in: app)
+        capture("single-pane-down-from-done", in: app)
+        XCUIRemote.shared.press(.up)
+        assertNativeFocus(app.buttons["live-multiview-done"], in: app)
+
+        select(app.buttons["live-multiview-add"], in: app)
+        select(app.descendants(matching: .any)["live-multiview-channel-sports-2"].firstMatch, in: app)
+        select(app.buttons["live-multiview-layout"], in: app)
+        selectMenuItem("Corner", in: app)
+        for corner in ["Bottom right", "Top right", "Top left", "Bottom left"] {
+            select(app.buttons["live-multiview-layout"], in: app)
+            selectMenuItem(corner, in: app)
+            select(pane("Sports 1", in: app), in: app, activate: false)
+            XCUIRemote.shared.press(corner.hasSuffix("left") ? .left : .right)
+            assertNativeFocus(pane("Sports 2", in: app), in: app)
+            capture("\(corner)-inset-directional-focus", in: app)
+            XCUIRemote.shared.press(corner.hasSuffix("left") ? .right : .left)
+            assertNativeFocus(pane("Sports 1", in: app), in: app)
+            capture("\(corner)-main-directional-focus", in: app)
+        }
+        select(pane("Sports 2", in: app), in: app, activate: false)
+        XCUIRemote.shared.press(.select, forDuration: 1)
+        capture("corner-pane-native-context-menu", in: app)
+        selectMenuItem("Listen", in: app)
+        XCTAssertEqual(pane("Sports 2", in: app).value as? String, "Audio on")
+        assertMetrics("Engines 2 loads 2 stops 0 audible 1", in: app)
+    }
+
+    @MainActor
     func testProductionRootRetainsThePromotedPlayer() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -56,7 +219,7 @@ final class LiveTVMultiviewRemoteTests: XCTestCase {
         select(app.buttons["live-multiview-add"], in: app)
         select(app.descendants(matching: .any)["live-multiview-channel-sports-2"].firstMatch, in: app)
         assertMetrics("Engines 2 loads 2 stops 0 audible 1", in: app)
-        select(app.buttons["Sports 2"], in: app)
+        select(pane("Sports 2", in: app), in: app)
         select(app.buttons["live-multiview-layout"], in: app)
         selectMenuItem("Corner", in: app)
         assertCornerLayout(in: app)
@@ -65,9 +228,9 @@ final class LiveTVMultiviewRemoteTests: XCTestCase {
         selectMenuItem("Top left", in: app)
         assertCornerLayout(in: app, topLeft: true)
         selectAudio("Sports 1", in: app)
-        XCTAssertEqual(app.buttons["Sports 1"].value as? String, "Audio on")
+        XCTAssertEqual(pane("Sports 1", in: app).value as? String, "Audio on")
         selectAudio("Sports 2", in: app)
-        XCTAssertEqual(app.buttons["Sports 2"].value as? String, "Audio on")
+        XCTAssertEqual(pane("Sports 2", in: app).value as? String, "Audio on")
         select(app.buttons["live-multiview-expand"], in: app)
         select(app.buttons["live-multiview-collapse"], in: app)
         assertMetrics("Engines 2 loads 2 stops 0 audible 1", in: app)
@@ -81,7 +244,7 @@ final class LiveTVMultiviewRemoteTests: XCTestCase {
     private func selectAudio(_ channel: String, in app: XCUIApplication) {
         select(app.buttons["live-multiview-audio"], in: app)
         selectMenuItem(channel, identifierPrefix: "live-multiview-listen-", in: app)
-        XCTAssertEqual(app.buttons[channel].value as? String, "Audio on", app.debugDescription)
+        XCTAssertEqual(pane(channel, in: app).value as? String, "Audio on", app.debugDescription)
         assertMetrics("Engines 2 loads 2 stops 0 audible 1", in: app)
     }
 
@@ -90,10 +253,11 @@ final class LiveTVMultiviewRemoteTests: XCTestCase {
         in app: XCUIApplication, topLeft: Bool = false,
         file: StaticString = #filePath, line: UInt = #line
     ) {
-        let main = app.buttons["Sports 1"]
-        let inset = app.buttons["Sports 2"]
+        let main = app.otherElements["multiview-fixture-video-1"]
+        let inset = app.otherElements["multiview-fixture-video-2"]
         let matches = NSPredicate { _, _ in
-            guard main.exists, inset.exists, inset.frame.width < main.frame.width / 2 else { return false }
+            guard main.exists, inset.exists, inset.frame.width < main.frame.width / 2,
+                  main.frame.insetBy(dx: -1, dy: -1).contains(inset.frame) else { return false }
             return !topLeft || (inset.frame.midX < main.frame.midX && inset.frame.midY < main.frame.midY)
         }
         XCTAssertEqual(
@@ -120,9 +284,10 @@ final class LiveTVMultiviewRemoteTests: XCTestCase {
     @MainActor
     private func select(
         _ target: XCUIElement, in app: XCUIApplication,
+        activate: Bool = true,
         file: StaticString = #filePath, line: UInt = #line
     ) {
-        guard target.waitForExistence(timeout: 5) else {
+        guard target.exists || target.waitForExistence(timeout: 5) else {
             XCTFail(
                 "Missing target: \(target). Native focus: \(nativeFocus(in: app)). \(app.debugDescription)",
                 file: file, line: line
@@ -135,7 +300,7 @@ final class LiveTVMultiviewRemoteTests: XCTestCase {
             let targetContainsFocus = target.descendants(matching: .any)
                 .matching(NSPredicate(format: "hasFocus == true")).firstMatch.exists
             if target.hasFocus || targetContainsFocus {
-                XCUIRemote.shared.press(.select)
+                if activate { XCUIRemote.shared.press(.select) }
                 return
             }
             let focused = focusedElement(in: app)
@@ -147,14 +312,17 @@ final class LiveTVMultiviewRemoteTests: XCTestCase {
                 XCUIRemote.shared.press(movingUp ? .up : .down)
                 continue
             }
-            if (!target.identifier.isEmpty && focused.identifier == target.identifier) ||
+            let sameNativeCell = target.elementType == .cell && focused.elementType == .cell &&
+                abs(target.frame.midX - focused.frame.midX) < 2 &&
+                abs(target.frame.midY - focused.frame.midY) < 2
+            if sameNativeCell || (!target.identifier.isEmpty && focused.identifier == target.identifier) ||
                ((!target.identifier.isEmpty || !target.label.isEmpty) &&
                focused.descendants(matching: .any).matching(
                 NSPredicate(
                     format: "identifier == %@ AND label == %@", target.identifier, target.label
                 )
             ).firstMatch.exists) {
-                XCUIRemote.shared.press(.select)
+                if activate { XCUIRemote.shared.press(.select) }
                 return
             }
             let destination = target.frame
@@ -186,20 +354,166 @@ final class LiveTVMultiviewRemoteTests: XCTestCase {
     private func focusedElement(in app: XCUIApplication) -> XCUIElement {
         let reported = app.descendants(matching: .any)
             .matching(NSPredicate(format: "hasFocus == true")).firstMatch
-        guard !reported.exists else { return reported }
+        guard !reported.exists || reported.elementType == .other else { return reported }
+        let diagnostic = nativeFocus(in: app)
         let prefix = "focusWindowFrame="
-        guard let component = nativeFocus(in: app).components(separatedBy: " | ")
+        guard let component = diagnostic.components(separatedBy: " | ")
             .first(where: { $0.hasPrefix(prefix) }) else { return reported }
         let frame = NSCoder.cgRect(for: String(component.dropFirst(prefix.count)))
         guard frame.width > 0, frame.height > 0 else { return reported }
-        // SwiftUI context-menu panes can own UIKit focus without exposing AX hasFocus.
-        return app.buttons.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@", "live-multiview-pane-"
-        )).allElementsBoundByIndex.first {
+        // Native menu cells and SwiftUI panes can own UIKit focus without AX hasFocus.
+        let candidates = diagnostic.contains("focused=_UIContextMenuCell |")
+            ? app.cells.allElementsBoundByIndex
+            : app.descendants(matching: .any).matching(NSPredicate(
+                format: "identifier BEGINSWITH %@", "live-multiview-pane-"
+            )).allElementsBoundByIndex
+        return candidates.first {
             let candidate = $0.frame
             return abs(candidate.midX - frame.midX) < 2 &&
                 abs(candidate.midY - frame.midY) < 2
         } ?? reported
+    }
+
+    @MainActor
+    private func pane(_ channel: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", "live-multiview-pane-", channel
+        )).firstMatch
+    }
+
+    @MainActor
+    private func assertNativeFocus(
+        _ target: XCUIElement, in app: XCUIApplication,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let matches = NSPredicate { _, _ in
+            guard target.exists else { return false }
+            if target.hasFocus { return true }
+            let focused = self.focusedElement(in: app)
+            guard focused.exists else { return false }
+            if !target.identifier.isEmpty { return focused.identifier == target.identifier }
+            return !target.label.isEmpty && focused.label == target.label && focused.elementType == target.elementType
+        }
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: matches, object: nil)], timeout: 5),
+            .completed, "Expected native focus on \(target). \(nativeFocus(in: app)). \(app.debugDescription)",
+            file: file, line: line
+        )
+    }
+
+    @MainActor
+    private func launchVisualFixture() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["--multiview-fixture", "--visual-focus-fixture"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["multiview-fixture-player-1"].waitForExistence(timeout: 10))
+        capture("visual-fixture-launched", in: app)
+        return app
+    }
+
+    @MainActor
+    @discardableResult
+    private func capture(_ name: String, in app: XCUIApplication) -> UIImage {
+        let screenshot = app.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        return screenshot.image
+    }
+
+    @MainActor
+    private func assertRenderedFocus(
+        _ target: XCUIElement, anchor: XCUIElement, name: String,
+        preservesVideo: Bool = false, visualSurface: XCUIElement? = nil, in app: XCUIApplication,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        select(anchor, in: app, activate: false, file: file, line: line)
+        guard target.exists else {
+            XCTFail("Missing visual focus target \(name)", file: file, line: line)
+            return
+        }
+        if let visualSurface {
+            guard visualSurface.exists, !visualSurface.frame.isEmpty else {
+                XCTFail("Missing rendered video surface for \(name)", file: file, line: line)
+                return
+            }
+        }
+        // Corner hit regions are narrower than the video and its full-picture focus outline.
+        let frame = visualSurface?.frame ?? target.frame
+        let before = capture("\(name)-unfocused", in: app)
+        select(target, in: app, activate: false, file: file, line: line)
+        let after = capture("\(name)-focused", in: app)
+        let region = frame.union(visualSurface?.frame ?? target.frame).insetBy(dx: -8, dy: -8)
+        let change = pixelDifference(before, after, region: region, screen: app.frame)
+        let evidence = "\(name): changed pixel fraction=\(change.fraction), mean RGB delta=\(change.mean)"
+        let attachment = XCTAttachment(string: "\(evidence)\n\(nativeFocus(in: app))")
+        attachment.name = "\(name)-pixel-evidence"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertGreaterThan(
+            change.fraction, preservesVideo ? 0.007 : 0.03,
+            "Focused \(name) must have a visible treatment. \(evidence)", file: file, line: line
+        )
+        if preservesVideo {
+            let sample = CGRect(
+                x: frame.minX + frame.width * 0.18, y: frame.minY + frame.height * 0.22,
+                width: frame.width * 0.12, height: frame.height * 0.12
+            )
+            let videoChange = pixelDifference(before, after, region: sample, screen: app.frame)
+            let videoEvidence = XCTAttachment(string: "\(name): video RGB delta=\(videoChange.mean)")
+            videoEvidence.name = "\(name)-video-evidence"
+            videoEvidence.lifetime = .keepAlways
+            add(videoEvidence)
+            XCTAssertLessThan(
+                videoChange.mean, 0.06,
+                "Focus must not wash out \(name)'s video: RGB delta=\(videoChange.mean)",
+                file: file, line: line
+            )
+        }
+    }
+
+    private func pixelDifference(
+        _ before: UIImage, _ after: UIImage, region: CGRect, screen: CGRect
+    ) -> (fraction: Double, mean: Double) {
+        guard let first = before.cgImage, let second = after.cgImage,
+              first.width == second.width, first.height == second.height else { return (0, 1) }
+        let width = first.width
+        let height = first.height
+        func pixels(_ image: CGImage) -> [UInt8] {
+            var bytes = [UInt8](repeating: 0, count: width * height * 4)
+            bytes.withUnsafeMutableBytes { storage in
+                let context = CGContext(
+                    data: storage.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                    bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                )!
+                context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            }
+            return bytes
+        }
+        let a = pixels(first)
+        let b = pixels(second)
+        let clipped = region.intersection(screen)
+        guard !clipped.isNull, !clipped.isEmpty else { return (0, 1) }
+        let x0 = max(0, Int(clipped.minX / screen.width * Double(width)))
+        let x1 = min(width, Int(clipped.maxX / screen.width * Double(width)))
+        let y0 = max(0, Int(clipped.minY / screen.height * Double(height)))
+        let y1 = min(height, Int(clipped.maxY / screen.height * Double(height)))
+        var changed = 0
+        var sum = 0.0
+        let count = (x1 - x0) * (y1 - y0)
+        guard count > 0 else { return (0, 1) }
+        for y in y0..<y1 {
+            for x in x0..<x1 {
+                let offset = (y * width + x) * 4
+                let delta = (0..<3).reduce(0) { $0 + abs(Int(a[offset + $1]) - Int(b[offset + $1])) }
+                let normalized = Double(delta) / (3 * 255)
+                if normalized > 0.15 { changed += 1 }
+                sum += normalized
+            }
+        }
+        return (Double(changed) / Double(count), sum / Double(count))
     }
 
     @MainActor

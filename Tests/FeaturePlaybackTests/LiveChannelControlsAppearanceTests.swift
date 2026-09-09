@@ -26,7 +26,15 @@ final class LiveChannelControlsAppearanceTests: XCTestCase {
         XCTAssertGreaterThan(backing, 600)
     }
 
-    private func render(title: String, focused: Bool) throws -> CGImage {
+    func testNativeFocusStyleKeepsTheExistingRestingAppearance() throws {
+        let native = try render(title: "Audio & Subtitles", focused: nil)
+        let explicit = try render(title: "Audio & Subtitles", focused: false)
+        XCTAssertEqual(native.width, explicit.width)
+        XCTAssertEqual(native.height, explicit.height)
+        XCTAssertEqual(try rgbaPixels(native), try rgbaPixels(explicit))
+    }
+
+    private func render(title: String, focused: Bool?) throws -> CGImage {
         let button = Button {} label: {
             Text(title).font(.system(size: 26, weight: .semibold))
         }

@@ -42,6 +42,7 @@ private final class MultiviewFixtureState {
 
 struct MultiviewFixture: View {
     @State private var state = MultiviewFixtureState()
+    @State private var isFavorite = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -61,7 +62,9 @@ struct MultiviewFixture: View {
                             input: prepared.input, logoURL: nil,
                             makeEngine: { state.makeEngine() },
                             onPreviousChannel: {}, onNextChannel: {},
-                            isFavorite: false, canToggleFavorite: false, onToggleFavorite: {},
+                            isFavorite: isFavorite,
+                            canToggleFavorite: ProcessInfo.processInfo.arguments.contains("--visual-focus-fixture"),
+                            onToggleFavorite: { isFavorite.toggle() },
                             isExpanded: !coordinator.isEnabled,
                             usesNativeFullscreen: !coordinator.isEnabled,
                             onReturnToGuide: {},
@@ -353,6 +356,7 @@ private final class MultiviewFixtureEngine: LiveChannelEngine {
     init(number: Int) {
         self.number = number
         output.backgroundColor = number == 1 ? .systemBlue : .systemTeal
+        output.accessibilityIdentifier = "multiview-fixture-video-\(number)"
         label.textColor = .white
         label.font = .preferredFont(forTextStyle: .headline)
         label.accessibilityIdentifier = "multiview-fixture-player-\(number)"

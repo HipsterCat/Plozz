@@ -856,6 +856,7 @@ final class LiveChannelPlaybackFocusPolicyTests: XCTestCase {
 
         XCTAssertTrue(availability.contains(.next))
         XCTAssertTrue(availability.contains(.previous))
+        XCTAssertTrue(availability.contains(.tracks))
     }
 
     func testPlaybackEligibilityExcludesMissingAndEscapeControls() {
@@ -870,6 +871,7 @@ final class LiveChannelPlaybackFocusPolicyTests: XCTestCase {
         XCTAssertTrue(availability.contains(.goLive))
         XCTAssertTrue(availability.contains(.next))
         XCTAssertTrue(availability.contains(.favorite))
+        XCTAssertTrue(availability.contains(.tracks))
         XCTAssertFalse(availability.contains(.playPause))
         XCTAssertFalse(availability.contains(.surface))
         XCTAssertFalse(availability.contains(.close))
@@ -877,6 +879,9 @@ final class LiveChannelPlaybackFocusPolicyTests: XCTestCase {
         XCTAssertFalse(availability.contains(nil))
         XCTAssertFalse(
             LiveChannelPlaybackFocusPolicy.Availability.hidden.contains(.next)
+        )
+        XCTAssertFalse(
+            LiveChannelPlaybackFocusPolicy.Availability.hidden.contains(.tracks)
         )
     }
 

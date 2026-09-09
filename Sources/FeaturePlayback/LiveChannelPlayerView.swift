@@ -224,11 +224,13 @@ public struct LiveChannelPlayerView: View {
                 if let networkBlock = model.networkBlock {
                     LiveChannelNetworkStatus(block: networkBlock)
                 } else if isExpanded {
-                    LiveChannelRevealSurface(
-                        isEnabled: !controlsVisible,
-                        focus: $focusedControl,
-                        onReveal: revealControls
-                    )
+                    if !controlsVisible {
+                        LiveChannelRevealSurface(
+                            focus: $focusedControl,
+                            onReveal: revealControls
+                        )
+                        .transition(.identity)
+                    }
 
                     if controlsVisible,
                        !sourceMatches || model.interruption == nil {
@@ -806,6 +808,7 @@ enum LiveChannelControl: Hashable {
     case favorite
     case retry
     case multiview
+    case tracks
 }
 
 struct LiveChannelFavoriteControlState: Equatable {
@@ -843,7 +846,7 @@ enum LiveChannelPlaybackFocusPolicy {
         func contains(_ control: LiveChannelControl?) -> Bool {
             guard isPresented, let control else { return false }
             switch control {
-            case .previous, .next:
+            case .previous, .next, .tracks:
                 return true
             case .playPause:
                 return canPlayPause
@@ -865,20 +868,20 @@ enum LiveChannelPlaybackFocusPolicy {
 }
 
 private struct LiveChannelRevealSurface: View {
-    let isEnabled: Bool
     @FocusState.Binding var focus: LiveChannelControl?
     let onReveal: () -> Void
 
     var body: some View {
         Color.clear
             .contentShape(Rectangle())
-            .allowsHitTesting(isEnabled)
             .onTapGesture(perform: onReveal)
             #if os(tvOS)
-            .focusable(isEnabled)
+            .focusable(true)
             .focused($focus, equals: .surface)
+            .focusEffectDisabled()
             .onMoveCommand { _ in onReveal() }
             #endif
+            .accessibilityIdentifier("live-channel-reveal-surface")
     }
 }
 
@@ -915,7 +918,10 @@ private struct LiveChannelOverlay: View {
             )
             Spacer()
             VStack(spacing: 12) {
-                LiveChannelTrackMenu(model: tracks, onPresentationChange: onTracksPresentationChange)
+                LiveChannelTrackMenu(
+                    model: tracks, focus: $focus,
+                    onPresentationChange: onTracksPresentationChange
+                )
                 LiveChannelTransport(
                 isPaused: phase == .paused,
                 canPause: canPause,
@@ -992,7 +998,7 @@ private struct LiveChannelHeader: View {
             .labelStyle(.iconOnly)
             .accessibilityIdentifier("live-channel-close")
             .focused($focus, equals: .close)
-            .buttonStyle(InfoActionButtonStyle(focused: focus == .close, prominent: false))
+            .buttonStyle(InfoActionButtonStyle(prominent: false))
             #endif
         }
         .foregroundStyle(.white)
@@ -1078,7 +1084,7 @@ private struct LiveChannelTransport: View {
             Label("Previous Channel", systemImage: "backward.end.fill")
         }
         .focused($focus, equals: .previous)
-        .buttonStyle(InfoActionButtonStyle(focused: focus == .previous, prominent: false))
+        .buttonStyle(InfoActionButtonStyle(prominent: false))
     }
 
     private var playPauseButton: some View {
@@ -1090,7 +1096,7 @@ private struct LiveChannelTransport: View {
             }
         }
         .focused($focus, equals: .playPause)
-        .buttonStyle(InfoActionButtonStyle(focused: focus == .playPause, prominent: false))
+        .buttonStyle(InfoActionButtonStyle(prominent: false))
     }
 
     private var goLiveButton: some View {
@@ -1098,7 +1104,7 @@ private struct LiveChannelTransport: View {
             Label("Go Live", systemImage: "dot.radiowaves.left.and.right")
         }
         .focused($focus, equals: .goLive)
-        .buttonStyle(InfoActionButtonStyle(focused: focus == .goLive, prominent: true))
+        .buttonStyle(InfoActionButtonStyle(prominent: true))
     }
 
     private var nextButton: some View {
@@ -1106,7 +1112,7 @@ private struct LiveChannelTransport: View {
             Label("Next Channel", systemImage: "forward.end.fill")
         }
         .focused($focus, equals: .next)
-        .buttonStyle(InfoActionButtonStyle(focused: focus == .next, prominent: false))
+        .buttonStyle(InfoActionButtonStyle(prominent: false))
     }
 
     private var favoriteButton: some View {
@@ -1120,7 +1126,7 @@ private struct LiveChannelTransport: View {
         .focused($focus, equals: .favorite)
         .disabled(!state.canToggle)
         // Keep one button style while this focused action changes state.
-        .buttonStyle(InfoActionButtonStyle(focused: focus == .favorite, prominent: false))
+        .buttonStyle(InfoActionButtonStyle(prominent: false))
         .accessibilityIdentifier("live-channel-favorite")
     }
 
@@ -1131,7 +1137,7 @@ private struct LiveChannelTransport: View {
                 Label("Multiview", systemImage: "rectangle.split.2x1")
             }
             .focused($focus, equals: .multiview)
-            .buttonStyle(InfoActionButtonStyle(focused: focus == .multiview, prominent: false))
+            .buttonStyle(InfoActionButtonStyle(prominent: false))
             .accessibilityIdentifier("live-channel-multiview")
         }
     }
@@ -1196,7 +1202,7 @@ private struct LiveChannelStartupView: View {
                 .foregroundStyle(.white)
             Button("Close", action: onClose)
                 .focused($focus, equals: .close)
-                .buttonStyle(InfoActionButtonStyle(focused: focus == .close, prominent: false))
+                .buttonStyle(InfoActionButtonStyle(prominent: false))
         }
         .padding(36)
         .background(.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 28))
@@ -1227,11 +1233,11 @@ private struct LiveChannelInterruptionView: View {
                 if canRetry {
                     Button("Try Again", action: onRetry)
                         .focused($focus, equals: .retry)
-                        .buttonStyle(InfoActionButtonStyle(focused: focus == .retry, prominent: true))
+                        .buttonStyle(InfoActionButtonStyle(prominent: true))
                 }
                 Button("Close", action: onClose)
                     .focused($focus, equals: .close)
-                    .buttonStyle(InfoActionButtonStyle(focused: focus == .close, prominent: false))
+                    .buttonStyle(InfoActionButtonStyle(prominent: false))
             }
         }
         .foregroundStyle(.white)

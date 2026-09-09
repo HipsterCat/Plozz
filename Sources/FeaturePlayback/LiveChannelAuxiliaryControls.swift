@@ -4,6 +4,7 @@ import SwiftUI
 
 struct LiveChannelTrackMenu: View {
     let model: LiveChannelPlayerModel
+    @FocusState.Binding var focus: LiveChannelControl?
     let onPresentationChange: (Bool) -> Void
     @State private var isPresented = false
 
@@ -14,7 +15,8 @@ struct LiveChannelTrackMenu: View {
         } label: {
             LiveChannelTrackButtonLabel()
         }
-        .foregroundStyle(.white)
+        .buttonStyle(InfoActionButtonStyle(prominent: false))
+        .focused($focus, equals: .tracks)
         .accessibilityIdentifier("live-channel-tracks")
         .sheet(isPresented: $isPresented) {
             NavigationStack {
@@ -37,7 +39,9 @@ struct LiveChannelTrackMenu: View {
         } label: {
             LiveChannelTrackButtonLabel()
         }
-        .foregroundStyle(.white)
+        .buttonStyle(InfoActionButtonStyle(prominent: false))
+        .focused($focus, equals: .tracks)
+        .focusEffectDisabled()
         .accessibilityIdentifier("live-channel-tracks")
         #endif
     }
@@ -46,8 +50,7 @@ struct LiveChannelTrackMenu: View {
 private struct LiveChannelTrackButtonLabel: View {
     var body: some View {
         Label("Audio & Subtitles", systemImage: "captions.bubble")
-            .padding(12)
-            .background(.black.opacity(0.58), in: Capsule())
+            .font(.body.weight(.semibold))
     }
 }
 

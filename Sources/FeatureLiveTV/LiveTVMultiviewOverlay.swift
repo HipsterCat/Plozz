@@ -5,6 +5,17 @@ import FeatureLiveTVCore
 import SwiftUI
 
 enum LiveTVMultiviewGeometry {
+    static func viewport(in size: CGSize) -> CGRect {
+        #if os(tvOS)
+        let top: CGFloat = 168
+        let bottom: CGFloat = 150
+        #else
+        let top: CGFloat = 90
+        let bottom: CGFloat = 110
+        #endif
+        return CGRect(x: 0, y: top, width: size.width, height: max(1, size.height - top - bottom))
+    }
+
     static func frame(
         for id: UUID, panes: [UUID], primary: UUID,
         layout: LiveTVMultiviewLayout, corner: LiveTVMultiviewCorner,
@@ -12,17 +23,14 @@ enum LiveTVMultiviewGeometry {
     ) -> CGRect {
         #if os(tvOS)
         let margin: CGFloat = 48
-        let top: CGFloat = 120
-        let bottom: CGFloat = 150
         #else
         let margin: CGFloat = 16
-        let top: CGFloat = 90
-        let bottom: CGFloat = 110
         #endif
+        let viewport = Self.viewport(in: size)
         let area = CGRect(
-            x: margin, y: top,
+            x: margin, y: viewport.minY,
             width: max(1, size.width - 2 * margin),
-            height: max(1, size.height - top - bottom)
+            height: viewport.height
         )
         if expanded != nil { return fitted(in: area) }
         let ordered = [primary] + panes.filter { $0 != primary }
@@ -56,6 +64,29 @@ enum LiveTVMultiviewGeometry {
             y: atTop ? main.minY + 16 : main.maxY - height - 16,
             width: width, height: height
         )
+    }
+
+    static func focusFrame(
+        for id: UUID, panes: [UUID], primary: UUID,
+        layout: LiveTVMultiviewLayout, corner: LiveTVMultiviewCorner,
+        insetSize: LiveTVMultiviewInsetSize, expanded: UUID?, size: CGSize
+    ) -> CGRect {
+        let picture = frame(
+            for: id, panes: panes, primary: primary, layout: layout, corner: corner,
+            insetSize: insetSize, expanded: expanded, size: size
+        )
+        guard expanded == nil, layout == .corner, id == primary,
+              let secondary = panes.first(where: { $0 != primary }) else { return picture }
+        let inset = frame(
+            for: secondary, panes: panes, primary: primary, layout: layout, corner: corner,
+            insetSize: insetSize, expanded: nil, size: size
+        )
+        // A full-picture focus item surrounds the inset and intercepts its directional entry.
+        let gap: CGFloat = 16
+        let leading = corner == .topLeading || corner == .bottomLeading
+        let x = leading ? inset.maxX + gap : picture.minX
+        let right = leading ? picture.maxX : inset.minX - gap
+        return CGRect(x: x, y: picture.minY, width: max(1, right - x), height: picture.height)
     }
 
     private static func fitted(in area: CGRect) -> CGRect {
@@ -93,27 +124,10 @@ struct LiveTVMultiviewOverlay: View {
         GeometryReader { geometry in
             ZStack {
                 ZStack(alignment: .topLeading) {
-                    ForEach(coordinator.panes) { pane in
-                        let frame = LiveTVMultiviewGeometry.frame(
-                            for: pane.id, panes: coordinator.panes.map(\.id),
-                            primary: coordinator.primaryPaneID, layout: coordinator.layout,
-                            corner: coordinator.corner, insetSize: coordinator.insetSize,
-                            expanded: coordinator.expandedPaneID, size: geometry.size
-                        )
-                        LiveTVMultiviewPaneControl(
-                            pane: pane, audible: coordinator.audiblePaneID == pane.id,
-                            listen: { coordinator.selectAudio(pane.id) },
-                            promote: { coordinator.promote(pane.id) },
-                            replace: { picker = .replace(pane.id) },
-                            retry: { coordinator.retry(pane.id) }
-                        )
-                        .frame(width: frame.width, height: frame.height)
-                        .position(x: frame.midX, y: frame.midY)
-                        .zIndex(pane.id == coordinator.primaryPaneID ? 0 : 1)
-                        .opacity(coordinator.expandedPaneID == nil || coordinator.expandedPaneID == pane.id ? 1 : 0)
-                        .disabled(coordinator.expandedPaneID != nil && coordinator.expandedPaneID != pane.id)
-                        .accessibilityHidden(coordinator.expandedPaneID != nil && coordinator.expandedPaneID != pane.id)
-                    }
+                    LiveTVMultiviewPaneViewport(
+                        coordinator: coordinator, size: geometry.size,
+                        replace: { picker = .replace($0) }
+                    )
                     VStack(spacing: 16) {
                         LiveTVMultiviewHeader(exit: exit)
                         Spacer(minLength: 0)
@@ -184,6 +198,54 @@ struct LiveTVMultiviewOverlay: View {
     }
 }
 
+private struct LiveTVMultiviewPaneViewport: View {
+    let coordinator: LiveTVMultiviewCoordinator
+    let size: CGSize
+    let replace: (UUID) -> Void
+
+    var body: some View {
+        let viewport = LiveTVMultiviewGeometry.viewport(in: size)
+        ZStack(alignment: .topLeading) {
+            ForEach(coordinator.panes) { pane in
+                let frame = LiveTVMultiviewGeometry.frame(
+                    for: pane.id, panes: coordinator.panes.map(\.id),
+                    primary: coordinator.primaryPaneID, layout: coordinator.layout,
+                    corner: coordinator.corner, insetSize: coordinator.insetSize,
+                    expanded: coordinator.expandedPaneID, size: size
+                )
+                let focusFrame = LiveTVMultiviewGeometry.focusFrame(
+                    for: pane.id, panes: coordinator.panes.map(\.id),
+                    primary: coordinator.primaryPaneID, layout: coordinator.layout,
+                    corner: coordinator.corner, insetSize: coordinator.insetSize,
+                    expanded: coordinator.expandedPaneID, size: size
+                )
+                let visible = coordinator.expandedPaneID == nil || coordinator.expandedPaneID == pane.id
+                LiveTVMultiviewPaneControl(
+                    pane: pane, audible: coordinator.audiblePaneID == pane.id,
+                    focusFrame: focusFrame.offsetBy(dx: -frame.minX, dy: -frame.minY),
+                    isInteractive: visible,
+                    listen: { coordinator.selectAudio(pane.id) },
+                    promote: { coordinator.promote(pane.id) },
+                    replace: { replace(pane.id) },
+                    retry: { coordinator.retry(pane.id) }
+                )
+                .frame(width: frame.width, height: frame.height)
+                .position(x: frame.midX - viewport.minX, y: frame.midY - viewport.minY)
+                .zIndex(pane.id == coordinator.primaryPaneID ? 0 : 1)
+                .opacity(visible ? 1 : 0)
+                .disabled(!visible)
+                .accessibilityHidden(!visible)
+            }
+        }
+        // Bridge Done's horizontal gap without absorbing the header or toolbar into this focus section.
+        .frame(width: viewport.width, height: viewport.height, alignment: .topLeading)
+        #if os(tvOS)
+        .focusSection()
+        #endif
+        .position(x: viewport.midX, y: viewport.midY)
+    }
+}
+
 private struct LiveTVMultiviewHeader: View {
     let exit: () -> Void
 
@@ -199,40 +261,34 @@ private struct LiveTVMultiviewHeader: View {
                 .accessibilityIdentifier("live-multiview-done")
         }
         .foregroundStyle(.white)
+        #if os(tvOS)
+        .focusSection()
+        #endif
     }
 }
 
 private struct LiveTVMultiviewPaneControl: View {
     let pane: LiveTVMultiviewPane
     let audible: Bool
+    let focusFrame: CGRect
+    let isInteractive: Bool
     let listen: () -> Void
     let promote: () -> Void
     let replace: () -> Void
     let retry: () -> Void
     @FocusState private var focused: Bool
     @Environment(\.themePalette) private var palette
+    @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         ZStack(alignment: .top) {
-            Button(action: listen) {
-                ZStack(alignment: .bottomLeading) {
-                    Rectangle().fill(.clear).contentShape(Rectangle())
-                    HStack(spacing: 10) {
-                        if audible { Image(systemName: "speaker.wave.2.fill") }
-                        Text(pane.channel?.name ?? String(localized: "Channel"))
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                        if pane.preparation.isPreparing { ProgressView().tint(.white) }
-                    }
-                    .font(.caption.weight(.semibold))
-                    .padding(14)
-                    .background(.black.opacity(0.7))
-                }
-            }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
-            .focused($focused)
-            .disabled(pane.preparation.current == nil && pane.preparation.failure != nil)
+            #if os(tvOS)
+            pictureLabel
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            #endif
+            pictureControl
+            .disabled(!isInteractive || (pane.preparation.current == nil && pane.preparation.failure != nil))
             .accessibilityLabel(pane.channel?.name ?? String(localized: "Channel"))
             .accessibilityValue(audible ? String(localized: "Audio on") : String(localized: "Muted"))
             .accessibilityIdentifier("live-multiview-pane-\(pane.id.uuidString)")
@@ -241,6 +297,10 @@ private struct LiveTVMultiviewPaneControl: View {
                 Button("Make main picture", systemImage: "rectangle.inset.filled", action: promote)
                 Button("Replace channel", systemImage: "arrow.triangle.2.circlepath", action: replace)
             }
+            #if os(tvOS)
+            .frame(width: focusFrame.width, height: focusFrame.height)
+            .position(x: focusFrame.midX, y: focusFrame.midY)
+            #endif
 
             if let failure = pane.preparation.failure {
                 LiveTVMultiviewFailure(
@@ -252,14 +312,48 @@ private struct LiveTVMultiviewPaneControl: View {
             }
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(
-                    focused ? .white : (audible ? palette.accent : .white.opacity(0.15)),
-                    lineWidth: focused ? 4 : 2
-                )
-                .allowsHitTesting(false)
+            if focused {
+                PrototypeFocusOutline(cornerRadius: 10)
+            } else {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(audible ? palette.accent : .white.opacity(0.15), lineWidth: 2)
+                    .allowsHitTesting(false)
+            }
         }
         .foregroundStyle(.white)
+    }
+
+    @ViewBuilder
+    private var pictureControl: some View {
+        #if os(tvOS)
+        Color.clear
+            .accessibilityElement(children: .ignore)
+            .focusableCard(
+                isFocused: $focused, cornerRadius: 10,
+                isEnabled: isEnabled && isInteractive
+                    && (pane.preparation.current != nil || pane.preparation.failure == nil),
+                action: listen
+            )
+        #else
+        Button(action: listen) { pictureLabel }
+            .buttonStyle(.plain)
+        #endif
+    }
+
+    private var pictureLabel: some View {
+        ZStack(alignment: .bottomLeading) {
+            Rectangle().fill(.clear).contentShape(Rectangle())
+            HStack(spacing: 10) {
+                if audible { Image(systemName: "speaker.wave.2.fill") }
+                Text(pane.channel?.name ?? String(localized: "Channel"))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if pane.preparation.isPreparing { ProgressView().tint(.white) }
+            }
+            .font(.caption.weight(.semibold))
+            .padding(14)
+            .background(.black.opacity(0.7))
+        }
     }
 }
 
