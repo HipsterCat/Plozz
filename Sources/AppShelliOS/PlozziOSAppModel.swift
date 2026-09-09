@@ -1633,16 +1633,7 @@ final class PlozziOSAppModel {
         )
         let reconciler = watchReconciler
         Task {
-            if let accountID {
-                await reconciler.endLiveSession(
-                    accountID: accountID,
-                    itemID: item.id
-                )
-            }
-            if let mutation {
-                await reconciler.enqueue(mutation)
-            }
-            await reconciler.drain()
+            await reconciler.finishLiveSession(accountID: accountID, itemID: item.id, mutation: mutation)
         }
     }
 
@@ -1776,6 +1767,10 @@ final class PlozziOSAppModel {
             applier: applier,
             onPersistenceFailure: {
                 PlozzLog.app.error("iOS durable watch outbox write failed")
+            },
+            onServerStateApplied: { mutation in
+                guard let refresh = MediaItemMutation(confirmedWatchMutation: mutation) else { return }
+                Task { @MainActor in refresh.post() }
             }
         )
     }

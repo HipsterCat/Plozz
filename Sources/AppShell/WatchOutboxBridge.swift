@@ -27,9 +27,8 @@ import LastFmService
 struct WatchOutboxBridge: Sendable {
     /// Register `(accountID, itemID)` as the live in-app session (idempotent).
     let beginLiveSession: @Sendable (_ accountID: String, _ itemID: String) -> Void
-    /// End the live session for `(accountID, itemID)` and enqueue the optional
-    /// final convergence `mutation`, in that order, so the just-played server is
-    /// no longer deferred and its resume/played write goes out. `watchedPercent`
+    /// Queue the final convergence mutation, then end the live session and drain
+    /// so old progress cannot overwrite the final state. `watchedPercent`
     /// (0...100) is the fraction watched at stop, used to drive the optimistic
     /// in-UI progress update (the resume bar on the surface the user returns to).
     let finishPlayback: @Sendable (_ accountID: String?, _ itemID: String, _ watchedPercent: Double, _ mutation: WatchMutation?, _ item: MediaItem?) -> Void

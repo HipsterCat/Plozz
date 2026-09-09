@@ -273,4 +273,42 @@ final class HomeViewModelNewResumeReloadTests: XCTestCase {
         await waitUntil { self.cw(vm).map(\.id) == ["e2"] && !vm.isRefreshing }
         XCTAssertEqual(provider.librariesCallCount, 3)
     }
+
+    func testServerConfirmationFetchesNextUpAfterEarlyRefreshWasTooSoon() async throws {
+        for kind in [ProviderKind.emby, .jellyfin, .plex] {
+            let provider = FakeMediaProvider(allItems: [], kind: kind)
+            let episode = MediaItem(id: "e3", title: "Episode 3", kind: .episode, sourceAccountID: "a")
+            provider.continueWatchingItems = [episode]
+            let vm = makeViewModel(provider: provider)
+            await vm.load()
+            provider.continueWatchingItems = []
+            vm.applyWatchedState(MediaItemMutation(
+                itemIDs: ["e3"], scopedItemIDs: ["a:e3"], played: true, resumePosition: 0, item: episode
+            ))
+            await waitUntil { provider.librariesCallCount == 2 && !vm.isRefreshing }
+            XCTAssertTrue(cw(vm).isEmpty, "The first feed predates the completed write")
+
+            provider.continueWatchingItems = [MediaItem(id: "e4", title: "Episode 4", kind: .episode)]
+            let confirmation = WatchMutation(
+                capturedAt: Date(), canonicalMediaID: "show/1/3", played: true, clearResume: true,
+                targets: [.init(accountID: "a", itemID: "e3")], kind: .episode
+            )
+            vm.applyWatchedState(try XCTUnwrap(MediaItemMutation(confirmedWatchMutation: confirmation)))
+            await waitUntil { self.cw(vm).map(\.id) == ["e4"] && !vm.isRefreshing }
+            XCTAssertEqual(provider.librariesCallCount, 3)
+        }
+    }
+
+    func testConfirmationFromInactiveAccountDoesNotRefreshHome() async throws {
+        let provider = FakeMediaProvider(allItems: [])
+        let vm = makeViewModel(provider: provider)
+        await vm.load()
+        let confirmation = WatchMutation(
+            capturedAt: Date(), canonicalMediaID: "show/1/3", played: true,
+            targets: [.init(accountID: "inactive", itemID: "e3")], kind: .episode
+        )
+        vm.applyWatchedState(try XCTUnwrap(MediaItemMutation(confirmedWatchMutation: confirmation)))
+        await Task.yield()
+        XCTAssertEqual(provider.librariesCallCount, 1)
+    }
 }

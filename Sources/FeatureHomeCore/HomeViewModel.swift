@@ -754,6 +754,16 @@ public final class HomeViewModel {
     /// flip its badge without a refetch. A watchlist add/remove also inserts/removes
     /// the title from the Watchlist row.
     public func applyWatchedState(_ mutation: MediaItemMutation) {
+        if mutation.refreshContinueWatching {
+            if accounts.contains(where: { account in
+                mutation.itemIDs.contains {
+                    mutation.matches(accountID: account.account.id, itemID: $0)
+                }
+            }) {
+                schedulePlaybackReload()
+            }
+            return
+        }
         let completedEpisode = mutation.played == true && (
             state.value?.continueWatching.contains {
                 $0.kind == .episode && mutation.targets($0)
