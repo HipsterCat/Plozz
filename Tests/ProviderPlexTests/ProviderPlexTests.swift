@@ -617,23 +617,51 @@ final class PlexProviderMappingTests: XCTestCase {
         XCTAssertFalse(stub.sentPaths.contains { $0.hasSuffix("/library/all") })
     }
 
-    /// An in-progress onDeck item already carries its own `lastViewedAt`; stamping
-    /// must never overwrite it with a series-level date.
-    func testContinueWatchingKeepsOwnTimestampOverSeriesRecency() async throws {
-        let stub = StubHTTPClient()
-        stub.stub(pathSuffix: "/library/onDeck", json: """
-        {"MediaContainer":{"size":1,"Metadata":[
-          {"ratingKey":"e5","type":"episode","title":"Episode 5","index":5,"parentIndex":1,
-           "grandparentRatingKey":"900","duration":1800000,"viewOffset":600000,
-           "lastViewedAt":1650000000}
-        ]}}
-        """)
-        let provider = PlexProvider(session: makeSession(), http: stub)
+    func testContinueWatchingUsesNewerSeriesActivityWithoutDiscardingNextEpisodeResume() async throws {
+        for endpoint in ["/hubs/home/continueWatching", "/library/onDeck"] {
+            let stub = StubHTTPClient()
+            stub.stub(pathSuffix: endpoint, json: """
+            {"MediaContainer":{"size":1,"Metadata":[
+              {"ratingKey":"e5","type":"episode","title":"Episode 5","index":5,"parentIndex":1,
+               "grandparentRatingKey":"900","duration":1800000,"viewOffset":600000,
+               "lastViewedAt":1650000000}
+            ]}}
+            """)
+            stub.stub(pathSuffix: "/library/metadata/900", json: """
+            {"MediaContainer":{"size":1,"Metadata":[
+              {"ratingKey":"900","type":"show","lastViewedAt":1700000000}
+            ]}}
+            """)
+            let items = try await PlexProvider(session: makeSession(), http: stub).continueWatching(limit: 10)
+            let item = try XCTUnwrap(items.first)
+            XCTAssertEqual(item.lastPlayedAt, Date(timeIntervalSince1970: 1_700_000_000),
+                           "Finishing episode 4 today must not bury episode 5 under its old resume date")
+            XCTAssertEqual(item.id, "e5")
+            XCTAssertEqual(item.resumePosition, 600)
+            XCTAssertEqual(item.playedPercentage ?? 0, 1.0 / 3, accuracy: 0.001)
+            XCTAssertFalse(item.isPlayed)
+            XCTAssertTrue(stub.sentPaths.contains("/library/metadata/900"))
+        }
+    }
 
-        let items = try await provider.continueWatching(limit: 10)
-        XCTAssertEqual(items.first?.lastPlayedAt, Date(timeIntervalSince1970: 1_650_000_000),
-                       "An in-progress item's own timestamp must win over its series recency")
-        XCTAssertFalse(stub.sentPaths.contains { $0.contains("/library/metadata/900") })
+    func testContinueWatchingNeverBackdatesEpisodeForOlderOrMissingSeriesActivity() async throws {
+        for seriesDate in ["1600000000", "null"] {
+            let stub = StubHTTPClient()
+            stub.stub(pathSuffix: "/hubs/home/continueWatching", json: """
+            {"MediaContainer":{"size":1,"Metadata":[
+              {"ratingKey":"e5","type":"episode","title":"Episode 5",
+               "grandparentRatingKey":"900","viewOffset":600000,"lastViewedAt":1650000000}
+            ]}}
+            """)
+            stub.stub(pathSuffix: "/library/metadata/900", json: """
+            {"MediaContainer":{"size":1,"Metadata":[
+              {"ratingKey":"900","type":"show","lastViewedAt":\(seriesDate)}
+            ]}}
+            """)
+            let items = try await PlexProvider(session: makeSession(), http: stub).continueWatching(limit: 10)
+            XCTAssertEqual(items.first?.lastPlayedAt, Date(timeIntervalSince1970: 1_650_000_000))
+            XCTAssertEqual(items.first?.resumePosition, 600)
+        }
     }
 
     func testContinueWatchingUnlimitedReadsPastSixtyAcrossShortPages() async throws {
@@ -773,7 +801,8 @@ final class PlexProviderMappingTests: XCTestCase {
         let episodes = (0..<51).map {
             """
             {"ratingKey":"e\($0)","type":"episode","title":"Episode \($0)",
-             "grandparentRatingKey":"s\($0)","grandparentTitle":"Series \($0)"}
+             "grandparentRatingKey":"s\($0)","grandparentTitle":"Series \($0)",
+             "lastViewedAt":\($0.isMultiple(of: 2) ? "1650000000" : "null")}
             """
         }.joined(separator: ",")
         stub.stub(pathSuffix: "/hubs/home/continueWatching", json: """
@@ -800,7 +829,7 @@ final class PlexProviderMappingTests: XCTestCase {
         ).continueWatching(limit: Int.max)
 
         XCTAssertEqual(items.count, 51)
-        XCTAssertTrue(items.allSatisfy { $0.lastPlayedAt != nil })
+        XCTAssertTrue(items.allSatisfy { $0.lastPlayedAt == Date(timeIntervalSince1970: 1_700_000_000) })
         let metadataPaths = stub.sentPaths.filter {
             $0.hasPrefix("/library/metadata/")
         }

@@ -2,13 +2,19 @@ import XCTest
 import AppRuntime
 import CoreModels
 import CoreNetworking
+import FeatureHomeCore
 import ProviderPlex
 
 private actor PlexCompletionHTTPClient: HTTPClient {
     private(set) var requests: [Endpoint] = []
     private var rejectsDismissal = false
+    private var responses: [String: Data] = [:]
 
     func rejectDismissal() { rejectsDismissal = true }
+
+    func respond(to path: String, json: String) {
+        responses[path] = Data(json.utf8)
+    }
 
     func send(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
         requests.append(endpoint)
@@ -16,15 +22,15 @@ private actor PlexCompletionHTTPClient: HTTPClient {
             throw AppError.notFound
         }
         return (
-            Data("{}".utf8),
+            responses[endpoint.path] ?? Data("{}".utf8),
             HTTPURLResponse(url: baseURL, statusCode: 200, httpVersion: nil, headerFields: nil)!
         )
     }
 }
 
 final class PlexCompletionVersusDismissalTests: XCTestCase {
-    private func reconciler(http: PlexCompletionHTTPClient) -> WatchStateReconciler {
-        let provider = PlexProvider(
+    private func provider(http: PlexCompletionHTTPClient) -> PlexProvider {
+        PlexProvider(
             session: UserSession(
                 server: MediaServer(
                     id: "plex", name: "Test", baseURL: URL(string: "https://plex.example")!, provider: .plex
@@ -33,11 +39,42 @@ final class PlexCompletionVersusDismissalTests: XCTestCase {
             ),
             http: http
         )
+    }
+
+    private func reconciler(http: PlexCompletionHTTPClient) -> WatchStateReconciler {
+        let provider = provider(http: http)
         let applier = AppShellWatchMutationApplier(
             resolveProvider: { _ in provider },
             applyTrakt: { _ in }, applySimkl: { _ in }, applyAniList: { _ in }, applyMAL: { _ in }
         )
         return WatchStateReconciler(store: InMemoryWatchMutationStore(), applier: applier)
+    }
+
+    func testNextEpisodeWithOldResumeRanksAheadOfOtherShowsAfterSeriesActivity() async throws {
+        let http = PlexCompletionHTTPClient()
+        await http.respond(to: "/hubs/home/continueWatching", json: """
+        {"MediaContainer":{"size":1,"Metadata":[
+          {"ratingKey":"e5","type":"episode","title":"Episode 5","index":5,"parentIndex":1,
+           "grandparentRatingKey":"900","viewOffset":133500,"lastViewedAt":1650000000}
+        ]}}
+        """)
+        await http.respond(to: "/library/metadata/900", json: """
+        {"MediaContainer":{"size":1,"Metadata":[
+          {"ratingKey":"900","type":"show","lastViewedAt":1700000000}
+        ]}}
+        """)
+        let items = try await provider(http: http).continueWatching(limit: 30)
+        let next = try XCTUnwrap(items.first)
+        let otherItems = (1...22).map { index in
+            MediaItem(
+                id: "other-\(index)", title: "Other \(index)", kind: .movie,
+                lastPlayedAt: Date(timeIntervalSince1970: 1_700_000_000 - Double(index))
+            )
+        }
+        let row = HomeAggregator.sortedByRecency(otherItems + [next])
+        XCTAssertEqual(row.count, 23)
+        XCTAssertEqual(row.first?.id, "e5", "The successor must rank first, not 23rd under its old resume date")
+        XCTAssertEqual(row.first?.resumePosition, 133.5)
     }
 
     func testCompletingAnEpisodeScrobblesAndClearsProgressWithoutDismissingTheShow() async throws {
