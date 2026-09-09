@@ -12,6 +12,9 @@ import SwiftUI
 import UIKit
 
 enum PlozziOSHeroMetrics {
+    // Add this above the actions and remove it below the foreground to keep the logo fixed.
+    static let compactDetailActionDrop: CGFloat = 20
+
     /// Whether this hero fills its stage by **mirroring** its own bottom edge
     /// into the space the picture doesn't reach, rather than by cropping the
     /// picture until it does.
@@ -624,7 +627,12 @@ private struct PlozziOSHeroStage<Foreground: View>: View {
                     .horizontal,
                     PlozziOSPageLayout.horizontalInset(for: style)
                 )
-                .padding(.bottom, style == .compactPortrait ? 30 : 42)
+                .padding(
+                    .bottom,
+                    style == .compactPortrait
+                        ? 30 - (surfaceRole == .detail ? PlozziOSHeroMetrics.compactDetailActionDrop : 0)
+                        : 42
+                )
 
         }
         .frame(height: height)
@@ -1947,6 +1955,7 @@ private struct PlozziOSDetailHeroForeground: View {
                 )
             }
             .controlSize(.large)
+            .padding(.top, style == .compactPortrait ? PlozziOSHeroMetrics.compactDetailActionDrop : 0)
         }
         .frame(
             maxWidth: PlozziOSPageLayout.heroTextMaxWidth(for: style),
