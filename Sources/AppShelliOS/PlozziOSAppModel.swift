@@ -1628,7 +1628,7 @@ final class PlozziOSAppModel {
         )
         publishPlaybackMutation(
             mutation,
-            itemID: item.id,
+            item: item,
             watchedPercent: watchedPercent
         )
         let reconciler = watchReconciler
@@ -1648,12 +1648,12 @@ final class PlozziOSAppModel {
 
     private func publishPlaybackMutation(
         _ mutation: WatchMutation?,
-        itemID: String,
+        item: MediaItem,
         watchedPercent: Double
     ) {
         guard let mutation else { return }
         var itemIDs = Set(mutation.optimisticTargets.map(\.itemID))
-        itemIDs.insert(itemID)
+        itemIDs.insert(item.id)
         MediaItemMutation(
             itemIDs: itemIDs,
             scopedItemIDs: Set(mutation.optimisticTargets.map(\.id)),
@@ -1661,7 +1661,8 @@ final class PlozziOSAppModel {
             resumePosition: mutation.resumePosition,
             playedPercentage: mutation.played == true
                 ? 1
-                : max(0, min(1, watchedPercent / 100))
+                : max(0, min(1, watchedPercent / 100)),
+            item: item
         ).post()
     }
 

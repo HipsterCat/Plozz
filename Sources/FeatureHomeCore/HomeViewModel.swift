@@ -754,6 +754,24 @@ public final class HomeViewModel {
     /// flip its badge without a refetch. A watchlist add/remove also inserts/removes
     /// the title from the Watchlist row.
     public func applyWatchedState(_ mutation: MediaItemMutation) {
+        let completedEpisode = mutation.played == true && (
+            state.value?.continueWatching.contains {
+                $0.kind == .episode && mutation.targets($0)
+            } == true || mutation.item.map { item in
+                item.kind == .episode && mutation.targets(item) && accounts.contains { account in
+                    mutation.matches(accountID: account.account.id, itemID: item.id)
+                        || item.sources.contains {
+                            $0.accountID == account.account.id
+                                && mutation.matches(accountID: $0.accountID, itemID: $0.itemID)
+                        }
+                }
+            } == true
+        )
+        // Removing the finished card isn't enough for a series: ask for its
+        // successor now, even when playback started outside an empty Home.
+        defer {
+            if completedEpisode { schedulePlaybackReload() }
+        }
         for (accountID, items) in detailResumeByAccount {
             detailResumeByAccount[accountID] = items.compactMap { item in
                 if mutation.targets(item),
@@ -764,15 +782,13 @@ public final class HomeViewModel {
             }
         }
         guard case var .loaded(content) = state else {
-            // A play that arrives before Home has any content to update is
-            // discarded outright — there is no row to change and nothing here
-            // schedules a look later. Worth seeing, because from the outside it is
-            // indistinguishable from the play never happening.
+            // There may be no card to update yet, but a completed episode still
+            // refreshes Home through the deferred playback reload above.
             ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.homeMutationLine(
                 played: mutation.played,
                 resumePosition: mutation.resumePosition,
                 onRow: false,
-                reloadScheduled: false,
+                reloadScheduled: completedEpisode,
                 state: String(describing: state)
             ))
             return
@@ -796,9 +812,8 @@ public final class HomeViewModel {
         // full reload (relaunch). Detect that case here and trigger a *silent*
         // re-aggregation so the new card is fetched from its provider (a media
         // share reads its freshly-persisted local resume off disk) and slots in —
-        // no skeleton flash, no focus reset. Gated to an in-progress resume (not a
-        // finish, which *leaves* Continue Watching) that matches nothing already
-        // loaded, so a normal re-watch or mark-watched never forces a reload.
+        // no skeleton flash, no focus reset. In-progress resumes already on the
+        // row only need an in-place update; episode finishes also fetch Next Up.
         let isInProgressResume = (mutation.resumePosition ?? 0) > 0 && !(mutation.played ?? false)
         let alreadyOnHome = content.continueWatching.contains { mutation.targets($0) }
         // A title played for the first time has never been on this row, so there is
@@ -832,13 +847,13 @@ public final class HomeViewModel {
             // Still refresh, so the placed card is reconciled with the server's own
             // view — cross-server sources, episode linkage, artwork it may know
             // better — once that view catches up.
-            scheduleNewResumeReload()
+            schedulePlaybackReload()
         }
         ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.homeMutationLine(
             played: mutation.played,
             resumePosition: mutation.resumePosition,
             onRow: alreadyOnHome || placedCard,
-            reloadScheduled: isInProgressResume && !alreadyOnHome,
+            reloadScheduled: completedEpisode || (isInProgressResume && !alreadyOnHome),
             state: placedCard ? "loaded placed-card" : "loaded"
         ))
 
@@ -1223,9 +1238,9 @@ public final class HomeViewModel {
     /// persistence wins. Keeping them out of the snapshot is what bounds it.
     private var unconfirmedContinueWatchingIDs: Set<String> = []
 
-    /// In-flight guard so a burst of resume ticks for a not-yet-loaded title
-    /// coalesces into a single silent re-aggregation instead of stacking reloads.
-    private var newResumeReloadInFlight = false
+    /// Coalesces playback-driven refreshes without losing a completion that
+    /// arrives after the current fetch started.
+    private var playbackReloadInFlight = false
 
     /// The scope keys a mutation addresses. `scopedItemIDs` already carries the
     /// exact `(account, item)` pairs the fan-out targeted; the played card
@@ -1299,21 +1314,18 @@ public final class HomeViewModel {
         for item in fetched { serverConfirmedTargets.formUnion(Self.scopeKeys(of: item)) }
     }
 
-    /// Silently re-aggregates Home so a brand-new resume is backed by real server
-    /// data as soon as the servers have it.
-    ///
-    /// This is now a follow-up rather than the way the title appears: the played
-    /// card is placed on the row immediately by ``applyWatchedState(_:)``, because
-    /// the app already has it and does not need to ask anyone. The reload exists so
-    /// the placed card is reconciled with the server's own view (artwork, episode
-    /// linkage, cross-server sources) once that view catches up.
-    private func scheduleNewResumeReload() {
-        guard !newResumeReloadInFlight, case .loaded = state else { return }
-        newResumeReloadInFlight = true
+    /// Fetches the server's Next Up after an episode finishes, or reconciles a
+    /// newly placed resume card. Existing rows remain visible throughout.
+    private func schedulePlaybackReload() {
+        guard !playbackReloadInFlight else {
+            if isLoading { wantsReloadAfterCurrent = true }
+            return
+        }
+        playbackReloadInFlight = true
         Task { [weak self] in
             guard let self else { return }
             await self.load(showLoadingState: false)
-            self.newResumeReloadInFlight = false
+            self.playbackReloadInFlight = false
         }
     }
 
