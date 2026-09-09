@@ -51,7 +51,7 @@ enum PlozziOSHeroMetrics {
             )
         }
         let base: CGFloat = style == .compactPortrait
-            ? (surfaceRole == .detail && !showsEpisodeStill ? 480 : 610)
+            ? (surfaceRole == .detail && !showsEpisodeStill ? 520 : 610)
             : (surfaceRole == .detail ? 760 : 680)
         return base + accessibilityExtra
     }
@@ -2722,7 +2722,6 @@ private struct PlozziOSHeroMetadata: View {
     }
 
     var body: some View {
-        let contextParts = separatesSummary ? factComponents : effectiveGenres
         VStack(
             alignment: style == .compactPortrait ? .center : .leading,
             spacing: 9
@@ -2785,13 +2784,13 @@ private struct PlozziOSHeroMetadata: View {
                 .accessibilityAddTraits(.isHeader)
             }
 
-            if effectiveRatingBadge != nil || !contextParts.isEmpty {
+            if !separatesSummary, effectiveRatingBadge != nil || !effectiveGenres.isEmpty {
                 HStack(spacing: 10) {
                     if let badge = effectiveRatingBadge {
                         MediaBadgeChip(badge: badge)
                     }
-                    if !contextParts.isEmpty {
-                        Text(contextParts.joined(separator: "  ·  "))
+                    if !effectiveGenres.isEmpty {
+                        Text(effectiveGenres.joined(separator: "  ·  "))
                             .font(.subheadline.weight(.medium))
                             .lineLimit(1)
                     }
@@ -2950,14 +2949,28 @@ private struct PlozziOSDetailSummary: View {
     let hidesRatings: Bool
 
     var body: some View {
+        let facts = HeroContentPolicy.detailFacts(focused: focused)
+        let certificate = HeroContentPolicy.ratingBadge(focused: focused, root: root)
         let genres = HeroContentPolicy.genres(focused: focused, root: root)
         let ratings = hidesRatings ? [] : HeroContentPolicy.ratings(focused: focused, root: root)
         let badges = HeroContentPolicy.technicalBadges(
             focused: focused, root: root, override: technicalBadgesOverride
         )
         let description = HeroContentPolicy.detailDescription(focused: focused, root: root)
-        if description != nil || !genres.isEmpty || !ratings.isEmpty || !badges.isEmpty {
-            VStack(alignment: .leading, spacing: 16) {
+        if description != nil || certificate != nil || !facts.isEmpty
+            || !genres.isEmpty || !ratings.isEmpty || !badges.isEmpty {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("About")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(palette.primaryText)
+                    .accessibilityAddTraits(.isHeader)
+
+                PlozziOSDetailContext(
+                    certificate: certificate,
+                    facts: facts,
+                    genres: genres
+                )
+
                 if let description {
                     Text(description.overviewMarkdownWithLegibleLinks(
                         textColor: palette.primaryText,
@@ -2966,12 +2979,6 @@ private struct PlozziOSDetailSummary: View {
                     .font(.body)
                     .foregroundStyle(palette.primaryText.opacity(0.92))
                     .fixedSize(horizontal: false, vertical: true)
-                }
-                if !genres.isEmpty {
-                    Text(genres.joined(separator: "  ·  "))
-                        .font(.subheadline)
-                        .foregroundStyle(palette.primaryText.opacity(0.8))
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 AdaptiveMediaMetadataRow(
                     facts: [],
@@ -2982,10 +2989,43 @@ private struct PlozziOSDetailSummary: View {
             .multilineTextAlignment(.leading)
             .frame(maxWidth: 500, alignment: .leading)
             .padding(.horizontal, PlozziOSPageLayout.horizontalInset(for: .compactPortrait))
-            .padding(.top, 4)
-            .padding(.bottom, 12)
+            .padding(.top, 28)
+            .padding(.bottom, 24)
             .frame(maxWidth: .infinity, alignment: .center)
             .background(palette.backgroundBase)
+        }
+    }
+}
+
+private struct PlozziOSDetailContext: View {
+    @Environment(\.themePalette) private var palette
+    let certificate: MediaBadge?
+    let facts: [String]
+    let genres: [String]
+
+    var body: some View {
+        if certificate != nil || !facts.isEmpty || !genres.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                if certificate != nil || !facts.isEmpty {
+                    HStack(spacing: 10) {
+                        if let certificate {
+                            MediaBadgeChip(badge: certificate)
+                        }
+                        if !facts.isEmpty {
+                            Text(facts.joined(separator: "  ·  "))
+                                .font(.subheadline.weight(.medium))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .foregroundStyle(palette.primaryText)
+                }
+                if !genres.isEmpty {
+                    Text(genres.joined(separator: "  ·  "))
+                        .font(.subheadline)
+                        .foregroundStyle(palette.primaryText.opacity(0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 }
