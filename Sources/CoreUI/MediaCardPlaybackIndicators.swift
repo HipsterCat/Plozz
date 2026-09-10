@@ -343,4 +343,33 @@ enum MediaPlaybackIndicatorPresentation {
         !item.isPlayed && !hasStartedPlayback(item) && !hidesStatus
     }
 }
+
+#if DEBUG
+#Preview("In progress") {
+    MediaCardPlaybackIndicators(
+        item: MediaItem(
+            id: "e2",
+            title: "Half Loop",
+            kind: .episode,
+            parentTitle: "Severance",
+            seasonNumber: 1,
+            episodeNumber: 2,
+            seriesID: "s1",
+            runtime: 53 * 60,
+            resumePosition: 20 * 60,
+            playedPercentage: 0.38
+        ),
+        badgeInset: 12,
+        progressHeight: 6,
+        progressHorizontalInset: 12,
+        progressBottomInset: 12
+    )
+    .frame(width: 280, height: 420)
+    .background { MediaArtworkPlaceholder() }
+    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 #endif

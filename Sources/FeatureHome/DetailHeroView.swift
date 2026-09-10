@@ -2105,7 +2105,40 @@ private struct SeriesDetailHeroBackdrop: View {
     }
 }
 
+///  SPLIT. DOES NOT RENDER. PREVIEW CAN NOT BE SHOWN.
+
 #if DEBUG
+private struct DetailHeroPreviewHost: View {
+    let item: MediaItem
+    var playTitle: LocalizedStringResource? = "Play"
+    var playProgress: Double? = nil
+    var playRemainingText: String? = nil
+    var playSeasonEpisodeText: String? = nil
+    var presentsEpisodeStill = false
+    var onPlayTrailer: (() -> Void)? = nil
+
+//    @State private var trailerController = HeroTrailerController()
+//    @State private var heroBackground = HeroBackgroundSettingsModel()
+
+    var body: some View {
+        DetailHeroView(
+            item: item,
+            presentsEpisodeStill: presentsEpisodeStill,
+            spoilerSettings: .default,
+            playTitle: playTitle,
+            onPlay: {},
+            playProgress: playProgress,
+            playRemainingText: playRemainingText,
+            playSeasonEpisodeText: playSeasonEpisodeText,
+            onPlayTrailer: onPlayTrailer
+        )
+//        .environment(trailerController)
+//        .environment(heroBackground)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+    }
+}
+
 #Preview("Credit line") {
     DetailHeroCreditLine(
         label: "Starring",
@@ -2132,6 +2165,70 @@ private struct SeriesDetailHeroBackdrop: View {
     .padding(80)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
     .background(.windowBackground)
+}
+
+#Preview("Hero · movie") {
+    DetailHeroPreviewHost(
+        item: MediaItem(
+            id: "m1",
+            title: "Dune",
+            kind: .movie,
+            overview: "A gifted young man must travel to the most dangerous planet in the universe to ensure the future of his people.",
+            productionYear: 2021,
+            officialRating: "PG-13",
+            genres: ["Science Fiction", "Adventure"]
+        )
+    )
+}
+
+#Preview("Hero · resume") {
+    DetailHeroPreviewHost(
+        item: MediaItem(
+            id: "m1",
+            title: "Dune",
+            kind: .movie,
+            overview: "A gifted young man must travel to the most dangerous planet in the universe to ensure the future of his people.",
+            productionYear: 2021,
+            runtime: 155 * 60,
+            resumePosition: 62 * 60,
+            playedPercentage: 0.4
+        ),
+        playTitle: "Resume",
+        playProgress: 0.4,
+        playRemainingText: "1h 33m"
+    )
+}
+
+#Preview("Hero · series") {
+    DetailHeroPreviewHost(
+        item: MediaItem(
+            id: "s1",
+            title: "Severance",
+            kind: .series,
+            overview: "Mark Scout leads a team of office workers whose memories have been surgically divided between their work and personal lives.",
+            productionYear: 2022
+        ),
+        playSeasonEpisodeText: "S1, E2"
+    )
+}
+
+#Preview("Hero · episode still") {
+    DetailHeroPreviewHost(
+        item: MediaItem(
+            id: "e2",
+            title: "Half Loop",
+            kind: .episode,
+            overview: "Mark attends a dinner party, where he learns a shocking truth.",
+            parentTitle: "Severance",
+            seasonNumber: 1,
+            episodeNumber: 2,
+            seriesID: "s1",
+            runtime: 53 * 60,
+            resumePosition: 20 * 60,
+            playedPercentage: 0.38
+        ),
+        presentsEpisodeStill: true
+    )
 }
 #endif
 #endif

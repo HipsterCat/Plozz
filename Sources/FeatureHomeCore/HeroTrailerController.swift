@@ -422,14 +422,16 @@ public final class HeroTrailerController {
 
     private func activateSession() {
         #if !os(macOS)
-        do {
-            let session = AVAudioSession.sharedInstance()
-            // Mix so a muted trailer never disturbs other audio; a sound-on trailer
-            // still coexists (and theme music is blocked separately at the app level).
-            try session.setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
-            try session.setActive(true)
-        } catch {
-            PlozzLog.app.error("Hero trailer: audio session activation failed error=\(String(describing: error))")
+        Task.detached(priority: .userInitiated) {
+            do {
+                let session = AVAudioSession.sharedInstance()
+                // Mix so a muted trailer never disturbs other audio; a sound-on trailer
+                // still coexists (and theme music is blocked separately at the app level).
+                try session.setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
+                try session.setActive(true)
+            } catch {
+                PlozzLog.app.error("Hero trailer audio session failed: \(error.localizedDescription)")
+            }
         }
         #endif
     }

@@ -133,4 +133,21 @@ private struct CastMemberCard: View {
     }
 }
 
+// STEAL at least they are initials
+
+#if DEBUG
+#Preview("Cast") {
+    CastRowView(
+        people: [
+            MediaPerson(id: "a1", name: "Timothée Chalamet", role: "Paul Atreides", kind: "Actor"),
+            MediaPerson(id: "a2", name: "Zendaya", role: "Chani", kind: "Actor"),
+            MediaPerson(id: "a3", name: "Rebecca Ferguson", role: "Lady Jessica", kind: "Actor")
+        ]
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
+
 #endif

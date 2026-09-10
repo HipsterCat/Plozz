@@ -34,4 +34,13 @@ public struct InlineErrorMessage: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+
+#if DEBUG
+#Preview("Error") {
+    InlineErrorMessage(Text("Can’t reach the server."))
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+}
+#endif
 #endif

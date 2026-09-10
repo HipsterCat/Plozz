@@ -300,4 +300,46 @@ public struct EpisodeColumnCard: View, Equatable {
         }
     }
 }
+
+#if DEBUG
+#Preview("Unwatched") {
+    EpisodeColumnCard(
+        item: MediaItem(
+            id: "e1",
+            title: "Good News About Hell",
+            kind: .episode,
+            parentTitle: "Severance",
+            seasonNumber: 1,
+            episodeNumber: 1,
+            seriesID: "s1",
+            runtime: 53 * 60
+        ),
+        action: {}
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+
+#Preview("In progress") {
+    EpisodeColumnCard(
+        item: MediaItem(
+            id: "e2",
+            title: "Half Loop",
+            kind: .episode,
+            parentTitle: "Severance",
+            seasonNumber: 1,
+            episodeNumber: 2,
+            seriesID: "s1",
+            runtime: 53 * 60,
+            resumePosition: 20 * 60,
+            playedPercentage: 0.38
+        ),
+        action: {}
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 #endif

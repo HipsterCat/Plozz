@@ -1503,4 +1503,17 @@ public enum HeroBackgroundSampler {
     }
 }
 #endif
+
+#if DEBUG
+#Preview("Text fallback") {
+    HeroLogoArtwork(references: []) {
+        Text("Dune")
+            .font(.largeTitle.bold())
+            .foregroundStyle(.white)
+    }
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 #endif

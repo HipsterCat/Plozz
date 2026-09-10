@@ -31,4 +31,23 @@ public struct PlozzScrollCard<Content: View>: View {
             .clipShape(RoundedRectangle(cornerRadius: PlozzTheme.Metrics.mediumCardCornerRadius, style: .continuous))
     }
 }
+
+#if DEBUG
+#Preview("Card") {
+    PlozzScrollCard {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Movies")
+            Text("TV Shows")
+            Text("Collections")
+        }
+        .font(.title2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(28)
+    }
+    .frame(width: 560, height: 280)
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 #endif

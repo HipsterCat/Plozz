@@ -1172,4 +1172,23 @@ private extension View {
     }
 }
 
+#if DEBUG
+#Preview("Poster row") {
+    MediaRowView(
+        title: Text("Recently Added"),
+        items: [
+            MediaItem(id: "m1", title: "Dune", kind: .movie, productionYear: 2021),
+            MediaItem(id: "m2", title: "Arrival", kind: .movie, productionYear: 2016),
+            MediaItem(id: "m3", title: "Blade Runner 2049", kind: .movie, productionYear: 2017),
+            MediaItem(id: "m4", title: "Ex Machina", kind: .movie, productionYear: 2014)
+        ],
+        style: .poster,
+        onSelect: { _ in }
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
+
 #endif

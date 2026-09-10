@@ -262,3 +262,19 @@ public struct PlayResumeButtonLabel: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("In progress") {
+    PlayResumeButtonLabel(
+        title: "Resume",
+        progress: 0.4,
+        remainingText: "32m",
+        onLight: false
+    )
+    .font(.title2.weight(.semibold))
+    .foregroundStyle(.white)
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif

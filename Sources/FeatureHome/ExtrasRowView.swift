@@ -113,4 +113,37 @@ private struct ExtrasFailureRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+
+#if DEBUG
+#Preview("Loading") {
+    ExtrasRowView(
+        state: .loading,
+        onSelect: { _ in },
+        onRetry: {}
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+
+#Preview("Loaded") {
+    ExtrasRowView(
+        state: .loaded([
+            MediaExtra(
+                item: MediaItem(id: "x1", title: "Official Trailer", kind: .video),
+                kind: .trailer
+            ),
+            MediaExtra(
+                item: MediaItem(id: "x2", title: "Behind the Scenes", kind: .video),
+                kind: .behindTheScenes
+            )
+        ]),
+        onSelect: { _ in },
+        onRetry: {}
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 #endif

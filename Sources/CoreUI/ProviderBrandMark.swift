@@ -196,4 +196,13 @@ public struct ProviderBrandMark: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Jellyfin") {
+    ProviderBrandMark(provider: .jellyfin, size: 64)
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+}
+#endif
 #endif

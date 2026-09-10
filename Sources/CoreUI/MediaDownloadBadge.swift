@@ -102,4 +102,27 @@ public struct MediaDownloadBadge: View {
         .frame(width: diameter, height: diameter)
     }
 }
+
+#if DEBUG
+#Preview("Completed") {
+    MediaDownloadBadge(state: .completed, size: 36)
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+}
+
+#Preview("In progress") {
+    MediaDownloadBadge(state: .inProgress(fraction: 0.4), size: 36)
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+}
+
+#Preview("Failed") {
+    MediaDownloadBadge(state: .failed, size: 36)
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+}
+#endif
 #endif

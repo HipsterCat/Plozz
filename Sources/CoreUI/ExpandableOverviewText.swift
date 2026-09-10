@@ -374,4 +374,21 @@ public struct ExpandableOverviewText: View {
         #endif
     }
 }
+
+// STEAL to compare
+
+#if DEBUG
+#Preview("Long text") {
+    ExpandableOverviewText(
+        text: "A filmmaker recalls his childhood, when he fell in love with the movies at his village's theater and formed a deep friendship with the theater's projectionist. Years later he returns home for the funeral and finds the reels that taught him how to see.",
+        title: "Cinema Paradiso",
+        lineLimit: 3,
+        font: .title3
+    )
+    .frame(width: 640)
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 #endif

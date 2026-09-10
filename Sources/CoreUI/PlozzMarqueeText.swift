@@ -294,4 +294,22 @@ private struct EdgeFade: ViewModifier {
 
     private func clamp(_ value: CGFloat) -> CGFloat { min(max(value, 0), 1) }
 }
+
+// Definitely STEAL
+
+#if DEBUG
+#Preview("Marquee") {
+    PlozzMarqueeText(
+        text: Text("The Emperor of Dune: Part Two"),
+        font: .headline.weight(.semibold),
+        color: .white,
+        inset: 16,
+        isFocused: true
+    )
+    .frame(width: 220)
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 #endif

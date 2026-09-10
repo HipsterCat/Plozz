@@ -143,4 +143,28 @@ public struct CircularFocusTile<Avatar: View, Caption: View>: View {
         .plozzCardFocusTransition(isFocused: isFocused)
     }
 }
+
+#if DEBUG
+#Preview("Tile") {
+    CircularFocusTile(
+        diameter: 150,
+        focusPadding: 8,
+        action: {}
+    ) {
+        Circle().fill(.secondary.opacity(0.35))
+            .overlay {
+                Text("TC")
+                    .font(.title.weight(.semibold))
+                    .foregroundStyle(.white)
+            }
+    } caption: { _ in
+        Text("Timothée Chalamet")
+            .font(.headline)
+            .foregroundStyle(.white)
+    }
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 #endif

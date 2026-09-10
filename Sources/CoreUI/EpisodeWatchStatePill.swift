@@ -339,4 +339,30 @@ public struct ResumeChipOverlay: View {
     }
 
 }
+
+// STEAL baseline
+
+#if DEBUG
+#Preview("In progress") {
+    EpisodeWatchStatePill(
+        item: MediaItem(
+            id: "e2",
+            title: "Half Loop",
+            kind: .episode,
+            parentTitle: "Severance",
+            seasonNumber: 1,
+            episodeNumber: 2,
+            seriesID: "s1",
+            runtime: 53 * 60,
+            resumePosition: 20 * 60,
+            playedPercentage: 0.38
+        ),
+        showsRuntimeWhenIdle: false,
+        showsWatched: false
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 #endif

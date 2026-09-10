@@ -250,4 +250,20 @@ public extension HeroBackdropLayer where Video == EmptyView {
         )
     }
 }
+
+#if DEBUG
+#Preview("Empty") {
+    HeroBackdropLayer(
+        urls: [],
+        height: 900,
+        scrimTone: .black
+    )
+    .frame(
+        maxWidth: .infinity,
+        maxHeight: .infinity,
+        alignment: .bottomTrailing
+    )
+    .background(.gray)
+}
+#endif
 #endif

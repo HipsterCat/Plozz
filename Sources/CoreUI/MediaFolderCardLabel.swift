@@ -34,4 +34,14 @@ public struct MediaFolderCardLabel: View {
         .accessibilityHint(Text("Open folder"))
     }
 }
+
+#if DEBUG
+#Preview("Folder") {
+    MediaFolderCardLabel(item: MediaItem(id: "f1", title: "Collections", kind: .folder))
+        .frame(width: 280)
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+}
+#endif
 #endif

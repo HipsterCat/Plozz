@@ -723,6 +723,18 @@ private struct FilteredArtworkImage<Content: View, Placeholder: View>: View {
     }
 }
 #endif
+
+#if DEBUG
+#Preview("Missing URL") {
+    FallbackAsyncImage(urls: []) {
+        MediaArtworkPlaceholder()
+    }
+    .frame(width: 280, height: 420)
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 #endif
 
 /// Retry budget for ``FallbackAsyncImage``'s network passes. A file-level enum

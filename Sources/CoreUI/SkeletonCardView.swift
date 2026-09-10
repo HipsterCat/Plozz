@@ -264,4 +264,22 @@ public struct SkeletonCardView: View {
     }
 }
 
+#if DEBUG
+#Preview("Poster") {
+    SkeletonCardView(style: .poster)
+        .frame(width: 280)
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+}
+
+#Preview("Landscape") {
+    SkeletonCardView(style: .landscape)
+        .frame(width: 480)
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+}
+#endif
+
 #endif

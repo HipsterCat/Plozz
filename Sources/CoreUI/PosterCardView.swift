@@ -1445,4 +1445,73 @@ public extension MediaItem {
     }
 }
 
+// STEAL compare with rivulet, seems like identical, but this one artwork with the title
+
+#if DEBUG
+#Preview("Unwatched") {
+    PosterCardView(item: MediaItem(id: "m1", title: "Dune", kind: .movie, productionYear: 2021), style: .poster, action: {})
+        .frame(width: 280)
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+}
+
+#Preview("In progress") {
+    PosterCardView(
+        item: MediaItem(
+            id: "e2",
+            title: "Half Loop",
+            kind: .episode,
+            parentTitle: "Severance",
+            seasonNumber: 1,
+            episodeNumber: 2,
+            seriesID: "s1",
+            runtime: 53 * 60,
+            resumePosition: 20 * 60,
+            playedPercentage: 0.38
+        ),
+        style: .poster,
+        playsOnSelect: true,
+        action: {}
+    )
+    .frame(width: 280)
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+
+#Preview("Watched") {
+    PosterCardView(
+        item: MediaItem(id: "m1", title: "Dune", kind: .movie, productionYear: 2021, isPlayed: true),
+        style: .poster,
+        action: {}
+    )
+    .frame(width: 280)
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+
+#Preview("Landscape episode") {
+    PosterCardView(
+        item: MediaItem(
+            id: "e2",
+            title: "Half Loop",
+            kind: .episode,
+            parentTitle: "Severance",
+            seasonNumber: 1,
+            episodeNumber: 2,
+            seriesID: "s1"
+        ),
+        style: .landscape,
+        showsSeriesArtwork: true,
+        action: {}
+    )
+    .frame(width: 480)
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
+
 #endif

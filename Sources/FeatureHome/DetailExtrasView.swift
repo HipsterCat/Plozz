@@ -525,4 +525,30 @@ private struct StudioTextChip: View {
     }
 }
 
+// details footer columns to compare CHECK
+
+#if DEBUG
+#Preview("Extras") {
+    DetailExtrasView(
+        item: MediaItem(
+            id: "m1",
+            title: "Dune",
+            kind: .movie,
+            overview: "A gifted young man must travel to the most dangerous planet in the universe to ensure the future of his people.",
+            productionYear: 2021,
+            officialRating: "PG-13",
+            genres: ["Science Fiction", "Adventure"],
+            people: [
+                MediaPerson(id: "a1", name: "Timothée Chalamet", role: "Paul Atreides", kind: "Actor"),
+                MediaPerson(id: "a2", name: "Zendaya", role: "Chani", kind: "Actor"),
+                MediaPerson(id: "d1", name: "Denis Villeneuve", kind: "Director")
+            ],
+            runtime: 155 * 60
+        )
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 #endif

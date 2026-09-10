@@ -72,4 +72,14 @@ public struct MediaArtworkPlaceholder: View {
         .accessibilityHidden(true)
     }
 }
+
+#if DEBUG
+#Preview("Placeholder") {
+    MediaArtworkPlaceholder()
+        .frame(width: 280, height: 420)
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+}
+#endif
 #endif

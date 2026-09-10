@@ -73,4 +73,27 @@ struct HomeContentNoticeView: View {
         .padding(.vertical, 44)
     }
 }
+
+#if DEBUG
+#Preview("No servers") {
+    HomeContentNoticeView(notice: .noServersConfigured, onReload: {})
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .background(.black)
+}
+
+#Preview("Servers off") {
+    HomeContentNoticeView(notice: .allServersSwitchedOff, onReload: {})
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .background(.black)
+}
+
+#Preview("Libraries hidden") {
+    HomeContentNoticeView(notice: .allLibrariesHidden, onReload: {})
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .background(.black)
+}
+#endif
 #endif

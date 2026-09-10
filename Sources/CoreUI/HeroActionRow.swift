@@ -28,3 +28,16 @@ public struct HeroActionRow<Content: View>: View {
             .fixedSize(horizontal: !stacksVertically, vertical: true)
     }
 }
+
+/// STEAL baseline buttons
+#if DEBUG
+#Preview("Actions") {
+    HeroActionRow(alignment: .leading, spacing: 16) {
+        Button("Play", systemImage: "play.fill") {}
+        Button("Trailer", systemImage: "film") {}
+    }
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
