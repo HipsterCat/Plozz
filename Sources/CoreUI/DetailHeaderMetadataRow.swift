@@ -43,9 +43,7 @@ public struct DetailHeaderMetadataRow: View {
                     WrappingHStackLayout(
                         alignment: .center,
                         spacing: 12,
-                        lineSpacing: 8,
-                        balancesLastRow: true
-                    ) {
+                        lineSpacing: 8                    ) {
                         ForEach(ratings) { RatingBadge(rating: $0) }
                         if !badges.isEmpty {
                             formatsDisclosure
