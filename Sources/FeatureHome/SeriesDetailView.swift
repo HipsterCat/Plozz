@@ -70,6 +70,7 @@ struct SeriesDetailView: View {
     /// snap from a geometrically-nearer chip. Once true, every chip is focusable
     /// so left/right moves freely between seasons; it resets when focus leaves.
     @State private var seasonBarEngaged = false
+    @State private var browserEntry = SeriesBrowserEntry.hero
     /// Whether focus is currently somewhere inside the episode browser.
     ///
     /// Gates the hero-blur backstop below. Focus leaving the hero does NOT imply
@@ -242,6 +243,7 @@ struct SeriesDetailView: View {
     /// downward exit, which we animate ourselves because the page is frozen while
     /// focus is inside the browser.
     private static let extrasAnchorID = "series-extras-top"
+    private static let loadingSeasonID = "series-seasons-loading"
     /// One duration for the entire hero↔browser transition, matching Home. Every
     /// moving part inherits this ambient transaction instead of carrying its own
     /// `.animation`, so the return scroll and the hero/backdrop transforms can
@@ -278,7 +280,15 @@ struct SeriesDetailView: View {
             // server. Skipped while an episode is fronted (the episode drives the
             // hero, and `frontSwitchTarget` re-fronts the matching one).
             .onChange(of: series.id) { _, _ in
+                browserEntry = .hero
+                seasonBarEngaged = false
                 if heroItem.kind == .series { heroItem = series }
+            }
+            .onChange(of: activeSeasonID) { _, id in
+                // Replace a focused loading control with the real active tab,
+                // not a geometrically-nearer tab or the About section.
+                guard browserEntry == .loadingSeasons, let id else { return }
+                focusedSeasonID = id
             }
             // Warm the current season's episode thumbnails as soon as they load, so
             // cards already have their thumbnail when scrolled to rather than
@@ -532,13 +542,13 @@ struct SeriesDetailView: View {
                     SeriesEpisodeBrowser(
                         series: series,
                         recedeModel: recedeModel,
-                        showsSeasons: !seasons.isEmpty || requestAvailability?.hasSeasonRequestContent == true,
+                        showsSeasons: showsSeasonEntry || requestAvailability?.hasSeasonRequestContent == true,
                         focusAnchorID: Self.browserFocusAnchorID,
                         seasonContent: {
                             // Keep the season chips + "request seasons" button hidden
                             // while focus is up in the hero; reveal them once the page
                             // scrolls down into the browser. The bar stays in the
-                            // hierarchy (opacity, not removed) so pressing down still
+                            // hierarchy (masked, not alpha-zero) so pressing down still
                             // lands on the active season chip.
                             //
                             // `seasonBarEngaged` is an additional reveal condition
@@ -578,15 +588,6 @@ struct SeriesDetailView: View {
                         leadingInset: PlozzTheme.Metrics.heroLeadingPadding,
                         seriesRecedeModel: recedeModel,
                         revealsSeriesCastWithoutBrowser: revealsCastWithoutBrowser,
-                        // Only a genuinely COVERED page is inert. This used to be
-                        // `ignoresSystemFocusMoves`, which also carries the
-                        // transient reclaim latch — and that latch drives
-                        // `.disabled()` on these rows, so any moment it was true
-                        // the cast and Related tiles were visible and focusable
-                        // but swallowed every press. The latch's real job is to
-                        // tell the page's focus HANDLERS that a move came from
-                        // tvOS rather than the viewer, which is unrelated to
-                        // whether the viewer may tap a face.
                         suppressesFocus: hasChildOnTop,
                         onCastFocusEntered: {
                             seasonBarEngaged = false
@@ -774,6 +775,7 @@ struct SeriesDetailView: View {
         guard !suppressesDuplicateHeroFocus else { return }
         SeriesFocusTrace.record("heroFocusAccepted")
         rearmEpisodeRailOnHeroFocusIfNeeded()
+        browserEntry = .hero
         seasonBarEngaged = false
         browserHoldsFocus = false
         suppressesDuplicateHeroFocus = true
@@ -788,10 +790,42 @@ struct SeriesDetailView: View {
 
     // MARK: Season tabs
 
+    private var showsSeasonEntry: Bool {
+        SeriesDetailBrowserPolicy.showsSeasonEntry(
+            childrenLoaded: viewModel.state.value?.childrenLoaded == true,
+            hasSeasons: !seasons.isEmpty
+        )
+    }
+
+    private var activeSeasonID: String? {
+        SeriesResume.openingSeasonID(
+            seasons: seasons,
+            episodes: stampedLooseEpisodes,
+            selectedSeasonID: selectedSeasonID,
+            preserveSelection: hasUserDirectedFocus,
+            initialSeasonID: initialSeasonID,
+            initialEpisode: initialEpisode,
+            resumeEpisode: viewModel.serverResumeEpisode
+        )
+    }
+
     private func seasonTabBar(onFocusEntered: @escaping () -> Void) -> some View {
         let hasRequestAccessory = requestAvailability?.hasSeasonRequestContent == true || requestAvailabilityFailed
         return ScrollViewReader { proxy in
-            if hasRequestAccessory {
+            if seasons.isEmpty, showsSeasonEntry {
+                LoadingSeasonTab(isFocused: focusedSeasonID == Self.loadingSeasonID)
+                    .focusable(browserHoldsFocus)
+                    .focusEffectDisabled()
+                    .focused($focusedSeasonID, equals: Self.loadingSeasonID)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, PlozzTheme.Metrics.heroLeadingPadding)
+                    .frame(height: SeriesEpisodeBrowserLayout.seasonBarHeight)
+                    .focusSection()
+                    .onChange(of: focusedSeasonID) { _, id in
+                        guard id == Self.loadingSeasonID else { return }
+                        enterSeasonBrowser(onFocusEntered: onFocusEntered)
+                    }
+            } else if hasRequestAccessory {
                 HStack(spacing: 18) {
                     if !seasons.isEmpty {
                         seasonScroller(
@@ -823,6 +857,27 @@ struct SeriesDetailView: View {
                     .focusSection()
             }
         }
+        .background {
+            #if os(tvOS)
+            NativeFocusRegionObserver(isEnabled: !ignoresSystemFocusMoves) {
+                SeriesFocusTrace.record("nativeSeasonEntry")
+                enterSeasonBrowser(onFocusEntered: onFocusEntered)
+            }
+            #endif
+        }
+    }
+
+    private func enterSeasonBrowser(onFocusEntered: () -> Void) {
+        let entering = !seasonBarEngaged && browserEntry != .loadingSeasons
+        let shouldReveal = !browserHoldsFocus || !recedeModel.isReceded
+        let loading = seasons.isEmpty && showsSeasonEntry
+        seasonBarEngaged = !loading
+        browserEntry = loading ? .loadingSeasons : .browser
+        browserHoldsFocus = true
+        if !loading { hasUserDirectedFocus = true }
+        hasSettledOpeningFocus = true
+        if entering { episodeRailResetToken += 1 }
+        if shouldReveal { onFocusEntered() }
     }
 
     private func seasonScroller(
@@ -830,10 +885,11 @@ struct SeriesDetailView: View {
         hasRequestAccessory: Bool,
         onFocusEntered: @escaping () -> Void
     ) -> some View {
-            ScrollView(.horizontal, showsIndicators: false) {
+        let activeID = activeSeasonID
+        return ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(seasons) { season in
-                        seasonChip(season)
+                        seasonChip(season, activeID: activeID)
                     }
                     // (No trailing spacer: we no longer leading-align chips, so the
                     // last chip should sit at the natural right edge — the phantom
@@ -884,21 +940,9 @@ struct SeriesDetailView: View {
                 enabled: hasRequestAccessory
             ))
             .onChange(of: focusedSeasonID) { _, newValue in
-                guard let id = newValue else { return }
-                let isEntering = !seasonBarEngaged
-                // We're now inside the bar — open every chip to focus so left/right
-                // navigation between seasons works.
-                seasonBarEngaged = true
-                browserHoldsFocus = true
-                // User-driven focus: fence the opening Play claim (see
-                // `hasSettledOpeningFocus`) so it can't fire behind them.
-                hasUserDirectedFocus = true
-                hasSettledOpeningFocus = true
-                if isEntering { onFocusEntered() }
-                // Focus has genuinely left the episode rail (it's now on the bar), so
-                // tell the rail to re-arm its entry gate for the next down-press.
-                episodeRailResetToken += 1
-                guard let season = seasons.first(where: { $0.id == id }) else { return }
+                guard let id = newValue,
+                      let season = seasons.first(where: { $0.id == id }) else { return }
+                enterSeasonBrowser(onFocusEntered: onFocusEntered)
                 select(season)
                 // Deliberately *don't* move the hero to the season: focusing the tab bar
                 // keeps the page on the episode you were last viewing, so going up and
@@ -962,15 +1006,10 @@ struct SeriesDetailView: View {
             hasOwnedSeasons: !seasons.isEmpty,
             seasonBarEngaged: seasonBarEngaged,
             hasRequestHandler: onRequestSeasons != nil
-        ))
+        ) || !browserHoldsFocus)
         .onChange(of: requestSeasonsFocused) { _, focused in
             if focused {
-                let isEntering = !seasonBarEngaged
-                seasonBarEngaged = true
-                hasUserDirectedFocus = true
-                hasSettledOpeningFocus = true
-                if isEntering { onFocusEntered() }
-                episodeRailResetToken += 1
+                enterSeasonBrowser(onFocusEntered: onFocusEntered)
             }
         }
     }
@@ -987,7 +1026,7 @@ struct SeriesDetailView: View {
     /// bar's disabled-others gate + `.focusSection()`, not by leading-alignment.
     private func fulfilSeasonRevealIfPending(using proxy: ScrollViewProxy) {
         guard pendingSeasonReveal, !seasonBarEngaged else { return }
-        guard let id = selectedSeasonID ?? seasons.first?.id else { return }
+        guard let id = activeSeasonID else { return }
         // Wait until both the viewport and the target chip have been measured.
         guard seasonBarViewportWidth > 0, let frame = seasonChipFrames[id] else { return }
 
@@ -1019,13 +1058,12 @@ struct SeriesDetailView: View {
     /// lifts into a Liquid-glass pill (matching the Twozz player controls). The
     /// style is applied unconditionally so selection never changes the tab's
     /// identity — that is what keeps left/right focus moving between tabs.
-    private func seasonChip(_ season: MediaItem) -> some View {
-        let isSelected = selectedSeasonID == season.id
+    private func seasonChip(_ season: MediaItem, activeID: String?) -> some View {
+        let isSelected = activeID == season.id
         // The chip focus can land on while *entering* the bar: the active season,
         // falling back to the first one before a selection settles, so the bar is
         // never momentarily unfocusable during initial load.
-        let activeID = selectedSeasonID ?? seasons.first?.id
-        let isFocusable = seasonBarEngaged || season.id == activeID
+        let isFocusable = browserHoldsFocus && (seasonBarEngaged || season.id == activeID)
         return SeasonWatchStateMenu(for: season) {
             select(season)
         } label: {
@@ -1086,12 +1124,7 @@ struct SeriesDetailView: View {
 
     // MARK: Episode rail
 
-    @ViewBuilder
     private func episodeRail(onFocusEntered: @escaping () -> Void) -> some View {
-        if let selectedSeasonID,
-           viewModel.episodes(for: selectedSeasonID) == nil {
-            SeriesEpisodeSkeletonRail()
-        } else {
         // Owned episodes first, then the season's not-yet-aired ones so a viewer can
         // see (and read about) the rest of the run without leaving the page.
         let episodes = currentEpisodes + upcomingPlaceholders
@@ -1110,38 +1143,41 @@ struct SeriesDetailView: View {
         // 50 when the id arrived — the apparent post-arrival "renegotiation".
         // Resolve the same fallback synchronously from the final episode pool so
         // the rail's very first frame already uses its permanent target.
-        let entryTarget = SeriesEpisodeEntry.episode(
-            matching: initialEpisode,
-            in: currentEpisodes
-        )?.id
-        let stableTarget = railTargetID.flatMap { id in
-            currentEpisodes.contains(where: { $0.id == id }) ? id : nil
-        }
-        let target = entryTarget
-            ?? stableTarget
-            ?? SeriesResume.nextUp(in: currentEpisodes)?.id
-        SeriesEpisodeRailContent(
+        let target = episodeEntryTarget(in: currentEpisodes)
+        return SeriesEpisodeRailContent(
             title: railTitle,
             episodes: episodes,
             spoilerSettings: spoilerSettings,
             targetID: target,
-            initialFocusID: initialEpisode == nil ? nil : target,
+            initialFocusID: initialEpisode == nil ? nil : (target ?? initialEpisode?.id),
             focusResetToken: episodeRailResetToken,
             isCovered: hasChildOnTop,
             precedingContainerIDs: precedingSeasonIDs,
+            episodeEntry: MediaRowEpisodeEntry(
+                phase: episodeEntryPhase,
+                isActive: browserEntry == .hero || seasonBarEngaged,
+                onPlaceholderFocus: {
+                    // Entering a loading slot is not an explicit choice of a
+                    // season. Let the arriving resume answer select the right one.
+                    enterEpisodeBrowser(isPlaceholder: true, onFocusEntered: onFocusEntered)
+                },
+                onRetry: {
+                    Task {
+                        if let selectedSeasonID {
+                            await viewModel.loadEpisodes(for: selectedSeasonID)
+                        } else {
+                            await viewModel.reload()
+                        }
+                    }
+                }
+            ),
             onRefocusComplete: {
                 reclaimTimeout?.cancel()
                 reclaimTimeout = nil
                 isReclaimingFocus = false
             },
             onFocusEntered: {
-                seasonBarEngaged = false
-                browserHoldsFocus = true
-                // The user has taken focus into the rail themselves — the opening
-                // Play claim must not fire behind them.
-                hasUserDirectedFocus = true
-                hasSettledOpeningFocus = true
-                onFocusEntered()
+                enterEpisodeBrowser(isPlaceholder: false, onFocusEntered: onFocusEntered)
             },
             onSelect: { item in
                 // An unaired episode has nothing to play and no page worth opening,
@@ -1151,7 +1187,46 @@ struct SeriesDetailView: View {
                 onPlay(item)
             }
         )
+    }
+
+    private var episodeEntryPhase: MediaRowEpisodeEntry.Phase {
+        guard viewModel.state.value?.childrenLoaded == true else { return .loading }
+        if SeriesEpisodeEntry.waitsForResume(
+            isResolving: viewModel.isResolvingServerResume,
+            hasResumeSeed: viewModel.serverResumeEpisode != nil,
+            hasExplicitSelection: hasUserDirectedFocus || initialEpisode != nil || initialSeasonID != nil
+        ) { return .loading }
+        if !seasons.isEmpty, selectedSeasonID == nil || selectedSeasonID != activeSeasonID {
+            return .loading
         }
+        if let id = selectedSeasonID ?? activeSeasonID {
+            switch viewModel.seasonLoadState(for: id) {
+            case .notLoaded: return .loading
+            case .failed: return .failed
+            case .loaded: break
+            }
+        } else if !seasons.isEmpty {
+            return .loading
+        }
+        return currentEpisodes.isEmpty && upcomingPlaceholders.isEmpty ? .empty : .ready
+    }
+
+    private func enterEpisodeBrowser(isPlaceholder: Bool, onFocusEntered: () -> Void) {
+        guard !ignoresSystemFocusMoves else { return }
+        let shouldReveal = !browserHoldsFocus || !recedeModel.isReceded
+        seasonBarEngaged = false
+        browserEntry = .browser
+        browserHoldsFocus = true
+        if !isPlaceholder { hasUserDirectedFocus = true }
+        hasSettledOpeningFocus = true
+        if shouldReveal { onFocusEntered() }
+    }
+
+    private func episodeEntryTarget(in episodes: [MediaItem]) -> String? {
+        SeriesEpisodeEntry.episode(matching: initialEpisode, in: episodes)?.id
+            ?? railTargetID.flatMap { id in episodes.contains { $0.id == id } ? id : nil }
+            ?? playTarget.flatMap { target in episodes.first { $0.id == target.id }?.id }
+            ?? SeriesResume.nextUp(in: episodes)?.id
     }
 
     /// The ids of seasons that come before the one whose rail is showing, so
@@ -1169,7 +1244,7 @@ struct SeriesDetailView: View {
     /// it fires once the selected season's episodes arrive and again when the
     /// season changes — but not on every unrelated re-render.
     private var stillPrefetchKey: String {
-        "\(series.sourceAccountID ?? "_")#\(series.id)#\(selectedSeasonID ?? "loose")#\(currentEpisodes.count)"
+        "\(series.sourceAccountID ?? "_")#\(series.id)#\(selectedSeasonID ?? "loose")#\(currentEpisodes.count)#\(episodeEntryTarget(in: currentEpisodes) ?? "_")"
     }
 
     private var seasonSetKey: String {
@@ -1179,7 +1254,7 @@ struct SeriesDetailView: View {
 
     private var initialSeasonPreparationKey: String {
         let resume = viewModel.serverResumeEpisode
-        return "\(seasonSetKey)#\(resume?.id ?? "")#\(resume?.resumePosition ?? 0)"
+        return "\(seasonSetKey)#\(activeSeasonID ?? "_")#\(viewModel.isResolvingServerResume)#\(resume?.id ?? "")#\(resume?.resumePosition ?? 0)"
     }
 
     /// Warms the **currently selected** season so its episode thumbnails are
@@ -1189,12 +1264,12 @@ struct SeriesDetailView: View {
         if let id = selectedSeasonID {
             await warmSeason(id)
         } else {
-            warmPrimaryThumbnails(for: currentEpisodes)
+            await warmEpisodeThumbnails(currentEpisodes, speculative: false)
         }
     }
 
-    /// Background-warms the nearest seasons after the visible season has settled.
-    /// Bounded so long multi-season shows do not decode their entire catalog.
+    /// Keeps nearby lists warming independently of slow artwork, so selecting
+    /// the next season never waits for the previous neighbor's thumbnails.
     private func prewarmAllSeasons() async {
         try? await Task.sleep(for: .seconds(2.5))
         if Task.isCancelled { return }
@@ -1204,90 +1279,40 @@ struct SeriesDetailView: View {
             .sorted { abs($0.offset - selectedIndex) < abs($1.offset - selectedIndex) }
             .prefix(Self.prewarmSeasonWindow)
             .map(\.element)
-        for season in neighbors {
-            if Task.isCancelled { return }
-            await viewModel.loadEpisodes(for: season.id)
-            await warmSeason(season.id)
-            await Task.yield()
-        }
+        await SeasonPrewarmScheduler.run(
+            seasonIDs: neighbors.map(\.id),
+            loadEpisodes: { await viewModel.loadEpisodes(for: $0) },
+            warmArtwork: { await warmSeason($0, speculative: true) }
+        )
     }
 
     private static let prewarmSeasonWindow = 4
 
-    /// Makes a season's episode thumbnails render with **no gray flash** when its
-    /// rail appears, by guaranteeing each card can seed its image *synchronously*
-    /// from the decoded cache on first frame.
-    ///
-    /// Two episode shapes exist:
-    ///   • Episodes the server has an image for already expose a seedable candidate
-    ///     URL (`posterURL`/`backdropURL`); we just decode it into the cache.
-    ///   • Anime (and other) episodes the server has *no* image for would otherwise
-    ///     get their still from the asynchronous ``ArtworkRouter`` fallback — a URL
-    ///     that is resolved lazily and therefore can **never** be seeded
-    ///     synchronously, which is the root of the persistent one-frame gray flash.
-    ///     For those we resolve the still here (the real per-episode still, else the
-    ///     series hero), decode it, and **inject it as the episode's `posterURL`**
-    ///     so it becomes a seedable candidate. The enriched episodes are handed back
-    ///     to the view model so the rail re-renders seeding the now-decoded image.
-    private func warmSeason(_ seasonID: String) async {
+    private func warmSeason(_ seasonID: String, speculative: Bool = false) async {
         guard let episodes = viewModel.episodes(for: seasonID) else { return }
-        var resolvedPosterURLs: [String: URL] = [:]
-        var heroResolved = false
-        var heroURL: URL?
-        for episode in episodes {
-            if Task.isCancelled { return }
-            let candidates = MediaArtworkPrefetchPolicy.candidates(
-                for: episode,
-                style: .landscape,
-                spoilerSettings: spoilerSettings
-            )
-            if let url = candidates.first {
-                #if canImport(UIKit)
-                await ArtworkSession.warmLimiter.run {
-                    _ = await ArtworkImageCache.shared.image(for: url, variant: .landscapeCard, background: true)
-                }
-                #endif
-                continue
-            }
-            guard !(spoilerSettings.mode == .placeholder
-                    && spoilerSettings.shouldHideThumbnail(for: episode)) else { continue }
-            guard episode.kind == .episode else { continue }
-            // No server image: resolve a real still, falling back to the series
-            // hero (resolved once and reused) so every episode is at least covered.
-            var still = await ArtworkRouter.shared.artworkURL(.thumbnail, for: episode)
-            if Task.isCancelled { return }
-            if still == nil {
-                if !heroResolved {
-                    heroURL = await ArtworkRouter.shared.artworkURL(.hero, for: series)
-                    if Task.isCancelled { return }
-                    heroResolved = true
-                }
-                still = heroURL ?? series.fallbackArtworkURL
-            }
-            guard let still else { continue }
-            #if canImport(UIKit)
-            await ArtworkSession.warmLimiter.run {
-                _ = await ArtworkImageCache.shared.image(for: still, variant: .landscapeCard, background: true)
-            }
-            #endif
-            if Task.isCancelled { return }
-            resolvedPosterURLs[episode.id] = still
-        }
-        viewModel.mergeResolvedEpisodePosterURLs(resolvedPosterURLs, for: seasonID)
+        await warmEpisodeThumbnails(episodes, speculative: speculative)
     }
 
-    /// Decodes each episode's first displayed landscape candidate (its server
-    /// image) into the shared synchronous image cache. Used for the loose-episode
-    /// case where there is no season id to enrich.
-    private func warmPrimaryThumbnails(for episodes: [MediaItem]) {
+    private func warmEpisodeThumbnails(_ episodes: [MediaItem], speculative: Bool) async {
         #if canImport(UIKit)
-        for episode in episodes {
-            guard let url = MediaArtworkPrefetchPolicy.candidates(
-                for: episode,
-                style: .landscape,
-                spoilerSettings: spoilerSettings
-            ).first else { continue }
-            ArtworkImageCache.shared.prefetch(url, variant: .landscapeCard)
+        let opening = SeasonArtworkPrewarmWindow.episodes(
+            episodes, targetID: episodeEntryTarget(in: episodes), limit: speculative ? 4 : 8
+        )
+        await withTaskGroup(of: Void.self) { group in
+            for episode in opening {
+                guard !Task.isCancelled else { return }
+                group.addTask { @MainActor in
+                    if speculative,
+                       !(await viewModel.prepareForSpeculativeSeasonArtwork(
+                           selectedSeasonID: { selectedSeasonID }
+                       )) { return }
+                    let source = EpisodeArtworkSource(item: episode, spoilerSettings: spoilerSettings)
+                    await ArtworkSession.warmLimiter.run {
+                        guard !Task.isCancelled else { return }
+                        await source.prepare()
+                    }
+                }
+            }
         }
         #endif
     }
@@ -1358,9 +1383,6 @@ struct SeriesDetailView: View {
     }
 
     private func rearmEpisodeRailOnHeroFocusIfNeeded() {
-        guard SeriesDetailBrowserPolicy.rearmsEpisodeRailOnHeroFocus(
-            hasSeasons: !seasons.isEmpty
-        ) else { return }
         episodeRailResetToken &+= 1
     }
 
@@ -1634,15 +1656,7 @@ struct SeriesDetailView: View {
 
     private func resolvedInitialSeasonID() -> String? {
         Self.logSeasonResolution(seasons, resume: viewModel.serverResumeEpisode)
-        return SeriesResume.openingSeasonID(
-            seasons: seasons,
-            episodes: stampedLooseEpisodes,
-            selectedSeasonID: selectedSeasonID,
-            preserveSelection: hasUserDirectedFocus,
-            initialSeasonID: initialSeasonID,
-            initialEpisode: initialEpisode,
-            resumeEpisode: viewModel.serverResumeEpisode
-        )
+        return activeSeasonID
     }
 
     /// Settles what the hero describes, once the episodes it needs are loaded.
@@ -1727,6 +1741,7 @@ private struct SeriesEpisodeRailContent: View {
     let focusResetToken: Int
     let isCovered: Bool
     let precedingContainerIDs: [String]
+    let episodeEntry: MediaRowEpisodeEntry
     let onRefocusComplete: () -> Void
     let onFocusEntered: () -> Void
     let onSelect: (MediaItem) -> Void
@@ -1745,6 +1760,7 @@ private struct SeriesEpisodeRailContent: View {
             onRefocusComplete: onRefocusComplete,
             leadingInset: PlozzTheme.Metrics.heroLeadingPadding,
             onFocusEntered: onFocusEntered,
+            episodeEntry: episodeEntry,
             onSelect: onSelect
         )
         .mediaItemActionContext(
@@ -1793,67 +1809,29 @@ private final class SeriesPlaceholderCache {
     }
 }
 
-private struct SeriesEpisodeSkeletonRail: View {
-    private let metrics = PlozzMetrics.standard
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: metrics.cardSpacing) {
-                ForEach(0..<4, id: \.self) { _ in
-                    SeriesEpisodeSkeletonCard()
-                }
-            }
-            .padding(.leading, PlozzTheme.Metrics.heroLeadingPadding)
-            .padding(.trailing, PlozzTheme.Metrics.screenPadding)
-            .padding(.vertical, metrics.railShadowClearance)
-        }
-        .padding(.top, metrics.railTopClearanceOffset)
-        .padding(.bottom, metrics.railBottomClearanceOffset)
-        .scrollDisabled(true)
-        .accessibilityLabel("Loading episodes")
-    }
+private enum SeriesBrowserEntry {
+    case hero
+    case loadingSeasons
+    case browser
 }
 
-private struct SeriesEpisodeSkeletonCard: View {
+private struct LoadingSeasonTab: View {
+    let isFocused: Bool
     @Environment(\.themePalette) private var palette
-    private let metrics = PlozzMetrics.standard
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            RoundedRectangle(
-                cornerRadius: metrics.landscapeCardCornerRadius,
-                style: .continuous
-            )
-            .fill(palette.fill)
-            .frame(
-                width: EpisodeColumnCard.artworkSize.width,
-                height: EpisodeColumnCard.artworkSize.height
-            )
-            .plozzMediaEdge(cornerRadius: metrics.landscapeCardCornerRadius)
-
-            VStack(alignment: .leading, spacing: 10) {
-                skeletonLine(width: 250, height: 20)
-                skeletonLine(width: 440, height: 15)
-                skeletonLine(width: 390, height: 15)
-                skeletonLine(width: 310, height: 15)
-            }
-            .padding(.top, metrics.landscapeCaptionTopSpacing)
-        }
-        .frame(width: EpisodeColumnCard.artworkSize.width, alignment: .leading)
-        .padding(.horizontal, EpisodeColumnCard.sideMargin)
-        .shimmering()
-    }
-
-    private func skeletonLine(width: CGFloat, height: CGFloat) -> some View {
-        Capsule()
-            .fill(palette.fill)
-            .frame(width: width, height: height)
+        Label("Loading Seasons…", systemImage: "hourglass")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(isFocused ? Color.black : palette.primaryText)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(isFocused ? Color.white : palette.cardSurface, in: Capsule())
     }
 }
 
 enum SeriesDetailBrowserPolicy {
-    static func rearmsEpisodeRailOnHeroFocus(hasSeasons: Bool) -> Bool {
-        !hasSeasons
+    static func showsSeasonEntry(childrenLoaded: Bool, hasSeasons: Bool) -> Bool {
+        hasSeasons || !childrenLoaded
     }
 
     static func revealsCastWithoutBrowser(

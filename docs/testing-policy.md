@@ -32,7 +32,9 @@ orchestration cycles into **one**, not compiling less.
 
 **Flake guard:** if the single run reports specific failed suite bundles, each is
 retried **once** in isolation; a suite only fails if it fails twice. A build/compile
-failure (no per-suite result) is not retried. This covers the occasional
+failure or an incomplete matrix is not retried. Failed targets are read from
+`xcresult`, including tests that crashed before XCTest restarted their bundle.
+This covers the occasional
 `ProviderPlexTests` StubHTTPClient timing race.
 
 `PLOZZ_PARALLEL=YES` opts into `-parallel-testing-enabled YES`. It is **off by
@@ -102,9 +104,9 @@ after the tests have already finished. Two things used to turn that into a
 result (`Test Suite 'X.xctest' passed|failed`). Those lines are flushed as each
 bundle finishes — unlike the final `** TEST FAILED **` banner, which is
 block-buffered and often only reaches the log once the process is killed. Once
-every expected bundle has reported, the run is logically over, so the script
+every expected bundle has reported, the script
 waits `PLOZZ_VERDICT_GRACE` (default 6s, polled every `PLOZZ_POLL_SECS`=2s) for a
-clean exit and then reaps xcodebuild and reports the results it already has. A
+clean exit, then checks for a finalized `xcresult` before reaping teardown. A
 from-clean retry is now only attempted when the run produced **no** results at
 all — the case it was actually meant for.
 
@@ -115,10 +117,63 @@ of pure waiting after the last bundle had already reported its verdict.
 Measured on `ProviderShareTests` (416 tests): a failing suite went 6m53s → 1m12s
 (including the isolation retry), a passing suite ~10min → 29s.
 
-Set `PLOZZ_VERDICT_GRACE=0` to reap as soon as the bundles report, or raise it if
-you need the real result bundle written out.
+Set `PLOZZ_VERDICT_GRACE=0` to check results as soon as the bundles report.
+`PLOZZ_RESULT_TIMEOUT` (default 660 seconds) bounds result finalization after the
+last bundle reports, allowing Xcode's 600-second simulator diagnostic collection
+to finish. This is a ceiling, not a fixed wait. A readable result bundle is
+always required; reaching the grace period alone never interrupts its writer.
+
+### Simulator readiness and authoritative results
+
+Before starting XCTest, the runner waits for `simctl bootstatus -b` to finish,
+including BackBoard and the system app. A simulator marked Booted can still be
+initializing those services; starting SwiftUI image rendering too early can
+abort or hang inside UIKit's display initialization. Startup is bounded by
+`PLOZZ_SIM_BOOT_TIMEOUT` (300 seconds by default), and a failed boot stops the run.
+
+Bundle-level console summaries only trigger the teardown grace period. XCTest
+can restart after a crash, skip the crashed test, and print a passing summary
+for the survivors. Every invocation therefore gets a unique retained result
+bundle under `$PLOZZ_TEST_RESULTS_DIR` (by default `.build/test-results/`),
+outside DerivedData and Xcode's rotating log store.
+The runner reads its structured summary with `xcresulttool` and fails closed
+when results are missing, unreadable, empty, or failed. Reaping a completed
+driver cannot turn a recorded crash into success. Named failures can receive
+the normal isolated retry only after every requested bundle reported.
+
+Runner verdict regressions use the existing host-side unittest runner:
+`python3 -m unittest discover -s tools/tests -p 'test_xcresult_summary.py'`.
+
+## App-hosted focus integration
+
+`tools/run-focus-tests.sh` runs the `PlozzFocusTests` scheme in a minimal,
+separate `PlozzFocusHost` app. It uses the same package code but supplies a real
+foreground window scene, which package logic tests cannot provide. The suite
+exercises native focus on a loading episode slot and its handoff to an episode
+near the end of a 1,000-item row. It uses local fixture artwork, not media servers.
+
+Pass `PLOZZ_SIM_ID` to select a simulator. Run `tools/generate-project.sh` after
+changing the host or test target. Results are retained under
+`.build/focus-test-results/`; the runner requires an authoritative passing
+`xcresult` just like the package runner. Both runners execute in CI.
 
 ## Guards that run before the compile
+
+Validate workflow edits with `actionlint .github/workflows/ci.yml` before
+pushing. GitHub rejects invalid context references before creating a runner or
+job log. Runner-local package storage is initialized in a step via
+`RUNNER_TEMP` and `GITHUB_ENV`; the `runner` expression context is not available
+in job-level `env`.
+
+CI selects a tvOS simulator matching the selected Xcode SDK and shares its
+`PLOZZ_SIM_ID` across package and app-hosted tests. It fails if that runtime is
+missing rather than silently choosing the first installed (possibly much older)
+runtime. The full matrix has a 40-minute wall-clock deadline; raw logs and
+result bundles are retained as workflow artifacts for seven days.
+
+Native typography tests compare against the runtime's `UIFontMetrics` behavior:
+older tvOS versions keep those metrics fixed, while newer runtimes scale them.
+Both paths assert the matching geometry rather than skipping older runtimes.
 
 Both are host-side Python (the tests run inside the tvOS Simulator sandbox and
 cannot read the repo tree), both are wired into `run-tests.sh`, `test-fast.sh`

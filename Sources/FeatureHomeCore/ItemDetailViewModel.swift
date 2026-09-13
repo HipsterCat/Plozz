@@ -28,6 +28,12 @@ public enum SeasonLoadState: Equatable, Sendable {
     }
 }
 
+@MainActor
+@Observable
+private final class SeriesResumeResolution {
+    var isResolving = false
+}
+
 /// Loads full detail for an item plus its children (episodes/seasons), and
 /// asynchronously enriches it with external ratings (IMDb/RT/Metacritic).
 @MainActor
@@ -88,6 +94,8 @@ public final class ItemDetailViewModel {
     /// server has no resume point. Observed through `state`: cached seasons can
     /// render before this live answer without changing their ids when it arrives.
     public var serverResumeEpisode: MediaItem? { state.value?.serverResumeEpisode }
+    private let resumeResolution = SeriesResumeResolution()
+    public var isResolvingServerResume: Bool { resumeResolution.isResolving }
 
 
     /// empty array — cached deliberately, so a season that genuinely cannot be
@@ -628,6 +636,10 @@ public final class ItemDetailViewModel {
                 itemID: loadItemID,
                 accountID: loadAccountID
             )
+        }
+        resumeResolution.isResolving = true
+        defer {
+            if isCurrent() { resumeResolution.isResolving = false }
         }
         if let interactive = loadProvider as? any InteractiveBrowseActivityReporting {
             await interactive.noteInteractiveBrowseActivity()
@@ -1804,6 +1816,7 @@ public final class ItemDetailViewModel {
               isStillLoaded(item, sourceGeneration: sourceGeneration),
               var detail = state.value else { return }
         detail.serverResumeEpisode = resume.map(tagged)
+        resumeResolution.isResolving = false
         state = .loaded(detail)
     }
 
@@ -1812,10 +1825,47 @@ public final class ItemDetailViewModel {
         provider: any MediaProvider
     ) async -> MediaItem? {
         guard item.kind == .series else { return nil }
+        if let scopedProvider = provider as? any SeriesResumeProviding {
+            do {
+                let episode = try await scopedProvider.resumeEpisode(inSeries: item.id)
+                guard episode?.kind == .episode, episode?.seriesID == item.id else { return nil }
+                return episode
+            } catch is CancellationError {
+                return nil
+            } catch let error as AppError where error == .cancelled {
+                return nil
+            } catch {
+                PlozzLog.networking.error("Series resume lookup failed: \(String(describing: error))")
+                return nil
+            }
+        }
         // The series may sit anywhere in the unlimited Home row. A preview-sized
         // lookup must not make an older show's detail page restart at episode one.
         guard let feed = try? await provider.continueWatching(limit: .max) else { return nil }
         return feed.first { $0.seriesID == item.id }
+    }
+
+    /// Speculative artwork waits outside the image limiter for the currently
+    /// selected list. Explicit selection and preloading share the same in-flight
+    /// fetch; a failed selected season is not retried by an artwork warmer.
+    public func prepareForSpeculativeSeasonArtwork(
+        selectedSeasonID: @MainActor () -> String?
+    ) async -> Bool {
+        while !Task.isCancelled {
+            guard let id = selectedSeasonID() else { return false }
+            switch seasonLoadState(for: id) {
+            case .loaded:
+                return true
+            case .failed:
+                return false
+            case .notLoaded:
+                await loadEpisodes(for: id)
+            }
+            guard !Task.isCancelled else { return false }
+            if selectedSeasonID() != id { continue }
+            return seasonLoadState(for: id).authoritativeEpisodes != nil
+        }
+        return false
     }
 
     /// Loads episode children from a season or the active series container.

@@ -257,14 +257,17 @@ public struct JellyfinClient: Sendable {
     /// in-progress episodes already come back from `/Items/Resume`, so NextUp is
     /// scoped to the next-after-completed episode. `EnableRewatching=false` avoids
     /// resurfacing fully-watched series.
-    func nextUpItems(userID: String, limit: Int, parentID: String? = nil) async throws -> [BaseItemDto] {
+    func nextUpItems(
+        userID: String, limit: Int, parentID: String? = nil, seriesID: String? = nil
+    ) async throws -> [BaseItemDto] {
         if limit == Int.max {
             return try await exhaustiveContinueWatchingItems { startIndex, pageSize in
                 return try await nextUpItemsPage(
                     userID: userID,
                     startIndex: startIndex,
                     limit: pageSize,
-                    parentID: parentID
+                    parentID: parentID,
+                    seriesID: seriesID
                 )
             }
         }
@@ -272,7 +275,8 @@ public struct JellyfinClient: Sendable {
             userID: userID,
             startIndex: nil,
             limit: limit,
-            parentID: parentID
+            parentID: parentID,
+            seriesID: seriesID
         ).Items
     }
 
@@ -280,7 +284,8 @@ public struct JellyfinClient: Sendable {
         userID: String,
         startIndex: Int?,
         limit: Int,
-        parentID: String?
+        parentID: String?,
+        seriesID: String?
     ) async throws -> ItemsResponse {
         var queryItems = [
             URLQueryItem(name: "UserId", value: userID),
@@ -296,6 +301,9 @@ public struct JellyfinClient: Sendable {
         }
         if let parentID {
             queryItems.append(URLQueryItem(name: "ParentId", value: parentID))
+        }
+        if let seriesID {
+            queryItems.append(URLQueryItem(name: "SeriesId", value: seriesID))
         }
         let endpoint = Endpoint(
             path: "/Shows/NextUp",
@@ -365,20 +373,12 @@ public struct JellyfinClient: Sendable {
         }
     }
 
-    /// Series the user has watched, most-recently-played first, each carrying its
-    /// series-level `UserData.LastPlayedDate` (the date of the most recent episode
-    /// play). Used to stamp NextUp suggestions — whose own episode
-    /// `LastPlayedDate` is nil — with their series' true last-watched time.
-    ///
-    /// Without this a just-finished show (present only in `/Shows/NextUp`, after
-    /// the whole `/Items/Resume` block) has no timestamp and either inherits an
-    /// unrelated in-progress item's date or sinks to the bottom of a merged
-    /// Continue Watching row — so the row stops reflecting what was watched last.
-    /// `/Users/{id}/Items` returns `UserData` by default, so no extra field is
-    /// requested. Only series referenced by the fetched Continue Watching feed
-    /// are requested; this avoids turning an unlimited row into an unrelated
-    /// full-library scan. IDs are split into bounded request batches.
-    func recentlyWatchedSeries(userID: String, seriesIDs: [String]) async throws -> [BaseItemDto] {
+    /// Lightweight metadata for exact series IDs, in bounded batches. Home needs
+    /// only external IDs; Continue Watching also needs UserData to stamp next-up
+    /// recency. Neither lookup needs artwork or playback metadata.
+    func seriesMetadata(
+        userID: String, seriesIDs: [String], includeUserData: Bool = true
+    ) async throws -> [BaseItemDto] {
         let uniqueIDs = Array(Set(seriesIDs.filter { !$0.isEmpty })).sorted()
         guard !uniqueIDs.isEmpty else { return [] }
 
@@ -398,6 +398,7 @@ public struct JellyfinClient: Sendable {
                     URLQueryItem(name: "Limit", value: String(batch.count)),
                     URLQueryItem(name: "Fields", value: "ProviderIds"),
                     URLQueryItem(name: "EnableImages", value: "false"),
+                    URLQueryItem(name: "EnableUserData", value: String(includeUserData)),
                     URLQueryItem(name: "EnableTotalRecordCount", value: "false")
                 ],
                 headers: authHeaders
@@ -667,7 +668,8 @@ public struct JellyfinClient: Sendable {
         recursive: Bool,
         startIndex: Int,
         limit: Int,
-        sort: CoreModels.SortDescriptor
+        sort: CoreModels.SortDescriptor,
+        fields: String = "PrimaryImageAspectRatio,ProviderIds"
     ) async throws -> ItemsResponse {
         var queryItems = [
             URLQueryItem(name: "ParentId", value: parentID),
@@ -678,7 +680,7 @@ public struct JellyfinClient: Sendable {
             // Minimal fields keep the first-page payload small for a fast grid;
             // ProviderIds is included so the aggregated cross-server library
             // browse can collapse a title that lives on multiple servers.
-            URLQueryItem(name: "Fields", value: "PrimaryImageAspectRatio,ProviderIds"),
+            URLQueryItem(name: "Fields", value: fields),
             URLQueryItem(name: "ImageTypeLimit", value: "1"),
             URLQueryItem(name: "EnableTotalRecordCount", value: "true")
         ]
@@ -839,6 +841,119 @@ public struct JellyfinClient: Sendable {
             DeviceProfile: capabilityProfile
         ))
         return try await http.decode(PlaybackInfoResponse.self, from: endpoint, baseURL: baseURL)
+    }
+
+    // MARK: Live TV
+
+    func liveTVSend(_ request: Endpoint) async throws -> Data {
+        var request = request
+        request.headers.merge(authHeaders) { _, authentication in authentication }
+        request.headers["Accept"] = "application/json"
+        request.headers["Cache-Control"] = "no-store"
+        request.redirectPolicy = .sameOrigin
+        let (data, response) = try await http.sendRaw(request, baseURL: baseURL)
+        switch response.statusCode {
+        case 200..<300: return data
+        case 401: throw AppError.unauthorized
+        case 402: throw ServerLiveTVError.subscriptionRequired
+        case 403: throw ServerLiveTVError.permissionDenied
+        case 404: throw AppError.notFound
+        case 409: throw ServerLiveTVError.tunerUnavailable
+        case 429: throw AppError.rateLimited(
+            retryAfter: response.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
+        )
+        default: throw AppError.invalidResponse
+        }
+    }
+
+    func liveTVPlaybackInfo(userID: String, itemID: String) async throws -> Data {
+        let endpoint = try Endpoint(
+            method: .post,
+            path: "/Items/\(itemID)/PlaybackInfo",
+            queryItems: [URLQueryItem(name: "UserId", value: userID)]
+        ).jsonBody(PlaybackInfoBody(
+            UserId: userID,
+            MaxStreamingBitrate: capabilityProfile.maxStreamingBitrate,
+            AutoOpenLiveStream: false,
+            MediaSourceId: nil,
+            EnableDirectPlay: true,
+            EnableDirectStream: true,
+            EnableTranscoding: true,
+            DeviceProfile: capabilityProfile
+        ))
+        return try await liveTVSend(endpoint)
+    }
+
+    func liveTVOpen(
+        userID: String,
+        itemID: String,
+        openToken: String,
+        playSessionID: String?
+    ) async throws -> Data {
+        let wireItemID: JellyfinLiveTVOpenItemID
+        if providerKind == .emby {
+            guard let value = Int64(itemID), value >= 0 else {
+                throw ServerLiveTVError.invalidChannel
+            }
+            wireItemID = .integer(value)
+        } else {
+            wireItemID = .string(itemID)
+        }
+        let endpoint = try Endpoint(method: .post, path: "/LiveStreams/Open")
+            .jsonBody(JellyfinLiveTVOpenBody(
+                OpenToken: openToken,
+                UserId: userID,
+                ItemId: wireItemID,
+                PlaySessionId: playSessionID,
+                MaxStreamingBitrate: capabilityProfile.maxStreamingBitrate,
+                DeviceProfile: capabilityProfile
+            ))
+        return try await liveTVSend(endpoint)
+    }
+
+    func liveTVClose(liveStreamID: String) async throws {
+        guard !liveStreamID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AppError.invalidResponse
+        }
+        _ = try await liveTVSend(Endpoint(
+            method: .post,
+            path: "/LiveStreams/Close",
+            queryItems: [
+                URLQueryItem(
+                    name: providerKind == .emby ? "LiveStreamId" : "liveStreamId",
+                    value: liveStreamID
+                )
+            ]
+        ))
+    }
+
+    func liveTVReport(_ body: JellyfinLiveTVProgressBody, path: String) async throws {
+        _ = try await liveTVSend(
+            Endpoint(method: .post, path: path).jsonBody(body)
+        )
+    }
+
+    func liveTVStopEncoding(playSessionID: String) async throws {
+        // A server may not expose this legacy endpoint. Never broaden a failed
+        // session-scoped request to a device-only stop.
+        guard !playSessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !deviceProfile.deviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AppError.invalidResponse
+        }
+        _ = try await liveTVSend(Endpoint(
+            method: .delete,
+            path: "/Videos/ActiveEncodings",
+            queryItems: [
+                URLQueryItem(
+                    name: providerKind == .emby ? "DeviceId" : "deviceId",
+                    value: deviceProfile.deviceID
+                ),
+                URLQueryItem(
+                    name: providerKind == .emby ? "PlaySessionId" : "playSessionId",
+                    value: playSessionID
+                )
+            ]
+        ))
     }
 
     func reportPlaybackProgress(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {
@@ -1306,6 +1421,17 @@ struct ReachabilityObservingHTTPClient: HTTPClient {
         do {
             let result = try await wrapped.send(endpoint, baseURL: baseURL)
             latch.confirm()
+            return result
+        } catch AppError.serverUnreachable {
+            latch.invalidate()
+            throw AppError.serverUnreachable
+        }
+    }
+
+    func sendRaw(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
+        do {
+            let result = try await wrapped.sendRaw(endpoint, baseURL: baseURL)
+            if (200..<300).contains(result.1.statusCode) { latch.confirm() }
             return result
         } catch AppError.serverUnreachable {
             latch.invalidate()

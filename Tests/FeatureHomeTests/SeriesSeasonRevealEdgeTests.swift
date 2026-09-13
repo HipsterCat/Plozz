@@ -84,6 +84,18 @@ final class SeriesSeasonRevealEdgeTests: XCTestCase {
 }
 
 final class SeriesDetailBrowserPolicyTests: XCTestCase {
+    func testUnknownSeasonsRetainAnEntry() {
+        XCTAssertTrue(SeriesDetailBrowserPolicy.showsSeasonEntry(childrenLoaded: false, hasSeasons: false))
+    }
+
+    func testLoadedSeasonsKeepTheirEntryRow() {
+        XCTAssertTrue(SeriesDetailBrowserPolicy.showsSeasonEntry(childrenLoaded: true, hasSeasons: true))
+    }
+
+    func testGenuinelyEmptySeriesDoesNotLeaveALoadingTab() {
+        XCTAssertFalse(SeriesDetailBrowserPolicy.showsSeasonEntry(childrenLoaded: true, hasSeasons: false))
+    }
+
     func testWholeSeriesEntryClaimsHeroPlay() {
         XCTAssertTrue(SeriesDetailEntryPolicy.claimsHeroPlay(
             hasOpenedOnce: false,
@@ -103,11 +115,6 @@ final class SeriesDetailBrowserPolicyTests: XCTestCase {
             hasOpenedOnce: true,
             hasInitialEpisode: false
         ))
-    }
-
-    func testLooseEpisodeBrowserRearmsWhenHeroRegainsFocus() {
-        XCTAssertTrue(SeriesDetailBrowserPolicy.rearmsEpisodeRailOnHeroFocus(hasSeasons: false))
-        XCTAssertFalse(SeriesDetailBrowserPolicy.rearmsEpisodeRailOnHeroFocus(hasSeasons: true))
     }
 
     func testCastRevealsOnlyWhenAnEmptyBrowserHasFinishedLoading() {

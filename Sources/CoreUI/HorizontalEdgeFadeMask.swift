@@ -6,31 +6,53 @@ import SwiftUI
 /// Shared by cast-credit rails and compact selection rails. The 24-stop
 /// smoothstep curve has zero slope at both ends, avoiding the visible crease and
 /// banding of a two-stop linear gradient.
+/// Independent strengths keep a reached content edge readable without changing
+/// the mask's structure or geometry.
 public struct HorizontalEdgeFadeMask: View {
     private let fadeWidth: CGFloat
     private let verticalOverhang: CGFloat
+    private let leadingStrength: CGFloat
+    private let trailingStrength: CGFloat
+    @Environment(\.layoutDirection) private var layoutDirection
 
-    public init(fadeWidth: CGFloat, verticalOverhang: CGFloat = 0) {
+    public init(
+        fadeWidth: CGFloat,
+        verticalOverhang: CGFloat = 0,
+        leadingStrength: CGFloat = 1,
+        trailingStrength: CGFloat = 1
+    ) {
         self.fadeWidth = fadeWidth
         self.verticalOverhang = verticalOverhang
+        self.leadingStrength = min(max(leadingStrength, 0), 1)
+        self.trailingStrength = min(max(trailingStrength, 0), 1)
     }
 
     public var body: some View {
         HStack(spacing: 0) {
-            edgeFade(reversed: false).frame(width: fadeWidth)
+            edgeFade(
+                reversed: false,
+                strength: layoutDirection == .rightToLeft ? trailingStrength : leadingStrength
+            ).frame(width: fadeWidth)
             Color.black
-            edgeFade(reversed: true).frame(width: fadeWidth)
+            edgeFade(
+                reversed: true,
+                strength: layoutDirection == .rightToLeft ? leadingStrength : trailingStrength
+            ).frame(width: fadeWidth)
         }
+        // Stack and gradient mirroring differed between SDKs; resolve the
+        // semantic strengths once, then draw in physical left-to-right space.
+        .environment(\.layoutDirection, .leftToRight)
         .padding(.vertical, -verticalOverhang)
     }
 
-    private func edgeFade(reversed: Bool) -> some View {
+    private func edgeFade(reversed: Bool, strength: CGFloat) -> some View {
         let samples = 24
         let stops = (0 ... samples).map { step -> Gradient.Stop in
             let t = Double(step) / Double(samples)
             let eased = t * t * (3 - 2 * t)
+            let activeOpacity = reversed ? 1 - eased : eased
             return Gradient.Stop(
-                color: .black.opacity(reversed ? 1 - eased : eased),
+                color: .black.opacity(1 - Double(strength) * (1 - activeOpacity)),
                 location: t
             )
         }
@@ -63,21 +85,11 @@ public struct LeadingEdgeFadeMask: View {
     }
 
     public var body: some View {
-        HStack(spacing: 0) {
-            // Same 24-stop smoothstep as `HorizontalEdgeFadeMask` — a two-stop
-            // linear gradient shows a visible crease and bands on a TV panel.
-            LinearGradient(
-                stops: (0 ... 24).map { step in
-                    let t = Double(step) / 24
-                    return Gradient.Stop(color: .black.opacity(t * t * (3 - 2 * t)), location: t)
-                },
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-            .frame(width: fadeWidth)
-            Color.black
-        }
-        .padding(.vertical, -verticalOverhang)
+        HorizontalEdgeFadeMask(
+            fadeWidth: fadeWidth,
+            verticalOverhang: verticalOverhang,
+            trailingStrength: 0
+        )
         // A visible leading fade starts at the row edge by design. When the
         // pinned sidebar hides and fadeWidth reaches zero, extend the opaque mask
         // on BOTH sides so focused-card bloom remains unclipped. Trailing always
@@ -282,12 +294,16 @@ public extension View {
 
     func horizontalEdgeFadeMask(
         fadeWidth: CGFloat,
-        verticalOverhang: CGFloat = 0
+        verticalOverhang: CGFloat = 0,
+        leadingStrength: CGFloat = 1,
+        trailingStrength: CGFloat = 1
     ) -> some View {
         mask {
             HorizontalEdgeFadeMask(
                 fadeWidth: fadeWidth,
-                verticalOverhang: verticalOverhang
+                verticalOverhang: verticalOverhang,
+                leadingStrength: leadingStrength,
+                trailingStrength: trailingStrength
             )
         }
     }

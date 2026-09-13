@@ -7,12 +7,13 @@ import CoreNetworking
 /// Holds an authenticated `JellyfinClient` and maps Jellyfin DTOs onto the
 /// provider-agnostic `CoreModels` types. Feature modules depend only on
 /// `MediaProvider`; this is the single place Jellyfin specifics live.
-public struct JellyfinProvider: MediaProvider {
+public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIdentityProviding {
     public let kind: ProviderKind
     public let session: UserSession
     public let accountID: String
     public let credentialRevision: CredentialRevision
     let client: JellyfinClient
+    let liveTVLeases = JellyfinLiveTVLeaseStore()
     let themeArchiveResolver: @Sendable (String?) async -> URL?
     private let authenticatedStreamProber: (any AuthenticatedHTTPStreamProbing)?
     private let probeDescriptors: MediaBrowserProbeDescriptorStore
@@ -106,6 +107,32 @@ public struct JellyfinProvider: MediaProvider {
         return limit == Int.max ? ordered : Array(ordered.prefix(limit))
     }
 
+    public func resumeEpisode(inSeries seriesID: String) async throws -> MediaItem? {
+        guard !seriesID.isEmpty else { throw AppError.invalidResponse }
+        let outcome = try await continueWatchingDTOs(
+            limit: .max, parentID: seriesID, seriesID: seriesID
+        )
+        guard outcome.successfulEndpointCount > 0 else {
+            throw outcome.firstError ?? AppError.invalidResponse
+        }
+        let episodes = outcome.items.filter { $0.Type == "Episode" && $0.SeriesId == seriesID }
+        // Keep the same recency ordering as Home, including rewatching and
+        // servers that omit LastPlayedDate on their next-up episode.
+        let dates = try await seriesLastPlayedDatesBestEffort(for: episodes)
+        let stamped = episodes.map(map(item:)).map { stampingSeriesRecency($0, using: dates) }
+        return orderedByEffectiveRecency(stamped).first
+    }
+
+    public func seriesProviderIDs(for seriesIDs: [String]) async throws -> [String: [String: String]] {
+        let series = try await client.seriesMetadata(
+            userID: session.userID, seriesIDs: seriesIDs, includeUserData: false
+        )
+        return Dictionary(
+            series.filter { $0.Type == "Series" }.map { ($0.Id, $0.ProviderIds ?? [:]) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
     /// Records the resume feed exactly as Jellyfin returned it, before mapping.
     ///
     /// Continue Watching here is `Items/Resume` *plus* `Shows/NextUp`, so the row
@@ -175,7 +202,8 @@ public struct JellyfinProvider: MediaProvider {
     /// Resume wins duplicate ids because it carries the playback position.
     private func continueWatchingDTOs(
         limit: Int,
-        parentID: String?
+        parentID: String?,
+        seriesID: String? = nil
     ) async throws -> ContinueWatchingDTOOutcome {
         async let resumeTask = client.resumeItems(
             userID: session.userID,
@@ -185,7 +213,8 @@ public struct JellyfinProvider: MediaProvider {
         async let nextUpTask = client.nextUpItems(
             userID: session.userID,
             limit: limit,
-            parentID: parentID
+            parentID: parentID,
+            seriesID: seriesID
         )
 
         var resume: [BaseItemDto] = []
@@ -263,7 +292,7 @@ public struct JellyfinProvider: MediaProvider {
 
         let series: [BaseItemDto]
         do {
-            series = try await client.recentlyWatchedSeries(
+            series = try await client.seriesMetadata(
                 userID: session.userID,
                 seriesIDs: seriesIDs
             )
@@ -1527,7 +1556,7 @@ public struct JellyfinProvider: MediaProvider {
 
     // MARK: - Mapping
 
-    private func authenticatedPlaybackLocator(
+    func authenticatedPlaybackLocator(
         itemID: String,
         source: MediaSourceInfo,
         playSessionID: String?,
@@ -1644,7 +1673,7 @@ public struct JellyfinProvider: MediaProvider {
         )
     }
 
-    private func map(item dto: BaseItemDto) -> MediaItem {
+    func map(item dto: BaseItemDto) -> MediaItem {
         let kind = Self.kind(forItemType: dto.`Type`)
         if self.kind == .emby {
             PlozzLog.playback.debug(
@@ -2051,7 +2080,7 @@ public struct JellyfinProvider: MediaProvider {
         return ratings
     }
 
-    private func map(stream dto: MediaStreamDto) -> MediaTrack {
+    func map(stream dto: MediaStreamDto) -> MediaTrack {
         let isSubtitle = dto.`Type` == "Subtitle"
         return MediaTrack(
             id: dto.Index,
@@ -2071,7 +2100,7 @@ public struct JellyfinProvider: MediaProvider {
     /// subtitles so the player can inject them into the native picker even on
     /// direct play. Image-based subs (PGS/VOBSUB) get no text delivery source;
     /// their engine-decoded bitmap cues keep their authored placement.
-    private func map(
+    func map(
         subtitleStream dto: MediaStreamDto,
         itemID: String,
         sourceID: String
