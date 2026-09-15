@@ -103,4 +103,32 @@ public struct SpoilerSafeOverviewText: View {
         .accessibilityLabel(EpisodeColumnPresentation.hiddenOverviewLabel)
     }
 }
+
+// STEAL but to improve
+
+#if DEBUG
+#Preview("Visible") {
+    SpoilerSafeOverviewText(
+        overview: "Mark Scout leads a team of office workers whose memories have been surgically divided between their work and personal lives.",
+        hidesSpoilers: false,
+        mode: .blur
+    )
+    .frame(width: 640)
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+
+#Preview("Hidden") {
+    SpoilerSafeOverviewText(
+        overview: "Mark Scout leads a team of office workers whose memories have been surgically divided between their work and personal lives.",
+        hidesSpoilers: true,
+        mode: .placeholder
+    )
+    .frame(width: 640)
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 #endif

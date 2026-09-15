@@ -29,6 +29,50 @@ import UIKit
 @MainActor
 @Observable
 final class PlozziOSAppModel {
+    private let appAdmission: AppAdmissionModel
+
+    static var isStandalonePlaybackAvailable: Bool {
+        #if DEBUG
+        true
+        #else
+        false
+        #endif
+    }
+
+    var admissionContext: AppAdmissionContext {
+        appAdmission.context(
+            hasMediaAccounts: !accountsProviders.accounts.isEmpty,
+            standalonePlaybackAvailable: Self.isStandalonePlaybackAvailable
+        )
+    }
+
+    var canEnterApp: Bool { admissionContext.canEnterApp }
+    var isLiveTVProfileAuthorized: Bool {
+        let profile = profiles.activeProfile
+        return canEnterApp && !mustChooseProfile
+            && (!requiresLaunchProfileSelection || didCompleteLaunchProfileSelection)
+            && lockedSwitch == nil && parentalSwitch == nil
+            && pendingIdentityAccount == nil && pendingLibrarySelection == nil
+            && pendingFirstRunStep == nil && profileOnboardingStep == nil
+            && plexHomeUsers.pendingPlexPINRequest == nil
+            && (!profile.isLocked || isUnlockedThisRun(profile.id))
+            && !profile.awaitsIdentity(amongAccounts: accountsProviders.activeAccountIDs)
+    }
+    var allowsStandalonePlayback: Bool { admissionContext.explicitStandaloneChoice }
+    var pendingStandaloneLiveTVEntry: Bool { appAdmission.pendingLiveTVEntry }
+
+    @discardableResult
+    func consumeStandaloneLiveTVEntryIntent() -> Bool {
+        appAdmission.consumeLiveTVEntryIntent()
+    }
+
+    /// Call only after a user-requested playlist/free-channel setup succeeds.
+    /// This records admission without changing first-run setup or navigation.
+    @discardableResult
+    func recordSuccessfulIPTVSetup() -> Bool {
+        appAdmission.recordStandaloneChoice(isAvailable: Self.isStandalonePlaybackAvailable)
+    }
+
     private struct HeroTrailerCacheEntry {
         let source: HeroTrailerSource?
         let expiresAt: Date
@@ -79,6 +123,14 @@ final class PlozziOSAppModel {
     /// `PlozziOSAppModel+CloudSync`.
     @ObservationIgnored
     private(set) lazy var cloudSync: CloudConfigSyncService? = Self.makeCloudSync(for: self)
+
+    #if DEBUG
+    @ObservationIgnored
+    private(set) lazy var liveTVPortableSync: LiveTVPortableSyncBridge? =
+        Self.makeLiveTVPortableSync(profiles: profiles)
+    @ObservationIgnored
+    var liveTVPortableSyncLifecycle: LiveTVPortableSyncLifecycle?
+    #endif
 
     /// Debounces bursts of local config edits into a single cloud publish.
     @ObservationIgnored
@@ -197,7 +249,8 @@ final class PlozziOSAppModel {
                 expected += 1
                 let server = MediaServer(id: desc.serverID, name: desc.serverName, baseURL: baseURL,
                                          provider: .mediaShare,
-                                         connectionURLs: desc.candidateBaseURLs.isEmpty ? nil : desc.candidateBaseURLs)
+                                         connectionURLs: desc.candidateBaseURLs.isEmpty ? nil : desc.candidateBaseURLs,
+                                         mediaShareLibraryConfiguration: desc.mediaShareLibraryConfiguration)
                 let account = Account(id: desc.id, server: server, userID: desc.userID, userName: desc.userName,
                                       avatarURL: desc.avatarURL, deviceID: accountStore.deviceID())
                 do {
@@ -281,11 +334,31 @@ final class PlozziOSAppModel {
     let crashReportingController: CrashReportingController
     let requiresLaunchProfileSelection: Bool
     private(set) var settings: PlozziOSSettingsModel
-    private var backgroundWorkRevision: UInt64 = 0
     @ObservationIgnored
     private var applicationIsActive = true
     @ObservationIgnored
     private var downloadProfileGeneration = 0
+    @ObservationIgnored
+    private var sceneSessionIDs: [String: UUID] = [:]
+    @ObservationIgnored
+    private var sceneNotificationTokens: [NSObjectProtocol] = []
+    @ObservationIgnored
+    private lazy var applicationLifecycle = ApplicationSceneLifecycle(
+        initiallyActive: applicationIsActive,
+        makeSuspensionLease: { expiration in
+            Self.makeSuspensionLease(expiration: expiration)
+        },
+        operation: { [weak self] transition in
+            await self?.applyApplicationActivity(transition)
+        },
+        expirationOperation: { [weak self] transition in
+            guard let self else { return }
+            PlozzLog.boot(
+                "ios.lifecycle suspension lease expired revision=\(transition.revision)"
+            )
+            await self.applyApplicationActivity(transition)
+        }
+    )
     private(set) var seriesTrackStore: SeriesTrackPreferenceStore
     private(set) var versionPreferences: VersionPreferenceStore
     private(set) var downloads: PlozziOSDownloadsModel
@@ -453,7 +526,9 @@ final class PlozziOSAppModel {
 
     var accountError: String?
 
-    init() {
+    init(appAdmissionStore: any AppAdmissionStoring = AppAdmissionStore()) {
+        let appAdmission = AppAdmissionModel(store: appAdmissionStore)
+        self.appAdmission = appAdmission
         let authenticatedHTTPResolver = ManagedAuthenticatedHTTPResolver()
         let accountStore: AccountStore
         var launchErrors: [String] = []
@@ -592,7 +667,10 @@ final class PlozziOSAppModel {
         )
         self.pendingLibrarySelection = nil
         self.pendingFirstRunStep =
-            !accountsProviders.accounts.isEmpty
+            appAdmission.context(
+                hasMediaAccounts: !accountsProviders.accounts.isEmpty,
+                standalonePlaybackAvailable: Self.isStandalonePlaybackAvailable
+            ).canEnterApp
                 && !profiles.firstRunProfileSetupComplete
             ? .confirmProfile
             : nil
@@ -722,7 +800,7 @@ final class PlozziOSAppModel {
         accountsProviders.reloadAccounts()
         // Self-heal any stale server names (shared path with tvOS).
         accountsProviders.refreshServerNames()
-        if !accountsProviders.accounts.isEmpty,
+        if canEnterApp,
            !profiles.firstRunProfileSetupComplete {
             pendingFirstRunStep = .confirmProfile
         }
@@ -754,10 +832,26 @@ final class PlozziOSAppModel {
         }
         prepareMediaAliasLedger()
         startCloudSyncIfEnabled()
+        observeApplicationScenes()
     }
 
     var accounts: [Account] {
         accountsProviders.accounts
+    }
+
+    /// Set setup and navigation intent before publishing admission so the root
+    /// can mount the right destination without an intermediate Home screen.
+    @discardableResult
+    func enterStandalonePlayback() -> Bool {
+        guard Self.isStandalonePlaybackAvailable,
+              pendingFirstRunStep == nil,
+              pendingLibrarySelection == nil,
+              plexHomeUsers.pendingPlexUserSelection == nil,
+              !isManagedServerPresentationActive else { return false }
+        if !profiles.firstRunProfileSetupComplete {
+            pendingFirstRunStep = .confirmProfile
+        }
+        return appAdmission.enterStandalonePlayback(isAvailable: Self.isStandalonePlaybackAvailable)
     }
 
     var crashReportContext: CrashReportContext {
@@ -841,13 +935,88 @@ final class PlozziOSAppModel {
         mediaShareRescanService.rescan(accountID: accountID)
     }
 
-    func setBackgroundWorkAllowed(_ allowed: Bool) {
-        applicationIsActive = allowed
-        backgroundWorkRevision &+= 1
-        let revision = backgroundWorkRevision
-        Task { [mediaShareRuntime] in
-            await mediaShareRuntime.setBackgroundWorkAllowed(allowed, revision: revision)
+    private func observeApplicationScenes() {
+        guard sceneNotificationTokens.isEmpty else { return }
+        for name in [
+            UIScene.didActivateNotification,
+            UIScene.willDeactivateNotification,
+            UIScene.didEnterBackgroundNotification,
+            UIScene.didDisconnectNotification
+        ] {
+            sceneNotificationTokens.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] notification in
+                MainActor.assumeIsolated {
+                    self?.refreshApplicationScenes(notification: notification)
+                }
+            })
         }
+        refreshApplicationScenes(notification: nil)
+    }
+
+    private func refreshApplicationScenes(notification: Notification?) {
+        let changedScene = notification?.object as? UIScene
+        let changedID = changedScene?.session.persistentIdentifier
+        var scenes: [UUID: Bool] = [:]
+        var connected = Set<String>()
+        for scene in UIApplication.shared.connectedScenes {
+            let sessionID = scene.session.persistentIdentifier
+            if sessionID == changedID,
+               notification?.name == UIScene.didDisconnectNotification { continue }
+            connected.insert(sessionID)
+            let id = sceneSessionIDs[sessionID] ?? UUID()
+            sceneSessionIDs[sessionID] = id
+            if sessionID == changedID {
+                scenes[id] = notification?.name == UIScene.didActivateNotification
+            } else {
+                scenes[id] = scene.activationState == .foregroundActive
+            }
+        }
+        sceneSessionIDs = sceneSessionIDs.filter { connected.contains($0.key) }
+        if let transition = applicationLifecycle.replaceScenes(scenes) {
+            applicationIsActive = transition.isActive
+        }
+    }
+
+    private func applyApplicationActivity(
+        _ transition: ApplicationActivityTransition
+    ) async {
+        let downloads = downloads
+        async let mediaShareTransition: Void =
+            mediaShareRuntime.setBackgroundWorkAllowed(
+                transition.isActive,
+                revision: transition.revision
+            )
+        async let downloadTransition: Void =
+            downloads.setApplicationActive(
+                transition.isActive,
+                revision: transition.revision
+            )
+        _ = await (mediaShareTransition, downloadTransition)
+    }
+
+    private static func makeSuspensionLease(
+        expiration: @escaping @MainActor @Sendable () -> Void
+    ) -> ApplicationLifecycleLease? {
+        let lease = ApplicationLifecycleLease(expiration: expiration)
+        let identifier = UIApplication.shared.beginBackgroundTask(
+            withName: "Plozz suspension safety"
+        ) {
+            // UIKit documents background-task expiration handlers as main-thread
+            // callbacks. Run inline so the assertion is ended in that callback,
+            // rather than relying on another task that may not be scheduled.
+            MainActor.assumeIsolated {
+                lease.expire()
+            }
+        }
+        guard identifier != .invalid else {
+            lease.end()
+            return nil
+        }
+        lease.installEndAction {
+            UIApplication.shared.endBackgroundTask(identifier)
+        }
+        return lease
     }
 
     /// Media-share account ids signed in on this device. Scopes the Settings
@@ -900,6 +1069,10 @@ final class PlozziOSAppModel {
         accountsProviders.reloadAccounts()
         plexHomeUsers.resetAllForDebug()
         profiles.resetToPristineDefaultForDebugging()
+        #if DEBUG
+        resetLiveTVPortableSync()
+        #endif
+        if accountsProviders.accounts.isEmpty { appAdmission.resetForDebugging() }
         pendingLibrarySelection = nil
         pendingFirstRunStep = nil
         pendingPairingInvite = nil
@@ -1543,32 +1716,56 @@ final class PlozziOSAppModel {
         )
         publishPlaybackMutation(
             mutation,
-            itemID: item.id,
+            item: item,
             watchedPercent: watchedPercent
         )
         let reconciler = watchReconciler
         Task {
-            if let accountID {
-                await reconciler.endLiveSession(
-                    accountID: accountID,
-                    itemID: item.id
-                )
-            }
-            if let mutation {
-                await reconciler.enqueue(mutation)
-            }
-            await reconciler.drain()
+            await reconciler.finishLiveSession(accountID: accountID, itemID: item.id, mutation: mutation)
         }
+    }
+
+    /// Broadcast completion never owns an ordinary playback/resume session.
+    func completeLibraryChannelPlayback(for item: MediaItem, authorizationID: UUID) throws {
+        #if DEBUG
+        try Task.checkCancellation()
+        let profileID = profiles.activeProfileID
+        let namespace = profiles.activeNamespace
+        guard isLiveTVProfileAuthorized,
+              LibraryChannelHistorySettings.shared(namespace: namespace).authorizationID == authorizationID,
+              let accountID = item.sourceAccountID,
+              accountsProviders.resolvedActiveAccounts.contains(where: { $0.account.id == accountID })
+        else { throw LibraryChannelError.authorizationChanged }
+        let accountAuthorization = accountsProviders.liveTVAuthorizationID
+        guard let completion = WatchMutationFactory.libraryChannelCompletion(
+            item: item,
+            accountID: accountID,
+            additionalSources: identityIndex.identitySourcesProvider(item),
+            crossServerSync: settings.playback.settings.syncWatchAcrossServers
+        ) else { throw LibraryChannelError.mediaChanged }
+        let mutation = completion.requiringAuthorization(owner: self) { @MainActor owner in
+            owner.isLiveTVProfileAuthorized
+                && owner.profiles.activeProfileID == profileID
+                && owner.profiles.activeNamespace == namespace
+                && owner.accountsProviders.liveTVAuthorizationID == accountAuthorization
+                && LibraryChannelHistorySettings.shared(namespace: namespace).authorizationID == authorizationID
+                && owner.accountsProviders.resolvedActiveAccounts.contains { $0.account.id == accountID }
+        }
+        publishPlaybackMutation(mutation, item: item, watchedPercent: 100)
+        applyWatchMutation(mutation)
+        #else
+        throw LibraryChannelError.authorizationChanged
+        #endif
     }
 
     private func publishPlaybackMutation(
         _ mutation: WatchMutation?,
-        itemID: String,
+        item: MediaItem,
         watchedPercent: Double
     ) {
         guard let mutation else { return }
         var itemIDs = Set(mutation.optimisticTargets.map(\.itemID))
-        itemIDs.insert(itemID)
+        itemIDs.insert(item.id)
         MediaItemMutation(
             itemIDs: itemIDs,
             scopedItemIDs: Set(mutation.optimisticTargets.map(\.id)),
@@ -1576,7 +1773,8 @@ final class PlozziOSAppModel {
             resumePosition: mutation.resumePosition,
             playedPercentage: mutation.played == true
                 ? 1
-                : max(0, min(1, watchedPercent / 100))
+                : max(0, min(1, watchedPercent / 100)),
+            item: item
         ).post()
     }
 
@@ -1690,6 +1888,10 @@ final class PlozziOSAppModel {
             applier: applier,
             onPersistenceFailure: {
                 PlozzLog.app.error("iOS durable watch outbox write failed")
+            },
+            onServerStateApplied: { mutation in
+                guard let refresh = MediaItemMutation(confirmedWatchMutation: mutation) else { return }
+                Task { @MainActor in refresh.post() }
             }
         )
     }
@@ -2019,32 +2221,47 @@ final class PlozziOSAppModel {
         Task { await seerService.setActiveProfile(namespace: profiles.activeNamespace) }
     }
 
-    var activeSeerrUserID: Int? {
-        profiles.activeProfile.seerrUserID
+    var activeSeerrRequestIdentity: SeerRequestIdentity {
+        profiles.activeProfile.seerrRequestIdentity
     }
 
-    var activeSeerrUserName: String? {
-        profiles.activeProfile.seerrUserName
+    var activeSeerrRequestActingName: String? {
+        let identity = activeSeerrRequestIdentity
+        guard identity.userID != nil,
+              !identity.requiresRelink(to: seerService.serverIdentity) else {
+            return nil
+        }
+        return profiles.activeProfile.seerrUserName
     }
 
     func setSeerrUser(_ user: SeerUser?, for profileID: String) {
-        guard var profile = profiles.profiles.first(where: { $0.id == profileID }) else {
+        guard let profile = profiles.profiles.first(where: { $0.id == profileID }) else {
             return
         }
-        profile.seerrUserID = user?.id
-        profile.seerrUserName = user?.name
-        profile.seerrUserAvatarURL = user?.avatarURL?.absoluteString
-        profiles.update(profile)
+        if let user {
+            guard let userServer = user.serverIdentity,
+                  let currentServer = seerService.serverIdentity,
+                  userServer == currentServer else {
+                PlozzLog.auth.error(
+                    "Rejected Seerr profile mapping without matching server provenance"
+                )
+                return
+            }
+        }
+        profiles.update(
+            profile.settingSeerrUser(
+                id: user?.id,
+                name: user?.name,
+                avatarURL: user?.avatarURL?.absoluteString,
+                serverIdentity: user?.serverIdentity
+            )
+        )
     }
 
     func disconnectSeerr() {
+        // Keep server-bound profile mappings so reconnecting the same endpoint
+        // restores them. A different endpoint is blocked until each is relinked.
         seerService.disconnect()
-        for var profile in profiles.profiles where profile.seerrUserID != nil {
-            profile.seerrUserID = nil
-            profile.seerrUserName = nil
-            profile.seerrUserAvatarURL = nil
-            profiles.update(profile)
-        }
     }
 
     func activeAccountIDs(for profileID: String) -> Set<String> {
@@ -2258,7 +2475,7 @@ final class PlozziOSAppModel {
     }
 
     func confirmFirstRunProfile() {
-        advanceFirstRunStep(to: .seerr)
+        advanceFirstRunStep(to: accounts.isEmpty && allowsStandalonePlayback ? .theme : .seerr)
     }
 
     func completeFirstRunSeerrSetup() {
@@ -2362,7 +2579,8 @@ final class PlozziOSAppModel {
         port: Int?,
         exportPath: String,
         subpath: String = "",
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveNFS(
@@ -2370,7 +2588,8 @@ final class PlozziOSAppModel {
                 port: port,
                 exportPath: exportPath,
                 subpath: subpath,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2391,7 +2610,8 @@ final class PlozziOSAppModel {
         username: String,
         password: String,
         displayName: String,
-        subpath: String = ""
+        subpath: String = "",
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveSMB(
@@ -2401,7 +2621,8 @@ final class PlozziOSAppModel {
                 username: username,
                 password: password,
                 displayName: displayName,
-                subpath: subpath
+                subpath: subpath,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2419,14 +2640,16 @@ final class PlozziOSAppModel {
         baseURL: URL,
         auth: MediaShareWebDAVAuth,
         trustPin: SHA256Fingerprint?,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveWebDAV(
                 baseURL: baseURL,
                 auth: auth,
                 trustPin: trustPin,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2447,7 +2670,8 @@ final class PlozziOSAppModel {
         username: String,
         password: String,
         hostKeyPin: SHA256Fingerprint,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveSFTP(
@@ -2457,7 +2681,8 @@ final class PlozziOSAppModel {
                 username: username,
                 password: password,
                 hostKeyPin: hostKeyPin,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2474,13 +2699,15 @@ final class PlozziOSAppModel {
     func addFTPShare(
         baseURL: URL,
         auth: MediaShareFTPAuth,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) -> Bool {
         do {
             let prepared = try mediaShareConfigurationService.saveFTP(
                 baseURL: baseURL,
                 auth: auth,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
             reloadAccountsAndCrashContext()
             identityIndex.warmIdentityIndex()
@@ -2602,6 +2829,13 @@ private struct PlozziOSMediaShareArtworkCacheLifecycle:
     func setPreferredAccountKeys(_ accountKeys: Set<String>, revision: UInt64) async {
         await ArtworkImageCache.shared.setPreferredNetworkArtworkAccounts(
             accountKeys,
+            revision: revision
+        )
+    }
+
+    func setBackgroundWorkAllowed(_ allowed: Bool, revision: UInt64) async {
+        await ArtworkImageCache.shared.setBackgroundWorkAllowed(
+            allowed,
             revision: revision
         )
     }

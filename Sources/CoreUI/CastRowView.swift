@@ -88,10 +88,12 @@ private struct CastMemberCard: View {
             onFocusChange: { focused in
                 if focused { onFocusEntered?() }
             },
+            nativeName: person.name,
             avatar: { avatar },
             caption: { _ in
                 VStack(spacing: 2) {
                     Text(person.name)
+                        .accessibilityIdentifier("cast-name-\(person.id)")
                         .font(.system(size: 22 * Self.scale, weight: .semibold))
                         .foregroundStyle(.primary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -106,6 +108,7 @@ private struct CastMemberCard: View {
                 .multilineTextAlignment(.center)
             }
         )
+        .plozzCircularFocusStyle()
     }
 
     @ViewBuilder
@@ -132,5 +135,22 @@ private struct CastMemberCard: View {
         return letters.joined().uppercased()
     }
 }
+
+// STEAL at least they are initials
+
+#if DEBUG
+#Preview("Cast") {
+    CastRowView(
+        people: [
+            MediaPerson(id: "a1", name: "Timothée Chalamet", role: "Paul Atreides", kind: "Actor"),
+            MediaPerson(id: "a2", name: "Zendaya", role: "Chani", kind: "Actor"),
+            MediaPerson(id: "a3", name: "Rebecca Ferguson", role: "Lady Jessica", kind: "Actor")
+        ]
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 
 #endif

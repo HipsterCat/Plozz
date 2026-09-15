@@ -95,6 +95,14 @@ extension PlozziOSAppModel {
             Task { await model?.cloudSync?.publishLocalChanges() }
         }
 
+        var channels = [mediaChannel, trackerTokenChannel]
+        #if DEBUG
+        channels.append(Self.makeLiveTVSyncChannel(
+            bridge: model.liveTVPortableSync,
+            stateFileURL: syncDir.appendingPathComponent("cloud-live-tv-state-v1.json")
+        ))
+        model.observeLiveTVPortableSync()
+        #endif
         return CloudConfigSyncService(.init(
             containerIdentifier: cloudContainerIdentifier,
             stateFileURL: configStateURL,
@@ -110,7 +118,7 @@ extension PlozziOSAppModel {
                 await model?.clearRemoteDerivedSyncState()
             },
             status: model.cloudSyncStatus
-        ), channels: [mediaChannel, trackerTokenChannel])
+        ), channels: channels)
     }
 
     /// Force an immediate two-way sync (manual "Sync Now").
@@ -234,6 +242,7 @@ extension PlozziOSAppModel {
         var settingWrites: [(pid: String, key: String, blob: Data)] = []
         var settingRemoves: [(pid: String, key: String)] = []
         var descriptorsTouched = false
+        var receivedDescriptors: [SyncedAccountDescriptor] = []
         var pendingStore = PendingSyncedServersStore()
         var removalUpserts: [String: Int] = [:]
         var removalClears: Set<String> = []
@@ -252,7 +261,10 @@ extension PlozziOSAppModel {
                 else { settingRemoves.append((key.id, key.subkey)) }
             case .descriptor:
                 descriptorsTouched = true
-                if let value, let d = CanonicalJSON.decode(SyncedAccountDescriptor.self, from: value) { pendingStore.upsertSynced(d.sanitizingURLs()) }
+                if let value, let d = CanonicalJSON.decode(SyncedAccountDescriptor.self, from: value) {
+                    pendingStore.upsertSynced(d.sanitizingURLs())
+                    receivedDescriptors.append(d.sanitizingURLs())
+                }
                 else if value == nil { pendingStore.removeSynced(key.id) }
             case .removal:
                 if let value, let dto = CanonicalJSON.decode(AccountRemovalDTO.self, from: value) { removalUpserts[key.id] = dto.removedAtEpoch }
@@ -277,6 +289,8 @@ extension PlozziOSAppModel {
             }
             for id in removalClears { removed.clear(id) }
         }
+
+        accountsProviders.applySyncedMediaShareLibraries(receivedDescriptors)
 
         // Accounts this device KNOWS aren't Plex. Synced ids for servers not
         // signed in here have an unknown provider, and are deliberately treated
@@ -717,6 +731,9 @@ extension PlozziOSAppModel {
     }
 
     func removeMediaAliases(forProfileID profileID: String) {
+        #if DEBUG
+        removeLiveTVPortableProfile(profileID)
+        #endif
         removeUniversalWatchlist(forProfileID: profileID)
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -845,6 +862,9 @@ extension PlozziOSAppModel {
         let config = cloudSync
         Task { @MainActor in
             await config?.deleteAllServerData()
+            #if DEBUG
+            resetLiveTVPortableSync()
+            #endif
             for profileID in profiles.profiles.map(\.id) {
                 do {
                     try await mediaAliasLedger.removeProfile(profileID)

@@ -22,7 +22,9 @@ public protocol MediaProvider: Sendable {
     /// Top-level libraries/views available to the user.
     func libraries() async throws -> [MediaLibrary]
 
-    /// "Continue Watching" — partially played, resumable items.
+    /// "Continue Watching" — resumable items and the provider's next-up episodes.
+    /// `Int.max` requests the complete feed; network providers must page with
+    /// bounded request sizes rather than send that value as a server limit.
     func continueWatching(limit: Int) async throws -> [MediaItem]
 
     /// Recently added items across the user's libraries.
@@ -267,6 +269,23 @@ public protocol MediaProvider: Sendable {
     /// address even to remote clients — trusting `baseURL` alone would
     /// mis-classify a Tailscale-reached server as local.
     var connectionLocality: SourceLocality { get }
+}
+
+/// Additive capability for providers whose indexed library also has a distinct
+/// file-tree view. Feature layers can offer a provider-neutral "Browse Files"
+/// action without assuming a provider kind or a synthetic container id.
+public protocol MediaFileBrowsing: Sendable {
+    var fileBrowserLibrary: MediaLibrary { get }
+}
+
+/// Additive capability for providers or container types that support only a
+/// subset of the app-wide sort menu. Feature layers fall back to every
+/// `SortField` when this capability is absent.
+public protocol MediaSortFieldProviding: Sendable {
+    func supportedSortFields(
+        in containerID: String,
+        kind: MediaItemKind
+    ) -> [SortField]
 }
 
 /// Optional provider capability used by UI surfaces to report genuine user

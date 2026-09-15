@@ -34,15 +34,22 @@ struct SearchTab: View {
     /// Seerr discovery service, backing the "Not in Your Library" search section
     /// and the discovery detail page's one-tap Request.
     let seer: SeerService
-    /// The active profile's linked Seerr user (`X-API-User`) for requests, or
-    /// `nil` to request as admin.
-    let activeSeerrUserID: Int?
+    /// The active profile's complete Seerr request identity.
+    let activeSeerrIdentity: SeerRequestIdentity
     /// Display name of the active profile's linked Seerr user, for "Request as
     /// <name>". `nil` when requesting as admin.
     let activeSeerrUserName: String?
     /// Whether an unmapped (admin) request should confirm first (multi-profile).
     let confirmAdminRequest: Bool
     let homeVisibility: HomeLibraryVisibilityModel
+
+    private var requestActingName: String? {
+        guard activeSeerrIdentity.userID != nil,
+              !activeSeerrIdentity.requiresRelink(to: seer.serverIdentity) else {
+            return nil
+        }
+        return activeSeerrUserName
+    }
     let behavior: SubtitleBehavior
     let style: SubtitleStyle
     let playbackSettings: PlaybackSettings
@@ -57,6 +64,7 @@ struct SearchTab: View {
     let enqueueWatchMutation: (WatchMutation) -> Void
     let watchBridge: WatchOutboxBridge
     let identitySources: @Sendable (MediaItem) -> [MediaSourceRef]
+    let continueWatchingSnapshot: @MainActor () -> [MediaItem]
     /// Persist an in-player subtitle-appearance edit to the profile store.
     let onSubtitleStyleChanged: (SubtitleStyle) -> Void
     /// Hosted on the root `TabView` (see `MainTabView`) for reliable presentation,
@@ -148,43 +156,55 @@ struct SearchTab: View {
                 onSelect: { open($0) }
             )
             .navigationDestination(for: MediaItem.self) { item in
-                // A discovery (Seerr) result that isn't in the library (id
-                // `seer:<tmdbId>`, requestable/in-flight availability) opens the
-                // request-focused discovery detail page rather than a library
-                // fetch. Search's "Not in Your Library" section only ever surfaces
-                // such titles (owned ones are filtered out).
-                let isDiscovery = detailEnvironment.isDiscovery(item)
-                ItemDetailView(
-                    viewModel: detailEnvironment.makeViewModel(for: item, libraryOrigin: nil),
-                    spoilerSettings: spoilerSettings,
-                    onPlay: { requestPlay($0) },
-                    onSelectChild: { open($0) },
-                    onNavigate: { navigateToItem($0) },
-                    onSelectPerson: { person, accountID in
-                        path.append(PersonRoute(person: person, sourceAccountID: accountID))
-                    },
-                    stackDepth: detailStackDepth,
-                    heroTrailerResolver: makeHeroTrailerResolver(),
-                    initialSeasonID: item.seasonID,
-                    isDiscoveryItem: isDiscovery,
-                    seerConnected: seer.isConfigured,
-                    onRequest: { item in
-                        let outcome = await seer.request(item, actingUserID: activeSeerrUserID)
-                        return seerRequestResult(outcome, actingName: activeSeerrUserName)
-                    },
-                    requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
-                    onRequestSeasons: { item, seasons in
-                        let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
-                        return seerRequestResult(outcome, actingName: activeSeerrUserName)
-                    },
-                    requestActingName: activeSeerrUserName,
-                    confirmAdminRequest: confirmAdminRequest
-                )
+                let provider = resolveProvider(item.sourceAccountID, in: accounts)
+                if let library = MediaFolderNavigation.library(
+                    for: item,
+                    providerKind: provider.kind,
+                    sourceAccountID: item.sourceAccountID ?? provider.session.server.id
+                ) {
+                    MediaFolderBrowseView(
+                        library: library,
+                        provider: provider,
+                        spoilerSettings: spoilerSettings,
+                        onSelect: { open($0) }
+                    )
+                } else {
+                    // Discovery titles keep their request-focused detail page.
+                    ItemDetailView(
+                        viewModel: detailEnvironment.makeViewModel(for: item, libraryOrigin: nil),
+                        spoilerSettings: spoilerSettings,
+                        onPlay: { requestPlay($0) },
+                        onSelectChild: { open($0) },
+                        onNavigate: { navigateToItem($0) },
+                        onSelectPerson: { person, accountID in
+                            path.append(PersonRoute(person: person, sourceAccountID: accountID))
+                        },
+                        stackDepth: detailStackDepth,
+                        heroTrailerResolver: makeHeroTrailerResolver(),
+                        initialSeasonID: item.seasonID,
+                        seerConnected: seer.isConfigured,
+                        onRequest: { item in
+                            let outcome = await seer.request(item, identity: activeSeerrIdentity)
+                            return seerRequestResult(outcome, actingName: requestActingName)
+                        },
+                        requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
+                        onRequestSeasons: { item, seasons in
+                            let outcome = await seer.request(
+                                item,
+                                seasons: seasons,
+                                identity: activeSeerrIdentity
+                            )
+                            return seerRequestResult(outcome, actingName: requestActingName)
+                        },
+                        requestActingName: requestActingName,
+                        confirmAdminRequest: confirmAdminRequest
+                    )
+                }
             }
             .onChange(of: pendingTitleRoute) { _, item in
                 guard isActiveTab, let item else { return }
                 pendingTitleRoute = nil
-                path.append(item)
+                withCinematicDetailNavigation(for: item) { path.append(item) }
             }
             .onChange(of: pendingPersonRoute) { _, route in
                 // Raised by the in-player Cast card and pushed once the player
@@ -240,24 +260,11 @@ struct SearchTab: View {
             }
             .navigationDestination(for: EpisodeContextRoute.self) { route in
                 ItemDetailView(
-                    viewModel: ItemDetailViewModel(
-                        provider: resolveProvider(route.sourceAccountID, in: accounts),
-                        itemID: route.seriesID,
-                        // Seed the hero from the tapped episode for INSTANT first
-                        // paint instead of a centered spinner while the series
-                        // resolves (load() swaps in the full series page in place).
-                        initialItem: route.episode,
-                        ratingsProvider: ratingsProvider,
+                    viewModel: detailEnvironment.makeSeriesContextViewModel(
+                        seriesID: route.seriesID,
+                        seed: route.episode,
                         sourceAccountID: route.sourceAccountID,
-                        // The fronted page IS the series, so it gets the same
-                        // cross-server "…" picker a directly-opened series does.
-                        alternateProviderResolver: { resolveOptionalProvider($0, in: accounts) },
-                        crossServerSourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
-                        relatedTitlesLoader: makeRelatedTitlesLoader(
-                            in: accounts,
-                            identitySources: identitySources
-                        ),
-                        snapshotCache: detailSnapshotCache
+                        originAccountID: nil
                     ),
                     spoilerSettings: spoilerSettings,
                     onPlay: { requestPlay($0) },
@@ -272,33 +279,24 @@ struct SearchTab: View {
                     seerConnected: seer.isConfigured,
                     requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
                     onRequestSeasons: { item, seasons in
-                        let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
-                        return seerRequestResult(outcome, actingName: activeSeerrUserName)
+                        let outcome = await seer.request(
+                            item,
+                            seasons: seasons,
+                            identity: activeSeerrIdentity
+                        )
+                        return seerRequestResult(outcome, actingName: requestActingName)
                     },
-                    requestActingName: activeSeerrUserName,
+                    requestActingName: requestActingName,
                     confirmAdminRequest: confirmAdminRequest
                 )
             }
             .navigationDestination(for: SeasonContextRoute.self) { route in
                 ItemDetailView(
-                    viewModel: ItemDetailViewModel(
-                        provider: resolveProvider(route.sourceAccountID, in: accounts),
-                        itemID: route.seriesID,
-                        // Seed the hero from the tapped season for INSTANT first
-                        // paint instead of a centered spinner while the series
-                        // resolves.
-                        initialItem: route.season,
-                        ratingsProvider: ratingsProvider,
+                    viewModel: detailEnvironment.makeSeriesContextViewModel(
+                        seriesID: route.seriesID,
+                        seed: route.season,
                         sourceAccountID: route.sourceAccountID,
-                        // The fronted page IS the series, so it gets the same
-                        // cross-server "…" picker a directly-opened series does.
-                        alternateProviderResolver: { resolveOptionalProvider($0, in: accounts) },
-                        crossServerSourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
-                        relatedTitlesLoader: makeRelatedTitlesLoader(
-                            in: accounts,
-                            identitySources: identitySources
-                        ),
-                        snapshotCache: detailSnapshotCache
+                        originAccountID: nil
                     ),
                     spoilerSettings: spoilerSettings,
                     onPlay: { requestPlay($0) },
@@ -313,10 +311,14 @@ struct SearchTab: View {
                     seerConnected: seer.isConfigured,
                     requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
                     onRequestSeasons: { item, seasons in
-                        let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
-                        return seerRequestResult(outcome, actingName: activeSeerrUserName)
+                        let outcome = await seer.request(
+                            item,
+                            seasons: seasons,
+                            identity: activeSeerrIdentity
+                        )
+                        return seerRequestResult(outcome, actingName: requestActingName)
                     },
-                    requestActingName: activeSeerrUserName,
+                    requestActingName: requestActingName,
                     confirmAdminRequest: confirmAdminRequest
                 )
             }
@@ -333,10 +335,12 @@ struct SearchTab: View {
     /// own page; "Go to Season" hands over a season, so the two are
     /// distinguishable by kind.
     private func navigateToItem(_ item: MediaItem) {
-        if item.kind == .season, item.seriesID != nil {
-            path.append(SeasonContextRoute(season: item, originAccountID: nil))
-        } else {
-            path.append(item)
+        withCinematicDetailNavigation(for: item) {
+            if item.kind == .season, item.seriesID != nil {
+                path.append(SeasonContextRoute(season: item, originAccountID: nil))
+            } else {
+                path.append(item)
+            }
         }
     }
 
@@ -355,8 +359,10 @@ struct SearchTab: View {
             resolveOptionalProvider: { resolveOptionalProvider($0, in: accounts) },
             identitySources: identitySources,
             crossServerSourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
+            continueWatchingSnapshot: continueWatchingSnapshot,
             ratingsProvider: ratingsProvider,
             discoveryStatusRefresh: { await seer.availability(for: $0) },
+            loadSeasonEpisodeRoster: { await seer.seasonEpisodeRoster(for: $0, seasonNumber: $1) },
             makeRelatedTitlesLoader: {
                 makeRelatedTitlesLoader(
                     in: accounts,
@@ -369,19 +375,21 @@ struct SearchTab: View {
     }
 
     private func open(_ item: MediaItem) {
-        switch item.kind {
-        case .episode where item.seriesID != nil:
-            path.append(EpisodeContextRoute(
-                episode: item,
-                originAccountID: nil
-            ))
-        case .season where item.seriesID != nil:
-            path.append(SeasonContextRoute(
-                season: item,
-                originAccountID: nil
-            ))
-        default:
-            path.append(item)
+        withCinematicDetailNavigation(for: item) {
+            switch item.kind {
+            case .episode where item.seriesID != nil:
+                path.append(EpisodeContextRoute(
+                    episode: item,
+                    originAccountID: nil
+                ))
+            case .season where item.seriesID != nil:
+                path.append(SeasonContextRoute(
+                    season: item,
+                    originAccountID: nil
+                ))
+            default:
+                path.append(item)
+            }
         }
     }
 

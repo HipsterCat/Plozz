@@ -150,7 +150,7 @@ public struct SkeletonCardView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     // The real caption rides up to the resting gap when unfocused (a pure
                     // offset, never a layout change); a skeleton is always at rest.
-                    .offset(y: -captionPush)
+                    .offset(y: focusStyle.usesSystemEffect ? 0 : -captionPush)
             }
         }
         .padding(.horizontal, metrics.borderlessCardSideMargin)
@@ -263,5 +263,23 @@ public struct SkeletonCardView: View {
             }
     }
 }
+
+#if DEBUG
+#Preview("Poster") {
+    SkeletonCardView(style: .poster)
+        .frame(width: 280)
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+}
+
+#Preview("Landscape") {
+    SkeletonCardView(style: .landscape)
+        .frame(width: 480)
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+}
+#endif
 
 #endif

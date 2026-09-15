@@ -180,6 +180,13 @@ case "$PLATFORM" in
     exit 2 ;;
 esac
 
+source tools/lib/apple-build-lease.sh
+acquire_apple_build_shared_lease "plozz/capture-shots"
+install_apple_build_lease_traps
+source tools/lib/swift-package-storage.sh
+PLOZZ_SHOTS_CLONED_SOURCE_PACKAGES="${PLOZZ_SHOTS_CLONED_SOURCE_PACKAGES:-$REPO_ROOT/.build/package-workspaces/capture-shots-$PLATFORM}"
+configure_plozz_package_resolution "$PLOZZ_SHOTS_CLONED_SOURCE_PACKAGES"
+
 mkdir -p "$OUT"
 
 # Resolves the newest available Simulator UDID for a device name on this
@@ -235,6 +242,7 @@ if [ "$DO_BUILD" = "1" ]; then
     -scheme "$SCHEME" \
     -destination "platform=$DEST_PLATFORM,id=$BUILD_UDID" \
     -derivedDataPath "$DERIVED" \
+    "${PACKAGE_RESOLUTION_ARGS[@]}" \
     DEVELOPMENT_TEAM="$TEAM" \
     ONLY_ACTIVE_ARCH=YES \
     -quiet

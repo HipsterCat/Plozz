@@ -26,6 +26,23 @@ final class HomeLibraryProvenanceTests: XCTestCase {
         let legacy = #"{"id":"i1","title":"Dune","kind":"movie"}"#
         let decoded = try JSONDecoder().decode(MediaItem.self, from: Data(legacy.utf8))
         XCTAssertNil(decoded.libraryID)
+        XCTAssertTrue(decoded.allowsTitleBasedMetadataMatching)
+    }
+
+    func testMediaItemRoundTripsDisabledTitleMatching() throws {
+        let item = MediaItem(
+            id: "personal",
+            title: "Birthday",
+            kind: .video,
+            allowsTitleBasedMetadataMatching: false
+        )
+
+        let decoded = try JSONDecoder().decode(
+            MediaItem.self,
+            from: JSONEncoder().encode(item)
+        )
+
+        XCTAssertFalse(decoded.allowsTitleBasedMetadataMatching)
     }
 
     func testMediaSourceRefRoundTripsLibraryID() throws {

@@ -1,6 +1,27 @@
 import CoreModels
 import Foundation
 
+/// Revocation waits only for a synchronous registry commit, never transport I/O.
+final class DownloadMutationPermit: @unchecked Sendable {
+    private let lock = NSLock()
+    private var valid = true
+
+    func invalidate() {
+        lock.withLock { valid = false }
+    }
+
+    func check() throws {
+        try withAccess {}
+    }
+
+    func withAccess<T>(_ body: () throws -> T) throws -> T {
+        try lock.withLock {
+            guard valid else { throw CancellationError() }
+            return try body()
+        }
+    }
+}
+
 /// The single source of truth for what is downloaded / downloading, backed by a
 /// durable, non-evictable store and keyed by cross-server ``MediaIdentity``.
 ///
@@ -19,6 +40,13 @@ public actor DownloadedMediaRegistry {
     public init(store: any DownloadedMediaStoring) {
         self.store = store
         self.state = store.load()
+    }
+
+    func withMutationPermit<T: Sendable>(
+        _ permit: DownloadMutationPermit,
+        _ body: @Sendable (isolated DownloadedMediaRegistry) throws -> T
+    ) throws -> T {
+        try permit.withAccess { try body(self) }
     }
 
     // MARK: - Observation

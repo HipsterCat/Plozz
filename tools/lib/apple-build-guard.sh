@@ -1,24 +1,35 @@
 #!/usr/bin/env bash
 #
-# Shared fail-closed guard for destructive Apple build-cache maintenance.
-# Callers must acquire the maintenance lock and complete the quiet window before
-# deleting, then call guard_cache_path_for_delete immediately before each rm.
+# Fail-closed guard for destructive Apple build-cache maintenance.
+# The host-wide shared/exclusive lease is the primary race-free interlock.
+# Process and open-path checks remain independent defense in depth.
 
 APPLE_BUILD_QUIET_SECONDS="${APPLE_BUILD_QUIET_SECONDS:-120}"
 APPLE_BUILD_MAX_WAIT_SECONDS="${APPLE_BUILD_MAX_WAIT_SECONDS:-900}"
 APPLE_BUILD_POLL_SECONDS="${APPLE_BUILD_POLL_SECONDS:-1}"
 APPLE_BUILD_OPEN_PATH_CHECK="${APPLE_BUILD_OPEN_PATH_CHECK:-1}"
-RECLAIM_LOCK_FILE="${RECLAIM_LOCK_FILE:-$HOME/Library/Caches/com.thatcube.reclaim-disk.lock}"
-BUILD_GUARD_HOME="$(cd "$HOME" 2>/dev/null && pwd -P || printf '%s' "$HOME")"
-
-BUILD_GUARD_OWNS_LOCK=0
-BUILD_GUARD_INHERITED_LOCK=0
 
 if ! declare -F build_guard_log >/dev/null 2>&1; then
   build_guard_log() {
     printf '%s\n' "$*"
   }
 fi
+
+apple_build_lease_log() {
+  build_guard_log "$*"
+}
+
+BUILD_GUARD_SOURCE="${BASH_SOURCE[0]}"
+BUILD_GUARD_LIB_DIR="$(cd "${BUILD_GUARD_SOURCE%/*}" && pwd -P)"
+source "$BUILD_GUARD_LIB_DIR/apple-build-lease.sh"
+BUILD_GUARD_HOME="$(
+  /usr/bin/python3 "$APPLE_BUILD_LEASE_PY" path home
+)" || {
+  build_guard_log "Cannot resolve canonical home for cache safety checks."
+  return 75 2>/dev/null || exit 75
+}
+BUILD_GUARD_TEST_MODE=0
+[ "${APPLE_BUILD_INTERLOCK_TESTING:-}" = "1" ] && BUILD_GUARD_TEST_MODE=1
 
 build_guard_valid_nonnegative_integer() {
   case "$1" in
@@ -141,59 +152,16 @@ build_guard_report_activity() {
 }
 
 acquire_maintenance_lock() {
-  local lock_dir owner_start file_inode fd_inode
-  lock_dir="$(dirname "$RECLAIM_LOCK_FILE")"
-  mkdir -p "$lock_dir" || {
-    build_guard_log "Cannot create maintenance lock directory: $lock_dir"
-    return 1
-  }
-
-  if [ -n "${RECLAIM_LOCK_OWNER_PID:-}" ] &&
-     kill -0 "$RECLAIM_LOCK_OWNER_PID" 2>/dev/null &&
-     [ -e /dev/fd/9 ]; then
-    owner_start="$(ps -o lstart= -p "$RECLAIM_LOCK_OWNER_PID" 2>/dev/null)"
-    file_inode="$(stat -f '%i' "$RECLAIM_LOCK_FILE" 2>/dev/null)"
-    fd_inode="$(stat -f '%i' /dev/fd/9 2>/dev/null)"
-    if [ -n "${RECLAIM_LOCK_OWNER_START:-}" ] &&
-       [ "$owner_start" = "$RECLAIM_LOCK_OWNER_START" ] &&
-       [ -n "${RECLAIM_LOCK_INODE:-}" ] &&
-       [ "$file_inode" = "$RECLAIM_LOCK_INODE" ] &&
-       [ "$fd_inode" = "$RECLAIM_LOCK_INODE" ]; then
-      BUILD_GUARD_INHERITED_LOCK=1
-      return 0
-    fi
-  fi
-
-  if ! command -v lockf >/dev/null 2>&1; then
-    build_guard_log "Cannot acquire maintenance lock: /usr/bin/lockf is unavailable."
-    return 1
-  fi
-  if ! exec 9>>"$RECLAIM_LOCK_FILE"; then
-    build_guard_log "Cannot open maintenance lock: $RECLAIM_LOCK_FILE"
-    return 1
-  fi
-  if ! lockf -s -t 0 9; then
-    exec 9>&-
-    build_guard_log "Destructive maintenance already running; refusing overlap."
-    return 1
-  fi
-
-  BUILD_GUARD_OWNS_LOCK=1
-  RECLAIM_LOCK_OWNER_PID="$$"
-  RECLAIM_LOCK_OWNER_START="$(ps -o lstart= -p $$ 2>/dev/null)"
-  RECLAIM_LOCK_INODE="$(stat -f '%i' "$RECLAIM_LOCK_FILE" 2>/dev/null)"
-  if [ -z "$RECLAIM_LOCK_OWNER_START" ] || [ -z "$RECLAIM_LOCK_INODE" ]; then
-    build_guard_log "Cannot verify maintenance lock ownership; refusing destructive work."
-    release_maintenance_lock
-    return 1
-  fi
-  export RECLAIM_LOCK_OWNER_PID RECLAIM_LOCK_OWNER_START RECLAIM_LOCK_INODE RECLAIM_LOCK_FILE
+  acquire_apple_build_exclusive_lease \
+    "${APPLE_BUILD_MAINTENANCE_OWNER:-cleanup/apple-build-cache}"
 }
 
 release_maintenance_lock() {
-  [ "$BUILD_GUARD_OWNS_LOCK" -eq 1 ] || return 0
-  exec 9>&-
-  BUILD_GUARD_OWNS_LOCK=0
+  release_apple_build_lease
+}
+
+abandon_maintenance_lock() {
+  abandon_apple_build_lease
 }
 
 wait_for_apple_build_quiet() {
@@ -236,19 +204,22 @@ begin_destructive_maintenance() {
   build_guard_validate_config || return 1
   acquire_maintenance_lock || return 1
 
-  if [ "$BUILD_GUARD_INHERITED_LOCK" -eq 1 ] &&
-     [ "${APPLE_BUILD_QUIET_OWNER_PID:-}" = "${RECLAIM_LOCK_OWNER_PID:-}" ]; then
+  if [ "${APPLE_BUILD_QUIET_LEASE_ID:-}" = "${APPLE_BUILD_LEASE_ID:-}" ]; then
     guard_no_apple_build_activity "before nested maintenance" || return 1
     return 0
   fi
 
   wait_for_apple_build_quiet || return 1
-  APPLE_BUILD_QUIET_OWNER_PID="${RECLAIM_LOCK_OWNER_PID:-$$}"
-  export APPLE_BUILD_QUIET_OWNER_PID
+  APPLE_BUILD_QUIET_LEASE_ID="${APPLE_BUILD_LEASE_ID:-}"
+  export APPLE_BUILD_QUIET_LEASE_ID
 }
 
 guard_no_apple_build_activity() {
   local context="$1" activity
+  if ! verify_apple_build_lease exclusive; then
+    build_guard_log "Exclusive Apple build lease verification failed $context."
+    return 1
+  fi
   activity="$(apple_build_activity)"
   if [ -n "$activity" ]; then
     build_guard_log "Apple build activity appeared $context; aborting remaining destructive maintenance."
@@ -307,6 +278,15 @@ validate_cache_container() {
     build_guard_log "Cannot resolve cache container: $path"
     return 1
   fi
+  if [ "$BUILD_GUARD_TEST_MODE" -eq 1 ]; then
+    case "$resolved" in
+      "$BUILD_GUARD_HOME"/*) ;;
+      *)
+        build_guard_log "Refusing cache container outside the test HOME fixture: $path"
+        return 1
+        ;;
+    esac
+  fi
   case "$resolved" in
     "/"|"$BUILD_GUARD_HOME"|"$BUILD_GUARD_HOME/Library"|"$BUILD_GUARD_HOME/Library/Caches"|\
     "$BUILD_GUARD_HOME/Library/Developer"|"$BUILD_GUARD_HOME/Library/Developer/Xcode"|\
@@ -331,6 +311,15 @@ guard_cache_path_for_delete() {
     build_guard_log "Cannot resolve cache deletion target: $path"
     return 1
   fi
+  if [ "$BUILD_GUARD_TEST_MODE" -eq 1 ]; then
+    case "$resolved" in
+      "$BUILD_GUARD_HOME"/*) ;;
+      *)
+        build_guard_log "Refusing cache deletion outside the test HOME fixture: $path"
+        return 1
+        ;;
+    esac
+  fi
   case "$resolved" in
     "/"|"$BUILD_GUARD_HOME"|"$BUILD_GUARD_HOME/Library"|"$BUILD_GUARD_HOME/Library/Caches"|\
     "$BUILD_GUARD_HOME/Library/Developer"|"$BUILD_GUARD_HOME/Library/Developer/Xcode"|\
@@ -344,9 +333,11 @@ guard_cache_path_for_delete() {
       ;;
   esac
 
+  verify_apple_build_lease exclusive || return 1
   guard_no_apple_build_activity "before deleting $path" || return 1
   cache_path_has_open_files "$resolved"
   open_status=$?
   [ "$open_status" -eq 1 ] || return 1
+  verify_apple_build_lease exclusive || return 1
   guard_no_apple_build_activity "after open-file check for $path" || return 1
 }

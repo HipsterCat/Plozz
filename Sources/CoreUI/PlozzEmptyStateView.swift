@@ -41,4 +41,13 @@ public struct PlozzEmptyStateView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+
+#if DEBUG
+#Preview("Empty") {
+    PlozzEmptyStateView("Nothing here yet.")
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .background(.black)
+}
+#endif
 #endif

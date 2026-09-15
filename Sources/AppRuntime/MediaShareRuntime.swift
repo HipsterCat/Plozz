@@ -90,8 +90,12 @@ public protocol MediaShareRuntime: Sendable {
     /// shares (tests, previews) need not implement it.
     func pollForChanges() async
 
-    /// Allows foreground-only scan/enrichment work to run. Passing false
-    /// checkpoints active work and preserves its durable queue for the next resume.
+    /// Allows foreground-only scan/enrichment work to run. Passing false closes
+    /// local persistence admission before returning, then lets cancellation-
+    /// insensitive transport teardown drain independently. A newer true revision
+    /// returns without awaiting that teardown: the scanner's actor-owned frontier
+    /// snapshot is flushed first, local reads resume promptly, and only replacement
+    /// scan transport waits for exact old ownership to drain.
     func setBackgroundWorkAllowed(_ allowed: Bool, revision: UInt64) async
 
     /// Retires the transport sessions bound to one account's credential

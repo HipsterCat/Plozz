@@ -21,8 +21,23 @@ public protocol ShareCatalogReading: Sendable {
     /// One page of movies for the Movies grid.
     func movies(offset: Int, limit: Int) async -> [MediaItem]
 
+    /// One page of movies using the caller's advertised library sort.
+    func movies(
+        offset: Int,
+        limit: Int,
+        sort: CoreModels.SortDescriptor
+    ) async -> [MediaItem]
+
     /// One page of series for a TV/Anime grid.
     func series(in library: CatalogLibrary, offset: Int, limit: Int) async -> [MediaItem]
+
+    /// One page of series using the caller's advertised library sort.
+    func series(
+        in library: CatalogLibrary,
+        offset: Int,
+        limit: Int,
+        sort: CoreModels.SortDescriptor
+    ) async -> [MediaItem]
 
     /// Exact indexed movie count (for stable grid sizing).
     func movieCount() async -> Int
@@ -73,18 +88,44 @@ public protocol ShareCatalogReading: Sendable {
 
     /// `nil` for a normal asset, otherwise the extra's resume policy.
     func extraResumeBehavior(fileID: String) async -> Bool?
+
+    /// Projects one live directory listing through the local catalog.
+    ///
+    /// Raw entries remain the source of truth for hierarchy and unindexed files.
+    /// The catalog may resolve files or add a logical movie/series/season beside
+    /// a physical folder only when persisted path/membership evidence proves the
+    /// identity. Promoted folders carry a separate raw file-browser route so
+    /// content added since the last inventory remains reachable from details.
+    func browseItems(_ items: [MediaItem]) async -> [MediaItem]
 }
 
-/// The concrete SQLite-backed store is the production witness. Its methods are
-/// synchronous actor-isolated reads, which satisfy the `async` requirements when
-/// the store is used through `any ShareCatalogReading`.
+/// The concrete SQLite-backed store is the production witness. Its async reads
+/// can wait for lifecycle admission without touching SQLite while suspended.
 extension ShareCatalogStore: ShareCatalogReading {}
 
 public extension ShareCatalogReading {
+    func movies(
+        offset: Int,
+        limit: Int,
+        sort: CoreModels.SortDescriptor
+    ) async -> [MediaItem] {
+        await movies(offset: offset, limit: limit)
+    }
+
+    func series(
+        in library: CatalogLibrary,
+        offset: Int,
+        limit: Int,
+        sort: CoreModels.SortDescriptor
+    ) async -> [MediaItem] {
+        await series(in: library, offset: offset, limit: limit)
+    }
+
     /// Default: no searchable cast.
     func itemsWithPerson(id personID: String?, name: String, limit: Int) async -> [MediaItem] { [] }
 
     func extras(ownerID: String) async -> [MediaExtra] { [] }
     func extra(fileID: String) async -> MediaExtra? { nil }
     func extraResumeBehavior(fileID: String) async -> Bool? { nil }
+    func browseItems(_ items: [MediaItem]) async -> [MediaItem] { items }
 }

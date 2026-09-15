@@ -26,6 +26,19 @@ final class OnlineTrailerSourceTests: XCTestCase {
         XCTAssertNil(OnlineTrailerSource.query(for: MediaItem(id: "x", title: "E1", kind: .episode)))
     }
 
+    func testQueryNilWhenTitleBasedMetadataMatchingIsDisabled() {
+        XCTAssertNil(
+            OnlineTrailerSource.query(
+                for: MediaItem(
+                    id: "personal",
+                    title: "Birthday",
+                    kind: .video,
+                    allowsTitleBasedMetadataMatching: false
+                )
+            )
+        )
+    }
+
     func testSearchQueryStrings() {
         XCTAssertEqual(
             OnlineTrailerSource.searchQuery(title: "Dune", year: 2021, isTV: false),

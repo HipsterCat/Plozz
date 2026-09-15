@@ -53,6 +53,9 @@ fi
 # against another Xcode's SwiftSyntax will fail to load at runtime.
 FINGERPRINT="$(shasum "$SOURCE" | awk '{print $1}')-$(cd "$HOST_LIBS" && pwd -P)"
 if [[ "$FORCE" == "1" || ! -x "$BINARY" || "$(cat "$STAMP" 2>/dev/null || true)" != "$FINGERPRINT" ]]; then
+  source "$ROOT/tools/lib/apple-build-lease.sh"
+  acquire_apple_build_shared_lease "plozz/l10n-guard"
+  install_apple_build_lease_traps
   mkdir -p "$CACHE_DIR"
   echo "▸ Building l10n-guard…"
   swiftc -O -swift-version 5 \
@@ -61,6 +64,10 @@ if [[ "$FORCE" == "1" || ! -x "$BINARY" || "$(cat "$STAMP" 2>/dev/null || true)"
     -Xlinker -rpath -Xlinker "$HOST_LIBS" \
     "$SOURCE" -o "$BINARY"
   printf '%s' "$FINGERPRINT" > "$STAMP"
+  if ! release_apple_build_lease; then
+    exit 75
+  fi
+  trap - EXIT HUP INT TERM
 fi
 
 exec "$BINARY" --repo-root "$ROOT" ${GUARD_ARGS[@]+"${GUARD_ARGS[@]}"}

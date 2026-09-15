@@ -241,6 +241,26 @@ struct SeerSeasonSummary: Decodable {
     }
 }
 
+/// Narrow decode of `GET /api/v1/tv/{id}/season/{seasonNumber}`. `episodes` is
+/// intentionally required: a missing/null list is not an authoritative empty
+/// season and must fail the whole response.
+struct SeerSeasonDetails: Decodable {
+    var seasonNumber: Int
+    var episodes: [SeerEpisodeDetails]
+}
+
+/// Episode fields needed by Plozz's metadata-only season roster. Identity and
+/// coordinates are required so malformed entries fail decoding instead of being
+/// silently dropped from a supposedly complete list.
+struct SeerEpisodeDetails: Decodable {
+    var id: Int
+    var name: String?
+    var airDate: String?
+    var episodeNumber: Int
+    var seasonNumber: Int
+    var stillPath: String?
+}
+
 // MARK: - Radarr / Sonarr service defaults
 
 /// One configured Radarr/Sonarr server from `GET /api/v1/service/{radarr|sonarr}`.

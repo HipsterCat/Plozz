@@ -28,6 +28,18 @@ public struct MediaItemActionContext: Sendable, Equatable {
 /// which siblings a bulk action touches. Kept free of SwiftUI and providers so
 /// it is fully unit-testable on Linux/CI.
 public enum MediaItemActionCatalog {
+    /// Season containers do not reliably report aggregate watch state. Offer
+    /// both explicit operations, but only when the provider supports watch edits.
+    public static func seasonWatchActions(
+        for item: MediaItem,
+        availableActions: [MediaItemAction]
+    ) -> [MediaItemAction] {
+        guard item.kind == .season,
+              availableActions.contains(.markWatched) || availableActions.contains(.markUnwatched)
+        else { return [] }
+        return [.markWatched, .markUnwatched]
+    }
+
     /// The ordered actions to show for `item`.
     ///
     /// - Parameters:
@@ -73,19 +85,10 @@ public enum MediaItemActionCatalog {
         // Watchlist action: a single toggle whose direction follows the item's
         // current favourite/watchlist state. Offered for the same content kinds
         // that carry a watched state (movies, episodes, series, …) — not folders.
-        if isWatchlistEligible(item) {
-            if let isWatchlisted {
-                actions.append(
-                    isWatchlisted ? .removeFromWatchlist : .addToWatchlist
-                )
-            } else if supportsWatchlist {
-                // Legacy provider-derived behavior while the universal feature
-                // flag is disabled. Provider `isFavorite` remains independent
-                // once an explicit Plozz membership value is supplied above.
-                actions.append(
-                    item.isFavorite ? .removeFromWatchlist : .addToWatchlist
-                )
-            }
+        if let watchlistAction = watchlistAction(
+            for: item, supportsWatchlist: supportsWatchlist, isWatchlisted: isWatchlisted
+        ) {
+            actions.append(watchlistAction)
         }
 
         // Navigation actions: independent of watched-state capability.
@@ -99,6 +102,10 @@ public enum MediaItemActionCatalog {
 
         if canGoToEpisode(item, in: context) {
             actions.append(.goToEpisode)
+        }
+        if item.kind != .folder, let containerID = item.fileBrowserContainerID,
+           !containerID.isEmpty {
+            actions.append(.browseFiles)
         }
 
         // Refresh Metadata: a server-side maintenance task, offered last for any
@@ -137,6 +144,18 @@ public enum MediaItemActionCatalog {
         }
 
         return actions
+    }
+
+    /// The bookmark control and full menu share eligibility and membership rules.
+    public static func watchlistAction(
+        for item: MediaItem, supportsWatchlist: Bool, isWatchlisted: Bool? = nil
+    ) -> MediaItemAction? {
+        guard isWatchlistEligible(item) else { return nil }
+        if let isWatchlisted {
+            return isWatchlisted ? .removeFromWatchlist : .addToWatchlist
+        }
+        guard supportsWatchlist else { return nil }
+        return item.isFavorite ? .removeFromWatchlist : .addToWatchlist
     }
 
     /// Downloadable kinds: a single playable file. A series or folder resolves to

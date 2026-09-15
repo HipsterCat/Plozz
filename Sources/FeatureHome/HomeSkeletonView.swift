@@ -1,6 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreUI
+import FeatureHomeCore
 
 /// A 1:1 placeholder for the Home screen shown while content loads. It renders
 /// the *same* row structure the loaded view will (driven by a `[HomeRowKind]`
@@ -318,4 +319,11 @@ struct HomeHeroSkeletonView: View {
     }
 }
 
+#if DEBUG
+#Preview("Skeleton") {
+    HomeSkeletonView(layout: HomeRowKind.defaultSkeletonLayout, appearDelay: .zero)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+}
+#endif
 #endif

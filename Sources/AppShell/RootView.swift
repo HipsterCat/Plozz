@@ -228,6 +228,7 @@ private static func makeAppState() -> AppState {
     }
 
     private var startupPresentationReady: Bool {
+        guard appState.canEnterApp, !appState.pendingStandaloneLiveTVEntry else { return false }
         guard appState.profileFlow.pendingSetupProfile == nil else { return false }
         guard case .ready = appState.state else { return false }
         return !appState.profileFlow.isChoosingProfile
@@ -253,6 +254,47 @@ private static func makeAppState() -> AppState {
             && !featureIntroductionStore.needsPresentation(.navigationStyles)
     }
 
+    private func makeLibraryChannelCompletionHandler(
+        profileID: String
+    ) -> @MainActor @Sendable (MediaItem, UUID) throws -> Void {
+        #if DEBUG
+        let namespace = appState.profilesModel.activeNamespace
+        return { [appState] item, authorizationID in
+            try Task.checkCancellation()
+            guard appState.isLiveTVProfileAuthorized,
+                  appState.profilesModel.activeProfileID == profileID,
+                  appState.profilesModel.activeNamespace == namespace,
+                  LibraryChannelHistorySettings.shared(
+                    namespace: namespace
+                  ).authorizationID == authorizationID,
+                  let accountID = item.sourceAccountID,
+                  appState.accountsProviders.resolvedActiveAccounts.contains(where: { $0.account.id == accountID })
+            else { throw LibraryChannelError.authorizationChanged }
+            let accountAuthorization = appState.accountsProviders.liveTVAuthorizationID
+            guard let completion = WatchMutationFactory.libraryChannelCompletion(
+                item: item,
+                accountID: accountID,
+                additionalSources: appState.identityIndex.identitySourcesProvider(item),
+                crossServerSync: appState.profileSettings.playbackModel.settings.syncWatchAcrossServers
+            ) else { throw LibraryChannelError.mediaChanged }
+            let mutation = completion.requiringAuthorization(owner: appState) { @MainActor owner in
+                owner.isLiveTVProfileAuthorized
+                    && owner.profilesModel.activeProfileID == profileID
+                    && owner.profilesModel.activeNamespace == namespace
+                    && owner.accountsProviders.liveTVAuthorizationID == accountAuthorization
+                    && LibraryChannelHistorySettings.shared(namespace: namespace).authorizationID == authorizationID
+                    && owner.accountsProviders.resolvedActiveAccounts.contains { $0.account.id == accountID }
+            }
+            // Broadcast playback never registered an ordinary resume session.
+            appState.finishLiveWatchSession(
+                accountID: nil, itemID: item.id, watchedPercent: 100, mutation: mutation, item: item
+            )
+        }
+        #else
+        return { _, _ in throw LibraryChannelError.authorizationChanged }
+        #endif
+    }
+
     public var body: some View {
         let _ = plozzPrintChanges { Self._printChanges() }
         // Read the PIN request HERE so the @Observable system registers it
@@ -270,7 +312,15 @@ private static func makeAppState() -> AppState {
             // temporarily moves that machine to `.onboarding`, but setup must
             // remain mounted underneath so its exact NavigationStack path
             // survives and the auth screen can behave as an overlay.
-            if let setupProfile = appState.profileFlow.pendingSetupProfile {
+            if appState.allowsStandalonePlayback && appState.profileFlow.isChoosingProfile {
+                // Standalone can resume profile confirmation without a server.
+                // A remembered locked profile must still be selected/unlocked
+                // before its confirmation or editor can appear.
+                ProfileSelectionView(
+                    appState: appState,
+                    canCancel: appState.profileFlow.isProfileSelectionCancelable
+                )
+            } else if let setupProfile = appState.profileFlow.pendingSetupProfile {
                 ProfileSetupFlowView(
                     appState: appState,
                     profile: setupProfile,
@@ -354,6 +404,7 @@ private static func makeAppState() -> AppState {
                     AppLanguageScope(model: appState.profileSettings.appLanguageModel) {
                     MainTabView(
                         accounts: accounts,
+                        accountsProviders: appState.accountsProviders,
                         detailSnapshotCache: detailCache,
                         currentAccounts: { appState.accountsProviders.homeAccounts },
                         networkFileResolver: appState.mediaShare.networkFileResolver,
@@ -379,6 +430,10 @@ private static func makeAppState() -> AppState {
                         navigationLibrariesSnapshotStore: NavigationLibrariesSnapshotStore(namespace: appState.profilesModel.activeNamespace),
                         mediaItemActionHandler: appState.mediaItemActionHandler,
                         enqueueWatchMutation: { appState.enqueueWatchMutation($0) },
+                        completeLibraryChannelPlayback: makeLibraryChannelCompletionHandler(
+                            profileID: appState.profilesModel.activeProfileID
+                        ),
+                        isLiveTVProfileAuthorized: { appState.isLiveTVProfileAuthorized },
                         // These bridge closures are `@Sendable` (the player may invoke
                         // them off the main actor), but every `appState` watch method is
                         // `@MainActor`-isolated. Hop to the main actor so the calls are
@@ -412,6 +467,7 @@ private static func makeAppState() -> AppState {
                         activeAccountID: appState.accountsProviders.primaryActiveAccount?.id,
                         profiles: appState.profilesModel.profilesByRecency,
                         activeProfile: appState.profilesModel.activeProfile,
+                        liveTVPreferencesNamespace: appState.profilesModel.activeNamespace,
                         plexIdentityGeneration: appState.plexHomeUsers.plexIdentityGeneration,
                         askProfileOnStartup: appState.profilesModel.askProfileOnStartup,
                         homeRuntime: HomeTabRuntime(
@@ -488,7 +544,15 @@ private static func makeAppState() -> AppState {
                         syncRepair: syncRepairActions,
                         pendingSyncedServers: appState.cloudSyncUI.pendingSyncedServers,
                         onIgnorePendingServer: { appState.ignorePendingSyncedServer($0) },
-                        onSetUpFromAnotherDevice: { showSyncReceiveFromSettings = true }
+                        onSetUpFromAnotherDevice: { showSyncReceiveFromSettings = true },
+                        admissionContext: appState.admissionContext,
+                        pendingStandaloneLiveTVEntry: appState.pendingStandaloneLiveTVEntry,
+                        onConsumeStandaloneLiveTVEntry: {
+                            _ = appState.consumeStandaloneLiveTVEntryIntent()
+                        },
+                        onConfiguredIPTVPlaylist: {
+                            _ = appState.recordSuccessfulIPTVSetup()
+                        }
                     )
                     .id(rootScopeIdentity)
                     .transition(.opacity)
@@ -1028,7 +1092,8 @@ private struct OnboardingPageContent: View {
                         username: draft.username,
                         password: draft.password,
                         displayName: draft.displayName,
-                        subpath: draft.subpath
+                        subpath: draft.subpath,
+                        libraryConfiguration: draft.libraryConfiguration
                     )
                 },
                 onWebDAVShareConfigured: { config in
@@ -1036,7 +1101,8 @@ private struct OnboardingPageContent: View {
                         baseURL: config.baseURL,
                         auth: config.auth,
                         trustPin: config.trustPin,
-                        displayName: config.displayName
+                        displayName: config.displayName,
+                        libraryConfiguration: config.libraryConfiguration
                     )
                 },
                 onMediaShareConfigured: { result in
@@ -1047,7 +1113,8 @@ private struct OnboardingPageContent: View {
                             port: config.port,
                             exportPath: config.exportPath,
                             subpath: config.subpath,
-                            displayName: config.displayName
+                            displayName: config.displayName,
+                            libraryConfiguration: config.libraryConfiguration
                         )
                     case let .sftp(config):
                         appState.didConfigureSFTPShare(
@@ -1057,20 +1124,25 @@ private struct OnboardingPageContent: View {
                             username: config.username,
                             password: config.password,
                             hostKeyPin: config.hostKeyPin,
-                            displayName: config.displayName
+                            displayName: config.displayName,
+                            libraryConfiguration: config.libraryConfiguration
                         )
                     case let .ftp(config):
                         appState.didConfigureFTPShare(
                             baseURL: config.baseURL,
                             auth: config.auth,
                             trustPin: config.trustPin,
-                            displayName: config.displayName
+                            displayName: config.displayName,
+                            libraryConfiguration: config.libraryConfiguration
                         )
                     }
 
                 },
                 onCancel: { appState.cancelAuthentication() },
-                onSetUpFromAnotherDevice: onSetUpFromAnotherDevice
+                onSetUpFromAnotherDevice: onSetUpFromAnotherDevice,
+                onStandalonePlayback: AppState.isStandalonePlaybackAvailable && !canReturnToApp
+                    ? { _ = appState.enterStandalonePlayback() }
+                    : nil
             )
 
         case let .authenticating(server):

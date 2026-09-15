@@ -55,6 +55,10 @@ final class ShareCatalogRuntime {
     var enricher: ShareEnricher?
     var localEnricher: ShareLocalMetadataEnricher?
     var artworkProbeWorker: ShareLocalArtworkProbeWorker?
+    /// Credential rotation may arrive while the catalog is suspended. The reset is
+    /// durable SQLite work, so the coordinator defers it until this store's exact
+    /// foreground-resume barrier has completed.
+    var needsCredentialMaintenance = false
 
     // MARK: Scan-task bookkeeping
 
@@ -63,6 +67,9 @@ final class ShareCatalogRuntime {
     /// True while `rescan` is tearing down the prior pass before starting a fresh one,
     /// so `ensureScanning` doesn't spawn a competing walk in the gap.
     var restarting = false
+    /// Reserves the gap before an admitted scan has a task. Concurrent catalog
+    /// reads must not acquire replacement leases during those actor suspensions.
+    var scanAdmission: ShareScanStartGate?
 
     // MARK: Invalidation
 

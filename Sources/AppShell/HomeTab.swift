@@ -65,9 +65,9 @@ struct HomeTab: View {
     let authenticatedHTTPResolver: any AuthenticatedHTTPResourceResolving
     /// Seerr discovery service backing the hero's featured content seam.
     let seer: SeerService
-    /// The active profile's linked Seerr user (`X-API-User`) for requests, or
-    /// `nil` to request as admin. Read at request time from the current profile.
-    let activeSeerrUserID: Int?
+    /// The active profile's complete Seerr request identity. A server-bound user
+    /// stays distinct from both admin and a legacy/mismatched mapping.
+    let activeSeerrIdentity: SeerRequestIdentity
     /// Display name of the active profile's linked Seerr user, for the pre-press
     /// "Request as <name>" label. `nil` when requesting as admin.
     let activeSeerrUserName: String?
@@ -89,6 +89,14 @@ struct HomeTab: View {
     /// App-wide navigation style, so the carousel's left-edge focus behaviour
     /// (escape to sidebar vs. wrap) matches the surrounding chrome.
     let navigationStyle: NavigationStyle
+
+    private var requestActingName: String? {
+        guard activeSeerrIdentity.userID != nil,
+              !activeSeerrIdentity.requiresRelink(to: seer.serverIdentity) else {
+            return nil
+        }
+        return activeSeerrUserName
+    }
     let behavior: SubtitleBehavior
     let style: SubtitleStyle
     let playbackSettings: PlaybackSettings
@@ -150,6 +158,7 @@ struct HomeTab: View {
     let isActiveTab: Bool
 
     @State private var path = NavigationPath()
+    @State private var heroRequestFailure: SeerRequestFailure?
     /// Handles owned above the tab so tab re-hosting cannot destroy them.
     let runtime: HomeTabRuntime
     /// Detail view models, kept across `navigationDestination` re-evaluations.
@@ -260,15 +269,11 @@ struct HomeTab: View {
                 homePerfOverlayEnabled: homePerfOverlayEnabled,
                 seerConnected: seer.isConfigured,
                 onRequestItem: { item in
-                    let outcome = await seer.request(item, actingUserID: activeSeerrUserID)
-                    if case let .success(status) = outcome { return status }
-                    return nil
+                    await requestFromHero(item)
                 },
                 onRequestAvailability: { await seer.requestAvailability(for: $0) },
                 onRequestSeasonsItem: { item, seasons in
-                    let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
-                    if case let .success(status) = outcome { return status }
-                    return nil
+                    await requestFromHero(item, seasons: seasons)
                 },
                 navigationStyle: navigationStyle,
                 onSelectItem: {
@@ -281,24 +286,27 @@ struct HomeTab: View {
                     // server picker), so best-source selection still happens there and
                     // at play time (requestPlay).
                     let item = $0
-                    Task { @MainActor in
-                        await heroTrailerController.captureHandoffFrame()
-                        if heroTrailerController.isShowing(item.id),
-                           heroTrailerController.isPlaying {
-                            // A system NavigationStack push snapshots/composites
-                            // the newly-created detail hierarchy before its video
-                            // layer is live, which exposes a backdrop for a few
-                            // frames. A playing hero trailer is a visual continuity
-                            // handoff, not a spatial page move: atomically replace
-                            // only the foreground metadata. Pop remains animated.
-                            var transaction = Transaction()
-                            transaction.disablesAnimations = true
-                            withTransaction(transaction) {
-                                navigate(item)
-                            }
-                        } else {
+                    let handsOffTrailer = heroTrailerController.isShowing(item.id)
+                        && heroTrailerController.isPlaying
+                    #if os(tvOS)
+                    DetailTransitionNavigation.prepare(
+                        for: item,
+                        artworkSnapshot: handsOffTrailer ? heroTrailerController.handoffImage : nil
+                    )
+                    #endif
+                    if handsOffTrailer {
+                        Task { @MainActor in
+                            await heroTrailerController.captureHandoffFrame()
+                        }
+                        // Keep the live player handoff, but never make navigation
+                        // or the first animation frame wait for video decoding.
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
                             navigate(item)
                         }
+                    } else {
+                        navigate(item)
                     }
                 },
                 onPlayItem: { requestPlay($0) },
@@ -308,6 +316,32 @@ struct HomeTab: View {
                 configuredServerCount: configuredServerCount,
                 enabledServerCount: accounts.count
             )
+            .alert(
+                "Request Failed",
+                isPresented: Binding(
+                    get: { heroRequestFailure != nil },
+                    set: { if !$0 { heroRequestFailure = nil } }
+                ),
+                presenting: heroRequestFailure
+            ) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { failure in
+                Text(failure.userMessage)
+            }
+    }
+
+    private func requestFromHero(
+        _ item: MediaItem,
+        seasons: [Int]? = nil
+    ) async -> MediaAvailabilityStatus? {
+        let outcome = await seer.request(item, seasons: seasons, identity: activeSeerrIdentity)
+        switch outcome {
+        case let .success(status):
+            return status
+        case let .failure(reason):
+            heroRequestFailure = reason
+            return nil
+        }
     }
 
     private var watchlistRoot: some View {
@@ -399,11 +433,8 @@ struct HomeTab: View {
                 // defaults to the smart best version (no library origin).
                 itemDetail(for: item, libraryOrigin: nil)
             }
-            .onChange(of: pendingTitleRoute) { _, item in
-                guard isActiveTab, let item else { return }
-                pendingTitleRoute = nil
-                path.append(item)
-            }
+            .onChange(of: pendingTitleRoute) { _, _ in consumePendingTitleRoute() }
+            .onChange(of: isActiveTab, initial: true) { _, _ in consumePendingTitleRoute() }
             .onChange(of: pendingPersonRoute) { _, route in
                 // Raised by the in-player Cast card and pushed once the player
                 // has gone. Cleared immediately so the same person can be
@@ -479,28 +510,11 @@ struct HomeTab: View {
                 ItemDetailView(
                     viewModel: detailViewModels.value(
                         forKey: "episode:\(route.seriesID)#\(route.episode.id)"
-                    ) { ItemDetailViewModel(
-                        provider: resolveProvider(route.sourceAccountID, in: accounts),
-                        itemID: route.seriesID,
-                        // Seed the hero from the tapped episode so first paint is
-                        // INSTANT (its thumbnail + title) instead of a centered
-                        // spinner on blank gray while `item(id:)` resolves the
-                        // series. load() swaps in the full series page in place.
-                        initialItem: route.episode,
-                        ratingsProvider: ratingsProvider,
+                    ) { detailEnvironment.makeSeriesContextViewModel(
+                        seriesID: route.seriesID,
+                        seed: route.episode,
                         sourceAccountID: route.sourceAccountID,
-                        originSourceAccountID: route.originAccountID,
-                        // The fronted page IS the series, so it gets the same
-                        // cross-server "…" picker a directly-opened series does —
-                        // discovery matches the series by provider IDs and fills
-                        // the server list once the page settles.
-                        alternateProviderResolver: { resolveOptionalProvider($0, in: accounts) },
-                        crossServerSourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
-                        relatedTitlesLoader: makeRelatedTitlesLoader(
-                            in: accounts,
-                            identitySources: identitySources
-                        ),
-                        snapshotCache: detailSnapshotCache
+                        originAccountID: route.originAccountID
                     ) },
                     spoilerSettings: spoilerSettings,
                     onPlay: { requestPlay($0) },
@@ -516,10 +530,14 @@ struct HomeTab: View {
                     seerConnected: seer.isConfigured,
                     requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
                     onRequestSeasons: { item, seasons in
-                        let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
-                        return seerRequestResult(outcome, actingName: activeSeerrUserName)
+                        let outcome = await seer.request(
+                            item,
+                            seasons: seasons,
+                            identity: activeSeerrIdentity
+                        )
+                        return seerRequestResult(outcome, actingName: requestActingName)
                     },
-                    requestActingName: activeSeerrUserName,
+                    requestActingName: requestActingName,
                     confirmAdminRequest: confirmAdminRequest
                 )
             }
@@ -527,25 +545,11 @@ struct HomeTab: View {
                 ItemDetailView(
                     viewModel: detailViewModels.value(
                         forKey: "season:\(route.seriesID)#\(route.season.id)"
-                    ) { ItemDetailViewModel(
-                        provider: resolveProvider(route.sourceAccountID, in: accounts),
-                        itemID: route.seriesID,
-                        // Seed the hero from the tapped season so first paint is
-                        // INSTANT (its poster + title) instead of a centered spinner
-                        // on blank gray while `item(id:)` resolves the series.
-                        initialItem: route.season,
-                        ratingsProvider: ratingsProvider,
+                    ) { detailEnvironment.makeSeriesContextViewModel(
+                        seriesID: route.seriesID,
+                        seed: route.season,
                         sourceAccountID: route.sourceAccountID,
-                        originSourceAccountID: route.originAccountID,
-                        // The fronted page IS the series, so it gets the same
-                        // cross-server "…" picker a directly-opened series does.
-                        alternateProviderResolver: { resolveOptionalProvider($0, in: accounts) },
-                        crossServerSourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
-                        relatedTitlesLoader: makeRelatedTitlesLoader(
-                            in: accounts,
-                            identitySources: identitySources
-                        ),
-                        snapshotCache: detailSnapshotCache
+                        originAccountID: route.originAccountID
                     ) },
                     spoilerSettings: spoilerSettings,
                     onPlay: { requestPlay($0) },
@@ -561,10 +565,14 @@ struct HomeTab: View {
                     seerConnected: seer.isConfigured,
                     requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
                     onRequestSeasons: { item, seasons in
-                        let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
-                        return seerRequestResult(outcome, actingName: activeSeerrUserName)
+                        let outcome = await seer.request(
+                            item,
+                            seasons: seasons,
+                            identity: activeSeerrIdentity
+                        )
+                        return seerRequestResult(outcome, actingName: requestActingName)
                     },
-                    requestActingName: activeSeerrUserName,
+                    requestActingName: requestActingName,
                     confirmAdminRequest: confirmAdminRequest
                 )
             }
@@ -597,6 +605,9 @@ struct HomeTab: View {
                 // sense, and costs nothing on the way in: the player is presented
                 // over the stack, so the page is simply already there underneath.
                 onResolved: { item in
+                    #if os(tvOS)
+                    DetailTransitionNavigation.suppressNextEntranceForPlayback()
+                    #endif
                     navigate(item)
                     // Next runloop turn, so the push is committed before the
                     // player is presented over it. Presenting into a navigation
@@ -992,23 +1003,31 @@ struct HomeTab: View {
         libraryOrigin: String? = nil,
         asOwnSubject: Bool = false
     ) {
-        if item.kind == .episode, asOwnSubject {
-            path.append(item)
-        } else if item.kind == .episode, item.seriesID != nil {
-            path.append(EpisodeContextRoute(
-                episode: item,
-                originAccountID: libraryOrigin
-            ))
-        } else if item.kind == .season, item.seriesID != nil {
-            path.append(SeasonContextRoute(
-                season: item,
-                originAccountID: libraryOrigin
-            ))
-        } else if let libraryOrigin {
-            path.append(LibraryDetailRoute(item: item, originAccountID: libraryOrigin))
-        } else {
-            path.append(item)
+        withCinematicDetailNavigation(for: item) {
+            if item.kind == .episode, asOwnSubject {
+                path.append(item)
+            } else if item.kind == .episode, item.seriesID != nil {
+                path.append(EpisodeContextRoute(
+                    episode: item,
+                    originAccountID: libraryOrigin
+                ))
+            } else if item.kind == .season, item.seriesID != nil {
+                path.append(SeasonContextRoute(
+                    season: item,
+                    originAccountID: libraryOrigin
+                ))
+            } else if let libraryOrigin {
+                path.append(LibraryDetailRoute(item: item, originAccountID: libraryOrigin))
+            } else {
+                path.append(item)
+            }
         }
+    }
+
+    private func consumePendingTitleRoute() {
+        guard isActiveTab, let item = pendingTitleRoute else { return }
+        pendingTitleRoute = nil
+        withCinematicDetailNavigation(for: item) { path.append(item) }
     }
 
     /// Builds the item-detail page, threading the optional `libraryOrigin` into the
@@ -1024,13 +1043,16 @@ struct HomeTab: View {
         let accounts = self.accounts
         let identitySources = self.identitySources
         let seer = self.seer
+        let runtime = self.runtime
         return DetailOpenEnvironment(
             resolveProvider: { resolveProvider($0, in: accounts) },
             resolveOptionalProvider: { resolveOptionalProvider($0, in: accounts) },
             identitySources: identitySources,
             crossServerSourceResolver: crossServerSourceResolver(in: accounts, identitySources: identitySources),
+            continueWatchingSnapshot: { runtime.continueWatchingForDetail },
             ratingsProvider: ratingsProvider,
             discoveryStatusRefresh: { await seer.availability(for: $0) },
+            loadSeasonEpisodeRoster: { await seer.seasonEpisodeRoster(for: $0, seasonNumber: $1) },
             makeRelatedTitlesLoader: {
                 makeRelatedTitlesLoader(
                     in: accounts,
@@ -1042,14 +1064,32 @@ struct HomeTab: View {
         )
     }
 
+    @ViewBuilder
     private func itemDetail(for item: MediaItem, libraryOrigin: String?) -> some View {
+        let provider = resolveProvider(libraryOrigin ?? item.sourceAccountID, in: accounts)
+        if let library = MediaFolderNavigation.library(
+            for: item,
+            providerKind: provider.kind,
+            sourceAccountID: libraryOrigin ?? item.sourceAccountID ?? provider.session.server.id
+        ) {
+            MediaFolderBrowseView(
+                library: library,
+                provider: provider,
+                spoilerSettings: spoilerSettings,
+                onSelect: { navigate($0, libraryOrigin: library.sourceAccountID) }
+            )
+        } else {
+            titleDetail(for: item, libraryOrigin: libraryOrigin)
+        }
+    }
+
+    private func titleDetail(for item: MediaItem, libraryOrigin: String?) -> some View {
         // A discovery (Seerr) title that isn't in the library — e.g. a "More Info"
         // tap on a *not-owned* featured hero slide — routes to the request-focused
         // discovery detail page instead of a doomed library fetch. Owned featured
         // titles (available/partiallyAvailable) are NOT discovery: they resolve to
         // a real library copy via the identity index, so they keep the normal
         // playable detail page.
-        let isDiscovery = detailEnvironment.isDiscovery(item)
         return ItemDetailView(
             viewModel: detailViewModels.value(forKey: "item:\(item.id)#\(libraryOrigin ?? "")") {
                 detailEnvironment.makeViewModel(for: item, libraryOrigin: libraryOrigin)
@@ -1065,18 +1105,21 @@ struct HomeTab: View {
             heroTrailerResolver: makeHeroTrailerResolver(),
             preservesHeroTrailerOnDisappear: true,
             initialSeasonID: item.seasonID,
-            isDiscoveryItem: isDiscovery,
             seerConnected: seer.isConfigured,
             onRequest: { item in
-                let outcome = await seer.request(item, actingUserID: activeSeerrUserID)
-                return seerRequestResult(outcome, actingName: activeSeerrUserName)
+                let outcome = await seer.request(item, identity: activeSeerrIdentity)
+                return seerRequestResult(outcome, actingName: requestActingName)
             },
             requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
             onRequestSeasons: { item, seasons in
-                let outcome = await seer.request(item, seasons: seasons, actingUserID: activeSeerrUserID)
-                return seerRequestResult(outcome, actingName: activeSeerrUserName)
+                let outcome = await seer.request(
+                    item,
+                    seasons: seasons,
+                    identity: activeSeerrIdentity
+                )
+                return seerRequestResult(outcome, actingName: requestActingName)
             },
-            requestActingName: activeSeerrUserName,
+            requestActingName: requestActingName,
             confirmAdminRequest: confirmAdminRequest
         )
     }

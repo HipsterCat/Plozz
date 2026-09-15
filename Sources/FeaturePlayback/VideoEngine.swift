@@ -1,5 +1,6 @@
 #if canImport(AVFoundation)
 import Foundation
+import AVFoundation
 import CoreModels
 #if canImport(UIKit)
 import UIKit
@@ -76,6 +77,15 @@ public struct PlayerEngineCapabilities: OptionSet, Sendable {
 ///    lives above the engine, not inside it.
 @MainActor
 public protocol VideoEngine: AnyObject {
+    /// Optional association for system Now Playing; custom decoders use the
+    /// app-level center and still receive transport through this protocol.
+    var nowPlayingPlayer: AVPlayer? { get }
+
+    /// iOS opt-in for audio to continue without PiP or an external display.
+    func setBackgroundAudioEnabled(_ enabled: Bool)
+    var needsBackgroundReload: Bool { get }
+    var maximumPlaybackSpeed: Double { get }
+
     // MARK: Lifecycle
 
     /// Builds and starts playback for an already-resolved stream, seeking to
@@ -194,6 +204,10 @@ public protocol VideoEngine: AnyObject {
 
     /// Current playback position in seconds (`0` when unknown).
     var currentTime: TimeInterval { get }
+
+    /// Whether position is settled enough for corrective seeks. A decoder can
+    /// report ready before its initial frame/seek or a retained reload settles.
+    var isPlaybackPositionReady: Bool { get }
 
     /// Total duration in seconds (`0`/non-finite when unknown or live).
     var duration: TimeInterval { get }
@@ -326,6 +340,11 @@ public protocol VideoEngine: AnyObject {
 }
 
 public extension VideoEngine {
+    var needsBackgroundReload: Bool { true }
+    var maximumPlaybackSpeed: Double { 4 }
+    var nowPlayingPlayer: AVPlayer? { nil }
+    func setBackgroundAudioEnabled(_ enabled: Bool) {}
+
     /// Default: the engine's playback resources survive background suspension.
     func reloadAfterForeground() async throws {}
 
@@ -379,6 +398,7 @@ public extension VideoEngine {
     /// `timeControlStatus`, Plozzigen end-of-stream signals) override this so the screensaver
     /// is also allowed at end-of-stream / during a stall, not just on pause.
     var preventsDisplaySleep: Bool { !isPaused }
+    var isPlaybackPositionReady: Bool { status == .ready }
 
     /// Default kinded-seek forwards to the unkinded variant, so existing
     /// engines that only know one seek mode keep working unchanged.

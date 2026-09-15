@@ -37,6 +37,7 @@ final class PlozzMetricsTests: XCTestCase {
         for density in UIDensity.allCases {
             let m = PlozzMetrics(density: density)
             XCTAssertEqual(m.focusCaptionPush(for: .outlined), m.focusCaptionPush)
+            XCTAssertEqual(m.focusCaptionPush(for: .system), m.focusCaptionPush)
             XCTAssertGreaterThan(
                 m.focusCaptionPush(for: .highlight),
                 m.focusCaptionPush(for: .outlined),
@@ -49,6 +50,18 @@ final class PlozzMetricsTests: XCTestCase {
         for density in UIDensity.allCases {
             let m = PlozzMetrics(density: density)
             XCTAssertEqual(m.posterColumns.count, density.posterGridColumns)
+        }
+    }
+
+    func testNativeCaptionHasNoExtraRestingGapWithoutChangingFocusTravel() {
+        XCTAssertEqual(PlozzMetrics.standard.nativePosterCaptionSpacing, 0)
+        for density in UIDensity.allCases {
+            let metrics = PlozzMetrics(density: density)
+            XCTAssertEqual(metrics.nativePosterCaptionSpacing, 0)
+            XCTAssertEqual(
+                metrics.focusCaptionPush(for: .system),
+                (PlozzTheme.Metrics.focusCaptionPush * metrics.scale).rounded()
+            )
         }
     }
 

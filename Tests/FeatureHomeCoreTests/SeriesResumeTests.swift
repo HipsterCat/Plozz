@@ -3,6 +3,99 @@ import CoreModels
 @testable import FeatureHomeCore
 
 final class SeriesResumeTests: XCTestCase {
+    func testLiveResumeReplacesAutomaticCachedSeasonButNotUserSelection() {
+        let seasons = [1, 4].map { (number: Int) in
+            MediaItem(id: "s\(number)", title: "Season \(number)", kind: .season, seasonNumber: number)
+        }
+        let resume = MediaItem(
+            id: "s4e1", title: "Resume", kind: .episode,
+            seasonNumber: 4, episodeNumber: 1, seasonID: "s4"
+        )
+        for userSelected in [false, true] {
+            XCTAssertEqual(
+                SeriesResume.openingSeasonID(
+                    seasons: seasons,
+                    episodes: [],
+                    selectedSeasonID: "s1",
+                    preserveSelection: userSelected,
+                    initialSeasonID: nil,
+                    initialEpisode: nil,
+                    resumeEpisode: resume
+                ),
+                userSelected ? "s1" : "s4"
+            )
+        }
+        XCTAssertEqual(
+            SeriesResume.openingSeasonID(
+                seasons: seasons,
+                episodes: [],
+                selectedSeasonID: nil,
+                preserveSelection: false,
+                initialSeasonID: "s1",
+                initialEpisode: nil,
+                resumeEpisode: resume
+            ),
+            "s1",
+            "An explicit Go to Season destination still takes precedence"
+        )
+    }
+
+    func testEpisodeNumberFallbackCannotTurnS4E1IntoS1E1() {
+        let target = MediaItem(
+            id: "resume", title: "Resume", kind: .episode,
+            seasonNumber: 4, episodeNumber: 1
+        )
+        let wrongSeason = MediaItem(
+            id: "s1e1", title: "Pilot", kind: .episode,
+            seasonNumber: 1, episodeNumber: 1
+        )
+        XCTAssertNil(SeriesEpisodeEntry.episode(matching: target, in: [wrongSeason]))
+    }
+
+    func testPlayableSeedRetainsProgressAndRequiresTheSameLibrarySource() {
+        let show = MediaItem(id: "show", title: "Show", kind: .series, sourceAccountID: "plex")
+        var target = MediaItem(
+            id: "s4e1", title: "Resume", kind: .episode,
+            seasonNumber: 4, episodeNumber: 1,
+            seriesID: show.id, resumePosition: 867,
+            sourceAccountID: "plex"
+        )
+        XCTAssertEqual(SeriesEpisodeEntry.playableSeed(target, for: show)?.resumePosition, 867)
+        target.sourceAccountID = "other"
+        XCTAssertNil(SeriesEpisodeEntry.playableSeed(target, for: show))
+        target.sourceAccountID = "plex"
+        target.seriesID = "other-show"
+        XCTAssertNil(SeriesEpisodeEntry.playableSeed(target, for: show))
+    }
+
+    func testFirstFrameEpisodeRespectsExplicitEpisodeAndSeasonDestinations() {
+        let show = MediaItem(id: "show", title: "Show", kind: .series, sourceAccountID: "plex")
+        let resume = MediaItem(
+            id: "s4e1", title: "Resume", kind: .episode,
+            seasonNumber: 4, episodeNumber: 1,
+            seriesID: show.id, sourceAccountID: "plex"
+        )
+        var tapped = resume
+        tapped.id = "s1e2"
+        tapped.seasonNumber = 1
+        tapped.episodeNumber = 2
+        XCTAssertEqual(
+            SeriesEpisodeEntry.openingSeed(
+                for: show, initialEpisode: tapped, initialSeasonID: nil, resumeEpisode: resume
+            )?.id,
+            tapped.id
+        )
+        XCTAssertNil(SeriesEpisodeEntry.openingSeed(
+            for: show, initialEpisode: nil, initialSeasonID: "s1", resumeEpisode: resume
+        ))
+        XCTAssertEqual(
+            SeriesEpisodeEntry.openingSeed(
+                for: show, initialEpisode: nil, initialSeasonID: nil, resumeEpisode: resume
+            )?.id,
+            resume.id
+        )
+    }
+
     private func episode(
         _ id: String,
         number: Int,

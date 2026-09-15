@@ -35,6 +35,10 @@ for arg in "$@"; do
   esac
 done
 
+. tools/lib/apple-build-lease.sh
+acquire_apple_build_shared_lease "plozz/generate-project"
+install_apple_build_lease_traps
+
 # Per-branch bundle-id / display-name suffixes (see project.yml). Default EMPTY so
 # a normal run generates the canonical `com.thatcube.Plozz` / "Plozz". An opt-in
 # per-branch build (tools/deploy-*.sh --branded) exports these before calling us so
@@ -66,9 +70,11 @@ fi
 proj_dir="Plozz.xcodeproj"
 proj="${proj_dir}/project.pbxproj"
 generation_signature_file="${proj_dir}/.plozz-generation-signature"
+canonical_package_lock="Package.resolved"
+workspace_package_lock="${proj_dir}/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
 generation_signature="$(
   {
-    shasum -a 256 project.yml Package.swift
+    shasum -a 256 project.yml Package.swift "$canonical_package_lock"
     printf '%s\n' \
       "PLOZZ_ID_SUFFIX=${PLOZZ_ID_SUFFIX}" \
       "PLOZZ_NAME_SUFFIX=${PLOZZ_NAME_SUFFIX}" \
@@ -97,6 +103,18 @@ fi
 if [ "$should_generate" = "1" ]; then
   xcodegen generate
   printf '%s\n' "$generation_signature" > "$generation_signature_file"
+fi
+
+# Xcode project builds read the workspace lock rather than the package-root lock.
+# Keep the generated copy byte-for-byte identical on both full generation and
+# bake-only runs so every entrypoint resolves the committed dependency graph.
+workspace_package_dir=$(dirname "$workspace_package_lock")
+mkdir -p "$workspace_package_dir"
+if ! cmp -s "$canonical_package_lock" "$workspace_package_lock"; then
+  temporary_package_lock="${workspace_package_lock}.tmp.$$"
+  cp "$canonical_package_lock" "$temporary_package_lock"
+  mv -f "$temporary_package_lock" "$workspace_package_lock"
+  echo "Synced ${canonical_package_lock} to ${workspace_package_lock}"
 fi
 
 # If PLOZZ_SENTRY_DSN wasn't provided in the environment, read it from a

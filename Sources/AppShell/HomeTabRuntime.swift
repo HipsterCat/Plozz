@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import CoreUI
+import CoreModels
 import FeatureHomeCore
 
 /// The Home tab's session-scoped handles: things owned **above** the tab so
@@ -22,6 +23,9 @@ struct HomeTabRuntime {
     let homeViewModel: LazyViewState<HomeViewModel>
     /// Identity of the account/profile scope the view model belongs to.
     let scopeKey: String
+    @MainActor var continueWatchingForDetail: [MediaItem] {
+        homeViewModel.existingValue(forKey: scopeKey)?.continueWatchingForDetail ?? []
+    }
     /// A Top Shelf deep link awaiting routing. Carried by reference so no view
     /// in the tab tree becomes a subscriber of it.
     let pendingPlay: PendingPlayRequest

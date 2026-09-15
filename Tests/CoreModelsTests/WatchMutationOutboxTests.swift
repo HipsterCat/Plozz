@@ -608,6 +608,31 @@ final class WatchOutboxTraktTests: XCTestCase {
 /// the live now-playing session). The reconciler defers such a target until the
 /// live session ends, then converges it. Deferral is never a drop.
 final class WatchOutboxLiveSessionTests: XCTestCase {
+    func testFinishReplacesDeferredCheckpointBeforeAnyServerWrite() async {
+        let applier = FakeWatchApplier()
+        let reconciler = WatchStateReconciler(store: InMemoryWatchMutationStore(), applier: applier)
+        let episode = target("a", "e3")
+        let started = Date()
+        await reconciler.beginLiveSession(accountID: "a", itemID: "e3")
+        await reconciler.enqueue(WatchMutation(
+            capturedAt: started, canonicalMediaID: "show/1/3",
+            resumePosition: 1_200, targets: [episode], kind: .episode
+        ))
+        await reconciler.drain()
+        XCTAssertTrue(applier.resumeWrites.isEmpty)
+        await reconciler.finishLiveSession(
+            accountID: "a", itemID: "e3",
+            mutation: WatchMutation(
+                capturedAt: started.addingTimeInterval(1), canonicalMediaID: "show/1/3",
+                played: true, clearResume: true, targets: [episode], kind: .episode
+            )
+        )
+        XCTAssertEqual(applier.resumeWrites.map(\.seconds), [0], "Never restore old progress after completion")
+        XCTAssertEqual(applier.playedWrites.map(\.played), [true])
+        let count = await reconciler.pendingCount
+        XCTAssertEqual(count, 0)
+    }
+
     private func resumeMutation(capturedAt: Date, targets: [WatchMutationTarget]) -> WatchMutation {
         WatchMutation(
             capturedAt: capturedAt,
@@ -803,5 +828,64 @@ final class WatchOutboxReentrancyTests: XCTestCase {
         )
         let pending = await reconciler.pendingCount
         XCTAssertEqual(pending, 0, "Both writes converge and the entry is pruned")
+    }
+
+    func testConfirmationWaitsForServerWriteAndSuppressesSupersededState() async {
+        let applier = GatedWatchApplier()
+        let confirmations = PersistenceFailureCounter()
+        let (events, continuation) = AsyncStream<WatchMutation>.makeStream()
+        let reconciler = WatchStateReconciler(
+            store: InMemoryWatchMutationStore(), applier: applier,
+            onServerStateApplied: {
+                confirmations.increment()
+                continuation.yield($0)
+            }
+        )
+        let first = Date()
+        await reconciler.enqueue(playedMutation(capturedAt: first, targets: [target("a", "e3")]))
+        let drain = Task { await reconciler.drain() }
+        await applier.waitUntilFirstWriteInFlight()
+        XCTAssertEqual(confirmations.value, 0, "Optimistic intent is not server confirmation")
+        await reconciler.enqueue(playedMutation(
+            played: false, capturedAt: first.addingTimeInterval(1), targets: [target("a", "e3")]
+        ))
+        applier.releaseFirstWrite()
+        await drain.value
+        continuation.finish()
+        var confirmed: [WatchMutation] = []
+        for await event in events { confirmed.append(event) }
+        XCTAssertEqual(confirmed.count, 1)
+        XCTAssertEqual(confirmed.first?.played, false)
+    }
+
+    func testConfirmationContainsOnlyAppliedTargetsAndSurvivesTrackerFailure() async {
+        let applier = FakeWatchApplier()
+        applier.failingAccounts = ["offline"]
+        applier.traktFails = true
+        let (events, continuation) = AsyncStream<WatchMutation>.makeStream()
+        let reconciler = WatchStateReconciler(
+            store: InMemoryWatchMutationStore(), applier: applier,
+            onServerStateApplied: { continuation.yield($0) }
+        )
+        let online = target("online", "e3")
+        let offline = target("offline", "e3")
+        let live = target("live", "e3")
+        await reconciler.beginLiveSession(accountID: live.accountID, itemID: live.itemID)
+        await reconciler.enqueue(playedMutation(
+            capturedAt: Date(), targets: [online, offline, live],
+            trakt: TraktScrobbleIntent(
+                kind: .episode, title: "Show", year: nil, seasonNumber: 1, episodeNumber: 3,
+                providerIDs: ["imdb": "tt1"], progress: 100
+            )
+        ))
+        await reconciler.drain()
+        await reconciler.drain()
+        continuation.finish()
+        var confirmed: [WatchMutation] = []
+        for await event in events { confirmed.append(event) }
+        XCTAssertEqual(confirmed.count, 1, "Failed, deferred and tracker-only retries are not confirmations")
+        XCTAssertEqual(confirmed.first?.targets, [online])
+        let pending = await reconciler.snapshot().pending
+        XCTAssertEqual(pending.first?.targets, [offline, live])
     }
 }

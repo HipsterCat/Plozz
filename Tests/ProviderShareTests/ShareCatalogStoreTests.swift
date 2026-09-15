@@ -30,6 +30,468 @@ final class ShareCatalogStoreTests: XCTestCase {
                      season: season, episode: episode)
     }
 
+    func testImmediateTransactionRollsBackWhenDeferredCommitFails() throws {
+        let directory = tempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let connection = CatalogConnection(
+            url: directory.appendingPathComponent("commit-failure.sqlite")
+        )
+        XCTAssertTrue(connection.ensureOpen { _ in true })
+        XCTAssertTrue(connection.exec("PRAGMA foreign_keys=ON;"))
+        XCTAssertTrue(connection.exec("CREATE TABLE parent(id INTEGER PRIMARY KEY);"))
+        XCTAssertTrue(connection.exec("""
+            CREATE TABLE child(
+              parent_id INTEGER,
+              FOREIGN KEY(parent_id) REFERENCES parent(id)
+                DEFERRABLE INITIALLY DEFERRED
+            );
+            """))
+
+        let result = connection.immediateTransaction {
+            connection.exec("INSERT INTO child(parent_id) VALUES(42);")
+        }
+
+        XCTAssertEqual(result, .commitFailed)
+        XCTAssertFalse(connection.isInTransaction)
+        var childCount = -1
+        connection.query("SELECT COUNT(*) FROM child;") {
+            childCount = Int(sqlite3_column_int64($0, 0))
+        }
+        XCTAssertEqual(childCount, 0)
+        XCTAssertTrue(connection.withImmediateTransaction {
+            connection.exec("INSERT INTO parent(id) VALUES(42);")
+        })
+    }
+
+    func testImmediateTransactionRollsBackWhenExternalReaderBlocksCommit() throws {
+        let directory = tempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("commit-lock.sqlite")
+        let connection = CatalogConnection(url: url)
+        XCTAssertTrue(connection.ensureOpen { _ in true })
+        XCTAssertTrue(connection.exec("PRAGMA journal_mode=DELETE;"))
+        XCTAssertTrue(connection.exec("CREATE TABLE values_table(value INTEGER);"))
+        XCTAssertTrue(connection.exec("INSERT INTO values_table(value) VALUES(1);"))
+
+        var reader: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &reader), SQLITE_OK)
+        defer { sqlite3_close(reader) }
+        XCTAssertEqual(sqlite3_exec(reader, "BEGIN;", nil, nil, nil), SQLITE_OK)
+        var readerStatement: OpaquePointer?
+        XCTAssertEqual(
+            sqlite3_prepare_v2(
+                reader,
+                "SELECT value FROM values_table;",
+                -1,
+                &readerStatement,
+                nil
+            ),
+            SQLITE_OK
+        )
+        XCTAssertEqual(sqlite3_step(readerStatement), SQLITE_ROW)
+
+        let result = connection.immediateTransaction {
+            connection.exec("INSERT INTO values_table(value) VALUES(2);")
+        }
+
+        XCTAssertEqual(result, .commitFailed)
+        XCTAssertFalse(connection.isInTransaction)
+        XCTAssertEqual(sqlite3_finalize(readerStatement), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(reader, "ROLLBACK;", nil, nil, nil), SQLITE_OK)
+        var values: [Int] = []
+        connection.query("SELECT value FROM values_table ORDER BY value;") {
+            values.append(Int(sqlite3_column_int64($0, 0)))
+        }
+        XCTAssertEqual(values, [1])
+        XCTAssertTrue(connection.withImmediateTransaction {
+            connection.exec("INSERT INTO values_table(value) VALUES(3);")
+        })
+    }
+
+    func testImmediateTransactionRejectsNestedBeginWithoutClosingOuterTransaction() throws {
+        let directory = tempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let connection = CatalogConnection(
+            url: directory.appendingPathComponent("nested.sqlite")
+        )
+        XCTAssertTrue(connection.ensureOpen { _ in true })
+        XCTAssertTrue(connection.exec("CREATE TABLE values_table(value INTEGER);"))
+        var nestedResult: CatalogConnection.ImmediateTransactionResult?
+
+        let outerResult = connection.immediateTransaction {
+            nestedResult = connection.immediateTransaction {
+                connection.exec("INSERT INTO values_table(value) VALUES(1);")
+            }
+            return connection.exec("INSERT INTO values_table(value) VALUES(2);")
+        }
+
+        XCTAssertEqual(nestedResult, .nestedTransaction)
+        XCTAssertEqual(outerResult, .committed)
+        var values: [Int] = []
+        connection.query("SELECT value FROM values_table;") {
+            values.append(Int(sqlite3_column_int64($0, 0)))
+        }
+        XCTAssertEqual(values, [2])
+    }
+
+    @MainActor
+    func testCancellationInterruptsSQLRollsBackAndLeavesConnectionReusable() async {
+        let directory = tempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let connection = CatalogConnection(
+            url: directory.appendingPathComponent("cancelled-write.sqlite")
+        )
+        XCTAssertTrue(connection.ensureOpen { _ in true })
+        XCTAssertTrue(connection.exec("CREATE TABLE values_table(value INTEGER);"))
+        var longSQLCompleted = true
+
+        let result = await Task { @MainActor in
+            connection.immediateTransaction {
+                guard connection.exec(
+                    "INSERT INTO values_table(value) VALUES(1);"
+                ) else { return false }
+                withUnsafeCurrentTask { $0?.cancel() }
+                longSQLCompleted = connection.exec("""
+                    WITH RECURSIVE sequence(value) AS (
+                      VALUES(1)
+                      UNION ALL
+                      SELECT value + 1 FROM sequence WHERE value < 1000000
+                    )
+                    INSERT INTO values_table(value) SELECT value FROM sequence;
+                    """)
+                return longSQLCompleted
+            }
+        }.value
+
+        XCTAssertEqual(result, .cancelled)
+        XCTAssertFalse(longSQLCompleted)
+        XCTAssertFalse(connection.isInTransaction)
+        var count = -1
+        connection.query("SELECT COUNT(*) FROM values_table;") {
+            count = Int(sqlite3_column_int64($0, 0))
+        }
+        XCTAssertEqual(count, 0)
+        XCTAssertTrue(connection.withImmediateTransaction {
+            connection.exec("INSERT INTO values_table(value) VALUES(2);")
+        })
+    }
+
+    func testCloseForSuspensionNeverFinalizesCallerOwnedStatement() throws {
+        let directory = tempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let connection = CatalogConnection(
+            url: directory.appendingPathComponent("busy-close.sqlite")
+        )
+        XCTAssertTrue(connection.ensureOpen { _ in true })
+        var statement: OpaquePointer?
+        XCTAssertEqual(
+            sqlite3_prepare_v2(connection.db, "SELECT 42;", -1, &statement, nil),
+            SQLITE_OK
+        )
+
+        connection.setAccessSuspended(true)
+        XCTAssertFalse(connection.closeForSuspension())
+        XCTAssertNil(connection.db)
+        XCTAssertFalse(connection.isClosed)
+        XCTAssertFalse(connection.exec("SELECT 1;"))
+        XCTAssertEqual(sqlite3_step(statement), SQLITE_ROW)
+        XCTAssertEqual(sqlite3_column_int64(statement, 0), 42)
+        XCTAssertEqual(sqlite3_finalize(statement), SQLITE_OK)
+        connection.setAccessSuspended(false)
+        XCTAssertNotNil(connection.db)
+        XCTAssertTrue(connection.closeForSuspension())
+        XCTAssertNil(connection.db)
+        XCTAssertTrue(connection.isClosed)
+    }
+
+    func testContendedInitialOpenClosesAndRetriesAfterLockRelease() throws {
+        let directory = tempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("contended-open.sqlite")
+        var blocker: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &blocker), SQLITE_OK)
+        defer { sqlite3_close(blocker) }
+        XCTAssertEqual(
+            sqlite3_exec(
+                blocker,
+                "CREATE TABLE legacy(value INTEGER); BEGIN IMMEDIATE;",
+                nil,
+                nil,
+                nil
+            ),
+            SQLITE_OK
+        )
+        let connection = CatalogConnection(url: url)
+
+        XCTAssertFalse(connection.ensureOpen { _ in true })
+        XCTAssertNil(connection.db)
+        XCTAssertEqual(sqlite3_exec(blocker, "ROLLBACK;", nil, nil, nil), SQLITE_OK)
+        XCTAssertTrue(connection.ensureOpen { _ in true })
+        XCTAssertNotNil(connection.db)
+    }
+
+    @MainActor
+    func testCancelledInitialMigrationClosesAndRetries() async {
+        let directory = tempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let connection = CatalogConnection(
+            url: directory.appendingPathComponent("cancelled-migration.sqlite")
+        )
+
+        let firstAttempt = await Task { @MainActor in
+            connection.ensureOpen { _ in
+                withUnsafeCurrentTask { $0?.cancel() }
+                return true
+            }
+        }.value
+
+        XCTAssertFalse(firstAttempt)
+        XCTAssertNil(connection.db)
+        XCTAssertTrue(connection.ensureOpen { _ in true })
+    }
+
+    func testSuspensionClosesCatalogAndStaleResumeCannotReopenIt() async throws {
+        let directory = tempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let accountKey = "suspension-\(UUID().uuidString)"
+        let store = ShareCatalogStore(accountKey: accountKey, directory: directory)
+        await store.upsert(
+            [movie("Movies/Film.mkv", title: "Film", year: 2026)],
+            scanID: 1
+        )
+        let migrationAttempts = await store.schemaMigrationAttemptCountForTesting()
+        let priorCheckpointSaved = await store.setMeta("resume_scan_id", "7")
+        XCTAssertTrue(priorCheckpointSaved)
+
+        let closed = await store.prepareForSuspension(revision: 2)
+        let suspended = await store.isSuspendedForTesting()
+        XCTAssertTrue(closed)
+        XCTAssertTrue(suspended)
+        XCTAssertTrue(
+            tryCanAcquireImmediateWriteLock(at: catalogURL(accountKey: accountKey, in: directory))
+        )
+
+        let staleResumeAccepted = await store.resumeAfterSuspension(revision: 1)
+        let staleResumeSuspended = await store.isSuspendedForTesting()
+        XCTAssertFalse(staleResumeAccepted)
+        XCTAssertTrue(staleResumeSuspended)
+
+        let pendingRead = Task {
+            await store.movies(offset: 0, limit: 10)
+        }
+        let readDidSuspend = await waitForSuspendedReadWaiters(1, in: store)
+        XCTAssertTrue(readDidSuspend)
+        XCTAssertTrue(
+            tryCanAcquireImmediateWriteLock(at: catalogURL(accountKey: accountKey, in: directory))
+        )
+
+        let cancelledRead = Task {
+            await store.movies(offset: 0, limit: 10)
+        }
+        let secondReadDidSuspend = await waitForSuspendedReadWaiters(2, in: store)
+        XCTAssertTrue(secondReadDidSuspend)
+        cancelledRead.cancel()
+        let cancelledMovies = await cancelledRead.value
+        XCTAssertTrue(cancelledMovies.isEmpty)
+        let cancellationRemovedWaiter = await waitForSuspendedReadWaiters(1, in: store)
+        XCTAssertTrue(cancellationRemovedWaiter)
+
+        let resumeAccepted = await store.resumeAfterSuspension(revision: 3)
+        let resumed = await store.isSuspendedForTesting()
+        let resumedMovies = await pendingRead.value
+        let resumedMigrationAttempts = await store.schemaMigrationAttemptCountForTesting()
+        let preservedCheckpoint = await store.meta("resume_scan_id")
+        XCTAssertTrue(resumeAccepted)
+        XCTAssertFalse(resumed)
+        XCTAssertEqual(resumedMovies.map(\.title), ["Film"])
+        XCTAssertEqual(preservedCheckpoint, "7")
+        XCTAssertEqual(resumedMigrationAttempts, migrationAttempts)
+    }
+
+    func testReopenRevalidatesSchemaAfterSuspendedCatalogIsEvicted() async throws {
+        let directory = tempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let accountKey = "evicted-\(UUID().uuidString)"
+        let url = catalogURL(accountKey: accountKey, in: directory)
+        let store = ShareCatalogStore(accountKey: accountKey, directory: directory)
+        await store.upsert(
+            [movie("Movies/Before.mkv", title: "Before", year: 2026)],
+            scanID: 1
+        )
+        let initialAttempts = await store.schemaMigrationAttemptCountForTesting()
+
+        let suspended = await store.prepareForSuspension(revision: 1)
+        XCTAssertTrue(suspended)
+        for suffix in ["", "-wal", "-shm"] {
+            let candidate = URL(fileURLWithPath: url.path + suffix)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                try FileManager.default.removeItem(at: candidate)
+            }
+        }
+        var replacement: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &replacement), SQLITE_OK)
+        let replacementDB = try XCTUnwrap(replacement)
+        XCTAssertEqual(
+            sqlite3_exec(replacementDB, "PRAGMA user_version=4;", nil, nil, nil),
+            SQLITE_OK
+        )
+        XCTAssertEqual(sqlite3_close(replacementDB), SQLITE_OK)
+        let resumed = await store.resumeAfterSuspension(revision: 2)
+        XCTAssertTrue(resumed)
+
+        let afterEviction = await store.movies(offset: 0, limit: 10)
+        let reopenedAttempts = await store.schemaMigrationAttemptCountForTesting()
+        XCTAssertTrue(afterEviction.isEmpty)
+        XCTAssertEqual(reopenedAttempts, initialAttempts + 1)
+
+        await store.upsert(
+            [movie("Movies/After.mkv", title: "After", year: 2026)],
+            scanID: 2
+        )
+        let rebuilt = await store.movies(offset: 0, limit: 10)
+        XCTAssertEqual(rebuilt.map(\.title), ["After"])
+    }
+
+    func testReopenRecreatesEvictedCacheDirectory() async throws {
+        let directory = tempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ShareCatalogStore(accountKey: UUID().uuidString, directory: directory)
+        await store.upsert([movie("Before.mkv", title: "Before", year: 2026)], scanID: 1)
+        let suspended = await store.prepareForSuspension(revision: 1)
+        XCTAssertTrue(suspended)
+        try FileManager.default.removeItem(at: directory)
+        let resumed = await store.resumeAfterSuspension(revision: 2)
+        XCTAssertTrue(resumed)
+        await store.upsert([movie("After.mkv", title: "After", year: 2026)], scanID: 2)
+        let rebuilt = await store.movies(offset: 0, limit: 10)
+        XCTAssertEqual(rebuilt.map(\.title), ["After"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path))
+    }
+
+    func testSuspensionAtChunkBoundaryClosesAndFencesOldGeneration() async throws {
+        let directory = tempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let accountKey = "chunk-suspension-\(UUID().uuidString)"
+        let gate = CatalogWriteChunkGate()
+        let store = ShareCatalogStore(
+            accountKey: accountKey,
+            directory: directory,
+            writeChunkBoundary: { await gate.pause() }
+        )
+        let generation = UUID()
+        await store.activateScanGeneration(generation)
+        let assets = (0..<450).map {
+            movie("Movies/Film \($0).mkv", title: "Film \($0)", year: 2026)
+        }
+
+        let write = Task {
+            await store.upsert(
+                assets,
+                scanID: 9,
+                scanGeneration: generation
+            )
+        }
+        await gate.waitUntilPaused()
+
+        let checkpoint = ShareScanResumeCheckpoint(
+            scanGeneration: generation,
+            scanID: 9,
+            frontierJSON: "queued-frontier",
+            savedAt: 123
+        )
+        let closed = await store.prepareForSuspension(
+            revision: 1,
+            checkpoint: checkpoint
+        )
+        XCTAssertTrue(closed)
+        let redundantlyClosed = await store.prepareForSuspension(revision: 2)
+        XCTAssertTrue(redundantlyClosed)
+        XCTAssertTrue(
+            tryCanAcquireImmediateWriteLock(at: catalogURL(accountKey: accountKey, in: directory))
+        )
+        let lateCheckpointSaved = await store.setMeta(
+            "resume_scan_id",
+            "late",
+            scanGeneration: generation
+        )
+        XCTAssertFalse(lateCheckpointSaved)
+        let ordinaryWriteSaved = await store.setMeta(
+            "last_full_scan_at",
+            "wrong-generation-write",
+            scanGeneration: generation
+        )
+        XCTAssertFalse(ordinaryWriteSaved)
+        let url = catalogURL(accountKey: accountKey, in: directory)
+        XCTAssertNil(try sqliteText(
+            at: url,
+            "SELECT value FROM meta WHERE key='resume_scan_id';"
+        ))
+        XCTAssertEqual(try sqliteInt(at: url, "SELECT COUNT(*) FROM assets;"), 200)
+        XCTAssertTrue(tryCanAcquireImmediateWriteLock(at: url))
+
+        var blocker: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &blocker), SQLITE_OK)
+        defer {
+            if let blocker {
+                sqlite3_close(blocker)
+            }
+        }
+        XCTAssertEqual(
+            sqlite3_exec(blocker, "BEGIN IMMEDIATE;", nil, nil, nil),
+            SQLITE_OK
+        )
+        let blockedResumeAccepted = await store.resumeAfterSuspension(revision: 3)
+        XCTAssertFalse(blockedResumeAccepted)
+        let remainedSuspended = await store.isSuspendedForTesting()
+        XCTAssertTrue(remainedSuspended)
+        XCTAssertNil(try sqliteText(
+            at: url,
+            "SELECT value FROM meta WHERE key='resume_scan_id';"
+        ))
+        XCTAssertEqual(sqlite3_exec(blocker, "ROLLBACK;", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_close(blocker), SQLITE_OK)
+        blocker = nil
+
+        let resumeAccepted = await store.resumeAfterSuspension(revision: 3)
+        XCTAssertTrue(resumeAccepted)
+        await gate.open()
+        await write.value
+
+        let resumedCount = await store.movieCount()
+        let persistedCheckpoint = await store.meta("resume_scan_id")
+        let frontier = await store.meta("resume_frontier")
+        let savedAt = await store.meta("resume_saved_at")
+        let staleWriteSaved = await store.setMeta(
+            "resume_frontier",
+            "stale",
+            scanGeneration: generation
+        )
+        XCTAssertEqual(resumedCount, 200)
+        XCTAssertEqual(persistedCheckpoint, "9")
+        XCTAssertEqual(frontier, "queued-frontier")
+        XCTAssertEqual(savedAt.flatMap(Double.init), 123)
+        XCTAssertFalse(staleWriteSaved)
+
+        let replacementGeneration = UUID()
+        await store.activateScanGeneration(replacementGeneration)
+        let staleInvalidationAccepted = await store.invalidateScanGeneration(revision: 2)
+        XCTAssertFalse(staleInvalidationAccepted)
+        let retiredScanInvalidationAccepted = await store.invalidateScanGeneration(
+            revision: 3, scanGeneration: generation
+        )
+        XCTAssertFalse(retiredScanInvalidationAccepted)
+        let replacementWriteSaved = await store.setMeta(
+            "replacement_generation_probe",
+            "1",
+            scanGeneration: replacementGeneration
+        )
+        XCTAssertTrue(replacementWriteSaved)
+        let currentInvalidationAccepted = await store.invalidateScanGeneration(
+            revision: 3, scanGeneration: replacementGeneration
+        )
+        XCTAssertTrue(currentInvalidationAccepted)
+    }
+
     private func catalogURL(accountKey: String, in directory: URL) -> URL {
         let allowed = CharacterSet.alphanumerics
         let mapped = String(accountKey.unicodeScalars.map {
@@ -77,6 +539,29 @@ final class ShareCatalogStoreTests: XCTestCase {
         guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
         guard let text = sqlite3_column_text(stmt, 0) else { return nil }
         return String(cString: text)
+    }
+
+    private func tryCanAcquireImmediateWriteLock(at url: URL) -> Bool {
+        var db: OpaquePointer?
+        guard sqlite3_open(url.path, &db) == SQLITE_OK, let db else { return false }
+        defer { sqlite3_close(db) }
+        guard sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil) == SQLITE_OK else {
+            return false
+        }
+        return sqlite3_exec(db, "ROLLBACK;", nil, nil, nil) == SQLITE_OK
+    }
+
+    private func waitForSuspendedReadWaiters(
+        _ expectedCount: Int,
+        in store: ShareCatalogStore
+    ) async -> Bool {
+        for _ in 0..<10_000 {
+            if await store.suspendedReadWaiterCountForTesting() == expectedCount {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
     }
 
     private func createLegacyCatalog(
@@ -319,6 +804,16 @@ final class ShareCatalogStoreTests: XCTestCase {
         XCTAssertFalse(writeAccepted)
         let unchanged = await store.item(id: "f:Movies/Rich.mkv")
         XCTAssertEqual(unchanged?.overview, "Rich overview")
+
+        let failedAttempts = await store.schemaMigrationAttemptCountForTesting()
+        let suspended = await store.prepareForSuspension(revision: 1)
+        let resumed = await store.resumeAfterSuspension(revision: 2)
+        XCTAssertTrue(suspended)
+        XCTAssertTrue(resumed)
+        let readableAfterRetry = await store.item(id: "f:Movies/Rich.mkv")
+        let retriedAttempts = await store.schemaMigrationAttemptCountForTesting()
+        XCTAssertEqual(readableAfterRetry?.overview, "Rich overview")
+        XCTAssertEqual(retriedAttempts, failedAttempts + 1)
     }
 
     func testSourcedEnrichmentDualWritesAndRoundTripsExactAttribution() async throws {
@@ -1251,4 +1746,32 @@ final class ShareCatalogStoreTests: XCTestCase {
         XCTAssertEqual(loaded?.overview, "A silo.", "the earlier pass's values survive")
     }
 
+}
+
+private actor CatalogWriteChunkGate {
+    private var paused = false
+    private var opened = false
+    private var pauseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var openWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func pause() async {
+        paused = true
+        let waiters = pauseWaiters
+        pauseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        guard !opened else { return }
+        await withCheckedContinuation { openWaiters.append($0) }
+    }
+
+    func waitUntilPaused() async {
+        guard !paused else { return }
+        await withCheckedContinuation { pauseWaiters.append($0) }
+    }
+
+    func open() {
+        opened = true
+        let waiters = openWaiters
+        openWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
 }

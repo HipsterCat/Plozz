@@ -116,6 +116,56 @@ public extension View {
 
 // MARK: - The menu
 
+/// Short Select chooses the season; press-and-hold opens its watch-state menu.
+public struct SeasonWatchStateMenu<MenuLabel: View>: View {
+    private let season: MediaItem
+    private let action: () -> Void
+    private let label: MenuLabel
+    @Environment(\.mediaItemActionHandler) private var handler
+
+    public init(
+        for season: MediaItem,
+        action: @escaping () -> Void,
+        @ViewBuilder label: () -> MenuLabel
+    ) {
+        self.season = season
+        self.action = action
+        self.label = label()
+    }
+
+    public var body: some View {
+        let handler = handler
+        let actions = MediaItemActionCatalog.seasonWatchActions(
+            for: season,
+            availableActions: handler?.actions(for: season, context: .none) ?? []
+        )
+        if actions.isEmpty {
+            Button(action: action) { label }
+        } else {
+            Menu {
+                ForEach(actions) { menuAction in
+                    Button {
+                        handler?.perform(menuAction, on: season, context: .none)
+                    } label: {
+                        if menuAction == .markWatched {
+                            Label("Mark Season Watched", systemImage: menuAction.systemImage)
+                        } else {
+                            Label("Mark Season Unwatched", systemImage: menuAction.systemImage)
+                        }
+                    }
+                }
+            } label: {
+                label
+            } primaryAction: {
+                action()
+            }
+            #if os(tvOS)
+            .menuStyle(.button)
+            #endif
+        }
+    }
+}
+
 /// Renders the native tvOS context menu (long-press on the focused card) for a
 /// `MediaItem`, driven entirely by the injected `MediaItemActionHandling`.
 public struct MediaItemContextMenu: ViewModifier {
@@ -219,6 +269,15 @@ extension MediaItem {
             // The item itself is the destination; the page re-fetches full
             // detail by id.
             return self
+        case .browseFiles:
+            guard let fileBrowserContainerID, !fileBrowserContainerID.isEmpty else { return nil }
+            return MediaItem(
+                id: fileBrowserContainerID,
+                title: title,
+                kind: .folder,
+                allowsTitleBasedMetadataMatching: false,
+                sourceAccountID: sourceAccountID
+            )
         case .markWatched, .markUnwatched, .markWatchedUpToHere,
              .addToWatchlist, .removeFromWatchlist, .refreshMetadata,
              .startDownload, .pauseDownload, .resumeDownload, .removeDownload,

@@ -130,9 +130,7 @@ struct AppearanceDetailView: View {
 
     /// Everything controlled by the single Navigation master row.
     ///
-    /// Style and its library arrangement belong together: changing to either
-    /// leading-edge style reveals the shared ordered/hidden list directly beneath
-    /// the picker. Top bar has no library destinations, so that section disappears.
+    /// Style and destination arrangement share one pane for every navigation style.
     private struct NavigationAppearanceDetail: View {
         @Bindable var navigation: NavigationStyleSettingsModel
         let librariesScope: ProfileLibrariesScope
@@ -141,24 +139,21 @@ struct AppearanceDetailView: View {
             VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
                 CompactNavigationPicker(selection: $navigation.style)
 
-                SettingsDetailGroup(
-                    title: "Destinations",
-                    description: "Keep the essentials fixed and choose which media shortcuts appear."
-                ) {
-                    VStack(alignment: .leading, spacing: 24) {
-                        Toggle("Show Watchlist", isOn: $navigation.showsWatchlist)
-                        Toggle("Show Music", isOn: $navigation.showsMusic)
-                    }
-                    .toggleStyle(SettingsSwitchToggleStyle())
-                }
+                #if os(tvOS)
+                Toggle(
+                    "Prevent Accidental Exit",
+                    isOn: $navigation.preventsAccidentalExit
+                )
+                .toggleStyle(SettingsSwitchToggleStyle())
+                #endif
 
-                if navigation.style != .tabBar {
-                    SettingsDetailGroup(
-                        title: "Navigation Libraries",
-                        description: "Choose which libraries appear in the navigation, and the order they appear in."
-                    ) {
-                        NavigationLibrariesDetailView(scope: librariesScope)
-                    }
+                SettingsDetailGroup(
+                    title: "Hide or Reorder Navigation"
+                ) {
+                    NavigationLibrariesDetailView(
+                        scope: librariesScope,
+                        includesIndividualLibraries: navigation.style != .tabBar
+                    )
                 }
             }
         }

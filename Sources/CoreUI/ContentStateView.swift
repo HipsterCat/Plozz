@@ -95,4 +95,19 @@ public struct ContentStateView<Value: Sendable, Content: View>: View {
     }
 }
 
+#if DEBUG
+#Preview("Loading") {
+    ContentStateView(state: LoadState<String>.loading, onRetry: {}) { Text(verbatim: $0) }
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .background(.black)
+}
+
+#Preview("Failed") {
+    ContentStateView(state: LoadState<String>.failed(.serverUnreachable), onRetry: {}) { Text(verbatim: $0) }
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .background(.black)
+}
+#endif
 #endif

@@ -100,6 +100,22 @@ struct SeerClient: Sendable {
         return try await http.decode(SeerMediaDetails.self, from: endpoint, baseURL: baseURL)
     }
 
+    /// `GET /api/v1/tv/{tmdbId}/season/{seasonNumber}` — authoritative season
+    /// details with the complete TMDB episode list, including unaired episodes.
+    func tvSeason(
+        tmdbID: Int,
+        seasonNumber: Int,
+        language: String = "en"
+    ) async throws -> SeerSeasonDetails {
+        let endpoint = Endpoint(
+            method: .get,
+            path: "/api/v1/tv/\(tmdbID)/season/\(seasonNumber)",
+            queryItems: [URLQueryItem(name: "language", value: language)],
+            headers: headers()
+        )
+        return try await http.decode(SeerSeasonDetails.self, from: endpoint, baseURL: baseURL)
+    }
+
     /// `GET /api/v1/user` — one page of Seerr users. `take`/`skip` page the list;
     /// Overseerr caps `take` at 100.
     func users(take: Int = 100, skip: Int = 0) async throws -> SeerUserPage {

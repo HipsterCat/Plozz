@@ -82,6 +82,11 @@ struct PlexHub: Decodable {
     let type: String?
     /// Whether more items exist beyond those inlined here.
     let more: Bool?
+    /// Paging metadata for endpoints that wrap their playable items in a Hub
+    /// instead of placing them directly on MediaContainer.
+    let size: Int?
+    let totalSize: Int?
+    let offset: Int?
     /// The hub's items. Some hubs return `Directory` entries (e.g. genre folders)
     /// instead of playable `Metadata`; those are ignored (we only surface playable
     /// content rows).

@@ -47,6 +47,7 @@ struct DetailHeroView: View, Equatable {
             && lhs.scheduleLine == rhs.scheduleLine
             && lhs.spoilerSettings == rhs.spoilerSettings
             && lhs.playTitle == rhs.playTitle
+            && lhs.showsPlayPlaceholder == rhs.showsPlayPlaceholder
             && lhs.playProgress == rhs.playProgress
             && lhs.playRemainingText == rhs.playRemainingText
             && lhs.playSeasonEpisodeText == rhs.playSeasonEpisodeText
@@ -79,6 +80,9 @@ struct DetailHeroView: View, Equatable {
     let item: MediaItem
     @Environment(HeroTrailerController.self) private var heroTrailerController
     @Environment(HeroBackgroundSettingsModel.self) private var heroBackground
+    #if os(tvOS)
+    @Environment(\.detailEntranceSession) private var detailEntrance
+    #endif
     /// The item whose artwork fills the backdrop *and* supplies the branded title
     /// logo. Defaults to `item`. A series page pins this to the series itself so
     /// the background and logo stay a single, stable, show-level identity even as
@@ -130,10 +134,11 @@ struct DetailHeroView: View, Equatable {
     /// Fridays" or "New season Aug 5". `nil` when nothing is known.
     var scheduleLine: LocalizedStringResource? = nil
     let spoilerSettings: SpoilerSettings
-    /// Title for the Play/Resume button, or `nil` to omit the button entirely
-    /// (e.g. a season with no resolved episodes yet).
+    /// Title for the ready Play/Resume button. Pending library details can keep
+    /// its disabled placeholder visible before a target has resolved.
     let playTitle: LocalizedStringResource?
     let onPlay: (() -> Void)?
+    var showsPlayPlaceholder: Bool = false
     /// When provided (`0..<1`), a thin watched-progress bar is shown inside the
     /// Play button, between the play icon and the remaining-time line.
     var playProgress: Double? = nil
@@ -468,6 +473,7 @@ struct DetailHeroView: View, Equatable {
     /// this page can't otherwise reach, and only when something can route it.
     private func offersHeroAction(_ action: MediaItemAction) -> Bool {
         guard action.isNavigation else { return true }
+        if action == .browseFiles { return navigator != nil }
         return offersParentNavigation && !action.navigatesToSelf && navigator != nil
     }
 
@@ -482,7 +488,7 @@ struct DetailHeroView: View, Equatable {
     private var heroParentNavigationAction: MediaItemAction? {
         guard offersParentNavigation, navigator != nil else { return nil }
         return (actionHandler?.actions(for: backdrop, context: actionContext) ?? [])
-            .first { $0.isNavigation && !$0.navigatesToSelf }
+            .first { $0 == .goToSeason }
     }
 
     /// The air-schedule badge above the title, e.g. "New episodes Fridays".
@@ -605,7 +611,9 @@ struct DetailHeroView: View, Equatable {
     /// whole series.
     private func performHeroAction(_ action: MediaItemAction) {
         if action.isNavigation {
-            if let navigator, let target = item.navigationTarget(for: action) {
+            let subject = action == .browseFiles && backdrop.fileBrowserContainerID != nil
+                ? backdrop : item
+            if let navigator, let target = subject.navigationTarget(for: action) {
                 navigator(target)
             }
             return
@@ -783,9 +791,11 @@ struct DetailHeroView: View, Equatable {
             // breadcrumb above the episode's own title instead.
             if let scheduleLine {
                 scheduleBadge(scheduleLine)
+                    .detailEntranceStage(.logo)
             }
             if presentsEpisodeStill {
                 titleText(hideText: hideText)
+                    .detailEntranceStage(.logo)
             } else {
                 HeroLogoArtwork(
                     references: backdrop.artworkReferences(for: .logo),
@@ -810,6 +820,7 @@ struct DetailHeroView: View, Equatable {
                 // asked for rather than inherited from leftover frame slack — which
                 // is what made it vary by logo. On top of the stack's own 12pt.
                 .padding(.vertical, 16)
+                .detailEntranceStage(.logo)
             }
             // The season/episode ("S{n} · E{m}") is now shown only in the Play
             // button, so it's omitted here for episodes to avoid a redundant line.
@@ -830,6 +841,7 @@ struct DetailHeroView: View, Equatable {
                     .lineLimit(1)
                     .contentTransition(.opacity)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .detailEntranceStage(.metadata)
             }
             let comps = HeroContentPolicy.detailFacts(
                 focused: focusedPresentation
@@ -860,6 +872,7 @@ struct DetailHeroView: View, Equatable {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .detailEntranceStage(.metadata)
             }
             // Description directly beneath the genres line.
             SpoilerSafeOverviewText(
@@ -883,6 +896,7 @@ struct DetailHeroView: View, Equatable {
             // to a single line. `fixedSize` makes it claim its natural height for
             // however many lines it actually has, up to `lineCount`.
             .fixedSize(horizontal: false, vertical: true)
+            .detailEntranceStage(.metadata)
             // Bottom facts region just above the action buttons: year · runtime,
             // ratings, then capability badges (4K / Atmos / HDR …). One wrapping
             // layout owns every item so an unusually rich title can add a real
@@ -896,11 +910,12 @@ struct DetailHeroView: View, Equatable {
                     )
                 }
             }
+            .detailEntranceStage(.metadata)
             if isDiscoveryItem
                 ? (showsRequestPill
                     || onPlayTrailer != nil
                     || heroWatchlistAction != nil)
-                : ((playTitle != nil && onPlay != nil) || onPlayTrailer != nil || hasHeroActionButtons) {
+                : ((playTitle != nil && onPlay != nil) || showsPlayPlaceholder || onPlayTrailer != nil || hasHeroActionButtons) {
                 HStack(spacing: 24) {
                     if isDiscoveryItem {
                         // Discovery keeps library-only actions suppressed but a
@@ -913,6 +928,7 @@ struct DetailHeroView: View, Equatable {
                             .modifier(HeroActionButtonStyle(prominent: !showsRequestPill))
                             .prefersDefaultFocus(!showsRequestPill, in: heroActionsScope)
                             .focused($heroActionRowFocus, equals: .trailer)
+                            .accessibilityIdentifier("detail-hero-trailer")
                         }
                         // Watchlisting is the whole point of a title you do NOT
                         // have: it is how you say "get this later". The row's own
@@ -923,8 +939,8 @@ struct DetailHeroView: View, Equatable {
                             watchlistButton(action: heroWatchlistAction)
                         }
                     } else {
-                    if let playTitle, let onPlay {
-                        playButton(title: playTitle, action: onPlay)
+                    if (playTitle != nil && onPlay != nil) || showsPlayPlaceholder {
+                        playButton(title: playTitle ?? "Play", action: onPlay)
                     }
                     if let onPlayTrailer {
                         Button(action: onPlayTrailer) {
@@ -932,6 +948,7 @@ struct DetailHeroView: View, Equatable {
                         }
                         .modifier(HeroActionButtonStyle(prominent: false))
                         .focused($heroActionRowFocus, equals: .trailer)
+                        .accessibilityIdentifier("detail-hero-trailer")
                     }
                     if let heroWatchlistAction {
                         watchlistButton(action: heroWatchlistAction)
@@ -980,6 +997,7 @@ struct DetailHeroView: View, Equatable {
                         onHeroActionBlurred?()
                     }
                 }
+                .detailEntranceStage(.controls)
             }
         }
         .padding(.top, PlozzTheme.Metrics.screenVerticalPadding)
@@ -996,6 +1014,7 @@ struct DetailHeroView: View, Equatable {
             alignment: .bottomLeading
         )
         .modifier(SeriesHeroContentLiftModifier(model: seriesRecedeModel))
+        .modifier(DetailHeroContentReveal(isVisible: heroVisible || hasCinematicEntrance, reduceMotion: reduceMotion))
         // The full-bleed backdrop lives in a `.background`, which by definition is
         // sized to the host and does NOT contribute to the host's measured size.
         // That is the fix: previously the backdrop was a ZStack *sibling* whose
@@ -1063,22 +1082,18 @@ struct DetailHeroView: View, Equatable {
                 .contentTransition(.opacity)
                 .allowsHitTesting(false)
                 .modifier(SeriesHeroContentLiftModifier(model: seriesRecedeModel))
+                .modifier(DetailHeroContentReveal(isVisible: heroVisible || hasCinematicEntrance, reduceMotion: reduceMotion))
+                .detailEntranceStage(.metadata)
             }
         }
         .contextMenu {
             heroContextMenu
         }
-        // Normal detail opens fade the whole hero in. A live Home-trailer handoff
-        // must be fully opaque on its very first frame; fading the inherited video
-        // from zero exposes the navigation/container background as a dark flash.
-        .opacity(isContinuingHeroTrailer || heroVisible ? 1 : 0)
+        // Artwork (including an inherited trailer) is visible immediately. Only
+        // the foreground fades, keeping its focus targets and geometry stable.
         .onAppear {
             guard !heroVisible else { return }
-            if reduceMotion || isContinuingHeroTrailer {
-                heroVisible = true
-            } else {
-                withAnimation(.easeInOut(duration: 0.35)) { heroVisible = true }
-            }
+            heroVisible = true
         }
         // Cross-fade the hero text as the focused context changes, while the
         // backdrop swaps underneath it.
@@ -1106,11 +1121,12 @@ struct DetailHeroView: View, Equatable {
 
     }
 
-    private var isContinuingHeroTrailer: Bool {
-        let heroItem = backdropItem ?? item
-        return heroBackground.settings.detailMode == .trailer
-            && heroTrailerController.isShowing(heroItem.id)
-            && heroTrailerController.isPlaying
+    private var hasCinematicEntrance: Bool {
+        #if os(tvOS)
+        detailEntrance != nil
+        #else
+        false
+        #endif
     }
 
     /// The episode's own 16:9 still, inset opposite the text on an episode page.
@@ -1125,7 +1141,9 @@ struct DetailHeroView: View, Equatable {
             asyncFallbackURL: episodeStillFallback,
             pinIdentity: item.stablePresentationID
         ) {
-            MediaArtworkPlaceholder()
+            MediaArtworkPlaceholder(
+                symbol: .init(for: item), cornerRadius: PlozzMetrics.standard.landscapeCardCornerRadius
+            )
         }
         .blur(radius: spoilerSettings.shouldHideThumbnail(for: item) ? 28 : 0)
         .frame(width: width, height: width * 9 / 16)
@@ -1152,9 +1170,8 @@ struct DetailHeroView: View, Equatable {
     /// ignore the horizontal/top overscan safe area and span the screen edge to
     /// edge *without* inflating the hero's (and the scroll column's) layout width.
     private func heroBackdrop() -> some View {
-        // The shared `HeroBackdropLayer` (CoreUI) owns the exact scrim + dissolve
-        // + full-bleed treatment, so the detail hero and the Home hero carousel
-        // render an identical backdrop. Hero artwork is never spoiler-blurred;
+        // `HeroBackdropLayer` shares Home's static shading while preserving the
+        // detail page's own dissolve and full-bleed treatment. Hero artwork is never spoiler-blurred;
         // episode spoiler masking remains limited to episode text and cards.
         let ladder = backdrop.artworkReferences(for: .detailBackdrop)
         HeroArtDiagnostics.emitOnce(
@@ -1188,20 +1205,21 @@ struct DetailHeroView: View, Equatable {
     /// label becomes `▶  [progress bar]  … left`, keeping the button's normal
     /// height; otherwise it's the plain `▶  Play/Resume`.
     @ViewBuilder
-    private func playButton(title: LocalizedStringResource, action: @escaping () -> Void) -> some View {
+    private func playButton(title: LocalizedStringResource, action: (() -> Void)?) -> some View {
         // The plain "▶ Play" form must occupy the SAME width as the wider resume
         // form ("▶ [bar] … left") so that flipping between them — e.g. when the
         // user marks the item Watched, which clears the live resume text — never
         // resizes Play or shifts the action row beside it. We size to a *latched*
         // resume text (`reservedResumeText`) that survives the watched transition,
-        // rather than a fixed over-wide frame. With no resume target ever (a plain
-        // unwatched title) there's nothing to reserve and Play takes its natural,
-        // tight default width.
+        // rather than shrinking after a watched transition. Placeholder dimensions
+        // never constrain the ready button.
         let liveResumeText = resumeText
         let sizingText = reservedResumeText ?? liveResumeText
         let button = Button {
-            heroTrailerController.stop()
-            action()
+            if let action {
+                heroTrailerController.stop()
+                action()
+            }
         } label: {
             ZStack {
                 if let sizingText {
@@ -1212,13 +1230,17 @@ struct DetailHeroView: View, Equatable {
                     progress: playProgress,
                     remainingText: playRemainingText,
                     seasonEpisodeText: playSeasonEpisodeText,
-                    onLight: playButtonHasFocus || colorScheme == .light
+                    onLight: playButtonHasFocus || colorScheme == .light,
+                    isPlaceholder: action == nil,
+                    separatesEpisodeText: (actionItem ?? item).startsWatching
                 )
             }
         }
         .modifier(HeroActionButtonStyle(prominent: true))
+        .disabled(action == nil)
         .focused($playButtonHasFocus)
         .focused($heroActionRowFocus, equals: .play)
+        .accessibilityIdentifier("detail-hero-play")
         .onChange(of: liveResumeText) { _, new in
             if let new { reservedResumeText = new }
         }
@@ -1229,10 +1251,10 @@ struct DetailHeroView: View, Equatable {
         if let playButtonFocus {
             button
                 .focused(playButtonFocus, equals: true)
-                .prefersDefaultFocus(true, in: heroActionsScope)
+                .prefersDefaultFocus(action != nil, in: heroActionsScope)
         } else {
             button
-                .prefersDefaultFocus(true, in: heroActionsScope)
+                .prefersDefaultFocus(action != nil, in: heroActionsScope)
         }
     }
 
@@ -1253,24 +1275,33 @@ struct DetailHeroView: View, Equatable {
 
     @ViewBuilder
     private func seriesRequestPill() -> some View {
-        if let seasonRequestAvailability, seasonRequestAvailability.hasSeasonRequestContent {
-            let hasRequestable = !seasonRequestAvailability.requestableSeasonNumbers.isEmpty
-            let label = isRequestingSeasons
-                ? "Requesting…"
-                : (hasRequestable ? "Request Seasons" : "Season Requests")
+        if let seasonRequestAvailability, !seasonRequestAvailability.seasons.isEmpty {
+            let hasRequestable = !seasonRequestAvailability.requestableMissingSeasonNumbers.isEmpty
+            let presentation = SeasonRequestPresentation(
+                availability: seasonRequestAvailability,
+                isSubmitting: isRequestingSeasons
+            )
             SeasonRequestMenu(
                 availability: seasonRequestAvailability,
                 requestAllTitle: "Request All Seasons",
+                isSubmitting: isRequestingSeasons,
+                refreshFailed: seasonRequestAvailabilityFailed,
+                onRefresh: onRetrySeasonRequestAvailability,
                 onRequest: { onRequestSeasons?($0) }
             ) {
-                Label(label, systemImage: "plus.circle")
+                Label(presentation.title, systemImage: presentation.systemImage)
             }
             .menuStyle(.button)
             .modifier(HeroActionButtonStyle(prominent: hasRequestable))
             .prefersDefaultFocus(true, in: heroActionsScope)
             .focused($heroActionRowFocus, equals: .request)
-            .disabled(onRequestSeasons == nil || isRequestingSeasons)
-            .accessibilityLabel(requestActingName.map { "\(label) as \($0)" } ?? label)
+            .disabled(onRequestSeasons == nil)
+            .accessibilityLabel(
+                requestActingName.map { Text("\(Text(presentation.title)) as \($0)") }
+                    ?? Text(presentation.title)
+            )
+            .accessibilityValue(presentation.detail.map { Text($0) } ?? Text(verbatim: ""))
+            .accessibilityHint("View season statuses or request missing seasons")
         } else if seasonRequestAvailabilityFailed {
             Button { onRetrySeasonRequestAvailability?() } label: {
                 Label("Retry Seasons", systemImage: "arrow.clockwise")
@@ -1371,6 +1402,7 @@ struct DetailHeroView: View, Equatable {
     private var showsMoreMenu: Bool {
         (serverChoices.count > 1 && onSelectSource != nil)
             || (versions.count > 1 && onSelectVersion != nil)
+            || heroMenuActions.contains(.browseFiles)
     }
 
     /// A single subtle trailing "…" menu that folds BOTH the cross-server picker
@@ -1399,12 +1431,20 @@ struct DetailHeroView: View, Equatable {
             offlineSourceAccountIDs: offlineSourceAccountIDs,
             versions: versions,
             selectedVersionID: selectedVersionID,
+            actions: heroMenuActions.filter { $0 == .browseFiles }.map {
+                PlaybackSourceMenuAction(id: $0.rawValue, title: $0.title, systemImage: $0.systemImage)
+            },
             onSelectSource: { accountID in
                 userInitiatedSourceSwitch = true
                 onSelectSource?(accountID)
             },
             onSelectVersion: { versionID in
                 onSelectVersion?(versionID)
+            },
+            onPerformAction: { id in
+                if id == MediaItemAction.browseFiles.rawValue {
+                    performHeroAction(.browseFiles)
+                }
             },
             onDismiss: {
                 heroActionRowFocus = .more
@@ -1417,6 +1457,7 @@ struct DetailHeroView: View, Equatable {
         }
         .modifier(HeroActionButtonStyle(prominent: false, circular: true))
         .focused($heroActionRowFocus, equals: .more)
+        .accessibilityIdentifier("detail-hero-more")
         .accessibilityLabel("More actions")
     }
 
@@ -1511,6 +1552,7 @@ struct DetailHeroView: View, Equatable {
         .modifier(HeroActionButtonStyle(prominent: false, circular: true))
         .animation(.easeInOut(duration: 0.2), value: isWatchlisted)
         .focused($heroActionRowFocus, equals: .watchlist)
+        .accessibilityIdentifier("detail-hero-watchlist")
         .accessibilityLabel(action.title)
         .accessibilityValue(
             isWatchlisted ? "In Watchlist" : "Not in Watchlist"
@@ -1563,6 +1605,7 @@ struct DetailHeroView: View, Equatable {
         }
         .modifier(HeroActionButtonStyle(prominent: false, circular: true))
         .focused($heroActionRowFocus, equals: .watched)
+        .accessibilityIdentifier("detail-hero-watched")
         .accessibilityLabel(action.title)
         .accessibilityValue(watchedActionItem.isPlayed ? "Watched" : "Not watched")
     }
@@ -1590,6 +1633,7 @@ struct DetailHeroView: View, Equatable {
         .modifier(HeroActionButtonStyle(prominent: false, circular: true))
         .focused($refreshButtonHasFocus)
         .focused($heroActionRowFocus, equals: .refresh)
+        .accessibilityIdentifier("detail-hero-refresh")
         .accessibilityLabel(MediaItemAction.refreshMetadata.title)
     }
 
@@ -1742,39 +1786,7 @@ struct DetailHeroView: View, Equatable {
     /// when pinned) and its TMDb id when that id refers to the show itself; for an
     /// episode/season backdrop it queries by series title. Inert without a token.
     private var tmdbBackdropFallback: (@Sendable () async -> URL?)? {
-        let source = backdrop
-        switch source.kind {
-        case .folder, .collection, .unknown:
-            return nil
-        default:
-            break
-        }
-        // A discovery page waits for its own enrichment instead of racing it.
-        //
-        // This fallback and the metadata pipeline are two different choosers of a
-        // backdrop, and they do not agree: the router picks one TMDb image, the
-        // pipeline's `detailBackdrop` picks another. On a discovery title — which
-        // arrives carrying only a poster — the router won the first paint and the
-        // pipeline replaced it a second later, which is the background visibly
-        // changing after arrival. Enrichment is the authoritative answer and is
-        // already in flight when this page opens, so the honest thing is to show
-        // the scrim until it lands rather than an image chosen only because it was
-        // quicker. A bare second beats a swap.
-        if isDiscoveryItem, source.heroBackdropURL == nil, source.backdropURL == nil {
-            return nil
-        }
-        // art → TMDb hero → the item's own poster. Some titles (e.g. a Plex movie
-        // with a poster but no fanart/`art`) carry no landscape backdrop anywhere,
-        // so fall back to the poster rather than leaving the hero blank — matching
-        // the resolution order documented on `heroBackgroundSample`. Only reached
-        // when the server backdrop URLs fail, so titles with real backdrop art are
-        // unaffected.
-        return {
-            await ArtworkRouter.shared.heroArtworkURL(
-                for: source,
-                placement: .detailBackdrop
-            ) ?? source.posterURL
-        }
+        DetailBackdropArtwork.fallback(for: backdrop, isDiscoveryItem: isDiscoveryItem)
     }
 
     /// Last-resort title art for the hero: look the show/movie up on TMDb and use
@@ -2034,6 +2046,9 @@ private struct SeriesDetailHeroBackdrop: View {
     let recedeModel: SeriesHeroRecedeModel?
     let trailerController: HeroTrailerController
     let showsTrailer: Bool
+    #if os(tvOS)
+    @Environment(\.detailEntranceSession) private var detailEntrance
+    #endif
 
     var body: some View {
         let receded = recedeModel?.isReceded == true
@@ -2069,10 +2084,142 @@ private struct SeriesDetailHeroBackdrop: View {
         // back through a freshly-pushed NavigationStack before the safe area
         // settles and temporarily center the whole page off-screen.
         .frame(width: width)
+        #if os(tvOS)
+        .onChange(of: showsTrailer, initial: true) { _, showing in
+            if showing { detailEntrance?.resolvedDestinationVideo() }
+        }
+        #endif
         // Match Home's slower parallax track, but transform the completed backdrop
         // layer so its mask/artwork do not re-render on every animation frame.
         .offset(y: receded ? -SeriesEpisodeBrowserLayout.heroBackdropRecedeLift : 0)
         .animation(.smooth(duration: 0.9), value: receded)
     }
 }
+
+///  SPLIT. DOES NOT RENDER. PREVIEW CAN NOT BE SHOWN.
+
+#if DEBUG
+private struct DetailHeroPreviewHost: View {
+    let item: MediaItem
+    var playTitle: LocalizedStringResource? = "Play"
+    var playProgress: Double? = nil
+    var playRemainingText: String? = nil
+    var playSeasonEpisodeText: String? = nil
+    var presentsEpisodeStill = false
+    var onPlayTrailer: (() -> Void)? = nil
+
+//    @State private var trailerController = HeroTrailerController()
+//    @State private var heroBackground = HeroBackgroundSettingsModel()
+
+    var body: some View {
+        DetailHeroView(
+            item: item,
+            presentsEpisodeStill: presentsEpisodeStill,
+            spoilerSettings: .default,
+            playTitle: playTitle,
+            onPlay: {},
+            playProgress: playProgress,
+            playRemainingText: playRemainingText,
+            playSeasonEpisodeText: playSeasonEpisodeText,
+            onPlayTrailer: onPlayTrailer
+        )
+//        .environment(trailerController)
+//        .environment(heroBackground)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .background(.black)
+    }
+}
+
+#Preview("Credit line") {
+    DetailHeroCreditLine(
+        label: "Starring",
+        values: ["Philippe Noiret", "Jacques Perrin", "Salvatore Cascio"]
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+    .background(.windowBackground)
+}
+
+#Preview("Facts row") {
+    DetailHeroFactsRow(
+        facts: ["1988", "2h 4m", "Drama", "Romance"],
+        ratings: [
+            ExternalRating(source: .rottenTomatoes, value: 90, scale: .percent),
+            ExternalRating(source: .tmdb, value: 8.4, scale: .outOfTen)
+        ],
+        featureBadges: [
+            MediaBadge("PG", style: .rating),
+            MediaBadge("SD", style: .prominent),
+            MediaBadge("SDR", style: .sdr)
+        ]
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.windowBackground)
+}
+
+#Preview("Hero · movie") {
+    DetailHeroPreviewHost(
+        item: MediaItem(
+            id: "m1",
+            title: "Dune",
+            kind: .movie,
+            overview: "A gifted young man must travel to the most dangerous planet in the universe to ensure the future of his people.",
+            productionYear: 2021,
+            officialRating: "PG-13",
+            genres: ["Science Fiction", "Adventure"]
+        )
+    )
+}
+
+#Preview("Hero · resume") {
+    DetailHeroPreviewHost(
+        item: MediaItem(
+            id: "m1",
+            title: "Dune",
+            kind: .movie,
+            overview: "A gifted young man must travel to the most dangerous planet in the universe to ensure the future of his people.",
+            productionYear: 2021,
+            runtime: 155 * 60,
+            resumePosition: 62 * 60,
+            playedPercentage: 0.4
+        ),
+        playTitle: "Resume",
+        playProgress: 0.4,
+        playRemainingText: "1h 33m"
+    )
+}
+
+#Preview("Hero · series") {
+    DetailHeroPreviewHost(
+        item: MediaItem(
+            id: "s1",
+            title: "Severance",
+            kind: .series,
+            overview: "Mark Scout leads a team of office workers whose memories have been surgically divided between their work and personal lives.",
+            productionYear: 2022
+        ),
+        playSeasonEpisodeText: "S1, E2"
+    )
+}
+
+#Preview("Hero · episode still") {
+    DetailHeroPreviewHost(
+        item: MediaItem(
+            id: "e2",
+            title: "Half Loop",
+            kind: .episode,
+            overview: "Mark attends a dinner party, where he learns a shocking truth.",
+            parentTitle: "Severance",
+            seasonNumber: 1,
+            episodeNumber: 2,
+            seriesID: "s1",
+            runtime: 53 * 60,
+            resumePosition: 20 * 60,
+            playedPercentage: 0.38
+        ),
+        presentsEpisodeStill: true
+    )
+}
+#endif
 #endif

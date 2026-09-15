@@ -2,61 +2,76 @@
 import SwiftUI
 import CoreModels
 
-/// The shared body of every season-request picker — "Request All …" (when more
-/// than one season is requestable) followed by one row per season: a tappable
-/// **Request S{n}** for a missing season, or a disabled status row for an
-/// in-flight / failed one. Placed inside a `Menu { }` on both platforms (tvOS +
-/// iOS, home hero + detail) so the picker reads identically everywhere and the
-/// season logic lives in exactly one place.
+/// Shared season actions and coverage, including completed seasons so a mixed
+/// request never looks like the entire series has finished.
 public struct SeasonRequestMenuContent: View {
     private let availability: MediaRequestAvailability
-    private let requestAllTitle: String
+    private let isSubmitting: Bool
+    private let refreshFailed: Bool
+    private let onRefresh: (() -> Void)?
     private let onRequest: ([Int]) -> Void
 
     public init(
         availability: MediaRequestAvailability,
-        requestAllTitle: String = "Request All Seasons",
+        requestAllTitle _: String = "Request All Seasons",
+        isSubmitting: Bool = false,
+        refreshFailed: Bool = false,
+        onRefresh: (() -> Void)? = nil,
         onRequest: @escaping ([Int]) -> Void
     ) {
         self.availability = availability
-        self.requestAllTitle = requestAllTitle
+        self.isSubmitting = isSubmitting
+        self.refreshFailed = refreshFailed
+        self.onRefresh = onRefresh
         self.onRequest = onRequest
     }
 
     private var seasons: [MediaSeasonRequestState] {
-        availability.requestPickerSeasons
+        availability.canonicalNumberedSeasons
     }
 
     private var requestableSeasons: [MediaSeasonRequestState] {
-        seasons.filter(\.isRequestable)
+        seasons.filter(\.isMissingSeasonRequestable)
     }
 
     public var body: some View {
         if requestableSeasons.count > 1 {
-            Button(requestAllTitle) {
+            Button(SeasonRequestPresentation(availability: availability).requestAllTitle) {
                 onRequest(requestableSeasons.map(\.number))
             }
+            .disabled(isSubmitting)
             Divider()
         }
         ForEach(seasons) { season in
-            if season.requestFailed {
-                Label("\(season.title) — Failed", systemImage: "exclamationmark.circle")
-            } else if season.isRequestable {
+            if season.isMissingSeasonRequestable {
                 Button("Request \(season.title)") {
                     onRequest([season.number])
                 }
+                .disabled(isSubmitting)
             } else {
-                Label {
-                    Text(verbatim: "\(season.title) — ") + Text(statusText(for: season))
-                } icon: {
-                    Image(systemName: season.status == .processing ? "arrow.down.circle" : "clock")
+                Button {} label: {
+                    Label {
+                        // Join content and complete localized copy with a nonlinguistic separator.
+                        Text(verbatim: season.title)
+                            + Text(verbatim: " — ")
+                            + Text(season.statusTitle)
+                    } icon: {
+                        Image(systemName: season.statusSystemImage)
+                    }
                 }
+                .disabled(true)
             }
         }
-    }
-
-    private func statusText(for season: MediaSeasonRequestState) -> LocalizedStringResource {
-        season.status == .processing ? "Processing" : "Requested"
+        if SeasonRequestPresentation(availability: availability).hasFailures {
+            Text("Failed or declined requests need attention in Seerr.")
+        }
+        if refreshFailed {
+            Text("Couldn’t refresh. Showing last known season statuses.")
+        }
+        if let onRefresh {
+            Divider()
+            Button("Refresh Status", systemImage: "arrow.clockwise", action: onRefresh)
+        }
     }
 }
 #endif

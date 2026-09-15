@@ -33,11 +33,15 @@ public struct EpisodeColumnCard: View, Equatable {
     private let presentation: EpisodeColumnPresentation
     private let action: () -> Void
 
-    @FocusState private var isFocused: Bool
+    @PlozzCardFocus private var isFocused: Bool
+    #if os(tvOS)
+    @State private var nativeArtwork = ArtworkResolutionState()
+    #endif
     @State private var synopsisVisible = false
     @State private var synopsisAtRest = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.plozzWatchStatusIndicator) private var watchStatusIndicator
+    @Environment(\.plozzCardFocusStyle) private var focusStyle
     @Environment(\.themePalette) private var palette
 
     private let metrics = PlozzMetrics.standard
@@ -59,53 +63,7 @@ public struct EpisodeColumnCard: View, Equatable {
     public var body: some View {
         let _ = plozzTraceBodyChanges { Self._printChanges() }
         VStack(alignment: .leading, spacing: 0) {
-            artwork
-                .frame(width: Self.artworkSize.width, height: Self.artworkSize.height)
-                // A not-yet-aired episode reads as unavailable rather than merely
-                // unwatched: desaturated and dimmed, with the air date on the
-                // artwork so the card says what it's waiting for.
-                .saturation(presentation.isUpcoming ? 0 : 1)
-                .opacity(presentation.isUpcoming ? 0.05 : 1)
-                // The artwork is nearly transparent, so without an opaque surface
-                // beneath it the focus backing shows through and washes the card out
-                // further the moment it takes focus. This keeps the slot's own
-                // surface — and the focus outline's contrast — constant.
-                .background {
-                    if presentation.isUpcoming {
-                        palette.cardSurface
-                    }
-                }
-                .overlay {
-                    if presentation.isUpcoming, let air = item.upcomingReleaseText {
-                        // Spelled out rather than a bare date: "Releases Friday"
-                        // can't be mistaken for an air date already passed.
-                        Label(air, systemImage: "clock")
-                            .font(.system(size: 21, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(.ultraThinMaterial, in: Capsule())
-                    }
-                }
-                .overlay {
-                    if presentation.artworkTreatment != .blurred {
-                        ResumeChipOverlay(item: item)
-                            // Settles the chip's white at rest, full strength on
-                            // focus. No-op off tvOS.
-                            .plozzChromeFocused(isFocused)
-                    }
-                }
-                .overlay(alignment: .topTrailing) { statusIndicator }
-                .clipShape(RoundedRectangle(
-                    cornerRadius: metrics.landscapeCardCornerRadius,
-                    style: .continuous
-                ))
-                .plozzMediaEdge(cornerRadius: metrics.landscapeCardCornerRadius)
-                .plozzFocusHalo(
-                    cornerRadius: metrics.landscapeCardCornerRadius,
-                    focusScale: reduceMotion ? 1 : PlozzTheme.Metrics.mediumFocusedCardScale,
-                    isFocused: isFocused
-                )
+            episodeArtwork
 
             VStack(alignment: .leading, spacing: 0) {
                 presentation.titleLine
@@ -137,13 +95,14 @@ public struct EpisodeColumnCard: View, Equatable {
                 )
                 .padding(.top, 10)
             }
-            .offset(y: reduceMotion || isFocused ? 0 : -metrics.focusCaptionPush)
+            .offset(y: reduceMotion || focusStyle.usesSystemEffect || isFocused ? 0 : -metrics.focusCaptionPush)
         }
         .frame(width: Self.artworkSize.width, alignment: .leading)
         .padding(.horizontal, Self.sideMargin)
         .focusableCard(
             isFocused: $isFocused,
             cornerRadius: metrics.landscapeCardCornerRadius,
+            nativeFocusInContent: true,
             action: action
         )
         .compositingGroup()
@@ -163,6 +122,7 @@ public struct EpisodeColumnCard: View, Equatable {
             synopsisAtRest = true
         }
         .mediaItemContextMenu(for: item)
+        .environment(\.plozzCardStyle, .borderless)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(presentation.accessibilityLabel)
     }
@@ -177,6 +137,82 @@ public struct EpisodeColumnCard: View, Equatable {
     }
 
     @ViewBuilder
+    private var episodeArtwork: some View {
+        #if os(tvOS)
+        if focusStyle.usesSystemEffect {
+            nativeEpisodeArtwork
+        } else {
+            customEpisodeArtwork
+        }
+        #else
+        customEpisodeArtwork
+        #endif
+    }
+
+    private var customEpisodeArtwork: some View {
+        artwork
+            .frame(width: Self.artworkSize.width, height: Self.artworkSize.height)
+            .saturation(presentation.isUpcoming ? 0 : 1)
+            .opacity(presentation.isUpcoming ? 0.05 : 1)
+            .background { if presentation.isUpcoming { palette.cardSurface } }
+            .overlay { episodeOverlays }
+            .plozzCardArtworkClip(RoundedRectangle(cornerRadius: metrics.landscapeCardCornerRadius, style: .continuous))
+            .plozzMediaEdge(
+                cornerRadius: metrics.landscapeCardCornerRadius,
+                isEnabled: MediaArtworkPlaceholder.Symbol(for: item) == .playback
+            )
+            .plozzFocusHalo(
+                cornerRadius: metrics.landscapeCardCornerRadius,
+                focusScale: reduceMotion ? 1 : PlozzTheme.Metrics.mediumFocusedCardScale,
+                isFocused: isFocused
+            )
+    }
+
+    private var episodeOverlays: some View {
+        ZStack {
+            if presentation.isUpcoming, let air = item.upcomingReleaseText {
+                Label(air, systemImage: "clock")
+                    .font(.system(size: 21, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+            if presentation.artworkTreatment != .blurred {
+                ResumeChipOverlay(item: item).plozzChromeFocused(isFocused)
+            }
+        }
+        .overlay(alignment: .topTrailing) { statusIndicator }
+    }
+
+    #if os(tvOS)
+    private var nativeEpisodeArtwork: some View {
+        let source = EpisodeArtworkSource(item: item, spoilerSettings: spoilerSettings)
+        let treatment: NativePosterImageTreatment = presentation.isUpcoming
+            ? .upcoming(palette.cardSurface)
+            : (presentation.artworkTreatment == .blurred ? .blurred : .original)
+        return NativeTVPoster(
+            image: nativeArtwork.image, treatment: treatment,
+            aspectRatio: Self.artworkSize.width / Self.artworkSize.height,
+            fallbackWidth: Self.artworkSize.width, title: nil, subtitle: nil,
+            overlay: episodeOverlays, focus: $isFocused, action: action
+        )
+        .focused($isFocused.focusState)
+        .frame(width: Self.artworkSize.width, height: Self.artworkSize.height)
+        .background {
+            FallbackAsyncImage(
+                references: source.references, variant: .landscapeCard,
+                asyncFallbackURL: source.fallbackURL, pinIdentity: source.pinIdentity,
+                content: { _ in Color.clear }, placeholder: { Color.clear }
+            )
+            .environment(\.artworkResolutionState, nativeArtwork)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+        }
+    }
+    #endif
+
+    @ViewBuilder
     private var artwork: some View {
         switch presentation.artworkTreatment {
         case .visible:
@@ -184,81 +220,24 @@ public struct EpisodeColumnCard: View, Equatable {
         case .blurred:
             realArtwork.blur(radius: 28)
         case .placeholder:
-            placeholderArtwork
+            realArtwork
         }
     }
 
     private var realArtwork: some View {
-        FallbackAsyncImage(
-            references: item.artworkReferences(for: .episodeThumbnail),
+        let source = EpisodeArtworkSource(item: item, spoilerSettings: spoilerSettings)
+        return FallbackAsyncImage(
+            references: source.references,
             variant: .landscapeCard,
-            asyncFallbackURL: asyncArtworkFallback,
-            pinIdentity: item.stablePresentationID
+            asyncFallbackURL: source.fallbackURL,
+            pinIdentity: source.pinIdentity
         ) {
             neutralPlaceholder
-        }
-    }
-
-    /// Spoiler-safe art for `.placeholder` mode: only ever **series-level** art,
-    /// never the real episode frame.
-    ///
-    /// Mirrors `realArtwork`'s shape — server art first, then an `ArtworkRouter`
-    /// last resort. Previously this read a single URL and fell straight through to
-    /// a grey box, and that URL (`fallbackArtworkURL`) was only ever populated by
-    /// Jellyfin, so on Plex and direct shares every hidden episode rendered blank.
-    ///
-    /// Nothing here may reach for `posterURL`/`backdropURL`: on Jellyfin those are
-    /// the episode's own images, which is exactly what this mode hides.
-    private var placeholderArtwork: some View {
-        FallbackAsyncImage(
-            references: placeholderArtworkReferences,
-            variant: .landscapeCard,
-            asyncFallbackURL: placeholderArtworkFallback,
-            pinIdentity: item.stablePresentationID
-        ) {
-            neutralPlaceholder
-        }
-    }
-
-    /// Server-supplied series art for a wide card: the show's backdrop, with its
-    /// vertical poster as a last resort — a cropped poster still identifies the
-    /// show, and a blank card does not.
-    private var placeholderArtworkReferences: [ArtworkReference] {
-        // Only the explicitly series-scoped local selection. Going through
-        // `artworkReferences(for: .seriesPoster)` would append that placement's
-        // legacy ladder, which ends in the episode's own `posterURL`.
-        let localSeriesArt = item.artworkSelections
-            .first(where: { $0.placement == .seriesPoster })?
-            .references ?? []
-        let remote = [item.fallbackArtworkURL, item.seriesPosterURL]
-            .compactMap { $0.map(ArtworkReference.remote) }
-        var seen = Set<ArtworkReference>()
-        return (remote + localSeriesArt).filter { seen.insert($0).inserted }
-    }
-
-    /// Last-resort series art from the metadata router. Asks only for a
-    /// series-scoped hero against a synthesized series item — never `.thumbnail`,
-    /// which resolves the episode's own still.
-    private var placeholderArtworkFallback: (@Sendable () async -> URL?)? {
-        let seriesItem = PosterCardView.seriesArtworkItem(for: item)
-        return {
-            await ArtworkRouter.shared.artworkURL(.hero, for: seriesItem)
         }
     }
 
     private var neutralPlaceholder: some View {
-        MediaArtworkPlaceholder()
-    }
-
-    private var asyncArtworkFallback: (@Sendable () async -> URL?)? {
-        let snapshot = item
-        return {
-            if let still = await ArtworkRouter.shared.artworkURL(.thumbnail, for: snapshot) {
-                return still
-            }
-            return await ArtworkRouter.shared.artworkURL(.hero, for: snapshot)
-                ?? snapshot.fallbackArtworkURL
-        }
+        MediaArtworkPlaceholder(symbol: .init(for: item), cornerRadius: metrics.landscapeCardCornerRadius)
     }
 
     @ViewBuilder
@@ -297,4 +276,46 @@ public struct EpisodeColumnCard: View, Equatable {
         }
     }
 }
+
+#if DEBUG
+#Preview("Unwatched") {
+    EpisodeColumnCard(
+        item: MediaItem(
+            id: "e1",
+            title: "Good News About Hell",
+            kind: .episode,
+            parentTitle: "Severance",
+            seasonNumber: 1,
+            episodeNumber: 1,
+            seriesID: "s1",
+            runtime: 53 * 60
+        ),
+        action: {}
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+
+#Preview("In progress") {
+    EpisodeColumnCard(
+        item: MediaItem(
+            id: "e2",
+            title: "Half Loop",
+            kind: .episode,
+            parentTitle: "Severance",
+            seasonNumber: 1,
+            episodeNumber: 2,
+            seriesID: "s1",
+            runtime: 53 * 60,
+            resumePosition: 20 * 60,
+            playedPercentage: 0.38
+        ),
+        action: {}
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 #endif

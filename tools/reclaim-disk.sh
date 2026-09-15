@@ -16,9 +16,11 @@
 #   * A cache is only removed if its SOURCE worktree has been idle >= --days days
 #     (default 4) OR the worktree is gone entirely. "Idle" = no source file
 #     modified in that window (uncommitted edits count as activity).
-#   * Apply runs are single-instance and wait for an Apple-build quiet window.
-#     xcodebuild and independent/orphaned build-service/compiler processes are
-#     detected directly; every destructive phase and path is rechecked.
+#   * Apply requires the host-wide exclusive build lease. Cooperative build and
+#     release entrypoints hold shared leases for their full lanes, so cleanup
+#     refuses without a start-after-check race.
+#   * SUSPENDED and the explicit cross-app rollout policy are mandatory gates.
+#     Process/open-path checks remain defense in depth after exclusive ownership.
 #   * Recently modified cache directories are still skipped as extra evidence,
 #     but directory mtime is not treated as proof that no build is active.
 #   * --dry-run shows exactly what would be freed and deletes nothing.
@@ -38,10 +40,10 @@
 #   tools/reclaim-disk.sh --days 7        # gentler: idle >=7d
 #   tools/reclaim-disk.sh --no-extras     # build caches only
 #
-# BUILD GUARD ENVIRONMENT
+# BUILD GUARD
 #   APPLE_BUILD_QUIET_SECONDS  Required no-build interval before apply (default 120).
 #   APPLE_BUILD_MAX_WAIT_SECONDS  Maximum wait for quiet (default 900).
-#   See docs/disk-reclaim.md for lock/process/open-path details.
+#   See docs/disk-reclaim.md for lease, rollout, suspension, and process details.
 #
 set -uo pipefail
 
@@ -90,12 +92,18 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+if [ "${APPLE_BUILD_INTERLOCK_TESTING:-}" = "1" ] && [ "$DRY" -ne 1 ] && [ "$DO_EXTRAS" -eq 1 ]; then
+  echo "Test-mode destructive maintenance requires --no-extras." >&2
+  exit 75
+fi
+
 mkdir -p "$(dirname "$LOG")"
 say() { echo "$*" | tee -a "$LOG"; }
 hr()  { say "------------------------------------------------------------"; }
 build_guard_log() { say "$*"; }
 
 source "$SELF_DIR/lib/apple-build-guard.sh"
+APPLE_BUILD_MAINTENANCE_OWNER="cleanup/reclaim-disk"
 
 avail_gb() { df -g /System/Volumes/Data 2>/dev/null | awk 'NR==2{print $4}'; }
 du_gb()    { du -sk "$1" 2>/dev/null | awk '{printf "%.1f", $1/1048576}'; }
@@ -110,9 +118,20 @@ hr
 # --- shared idle-detection (mirrors prune-deriveddata.sh) ----------------------
 STALE_REF="$(mktemp -t reclaimref)"
 cleanup() {
+  local status=$?
+  trap - EXIT HUP INT TERM
   rm -f "$STALE_REF"
-  release_maintenance_lock
+  if [ "${APPLE_BUILD_LEASE_SIGNALLED:-0}" -eq 1 ] || [ "$status" -ne 0 ]; then
+    abandon_maintenance_lock
+  elif ! release_maintenance_lock; then
+    status=75
+  fi
+  exit "$status"
 }
+APPLE_BUILD_LEASE_SIGNALLED=0
+trap 'apple_build_lease_signal_exit 129' HUP
+trap 'apple_build_lease_signal_exit 130' INT
+trap 'apple_build_lease_signal_exit 143' TERM
 trap cleanup EXIT
 touch -t "$(date -v-"${DAYS}"d +%Y%m%d%H%M.%S 2>/dev/null \
         || date -d "-${DAYS} days" +%Y%m%d%H%M.%S)" "$STALE_REF"
@@ -228,6 +247,24 @@ for repo in "${MAIN_REPOS[@]}"; do
       continue
     fi
   else
+    if ! validate_cache_container "$repo"; then
+      destructive_aborted=1
+      break
+    fi
+    if ! git_common_dir="$(git -C "$repo" rev-parse --git-common-dir 2>/dev/null)"; then
+      say "  $(basename "$repo"): cannot resolve Git common directory; stopping destructive maintenance"
+      destructive_aborted=1
+      break
+    fi
+    case "$git_common_dir" in
+      /*) ;;
+      *) git_common_dir="$repo/$git_common_dir" ;;
+    esac
+    if ! validate_cache_container "$git_common_dir"; then
+      say "  $(basename "$repo"): unsafe Git common directory; stopping destructive maintenance"
+      destructive_aborted=1
+      break
+    fi
     if ! out="$(git -C "$repo" worktree prune -v 2>/dev/null)"; then
       say "  $(basename "$repo"): worktree prune failed; stopping destructive maintenance"
       destructive_aborted=1

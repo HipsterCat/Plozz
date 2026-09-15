@@ -72,6 +72,7 @@ enum OnlineTrailerSource {
     /// Maps an item onto the trailer search it should use, or `nil` for kinds
     /// that don't carry a show/movie-level trailer (seasons, episodes, folders).
     static func query(for item: MediaItem) -> (title: String, year: Int?, isTV: Bool)? {
+        guard item.allowsTitleBasedMetadataMatching else { return nil }
         switch item.kind {
         case .movie, .video:
             return (item.title, item.productionYear, false)

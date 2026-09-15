@@ -42,6 +42,24 @@ public struct MediaOwnershipPresentation: Equatable, Sendable {
 }
 
 public extension MediaItem {
+    var startsWatching: Bool {
+        kind == .episode
+            && (seasonNumber ?? 0) > 0
+            && episodeNumber == 1
+            && locallyValidatedPlayableSource
+            && !isUpcomingUnaired
+            && !isPlayed
+            && !hasBeenPlayed
+            && (resumePosition ?? 0) == 0
+            && (playedPercentage ?? 0) == 0
+    }
+
+    var playActionTitle: LocalizedStringResource {
+        startsWatching
+            ? LocalizedStringResource("Start watching", comment: "Play an unstarted first episode. The season and episode numbers follow this label.")
+            : "Play"
+    }
+
     /// The hero primary CTA for this item given the current Seerr connection.
     func heroCTA(seerConnected: Bool) -> HeroCTA {
         Self.heroCTA(

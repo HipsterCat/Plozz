@@ -100,4 +100,13 @@ public struct LoadingMessagesView: View {
         #endif
     }
 }
+
+#if DEBUG
+#Preview("Loading") {
+    LoadingMessagesView(initialDelay: 0)
+        .padding(80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .background(.black)
+}
+#endif
 #endif

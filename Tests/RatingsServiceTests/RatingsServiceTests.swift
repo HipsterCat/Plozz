@@ -273,6 +273,30 @@ final class RatingsCacheTests: XCTestCase {
         XCTAssertEqual(key, "id")
         XCTAssertEqual(value as? Int, 154587)
     }
+
+    func testAniListDisabledTitleMatchingStillAllowsExactIDOnly() {
+        let personalVideo = MediaItem(
+            id: "f:Frieren.mkv",
+            title: "Frieren",
+            kind: .video,
+            genres: ["Anime"],
+            allowsTitleBasedMetadataMatching: false
+        )
+        XCTAssertNil(AniListRatingsProvider.lookup(for: personalVideo))
+
+        let exactMatch = MediaItem(
+            id: "s1",
+            title: "Frieren",
+            kind: .series,
+            providerIDs: ["AniList": "154587"],
+            allowsTitleBasedMetadataMatching: false
+        )
+        guard let (key, value) = AniListRatingsProvider.lookup(for: exactMatch) else {
+            return XCTFail("an exact AniList id must remain usable")
+        }
+        XCTAssertEqual(key, "id")
+        XCTAssertEqual(value as? Int, 154587)
+    }
 }
 
 /// A thread-safe mutable clock for TTL tests.

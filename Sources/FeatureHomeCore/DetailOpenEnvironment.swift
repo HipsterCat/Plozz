@@ -33,6 +33,8 @@ public struct DetailOpenEnvironment {
     /// it (keyed by the item's provider guids), so a Discover/watchlist item with
     /// empty `sources` still resolves to real library copies.
     public let identitySources: @Sendable (MediaItem) -> [MediaSourceRef]
+    /// The current profile's already-loaded Home resume state, read at open time.
+    public let continueWatchingSnapshot: @MainActor () -> [MediaItem]
     /// Discovers *other servers* hosting the same title off the critical path, to
     /// fill the cross-server picker. `nil` disables cross-server discovery.
     public let crossServerSourceResolver: (@Sendable (MediaItem) async -> [MediaSourceRef])?
@@ -41,6 +43,10 @@ public struct DetailOpenEnvironment {
     /// Refreshes a discovery (Seerr) title's request/availability. `nil` when Seerr
     /// isn't wired.
     public let discoveryStatusRefresh: (@Sendable (MediaItem) async -> (MediaAvailabilityStatus, Double?)?)?
+    /// Loads a series season's complete canonical episode metadata roster.
+    /// `nil` leaves roster-backed season coverage unavailable.
+    public let loadSeasonEpisodeRoster:
+        (@Sendable (MediaItem, Int) async -> SeasonEpisodeRosterResult)?
     /// Builds the Related row's loader. A closure rather than a value because the
     /// loader holds per-page state, so each detail page needs its own.
     /// `nil` leaves the row absent.
@@ -54,8 +60,11 @@ public struct DetailOpenEnvironment {
         resolveOptionalProvider: @escaping @Sendable (_ accountID: String) -> (any MediaProvider)?,
         identitySources: @escaping @Sendable (MediaItem) -> [MediaSourceRef],
         crossServerSourceResolver: (@Sendable (MediaItem) async -> [MediaSourceRef])?,
+        continueWatchingSnapshot: @escaping @MainActor () -> [MediaItem] = { [] },
         ratingsProvider: any ExternalRatingsProviding = DisabledRatingsProvider(),
         discoveryStatusRefresh: (@Sendable (MediaItem) async -> (MediaAvailabilityStatus, Double?)?)? = nil,
+        loadSeasonEpisodeRoster:
+            (@Sendable (MediaItem, Int) async -> SeasonEpisodeRosterResult)? = nil,
         makeRelatedTitlesLoader:
             (@MainActor (RelatedTitlesLoader.DisplayMode) -> RelatedTitlesLoader?)? = nil,
         snapshotCache: DetailSnapshotCache = .ephemeral
@@ -63,9 +72,11 @@ public struct DetailOpenEnvironment {
         self.resolveProvider = resolveProvider
         self.resolveOptionalProvider = resolveOptionalProvider
         self.identitySources = identitySources
+        self.continueWatchingSnapshot = continueWatchingSnapshot
         self.crossServerSourceResolver = crossServerSourceResolver
         self.ratingsProvider = ratingsProvider
         self.discoveryStatusRefresh = discoveryStatusRefresh
+        self.loadSeasonEpisodeRoster = loadSeasonEpisodeRoster
         self.makeRelatedTitlesLoader = makeRelatedTitlesLoader
         self.snapshotCache = snapshotCache
     }
@@ -110,6 +121,21 @@ public struct DetailOpenEnvironment {
             isDiscovery: isDiscovery,
             identitySources: identitySources
         )
+    }
+
+    /// Membership-only index refs contain no progress. Selecting the same physical
+    /// item must not erase the resume state that arrived on the tapped card.
+    public static func initialItem(
+        for item: MediaItem,
+        selectedSource: MediaSourceRef?
+    ) -> MediaItem {
+        guard let selectedSource else { return item }
+        if item.locallyValidatedPlayableSource,
+           item.id == selectedSource.itemID,
+           item.sourceAccountID == selectedSource.accountID {
+            return item
+        }
+        return item.selectingSource(selectedSource)
     }
 
     /// Resolves the complete source set and chooses the page's server before a
@@ -158,10 +184,9 @@ public struct DetailOpenEnvironment {
     /// that supplied it has no idea what the viewer owns — that is a statement
     /// about the provider, not a finding about the library.
     ///
-    /// Public because the view layer decides the same thing when it builds the
-    /// page, and the two answers MUST agree: a view told `isDiscoveryItem: true`
-    /// while its model loads a real library item renders the request layout over
-    /// library data.
+    /// This is the initial, synchronous answer. The model probes for a library
+    /// copy after an index miss; views observe its `isDiscoveryItem` so a late
+    /// match restores the library layout as well as the data.
     public func isDiscovery(_ item: MediaItem) -> Bool {
         Self.isDiscovery(item, identitySources: identitySources)
     }
@@ -190,19 +215,22 @@ public struct DetailOpenEnvironment {
         let sources = selection.sources
         let selectedSource = selection.selected
         Self.logDetailOpen(item: item, isDiscovery: isDiscovery, resolvedSources: sources)
-        let selectedItem = selectedSource.map { item.selectingSource($0) } ?? item
+        let selectedItem = Self.initialItem(for: item, selectedSource: selectedSource)
+        let resume = DetailPlaybackSelection.resumeItem(for: selectedItem, in: continueWatchingSnapshot())
         return ItemDetailViewModel(
             provider: resolveProvider(selectedSource?.accountID ?? item.sourceAccountID),
             itemID: selectedSource?.itemID ?? item.id,
-            initialItem: selectedItem,
+            initialItem: DetailPlaybackSelection.applyingResumeItem(resume, to: selectedItem),
+            initialResumeEpisode: selectedItem.kind == .series ? resume : nil,
             isDiscoveryItem: isDiscovery,
             discoveryStatusRefresh: discoveryStatusRefresh,
+            loadSeasonEpisodeRoster: loadSeasonEpisodeRoster,
             ratingsProvider: ratingsProvider,
             sourceAccountID: selectedSource?.accountID ?? item.sourceAccountID,
             originSourceAccountID: libraryOrigin,
             initialSources: sources,
             alternateProviderResolver: resolveOptionalProvider,
-            crossServerSourceResolver: isDiscovery ? nil : crossServerSourceResolver,
+            crossServerSourceResolver: crossServerSourceResolver,
             relatedTitlesLoader: makeRelatedTitlesLoader?(
                 Self.relatedTitlesDisplayMode(isDiscoveryItem: isDiscovery)
             ),
@@ -254,10 +282,20 @@ public struct DetailOpenEnvironment {
         sourceAccountID: String?,
         originAccountID: String?
     ) -> ItemDetailViewModel {
-        ItemDetailViewModel(
+        let series = MediaItem(
+            id: seriesID,
+            title: seed.parentTitle ?? seed.title,
+            kind: .series,
+            sourceAccountID: sourceAccountID ?? originAccountID
+        )
+        return ItemDetailViewModel(
             provider: resolveProvider(sourceAccountID),
             itemID: seriesID,
             initialItem: seed,
+            initialResumeEpisode: DetailPlaybackSelection.resumeItem(
+                for: series, in: continueWatchingSnapshot()
+            ),
+            loadSeasonEpisodeRoster: loadSeasonEpisodeRoster,
             ratingsProvider: ratingsProvider,
             sourceAccountID: sourceAccountID,
             originSourceAccountID: originAccountID,

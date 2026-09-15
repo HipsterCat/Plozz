@@ -348,9 +348,12 @@ actor ShareEnricher {
         // `ShareEnrichRequest.knownProviderIDs`) — never reorders existing
         // sources, only seeds them.
         let knownProviderIDs = await store.localProviderIDs(forItemID: pending.itemID)
+        let configuredAnime = await store.libraryAnimeContext()
         return ShareEnrichRequest(
             itemID: pending.itemID, title: pending.title, year: pending.year,
-            isMovie: pending.isMovie, isAnime: pending.isAnime, episodeHints: hints,
+            isMovie: pending.isMovie,
+            isAnime: pending.isAnime || configuredAnime,
+            episodeHints: hints,
             titleAlternates: alternates, knownTVDBID: knownTVDBID,
             knownProviderIDs: knownProviderIDs
         )

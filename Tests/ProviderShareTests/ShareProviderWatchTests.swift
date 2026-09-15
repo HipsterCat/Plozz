@@ -220,6 +220,41 @@ final class ShareProviderWatchTests: XCTestCase {
         XCTAssertTrue(secondItems.isEmpty)
     }
 
+    func testUnlimitedContinueWatchingKeepsMoreThanSixtyOldTitles() async throws {
+        let durableStore = try makeDurableStore()
+        let session = makeSession()
+        let context = LocalMediaContext(
+            accountID: session.server.id,
+            profileID: ProfileStore.defaultProfileID,
+            profileNamespace: nil
+        )
+        let watch = ShareWatchStore(localMediaContext: context, durableStore: durableStore)
+        let old = Date(timeIntervalSince1970: 1_000)
+        for index in 0..<125 {
+            await watch.setResume(
+                120,
+                itemID: "f:Movie-\(index).mkv",
+                capturedAt: old.addingTimeInterval(Double(index)),
+                duration: 3_600
+            )
+        }
+        await watch.setResume(120, itemID: "f:Dismissed.mkv", capturedAt: old)
+        await watch.dismissFromContinueWatching(itemID: "f:Dismissed.mkv", at: old.addingTimeInterval(1))
+        await watch.setPlayed(true, itemID: "f:Finished.mkv", capturedAt: old)
+        let provider = ShareProvider(
+            session: session,
+            localMediaContext: context,
+            durableLocalStateStore: durableStore
+        )
+        let all = try await provider.continueWatching(limit: ContinueWatchingPolicy.default.rowLimit)
+        XCTAssertEqual(all.count, 125)
+        XCTAssertEqual(all.first?.id, "f:Movie-124.mkv")
+        XCTAssertEqual(all.last?.id, "f:Movie-0.mkv")
+        XCTAssertFalse(all.contains { $0.id == "f:Dismissed.mkv" || $0.id == "f:Finished.mkv" })
+        let limited = try await provider.continueWatching(limit: 10)
+        XCTAssertEqual(limited.map(\.id), Array(all.prefix(10)).map(\.id))
+    }
+
     func testProgressTickPersistsAcrossRelaunch() async throws {
         let durableStore = try makeDurableStore()
         let session = makeSession()

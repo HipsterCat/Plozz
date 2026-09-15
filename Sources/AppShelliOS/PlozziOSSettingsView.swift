@@ -187,6 +187,9 @@ private enum PlozziOSSettingsDestination: Hashable {
     case trackers
     case appearance
     case home
+    #if DEBUG
+    case liveTV
+    #endif
     case detailPage
     case playback
     case downloads
@@ -337,6 +340,9 @@ private struct PlozziOSSettingsSplitView: View {
                         settingsRow(.trackers, title: "Trackers", systemImage: "link")
                         settingsRow(.appearance, title: "Appearance", systemImage: "paintpalette")
                         settingsRow(.home, title: "Customize Home", systemImage: "house")
+                        #if DEBUG
+                        settingsRow(.liveTV, title: "Live TV", systemImage: "antenna.radiowaves.left.and.right")
+                        #endif
                         settingsRow(.detailPage, title: "Detail Page", systemImage: "rectangle.portrait.on.rectangle.portrait")
                         settingsRow(.playback, title: "Playback", systemImage: "play.rectangle")
                         settingsRow(.subtitles, title: "Subtitles", systemImage: "captions.bubble")
@@ -621,6 +627,7 @@ private struct PlozziOSSettingsSplitView: View {
             PlozziOSTrackerSettingsView(appModel: appModel)
         case .appearance:
             PlozziOSAppearanceSettingsView(
+                appModel: appModel,
                 theme: appModel.settings.theme,
                 transparency: appModel.settings.transparency,
                 cardStyle: appModel.settings.cardStyle,
@@ -636,10 +643,37 @@ private struct PlozziOSSettingsSplitView: View {
                 accounts: appModel.accountsProviders.resolvedActiveAccounts,
                 seerConfigured: appModel.seerService.isConfigured
             )
+        #if DEBUG
+        case .liveTV:
+            LiveTVSettingsView(
+                store: LiveTVViewSettingsStore(
+                    namespace: appModel.profiles.activeNamespace
+                ),
+                preferencesStore: LiveTVPreferencesStore(
+                    namespace: appModel.profiles.activeNamespace
+                ),
+                sourceManagement: {
+                    AnyView(PlozziOSLiveTVSourcesDestination(
+                        profileID: appModel.profiles.activeProfile.id,
+                        preferencesNamespace: appModel.profiles.activeNamespace,
+                        accountsProviders: appModel.accountsProviders,
+                        profiles: appModel.profiles,
+                        connectServer: onAddServer,
+                        didConfigurePlaylist: {
+                            _ = appModel.recordSuccessfulIPTVSetup()
+                        },
+                        isPresented: selection == .liveTV,
+                        isProfileAuthorized: { [appModel] in appModel.isLiveTVProfileAuthorized }
+                    ))
+                }
+            )
+            .id(appModel.profiles.activeProfile.id)
+        #endif
         case .detailPage:
             PlozziOSDetailPageSettingsView(
                 heroBackground: appModel.settings.heroBackground,
-                themeMusic: appModel.settings.themeMusic
+                themeMusic: appModel.settings.themeMusic,
+                detailPage: appModel.settings.detailPage
             )
         case .playback:
             PlozziOSPlaybackSettingsView(
@@ -888,6 +922,7 @@ private struct PlozziOSSettingsCompactMenu: View {
                 }
                 NavigationLink {
                     PlozziOSAppearanceSettingsView(
+                        appModel: appModel,
                         theme: appModel.settings.theme,
                         transparency: appModel.settings.transparency,
                         cardStyle: appModel.settings.cardStyle,
@@ -909,10 +944,39 @@ private struct PlozziOSSettingsCompactMenu: View {
                 } label: {
                     Label("Customize Home", systemImage: "house")
                 }
+                #if DEBUG
+                NavigationLink {
+                    LiveTVSettingsView(
+                        store: LiveTVViewSettingsStore(
+                            namespace: appModel.profiles.activeNamespace
+                        ),
+                        preferencesStore: LiveTVPreferencesStore(
+                            namespace: appModel.profiles.activeNamespace
+                        ),
+                        sourceManagement: {
+                            AnyView(PlozziOSLiveTVSourcesDestination(
+                                profileID: appModel.profiles.activeProfile.id,
+                                preferencesNamespace: appModel.profiles.activeNamespace,
+                                accountsProviders: appModel.accountsProviders,
+                                profiles: appModel.profiles,
+                                connectServer: onAddServer,
+                                didConfigurePlaylist: {
+                                    _ = appModel.recordSuccessfulIPTVSetup()
+                                },
+                                isProfileAuthorized: { [appModel] in appModel.isLiveTVProfileAuthorized }
+                            ))
+                        }
+                    )
+                    .id(appModel.profiles.activeProfile.id)
+                } label: {
+                    Label("Live TV", systemImage: "antenna.radiowaves.left.and.right")
+                }
+                #endif
                 NavigationLink {
                     PlozziOSDetailPageSettingsView(
                         heroBackground: appModel.settings.heroBackground,
-                        themeMusic: appModel.settings.themeMusic
+                        themeMusic: appModel.settings.themeMusic,
+                        detailPage: appModel.settings.detailPage
                     )
                 } label: {
                     Label("Detail Page", systemImage: "rectangle.portrait.on.rectangle.portrait")
@@ -1604,6 +1668,7 @@ struct PlozziOSPlexHomeUserSettingsView: View {
 }
 
 private struct PlozziOSAppearanceSettingsView: View {
+    let appModel: PlozziOSAppModel
     @Bindable var theme: ThemeSettingsModel
     @Bindable var transparency: TransparencyPreferenceModel
     @Bindable var cardStyle: CardStyleSettingsModel
@@ -1611,6 +1676,37 @@ private struct PlozziOSAppearanceSettingsView: View {
     @Bindable var watchIndicator: WatchStatusIndicatorSettingsModel
     @Bindable var navigation: NavigationStyleSettingsModel
     @Environment(AppLanguageSettingsModel.self) private var appLanguage
+
+    private var navigationLibrariesScope: ProfileLibrariesScope {
+        let profile = appModel.profiles.activeProfile
+        return ProfileLibrariesScope(
+            accounts: appModel.accounts,
+            activeProfile: profile,
+            // Individual library tabs are not supported by the iOS tab bar, so
+            // this shared editor needs only its always-available built-ins.
+            discoveredLibraries: .loaded([]),
+            refreshingLibraryAccountIDs: [],
+            unreachableLibraryAccountIDs: [],
+            reloadLibraries: {},
+            homeVisibility: appModel.settings.homeVisibility,
+            isAccountIncludedInActiveProfile: {
+                appModel.activeAccountIDs(for: profile.id).contains($0)
+            },
+            onSetAccountIncluded: {
+                appModel.setAccount($0, enabled: $1, for: profile.id)
+            },
+            onAddAccount: {},
+            plexHomeUsersFetcher: {
+                await appModel.plexHomeUsers.plexHomeUsers(forAccountID: $0)
+            },
+            onSelectPlexHomeUser: {
+                appModel.plexHomeUsers.setPlexHomeUserForActiveProfile(
+                    accountID: $0,
+                    user: $1
+                )
+            }
+        )
+    }
 
     var body: some View {
         @Bindable var appLanguage = appLanguage
@@ -1676,17 +1772,24 @@ private struct PlozziOSAppearanceSettingsView: View {
                         Text(indicator.displayName).tag(indicator)
                     }
                 }
+            }
 
-                SettingsSectionGroup("Navigation") {
-                    Toggle("Show Watchlist", isOn: $navigation.showsWatchlist)
-                } footer: {
-                    Text("Home, Search, profile switching and Settings always stay available.")
-                }
+            SettingsSectionGroup("Hide or Reorder Navigation") {
+                NavigationLibrariesDetailView(
+                    scope: navigationLibrariesScope,
+                    includesIndividualLibraries: false,
+                    excludedKeys: [
+                        NavigationLibraryLayout.musicKey,
+                        NavigationLibraryLayout.allLibrariesKey,
+                    ]
+                )
+                .id(appModel.profiles.activeProfileID)
             }
         }
         .settingsPageSurface()
         .navigationTitle("Appearance")
     }
+
 }
 
 private struct PlozziOSHomeSettingsView: View {
@@ -1793,6 +1896,7 @@ private struct PlozziOSHomeSettingsView: View {
                 Toggle("Show hero", isOn: $hero.settings.isEnabled)
                 if hero.settings.isEnabled {
                     Toggle("Hide watched titles", isOn: $hero.settings.hideWatched)
+                    Toggle("Show ratings", isOn: $hero.settings.showsRatings)
                     Toggle("Auto-advance", isOn: $hero.settings.autoAdvance)
                     Toggle(
                         "Play trailer behind the hero",
@@ -2014,9 +2118,25 @@ private struct PlozziOSLibraryHomeSettingsView: View {
 private struct PlozziOSDetailPageSettingsView: View {
     @Bindable var heroBackground: HeroBackgroundSettingsModel
     @Bindable var themeMusic: ThemeMusicSettingsModel
+    @Bindable var detailPage: DetailPageSettingsModel
 
     var body: some View {
         List {
+            SettingsSectionGroup("Header ratings") {
+                Toggle("Show ratings in header", isOn: $detailPage.settings.showsHeaderRatings)
+                Picker("Maximum ratings shown", selection: $detailPage.settings.maxHeaderRatings) {
+                    ForEach(Array(DetailPageSettings.headerRatingCountRange), id: \.self) { count in
+                        Text(count, format: .number).tag(count)
+                    }
+                }
+                NavigationLink {
+                    PlozziOSDetailRatingPriorityView(model: detailPage)
+                } label: {
+                    Text("Rating sources & order")
+                }
+            } footer: {
+                Text("This limits how many scores appear in the header, not how many sources you can enable. Missing scores are skipped in your source order. More than two scores can wrap onto extra lines. Spoiler settings still apply.")
+            }
             SettingsSectionGroup("Behind the hero") {
                 Picker(
                     "Background",
@@ -2048,6 +2168,46 @@ private struct PlozziOSDetailPageSettingsView: View {
         }
         .settingsPageSurface()
         .navigationTitle("Detail Page")
+    }
+}
+
+private struct PlozziOSDetailRatingPriorityView: View {
+    @Bindable var model: DetailPageSettingsModel
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(model.settings.orderedSources, id: \.self) { source in
+                    Toggle(isOn: Binding(
+                        get: { model.settings.enabledRatingSources.contains(source) },
+                        set: { enabled in
+                            if enabled {
+                                model.settings.enabledRatingSources.insert(source)
+                            } else {
+                                model.settings.enabledRatingSources.remove(source)
+                            }
+                        }
+                    )) {
+                        switch source {
+                        case .community: Text("Community")
+                        case .critic: Text("Critics")
+                        default: Text(verbatim: source.displayName)
+                        }
+                    }
+                }
+                .onMove { offsets, destination in
+                    var order = model.settings.orderedSources
+                    order.move(fromOffsets: offsets, toOffset: destination)
+                    model.settings.ratingSourceOrder = order
+                }
+            } footer: {
+                Text("Enable as many sources as you want, then tap Edit to set their priority. Not every title has every score. The header shows the first available enabled sources, up to your chosen maximum. AniList is used only for anime.")
+            }
+        }
+        .toggleStyle(SettingsTouchSwitchToggleStyle())
+        .settingsPageSurface()
+        .navigationTitle("Rating sources & order")
+        .toolbar { EditButton() }
     }
 }
 
@@ -2088,6 +2248,14 @@ private struct PlozziOSPlaybackSettingsView: View {
             }
 
             SettingsSectionGroup("Playback") {
+                Toggle(isOn: $model.settings.backgroundAudio) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Background Audio")
+                        Text("Keep video audio playing when you lock your device or leave Plozz.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 Toggle("Seek without pausing", isOn: $model.settings.seekWithoutPausing)
                 // Autoplay first: whether the next episode starts at all, then
                 // whether the card announces it. Independent switches.

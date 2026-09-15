@@ -20,6 +20,23 @@ public struct NFSShareConfiguration: Equatable {
     public let exportPath: String
     public let subpath: String
     public let displayName: String
+    public let libraryConfiguration: MediaShareLibraryConfiguration?
+
+    public init(
+        host: String,
+        port: Int?,
+        exportPath: String,
+        subpath: String,
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
+    ) {
+        self.host = host
+        self.port = port
+        self.exportPath = exportPath
+        self.subpath = subpath
+        self.displayName = displayName
+        self.libraryConfiguration = libraryConfiguration
+    }
 }
 
 /// The finished configuration for an SFTP share, handed back to
@@ -33,6 +50,27 @@ public struct SFTPShareConfiguration: Equatable {
     public let password: String
     public let hostKeyPin: SHA256Fingerprint
     public let displayName: String
+    public let libraryConfiguration: MediaShareLibraryConfiguration?
+
+    public init(
+        host: String,
+        port: Int?,
+        path: String,
+        username: String,
+        password: String,
+        hostKeyPin: SHA256Fingerprint,
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
+    ) {
+        self.host = host
+        self.port = port
+        self.path = path
+        self.username = username
+        self.password = password
+        self.hostKeyPin = hostKeyPin
+        self.displayName = displayName
+        self.libraryConfiguration = libraryConfiguration
+    }
 }
 
 /// The finished configuration for an FTP/FTPS share, handed back to
@@ -43,6 +81,21 @@ public struct FTPShareConfiguration: Equatable {
     public let auth: MediaShareFTPAuth
     public let trustPin: SHA256Fingerprint?
     public let displayName: String
+    public let libraryConfiguration: MediaShareLibraryConfiguration?
+
+    public init(
+        baseURL: URL,
+        auth: MediaShareFTPAuth,
+        trustPin: SHA256Fingerprint?,
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
+    ) {
+        self.baseURL = baseURL
+        self.auth = auth
+        self.trustPin = trustPin
+        self.displayName = displayName
+        self.libraryConfiguration = libraryConfiguration
+    }
 }
 
 /// A completed add-a-share result for the credential-envelope transports the
@@ -129,9 +182,29 @@ public final class UnifiedAddShareModel {
     // MARK: Location
     public private(set) var locations: [LocationItem] = []
     public private(set) var locationLoad: LocationLoad = .idle
-    public private(set) var currentPath = "/"
+    public private(set) var currentPath = "/" {
+        didSet { inferAnimeContextIfUnedited(from: currentPath) }
+    }
     public var manualShare = ""
-    public var displayName = ""
+    private struct LibraryDraft: Equatable {
+        var name = ""
+        var contentType: MediaShareLibraryConfiguration.ContentType = .automatic
+        var isAnime = false
+        var animeSelectionWasEdited = false
+    }
+    private var libraryDraft = LibraryDraft()
+    public var displayName: String {
+        get { libraryDraft.name }
+        set { libraryDraft.name = newValue }
+    }
+    public var libraryContentType: MediaShareLibraryConfiguration.ContentType {
+        get { libraryDraft.contentType }
+        set { libraryDraft.contentType = newValue }
+    }
+    public var libraryIsAnime: Bool {
+        get { libraryDraft.isAnime }
+        set { libraryDraft.isAnime = newValue }
+    }
 
     // Resolved connection for the active attempt.
     private var resolvedHost = ""
@@ -349,7 +422,8 @@ public final class UnifiedAddShareModel {
 
     private func resetForm() {
         connectError = nil
-        username = ""; password = ""; token = ""; manualShare = ""; displayName = ""
+        username = ""; password = ""; token = ""; manualShare = ""
+        libraryDraft = LibraryDraft()
         address = ""
         portText = ""
         authMode = .usernamePassword
@@ -391,6 +465,25 @@ public final class UnifiedAddShareModel {
         case .webDAV, .sftp, .ftp:
             return currentPath != minimumBrowsePath
         }
+    }
+
+    public func setLibraryIsAnime(_ isAnime: Bool) {
+        libraryDraft.animeSelectionWasEdited = true
+        libraryIsAnime = isAnime
+    }
+
+    private func inferAnimeContextIfUnedited(from path: String) {
+        guard !libraryDraft.animeSelectionWasEdited else { return }
+        libraryIsAnime = path
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .contains { component in
+                let value = component.lowercased()
+                return value == "anime"
+                    || value == "animes"
+                    || value == "anime tv"
+                    || value == "anime movies"
+                    || value == "anime films"
+            }
     }
 
     public var showsManualRootEntry: Bool {
@@ -953,6 +1046,15 @@ public final class UnifiedAddShareModel {
     public func chooseFilesystemRoot() {
         let name = displayName.trimmingCharacters(in: .whitespaces)
         let path = confirmedPath
+        inferAnimeContextIfUnedited(from: path)
+        let resolvedName = name.isEmpty
+            ? defaultLibraryName(
+                path: path,
+                fallback: resolvedHost,
+                transport: selectedTransport
+            )
+            : name
+        let libraryConfiguration = libraryConfiguration(defaultName: resolvedName)
         switch selectedTransport {
         case .nfs:
             guard let exportPath = selectedNFSExport,
@@ -964,7 +1066,8 @@ public final class UnifiedAddShareModel {
                 port: resolvedPort,
                 exportPath: exportPath,
                 subpath: subpath,
-                displayName: name
+                displayName: resolvedName,
+                libraryConfiguration: libraryConfiguration
             )))
         case .sftp:
             let user = username.trimmingCharacters(in: .whitespaces)
@@ -978,7 +1081,8 @@ public final class UnifiedAddShareModel {
                 username: user,
                 password: password,
                 hostKeyPin: pin,
-                displayName: name
+                displayName: resolvedName,
+                libraryConfiguration: libraryConfiguration
             )))
         case .ftp:
             let scheme = ftpScheme(from: address, port: resolvedPort)
@@ -994,11 +1098,34 @@ public final class UnifiedAddShareModel {
                 baseURL: url,
                 auth: auth,
                 trustPin: nil,
-                displayName: name
+                displayName: resolvedName,
+                libraryConfiguration: libraryConfiguration
             )))
         case .smb, .webDAV:
             break
         }
+    }
+
+    private func libraryConfiguration(
+        defaultName: String
+    ) -> MediaShareLibraryConfiguration {
+        MediaShareLibraryConfiguration(
+            name: defaultName,
+            contentType: libraryContentType,
+            isAnime: libraryContentType == .personalVideos ? false : libraryIsAnime
+        )
+    }
+
+    private func defaultLibraryName(
+        path: String,
+        fallback: String,
+        transport: MediaShareTransportKind
+    ) -> String {
+        MediaShareAccountConfigurationService.defaultShareName(
+            path: path,
+            host: fallback,
+            transport: transport
+        )
     }
 
     public func loadSMBShares() {
@@ -1366,6 +1493,7 @@ public final class UnifiedAddShareModel {
     public func chooseSMBShare(_ path: String) {
         guard hasValidPathComponents(path) else { return }
         let normalized = normalizedRelativePath(path)
+        inferAnimeContextIfUnedited(from: normalized)
         let components = normalized.split(
             separator: "/",
             omittingEmptySubsequences: true
@@ -1373,16 +1501,18 @@ public final class UnifiedAddShareModel {
         guard let share = components.first else { return }
         let subpath = components.dropFirst().joined(separator: "/")
         let name = displayName.trimmingCharacters(in: .whitespaces)
+        let resolvedName = name.isEmpty
+            ? (components.last ?? resolvedHost)
+            : name
         onSMBConfigured(ShareDraft(
             host: resolvedHost,
             port: resolvedPort,
             share: share,
             username: username.trimmingCharacters(in: .whitespaces),
             password: password,
-            displayName: name.isEmpty
-                ? (components.last ?? resolvedHost)
-                : name,
-            subpath: subpath
+            displayName: resolvedName,
+            subpath: subpath,
+            libraryConfiguration: libraryConfiguration(defaultName: resolvedName)
         ))
     }
 
@@ -1391,15 +1521,24 @@ public final class UnifiedAddShareModel {
         guard let origin = webDAVOriginURL,
               var comps = URLComponents(url: origin, resolvingAgainstBaseURL: false) else { return }
         let path = normalizedWebDAVPath(path)
+        inferAnimeContextIfUnedited(from: path)
         comps.percentEncodedPath = path == "/" ? "" : path
         guard let baseURL = comps.url else { return }
         let pin = approvedPin.flatMap { try? SHA256Fingerprint(bytes: $0) }
         let name = displayName.trimmingCharacters(in: .whitespaces)
+        let resolvedName = name.isEmpty
+            ? defaultLibraryName(
+                path: path,
+                fallback: resolvedHost,
+                transport: .webDAV
+            )
+            : name
         onWebDAVConfigured(WebDAVShareConfiguration(
             baseURL: baseURL,
             auth: webDAVShareAuth,
             trustPin: pin,
-            displayName: name
+            displayName: resolvedName,
+            libraryConfiguration: libraryConfiguration(defaultName: resolvedName)
         ))
     }
 

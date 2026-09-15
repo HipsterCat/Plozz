@@ -29,6 +29,8 @@ enum NavigationRailMetrics {
     /// foreground to the full screen width by design, and a safe-area inset leaves
     /// that column exactly where it was — under the icons.
     static let contentInset: CGFloat = 64
+    static let searchHeaderHeight: CGFloat = 80
+    static let pageButtonTopInset: CGFloat = 12
 
     /// Width the rail grows to once focus enters it.
     static let expandedWidth: CGFloat = 426
@@ -56,7 +58,7 @@ enum NavigationRailMetrics {
     static func expandedContentVerticalPadding(safeAreaInset: CGFloat) -> CGFloat {
         expandedPanelLayoutInset
             + expandedPanelContentInset
-            - bumperHeight
+            - edgeSpacerHeight
             - itemVerticalPadding
             - safeAreaInset
     }
@@ -106,13 +108,9 @@ enum NavigationRailMetrics {
     /// and Settings up by the same amount. Only enough is needed for the focus
     /// engine to find one directly beyond the end row — it picks the nearest
     /// candidate in the direction of travel, and nothing else is closer.
-    static let bumperHeight: CGFloat = 10
-    /// How far the library list dissolves at its top and bottom edges.
-    ///
-    /// The list scrolls between fixed chrome — the LIBRARIES label above, the
-    /// pinned Settings row below — so a row leaving it must fade out rather than
-    /// be cut mid-glyph or, worse, carry on drawing over that chrome. Roughly one
-    /// row tall, so a row is fully gone by the time it reaches either edge.
+    static let edgeSpacerHeight: CGFloat = 10
+    /// How far the destination list dissolves at its top and bottom edges. Roughly
+    /// one row tall, so a row is fully gone by the time it reaches either edge.
     static let listEdgeFade: CGFloat = 44
     /// How far the fade mask overhangs the list horizontally, so a focused row's
     /// pill and its shadow are not clipped by the mask that feathers the ends.
@@ -128,11 +126,9 @@ enum NavigationRailMetrics {
 ///
 /// Layout, top to bottom:
 /// 1. the active profile's avatar — opens the existing profile switcher;
-/// 2. Search, Home, then Watchlist;
-/// 3. the viewer's libraries, in their own arrangement, each with a glyph for what
-///    it holds (film / TV / anime / photos / mixed), scrolling if there are many;
-/// 4. Settings, **pinned to the bottom** so it is reachable at a glance no matter
-///    how many libraries sit above it.
+/// 2. every visible built-in and library destination in the viewer's chosen order,
+///    scrolling as one list when there are many. Settings is required but may be
+///    moved like every other visible destination.
 ///
 /// Everything about the list is data: which libraries appear and in what order
 /// comes from the profile's ``NavigationLibraryLayout``, so re-arranging is a value
@@ -140,30 +136,39 @@ enum NavigationRailMetrics {
 struct NavigationRailView: View {
     let profile: Profile
     let entries: [NavigationRailLibraryEntry]
-    let showsWatchlist: Bool
-    let showsMusic: Bool
+    let destinations: [NavigationRailDestination]
     @Binding var selection: NavigationRailDestination
     /// Mirrors "focus is inside the rail" outward, so the shell can coordinate
     /// preferred focus and directional fallback while the overlay is open.
     @Binding var isExpandedOutward: Bool
     let onOpenProfileSwitcher: () -> Void
+    let onSelectDestination: (NavigationRailDestination) -> Void
+    var isFocusEnabled = true
     /// Bumped by the shell when its leading-edge catcher takes a Left press, so the
     /// rail pulls focus onto the current destination.
     var focusRequestToken: Int = 0
     /// Bumped when a Right press inside the rail resolved to nothing, so the rail
     /// gives focus back to the page.
     var focusReleaseToken: Int = 0
+    /// A page-button activation presents the full menu before focus arrives.
+    var opensExpanded: Bool = false
+    /// Search keeps full menu geometry while its shared surface morphs to a capsule.
+    var usesPageButtonSurface: Bool = false
+    var onFocusRequestFailed: (Int) -> Void = { _ in }
+    var preventsAccidentalExit: Bool = false
 
     @Environment(\.themePalette) private var palette
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isEnabled) private var isEnabled
+    @Namespace private var railFocusScope
     @FocusState private var focusedTarget: RailFocusTarget?
-    /// The last row that actually held focus, so an edge bumper can hand focus
-    /// straight back to it.
-    @State private var lastFocusedRow: RailFocusTarget?
+    @State private var pendingFocusRequest: Int?
+    @State private var pendingFocusTarget: RailFocusTarget?
+    @State private var focusRequestGeneration = 0
     /// Makes every row unfocusable while focus is moving to the page. The rows stay
     /// unavailable until the next explicit request to open the rail, so a slow
     /// destination cannot let tvOS fall back into the menu.
-    @State private var isReleasingFocus = false
+    @State private var isReleasingFocus = true
     /// Continuously tracks how much content has moved past each edge, so the mask
     /// follows the scroll instead of flashing on at a threshold.
     @State private var libraryListFade = ListEdgeFade()
@@ -174,16 +179,19 @@ struct NavigationRailView: View {
     /// One numeric clock drives every animated dimension. A focus change is
     /// discrete; using that Boolean directly let newly revealed labels jump to
     /// their final layout before the icons completed their movement.
-    @State private var expansionProgress: CGFloat = 0
+    @State private var animatedExpansionProgress: CGFloat = 0
 
-    /// The rail is expanded exactly while it holds focus — "move focus into it to
-    /// open it", with no timers and no separate toggle to get out of sync.
-    private var isExpanded: Bool { focusedTarget != nil }
+    private var expansionProgress: CGFloat {
+        usesPageButtonSurface ? 1 : animatedExpansionProgress
+    }
+
+    /// Explicit page-button entry shows the full menu while focus catches up.
+    private var isExpanded: Bool { isFocusEnabled && (hasFocus || opensExpanded) }
 
     /// Whether focus is currently inside the rail.
     ///
     /// Drives which rows are focusable at all: see ``isRowFocusable(_:)``.
-    private var hasFocus: Bool { focusedTarget != nil }
+    private var hasFocus: Bool { isFocusEnabled && focusedTarget != nil }
 
     private var animatedRailWidth: CGFloat {
         NavigationRailMetrics.collapsedWidth
@@ -227,6 +235,7 @@ struct NavigationRailView: View {
     ///
     /// Once focus is inside, everything opens up so Up/Down walk the whole rail.
     private func isRowFocusable(_ target: RailFocusTarget) -> Bool {
+        guard isFocusEnabled, isEnabled else { return false }
         // Handing focus back to the page: nothing in the rail may hold it.
         if isReleasingFocus { return false }
         if hasFocus { return true }
@@ -234,43 +243,15 @@ struct NavigationRailView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Invisible focus walls. Pressing Up from the top row (or Down from
-            // Settings) must do NOTHING — the rail is a list you leave sideways,
-            // not by falling out of either end. The focus engine will happily jump
-            // to a page card that is merely near, so the reliable block is to give
-            // it a nearer candidate inside the rail and hand focus straight back.
-            // The bumper draws nothing, so the bounce is invisible: the row you
-            // were on simply stays put.
-            edgeBumper(.topBumper)
+        return VStack(alignment: .leading, spacing: 0) {
+            edgeSpacing
 
             profileButton
                 .padding(.bottom, PlozzTheme.Spacing.large)
 
-            item(.search, symbol: "magnifyingglass", label: Text(Self.searchTitle))
-            item(.home, symbol: "house.fill", label: Text(Self.homeTitle))
-            if showsWatchlist {
-                item(
-                    .watchlist,
-                    symbol: "bookmark.fill",
-                    label: Text(Self.watchlistTitle)
-                )
-            }
-            if showsMusic {
-                item(.music, symbol: "music.note", label: Text(Self.musicTitle))
-            }
+            destinationList
 
-            if !entries.isEmpty {
-                sectionDivider
-                libraryList
-                sectionDivider
-            } else {
-                Spacer(minLength: 0)
-            }
-
-            item(.settings, symbol: "gearshape.fill", label: Text(Self.settingsTitle))
-
-            edgeBumper(.bottomBumper)
+            edgeSpacing
         }
         .padding(.vertical, animatedVerticalPadding)
         .padding(.leading, NavigationRailMetrics.leadingInset)
@@ -293,14 +274,37 @@ struct NavigationRailView: View {
         // nearest, and a Right press returns to the content rather than walking
         // through every remaining rail row.
         .focusSection()
+        .focusScope(railFocusScope)
+        .tvNavigationExitProtection(
+            isEnabled: preventsAccidentalExit,
+            navigationHasFocus: hasFocus
+        )
         .accessibilityLabel(Text(Self.accessibilityTitle))
-        .onChange(of: isExpanded) { _, expanded in
-            isExpandedOutward = expanded
-            withAnimation(NavigationRailMetrics.expandAnimation) {
-                expansionProgress = expanded ? 1 : 0
+        .onChange(of: isExpanded, initial: true) { _, expanded in
+            withAnimation(isFocusEnabled ? NavigationRailMetrics.expandAnimation : nil) {
+                animatedExpansionProgress = expanded ? 1 : 0
             }
         }
-        .onDisappear { isExpandedOutward = false }
+        .onChange(of: hasFocus) { _, focused in
+            isExpandedOutward = focused
+            if !focused {
+                pendingFocusRequest = nil
+                pendingFocusTarget = nil
+            }
+        }
+        .onDisappear {
+            pendingFocusRequest = nil
+            pendingFocusTarget = nil
+            isExpandedOutward = false
+        }
+        .onChange(of: isFocusEnabled) { _, enabled in
+            if !enabled {
+                focusRequestGeneration &+= 1
+                pendingFocusRequest = nil
+                pendingFocusTarget = nil
+                focusedTarget = nil
+            }
+        }
         // The shell's edge catcher took a Left press from the page. Claim focus for
         // the tab you are actually on — the catcher draws nothing, so nothing
         // flashes in between.
@@ -311,37 +315,13 @@ struct NavigationRailView: View {
         .onChange(of: focusReleaseToken) { _, _ in
             releaseFocusToPage()
         }
-        .onChange(of: focusedTarget) { _, target in
-            switch target {
-            case .topBumper, .bottomBumper:
-                returnFromBumper()
-            case .some(let row):
-                lastFocusedRow = row
-            case nil:
-                break
-            }
-        }
     }
 
-    /// A zero-chrome focus target at each end of the rail. It renders nothing, so
-    /// landing on it and bouncing away is invisible.
-    private func edgeBumper(_ target: RailFocusTarget) -> some View {
-        // A bare focusable, not a Button: on tvOS a Button paints the system focus
-        // platter behind its label and `.focusEffectDisabled()` does not fully
-        // remove it, which flashed a white slab over the rail as focus passed
-        // through. Same reason `CircularFocusTile` and the media cards avoid one.
+    private var edgeSpacing: some View {
         Color.clear
-            .frame(height: NavigationRailMetrics.bumperHeight)
+            .frame(height: NavigationRailMetrics.edgeSpacerHeight)
             .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
-            // Only a wall while focus is actually inside the rail — otherwise it
-            // would be one more thing competing to catch a Left press from the page.
-            // It also stands down while focus is being handed BACK to the page: the
-            // wall exists to stop focus falling out of the ENDS of the rail, not to
-            // stop it leaving sideways, and catching it here trapped the hand-off.
-            .focusable(hasFocus && !isReleasingFocus)
-            .focusEffectDisabled()
-            .focused($focusedTarget, equals: target)
+            .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
 
@@ -362,63 +342,86 @@ struct NavigationRailView: View {
     /// loading and has no focusable content yet: restoring them on a timer lets
     /// tvOS re-home focus back into the rail and reopen it.
     private func releaseFocusToPage() {
+        pendingFocusRequest = nil
+        pendingFocusTarget = nil
         isReleasingFocus = true
         focusedTarget = nil
     }
 
-    /// Whether `target` is the row an edge bumper is currently bouncing focus back
-    /// to, so it can keep its highlight for that one run-loop turn.
-    private func isBouncingOffBumper(_ target: RailFocusTarget) -> Bool {
-        guard focusedTarget == .topBumper || focusedTarget == .bottomBumper else {
-            return false
-        }
-        return (lastFocusedRow ?? .destination(selection)) == target
-    }
-
-    /// Hands focus back to the row the viewer was on, so an Up/Down press at
-    /// either end of the rail is a no-op rather than an exit.
-    ///
-    /// Deliberately no re-entrancy guard: the destination is never a bumper, so
-    /// this cannot recurse — and a guard that latched would leave focus parked on
-    /// an invisible row, which is the one outcome worse than the bounce itself.
-    /// The hand-back waits a run-loop turn because assigning `@FocusState` from
-    /// inside its own `onChange` is dropped (the same reason the reorder list
-    /// restores focus after layout).
-    private func returnFromBumper() {
-        // Never bounce while handing focus to the page. Focus passing through a
-        // bumper on its way OUT is the hand-off working; bouncing it back here is
-        // what made Right from Home appear to do nothing — focus left the row,
-        // landed on the wall, and was immediately returned to the rail.
-        guard !isReleasingFocus else { return }
-        adoptFocus(lastFocusedRow ?? .destination(selection))
-    }
-
-    /// Moves focus to `target` a run-loop turn later.
-    ///
-    /// Assigning `@FocusState` from inside its own `onChange` is dropped, so the
-    /// hand-off has to wait for the current focus transaction to finish.
+    /// The row's UIKit marker waits for its control to exist before handing off.
     private func adoptFocus(_ target: RailFocusTarget) {
-        Task { @MainActor in
-            isReleasingFocus = false
-            await Task.yield()
-            focusedTarget = target
-        }
+        guard isFocusEnabled, isEnabled else { return }
+        isReleasingFocus = false
+        focusRequestGeneration &+= 1
+        pendingFocusTarget = target
+        pendingFocusRequest = focusRequestGeneration
+    }
+
+    private func focusRequester(for target: RailFocusTarget) -> some View {
+        let requestState = $pendingFocusRequest
+        let targetState = $pendingFocusTarget
+        let shellRequest = focusRequestToken
+        let onFailed = onFocusRequestFailed
+        return NavigationRowFocusRequester(
+            request: isFocusEnabled && isEnabled && !isReleasingFocus && pendingFocusTarget == target
+                ? pendingFocusRequest : nil,
+            onCompleted: { request, didFocus in
+                guard requestState.wrappedValue == request else { return }
+                requestState.wrappedValue = nil
+                targetState.wrappedValue = nil
+                if !didFocus { onFailed(shellRequest) }
+            }
+        )
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     // MARK: - Pieces
 
-    /// The libraries block. Scrollable so a household with forty libraries can
-    /// still reach them all, while Settings below stays pinned and visible.
-    private var libraryList: some View {
+    /// The complete viewer-arranged destination list. It is one scrollable block
+    /// because built-ins may be interleaved with libraries, including moving
+    /// Settings away from its historical bottom position.
+    private var destinationList: some View {
+        ScrollViewReader { proxy in
+            scrollingDestinations
+                .onChange(of: selection, initial: true) { _, destination in
+                    reveal(destination, using: proxy)
+                }
+                .onChange(of: focusRequestToken) { _, _ in
+                    reveal(selection, using: proxy)
+                }
+                .onChange(of: destinations) { _, _ in
+                    if !hasFocus { reveal(selection, using: proxy) }
+                }
+                .onChange(of: pendingFocusTarget) { _, target in
+                    if case let .destination(destination) = target {
+                        reveal(destination, using: proxy)
+                    }
+                }
+        }
+    }
+
+    private func reveal(_ destination: NavigationRailDestination, using proxy: ScrollViewProxy) {
+        // Native focus discovery only sees rows inside the scroll viewport.
+        // Reveal the selected row before its UIKit marker requests focus.
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo(destination, anchor: .center)
+        }
+    }
+
+    private var scrollingDestinations: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: NavigationRailMetrics.itemSpacing) {
-                ForEach(entries) { entry in
-                    libraryItem(entry)
+                ForEach(destinations, id: \.storageValue) { destination in
+                    destinationItem(destination)
+                        .id(destination)
                 }
             }
         }
         .scrollIndicators(.hidden)
-        // Takes whatever height is left between Home and the pinned Settings row.
+        // Takes whatever height is left beneath the fixed profile row.
         .frame(maxHeight: .infinity, alignment: .top)
         // The scroll view must NOT clip: a focused row's pill is wider than the
         // list (and carries a shadow), so the scroll view's own clip sheared its
@@ -426,11 +429,10 @@ struct NavigationRailView: View {
         // vertically, where rows would otherwise cover the chrome, while
         // overhanging horizontally so the pill stays whole.
         .scrollClipDisabled()
-        // Rows must never be readable outside this list: with the clip disabled a
-        // scrolled row kept drawing over the pinned Settings row below and the
-        // section label above. The mask both clips and feathers, so a row dissolves
-        // as it reaches either end instead of being cut mid-glyph. It overhangs
-        // horizontally so a focused row's pill and shadow stay intact.
+        // Rows must never be readable outside this list. The mask both clips and
+        // feathers, so a row dissolves as it reaches either end instead of being
+        // cut mid-glyph. It overhangs horizontally so a focused row's pill and
+        // shadow stay intact.
         //
         // Each end fades in continuously as content travels beneath it. The mask
         // always keeps the same view structure and geometry, avoiding the flicker
@@ -451,6 +453,33 @@ struct NavigationRailView: View {
             )
         } action: { _, fade in
             libraryListFade = fade
+        }
+    }
+
+    @ViewBuilder
+    private func destinationItem(_ destination: NavigationRailDestination) -> some View {
+        switch destination {
+        case .home:
+            item(.home, symbol: "house.fill", label: Text(Self.homeTitle))
+        case .search:
+            item(.search, symbol: "magnifyingglass", label: Text(Self.searchTitle))
+        case .watchlist:
+            item(.watchlist, symbol: "bookmark.fill", label: Text(Self.watchlistTitle))
+        #if DEBUG
+        case .liveTV:
+            item(
+                .liveTV, symbol: "antenna.radiowaves.left.and.right",
+                label: Text(Self.liveTVTitle), isExperimental: true
+            )
+        #endif
+        case .music:
+            item(.music, symbol: "music.note", label: Text(Self.musicTitle))
+        case .settings:
+            item(.settings, symbol: "gearshape.fill", label: Text(Self.settingsTitle))
+        case .allLibraries, .library:
+            if let entry = entries.first(where: { $0.destination == destination }) {
+                libraryItem(entry)
+            }
         }
     }
 
@@ -480,7 +509,11 @@ struct NavigationRailView: View {
                 .opacity(animatedLabelOpacity)
             }
             .contentShape(Rectangle())
+            .background { focusRequester(for: .profile) }
         }
+        .focused($focusedTarget, equals: .profile)
+        .prefersDefaultFocus(pendingFocusTarget == .profile, in: railFocusScope)
+        .disabled(!isRowFocusable(.profile))
         .buttonStyle(
             NavigationRailItemStyle(
                 expansionProgress: expansionProgress,
@@ -490,8 +523,6 @@ struct NavigationRailView: View {
         )
         .padding(.vertical, NavigationRailMetrics.itemVerticalPadding)
         .offset(x: animatedContentOffset)
-        .focused($focusedTarget, equals: .profile)
-        .disabled(!isRowFocusable(.profile))
         .accessibilityLabel(Text(Self.switchProfileSubtitle))
         .accessibilityValue(Text(verbatim: profile.name))
     }
@@ -499,13 +530,11 @@ struct NavigationRailView: View {
     private func item(
         _ destination: NavigationRailDestination,
         symbol: String,
-        label: Text
+        label: Text,
+        isExperimental: Bool = false
     ) -> some View {
         Button {
-            selection = destination
-            // Activating a destination is the same commitment as selecting it and
-            // pressing Right: close the menu and enter the page immediately.
-            releaseFocusToPage()
+            onSelectDestination(destination)
         } label: {
             HStack(spacing: 0) {
                 Image(systemName: symbol)
@@ -519,40 +548,61 @@ struct NavigationRailView: View {
             .frame(height: NavigationRailMetrics.rowContentHeight)
             .frame(width: animatedRowContentWidth, alignment: .leading)
             .overlay(alignment: .leading) {
-                railLabel(
-                    label,
-                    color: foregroundColor(
-                        for: .destination(destination),
-                        isSelected: selection == destination
-                    ),
-                    isFocused: focusedTarget == .destination(destination)
-                )
+                VStack(alignment: .leading, spacing: 0) {
+                    railLabel(
+                        label,
+                        color: foregroundColor(
+                            for: .destination(destination),
+                            isSelected: selection == destination
+                        ),
+                        isFocused: focusedTarget == .destination(destination),
+                        font: isExperimental
+                            ? .system(size: 22, weight: .semibold) : NavigationRailMetrics.labelFont
+                    )
+                    if isExperimental {
+                        Text("Experimental")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(foregroundColor(
+                                for: .destination(destination),
+                                isSelected: selection == destination
+                            ))
+                    }
+                }
                 .frame(width: NavigationRailMetrics.expandedLabelWidth, alignment: .leading)
                 .offset(x: NavigationRailMetrics.expandedLabelOffset)
                 .opacity(animatedLabelOpacity)
             }
             .contentShape(Rectangle())
+            .background { focusRequester(for: .destination(destination)) }
         }
+        // UIKit owns explicit entry; the binding observes actual row focus.
+        .focused($focusedTarget, equals: .destination(destination))
+        .prefersDefaultFocus(
+            pendingFocusTarget.map { $0 == .destination(destination) } ?? (destination == selection),
+            in: railFocusScope
+        )
+        .disabled(!isRowFocusable(.destination(destination)))
         .buttonStyle(
             NavigationRailItemStyle(
                 expansionProgress: expansionProgress,
                 isSelected: selection == destination,
-                accent: palette.accent,
-                holdsFocusStyling: isBouncingOffBumper(.destination(destination))
+                accent: palette.accent
             )
         )
         .padding(.vertical, NavigationRailMetrics.itemVerticalPadding)
         .offset(x: animatedContentOffset)
-        .focused($focusedTarget, equals: .destination(destination))
-        .disabled(!isRowFocusable(.destination(destination)))
         .accessibilityLabel(label)
+        .accessibilityValue(isExperimental ? Text("Experimental") : Text(verbatim: ""))
         .accessibilityAddTraits(selection == destination ? [.isSelected] : [])
     }
 
-    private func railLabel(_ text: Text, color: Color, isFocused: Bool) -> some View {
+    private func railLabel(
+        _ text: Text, color: Color, isFocused: Bool,
+        font: Font = NavigationRailMetrics.labelFont
+    ) -> some View {
         PlozzMarqueeText(
             text: text,
-            font: NavigationRailMetrics.labelFont,
+            font: font,
             color: color,
             inset: 0,
             fadeWidth: 16,
@@ -564,33 +614,11 @@ struct NavigationRailView: View {
         for target: RailFocusTarget,
         isSelected: Bool
     ) -> Color {
-        let focused = focusedTarget == target || isBouncingOffBumper(target)
+        let focused = focusedTarget == target
         if focused {
             return colorScheme == .dark ? .black : .white
         }
         return isSelected ? palette.accent : .primary
-    }
-
-    /// A quiet separator between fixed destinations and the viewer's libraries.
-    /// It stays identical in both rail states so expansion changes no content.
-    private var sectionDivider: some View {
-        let collapsedDividerWidth = NavigationRailMetrics.iconColumnWidth * 0.6
-        let expandedDividerWidth = NavigationRailMetrics.expandedWidth
-            - (NavigationRailMetrics.expandedContentHorizontalPadding * 2)
-            + (NavigationRailMetrics.expandedRowBackgroundOutset * 2)
-            - (NavigationRailMetrics.dividerHorizontalInset * 2)
-        let dividerWidth = collapsedDividerWidth
-            + (expandedDividerWidth - collapsedDividerWidth) * expansionProgress
-
-        return Capsule(style: .continuous)
-            .fill(.white.opacity(0.22))
-            .frame(width: dividerWidth, height: 2)
-            .frame(width: animatedRowContentWidth, alignment: .center)
-            // Match the icon's inset inside its focus pill in both states.
-            .padding(.leading, NavigationRailMetrics.rowHorizontalPadding)
-            .padding(.vertical, PlozzTheme.Spacing.medium)
-            .offset(x: animatedContentOffset)
-            .accessibilityHidden(true)
     }
 
     /// The rail's backing.
@@ -605,10 +633,7 @@ struct NavigationRailView: View {
 
     private var expandedBackdrop: some View {
         Color.clear
-            .plozzGlassPanel(
-                cornerRadius: NavigationRailMetrics.expandedPanelCornerRadius,
-                scrimOpacity: 0.08
-            )
+            .anchorPreference(key: NavigationGlassAnchors.self, value: .bounds) { [.menu: $0] }
             .padding(.horizontal, NavigationRailMetrics.expandedPanelLayoutInset)
             .padding(
                 .vertical,
@@ -626,7 +651,7 @@ struct NavigationRailView: View {
         defaultValue: "Home",
         comment: "Navigation rail destination."
     )
-    private static let searchTitle = LocalizedStringResource(
+    static let searchTitle = LocalizedStringResource(
         "navigationRail.search",
         defaultValue: "Search",
         comment: "Navigation rail destination."
@@ -636,6 +661,13 @@ struct NavigationRailView: View {
         defaultValue: "Watchlist",
         comment: "Navigation rail destination for the user's universal Watchlist."
     )
+    #if DEBUG
+    private static let liveTVTitle = LocalizedStringResource(
+        "navigationRail.liveTV",
+        defaultValue: "Live TV",
+        comment: "Development-only Live TV prototype navigation destination."
+    )
+    #endif
     private static let musicTitle = LocalizedStringResource(
         "navigationRail.music",
         defaultValue: "Music",
@@ -679,9 +711,6 @@ private struct ListEdgeFade: Equatable {
 private enum RailFocusTarget: Hashable {
     case profile
     case destination(NavigationRailDestination)
-    /// The invisible walls at each end that stop focus falling out of the rail.
-    case topBumper
-    case bottomBumper
 }
 
 /// Rail row chrome. Focus is the standard tvOS inverted card; the *selected*
@@ -691,20 +720,10 @@ private struct NavigationRailItemStyle: ButtonStyle {
     let expansionProgress: CGFloat
     let isSelected: Bool
     let accent: Color
-    /// Keeps the row drawn as focused while an edge bumper briefly holds focus.
-    ///
-    /// Pressing Down on the last row must do NOTHING. The block works by giving
-    /// the focus engine an invisible row to land on and handing focus straight
-    /// back — but that round trip takes a run-loop turn, during which this row is
-    /// genuinely unfocused and its highlight dropped. That flicker read as the row
-    /// being re-focused on every press. Holding the highlight makes the bounce
-    /// invisible, which is what "nothing happens" should look like.
-    var holdsFocusStyling: Bool = false
     @Environment(\.isFocused) private var isFocused
     @Environment(\.colorScheme) private var colorScheme
 
     func makeBody(configuration: Configuration) -> some View {
-        let isFocused = isFocused || holdsFocusStyling
         let invertedFill: Color = colorScheme == .dark ? .white : .black
         let invertedText: Color = colorScheme == .dark ? .black : .white
         let foreground: AnyShapeStyle = isFocused

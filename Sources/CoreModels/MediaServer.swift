@@ -19,6 +19,10 @@ public struct MediaServer: Codable, Hashable, Identifiable, Sendable {
     /// being pinned to one address that may have gone unreachable. `nil` for
     /// servers reached through a single fixed URL (e.g. a manually-entered host).
     public var connectionURLs: [URL]?
+    /// Optional, non-secret indexing/presentation intent for a network-share root.
+    /// `nil` means the legacy automatic behavior used by accounts saved before
+    /// explicit share configuration existed.
+    public var mediaShareLibraryConfiguration: MediaShareLibraryConfiguration?
 
     public init(
         id: String,
@@ -26,7 +30,8 @@ public struct MediaServer: Codable, Hashable, Identifiable, Sendable {
         baseURL: URL,
         provider: ProviderKind,
         version: String? = nil,
-        connectionURLs: [URL]? = nil
+        connectionURLs: [URL]? = nil,
+        mediaShareLibraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) {
         self.id = id
         self.name = name
@@ -34,6 +39,7 @@ public struct MediaServer: Codable, Hashable, Identifiable, Sendable {
         self.provider = provider
         self.version = version
         self.connectionURLs = connectionURLs
+        self.mediaShareLibraryConfiguration = mediaShareLibraryConfiguration
     }
 }
 

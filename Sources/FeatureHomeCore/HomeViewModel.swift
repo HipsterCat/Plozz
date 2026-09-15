@@ -122,13 +122,12 @@ public final class HomeViewModel {
                 && libraries.isEmpty && librarySections.isEmpty
         }
 
-        /// A copy bounded for launch persistence. Ordinary Home preview rows keep
-        /// only enough cards for the first paint, while Watchlist keeps its complete
-        /// presentation: unlike the previews, that same snapshot backs a dedicated
-        /// browse destination and must not strand navigation at 30 items.
+        /// Bounds discovery previews for launch persistence, not Continue Watching.
+        /// The complete resume row must survive a relaunch or failed refresh.
+        /// Watchlist likewise keeps its separate full-browsing budget.
         func bounded(perRow: Int, watchlistLimit: Int) -> Content {
             Content(
-                continueWatching: Array(continueWatching.prefix(perRow)),
+                continueWatching: continueWatching,
                 latest: Array(latest.prefix(perRow)),
                 watchlist: Array(watchlist.prefix(watchlistLimit)),
                 libraries: libraries,
@@ -180,7 +179,11 @@ public final class HomeViewModel {
         }
     }
 
-    public private(set) var state: LoadState<Content> = .idle
+    public private(set) var state: LoadState<Content> = .idle {
+        didSet { stateRevision &+= 1 }
+    }
+    @ObservationIgnored private var stateRevision: UInt64 = 0
+    @ObservationIgnored private var reenrichGeneration: UInt64 = 0
 
     /// `true` while `state` holds a snapshot hydrated from `contentStore` on launch
     /// that has NOT yet been refreshed from the network this session. The first
@@ -188,6 +191,21 @@ public final class HomeViewModel {
     /// cached rows remain visible; Continue Watching uses a row placeholder until
     /// fresh content publishes once.
     public private(set) var isShowingCachedSnapshot = false
+    @ObservationIgnored private var hasReceivedLiveContent = false
+    @ObservationIgnored private var detailResumeByAccount: [String: [MediaItem]] = [:]
+    /// Detail opens can use a server's native episode ids before the other servers
+    /// finish, and after the visible row merges those copies into a single card.
+    public var continueWatchingForDetail: [MediaItem] {
+        let content = state.value
+        let visible = hasReceivedLiveContent ? content?.continueWatching ?? [] : []
+        let native = accounts.flatMap { detailResumeByAccount[$0.account.id] ?? [] }
+        let visibility = currentVisibility()
+        var seen = Set<String>()
+        return (visible + native).filter { item in
+            item.isVisibleOnHome(isLibraryVisible: { visibility.isVisibleOnHome($0) })
+                && seen.insert("\(item.sourceAccountID ?? ""):\(item.id)").inserted
+        }
+    }
     /// A network aggregation is replacing the visible snapshot. Unlike `state`,
     /// this remains true during stale-while-revalidate so cached rows can explain
     /// that their complete live contents are still arriving.
@@ -261,6 +279,9 @@ public final class HomeViewModel {
     /// has turned off "Merge libraries on Home"). Tracked so `deinit` can cancel it.
     private nonisolated(unsafe) var unmergedTask: Task<HomeAggregator.UnmergedContent, Never>?
     private nonisolated(unsafe) var topShelfPublishTask: Task<Void, Never>?
+    /// View subscriptions disappear while detail/playback covers Home, but the
+    /// retained model must still receive completion and server-confirmation events.
+    @ObservationIgnored private nonisolated(unsafe) var watchMutationObserver: NSObjectProtocol?
 
     /// Coalesces the burst of `identityIndexDidUpdate` notifications posted while
     /// the index warms: each active account publishes independently, so a fresh
@@ -404,9 +425,22 @@ public final class HomeViewModel {
                 self.isShowingCachedSnapshot = true
             }
         }
+        watchMutationObserver = NotificationCenter.default.addObserver(
+            forName: .mediaItemDidMutate, object: nil, queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if let mutation = MediaItemMutation.from(note) {
+                    self.applyWatchedState(mutation)
+                } else {
+                    self.schedulePlaybackReload()
+                }
+            }
+        }
     }
 
     deinit {
+        if let watchMutationObserver { NotificationCenter.default.removeObserver(watchMutationObserver) }
         aggregationTask?.cancel()
         unmergedTask?.cancel()
         topShelfPublishTask?.cancel()
@@ -509,6 +543,7 @@ public final class HomeViewModel {
         }
         isLoading = true
         isRefreshing = true
+        detailResumeByAccount = [:]
         defer {
             isLoading = false
             if wantsReloadAfterCurrent {
@@ -526,6 +561,10 @@ public final class HomeViewModel {
         let accounts = self.accounts
         let identitySources = self.identitySources
         let policy = self.policy
+        let receiveResume: @Sendable (String, [MediaItem]) async -> Void = { [weak self] accountID, items in
+            guard !Task.isCancelled else { return }
+            await self?.receiveDetailResume(items, accountID: accountID)
+        }
         // What the viewer is looking at right now. A just-played card lives here and
         // nowhere else until the servers catch up, so it has to be offered to the
         // reconciler — which decides, on evidence, whether it has earned its place.
@@ -550,7 +589,10 @@ public final class HomeViewModel {
         let content: Content
         if visibility.mergeLibrariesOnHome {
             let aggregationTask = Task.detached(priority: .userInitiated) {
-                await aggregator.content(from: accounts, policy: policy, visibility: visibility, identitySources: identitySources)
+                await aggregator.content(
+                    from: accounts, policy: policy, visibility: visibility,
+                    identitySources: identitySources, onContinueWatching: receiveResume
+                )
             }
             self.aggregationTask = aggregationTask
             let merged = await aggregationTask.value
@@ -600,7 +642,10 @@ public final class HomeViewModel {
             // full library inventory feeds the Libraries tiles, and each library the
             // user opted rows into contributes a block below.
             let unmergedTask = Task.detached(priority: .userInitiated) {
-                await aggregator.unmergedContent(from: accounts, policy: policy, visibility: visibility, identitySources: identitySources)
+                await aggregator.unmergedContent(
+                    from: accounts, policy: policy, visibility: visibility,
+                    identitySources: identitySources, onContinueWatching: receiveResume
+                )
             }
             self.unmergedTask = unmergedTask
             let unmerged = await unmergedTask.value
@@ -674,6 +719,7 @@ public final class HomeViewModel {
             isShowingCachedSnapshot = false
             return
         }
+        hasReceivedLiveContent = true
         isShowingCachedSnapshot = false
         state = content.isEmpty && watchlistLoadingPlaceholderCount == 0
             ? .empty
@@ -712,22 +758,67 @@ public final class HomeViewModel {
         }
     }
 
+    private func receiveDetailResume(_ items: [MediaItem], accountID: String) async {
+        let pending = await pendingWatchMutations()
+        let recency = await recentlyAppliedRecency()
+        guard !Task.isCancelled,
+              accounts.contains(where: { $0.account.id == accountID }) else { return }
+        detailResumeByAccount[accountID] = Self.reconcileContinueWatching(
+            items, pending: pending, appliedRecency: recency
+        ).filter { $0.sourceAccountID == accountID }
+    }
+
     /// Applies a watched-state or watchlist mutation to the loaded rows **in
     /// place** so affected cards immediately reflect their new state. A title marked
     /// watched leaves Continue Watching immediately; other rows retain the card and
     /// flip its badge without a refetch. A watchlist add/remove also inserts/removes
     /// the title from the Watchlist row.
     public func applyWatchedState(_ mutation: MediaItemMutation) {
+        if mutation.refreshContinueWatching {
+            if accounts.contains(where: { account in
+                mutation.itemIDs.contains {
+                    mutation.matches(accountID: account.account.id, itemID: $0)
+                }
+            }) {
+                schedulePlaybackReload()
+            }
+            return
+        }
+        let completedEpisode = mutation.played == true && (
+            state.value?.continueWatching.contains {
+                $0.kind == .episode && mutation.targets($0)
+            } == true || mutation.item.map { item in
+                item.kind == .episode && mutation.targets(item) && accounts.contains { account in
+                    mutation.matches(accountID: account.account.id, itemID: item.id)
+                        || item.sources.contains {
+                            $0.accountID == account.account.id
+                                && mutation.matches(accountID: $0.accountID, itemID: $0.itemID)
+                        }
+                }
+            } == true
+        )
+        // Removing the finished card isn't enough for a series: ask for its
+        // successor now, even when playback started outside an empty Home.
+        defer {
+            if completedEpisode { schedulePlaybackReload() }
+        }
+        for (accountID, items) in detailResumeByAccount {
+            detailResumeByAccount[accountID] = items.compactMap { item in
+                if mutation.targets(item),
+                   mutation.played == true || (mutation.resumePosition == 0 && mutation.played != false) {
+                    return nil
+                }
+                return apply(mutation, to: item)
+            }
+        }
         guard case var .loaded(content) = state else {
-            // A play that arrives before Home has any content to update is
-            // discarded outright — there is no row to change and nothing here
-            // schedules a look later. Worth seeing, because from the outside it is
-            // indistinguishable from the play never happening.
+            // There may be no card to update yet, but a completed episode still
+            // refreshes Home through the deferred playback reload above.
             ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.homeMutationLine(
                 played: mutation.played,
                 resumePosition: mutation.resumePosition,
                 onRow: false,
-                reloadScheduled: false,
+                reloadScheduled: completedEpisode,
                 state: String(describing: state)
             ))
             return
@@ -751,9 +842,8 @@ public final class HomeViewModel {
         // full reload (relaunch). Detect that case here and trigger a *silent*
         // re-aggregation so the new card is fetched from its provider (a media
         // share reads its freshly-persisted local resume off disk) and slots in —
-        // no skeleton flash, no focus reset. Gated to an in-progress resume (not a
-        // finish, which *leaves* Continue Watching) that matches nothing already
-        // loaded, so a normal re-watch or mark-watched never forces a reload.
+        // no skeleton flash, no focus reset. In-progress resumes already on the
+        // row only need an in-place update; episode finishes also fetch Next Up.
         let isInProgressResume = (mutation.resumePosition ?? 0) > 0 && !(mutation.played ?? false)
         let alreadyOnHome = content.continueWatching.contains { mutation.targets($0) }
         // A title played for the first time has never been on this row, so there is
@@ -787,13 +877,13 @@ public final class HomeViewModel {
             // Still refresh, so the placed card is reconciled with the server's own
             // view — cross-server sources, episode linkage, artwork it may know
             // better — once that view catches up.
-            scheduleNewResumeReload()
+            schedulePlaybackReload()
         }
         ContinueWatchingDiagnostics.emit(ContinueWatchingDiagnostics.homeMutationLine(
             played: mutation.played,
             resumePosition: mutation.resumePosition,
             onRow: alreadyOnHome || placedCard,
-            reloadScheduled: isInProgressResume && !alreadyOnHome,
+            reloadScheduled: completedEpisode || (isInProgressResume && !alreadyOnHome),
             state: placedCard ? "loaded placed-card" : "loaded"
         ))
 
@@ -1178,9 +1268,9 @@ public final class HomeViewModel {
     /// persistence wins. Keeping them out of the snapshot is what bounds it.
     private var unconfirmedContinueWatchingIDs: Set<String> = []
 
-    /// In-flight guard so a burst of resume ticks for a not-yet-loaded title
-    /// coalesces into a single silent re-aggregation instead of stacking reloads.
-    private var newResumeReloadInFlight = false
+    /// Coalesces playback-driven refreshes without losing a completion that
+    /// arrives after the current fetch started.
+    private var playbackReloadInFlight = false
 
     /// The scope keys a mutation addresses. `scopedItemIDs` already carries the
     /// exact `(account, item)` pairs the fan-out targeted; the played card
@@ -1254,21 +1344,18 @@ public final class HomeViewModel {
         for item in fetched { serverConfirmedTargets.formUnion(Self.scopeKeys(of: item)) }
     }
 
-    /// Silently re-aggregates Home so a brand-new resume is backed by real server
-    /// data as soon as the servers have it.
-    ///
-    /// This is now a follow-up rather than the way the title appears: the played
-    /// card is placed on the row immediately by ``applyWatchedState(_:)``, because
-    /// the app already has it and does not need to ask anyone. The reload exists so
-    /// the placed card is reconciled with the server's own view (artwork, episode
-    /// linkage, cross-server sources) once that view catches up.
-    private func scheduleNewResumeReload() {
-        guard !newResumeReloadInFlight, case .loaded = state else { return }
-        newResumeReloadInFlight = true
+    /// Fetches the server's Next Up after an episode finishes, or reconciles a
+    /// newly placed resume card. Existing rows remain visible throughout.
+    private func schedulePlaybackReload() {
+        guard !playbackReloadInFlight else {
+            if isLoading { wantsReloadAfterCurrent = true }
+            return
+        }
+        playbackReloadInFlight = true
         Task { [weak self] in
             guard let self else { return }
             await self.load(showLoadingState: false)
-            self.newResumeReloadInFlight = false
+            self.playbackReloadInFlight = false
         }
     }
 
@@ -1616,37 +1703,58 @@ public final class HomeViewModel {
     /// and re-sorting the feed-less loaded row is what used to shuffle the row on
     /// every index warm. State is only republished when something actually changed,
     /// so a re-enrich that surfaces no new source is a true no-op (no view churn).
-    public func reenrich() {
-        guard case let .loaded(current) = state else { return }
+    /// The merge and equality check run off MainActor. A content revision protects
+    /// newer reloads and watch mutations while that immutable snapshot is processed.
+    public func reenrich() async {
+        reenrichGeneration &+= 1
+        let generation = reenrichGeneration
         let serverInfoMap = accounts.sourceServerInfo()
-        let resolve: (String) -> SourceServerInfo? = { serverInfoMap[$0] }
         let sources = identitySources
 
-        var updated = current
-        // Re-merge folds any newly-discovered cross-server sources into the loaded
-        // cards. `MediaItemMerger.merge` is order-stable (first occurrence stays
-        // primary), so the Continue Watching order the initial load computed is
-        // preserved verbatim — we deliberately do NOT re-sort here. The recency sort
-        // anchors untimestamped "Next Up" cards from a per-*feed* carry-forward that
-        // only exists at load time (pre-interleave); re-sorting the interleaved,
-        // feed-less loaded row is exactly what used to make Continue Watching "shift
-        // around" on every background index warm. Enrich in place; never reorder.
-        updated.continueWatching = MediaItemMerger.merge(current.continueWatching, serverInfo: resolve, identitySources: sources)
-        updated.latest = MediaItemMerger.merge(current.latest, serverInfo: resolve, identitySources: sources)
-        updated.watchlist = MediaItemMerger.merge(current.watchlist, serverInfo: resolve, identitySources: sources)
+        while !Task.isCancelled, generation == reenrichGeneration {
+            guard case let .loaded(current) = state else { return }
+            let revision = stateRevision
+            // Identity graph traversal and title normalization can take seconds
+            // for a large library. Only the final publication belongs on MainActor.
+            let merge = Task.detached(priority: .utility) { () -> Content? in
+                let resolve: (String) -> SourceServerInfo? = { serverInfoMap[$0] }
+                var updated = current
+                guard !Task.isCancelled else { return nil }
+                updated.continueWatching = MediaItemMerger.merge(
+                    current.continueWatching, serverInfo: resolve, identitySources: sources
+                )
+                guard !Task.isCancelled else { return nil }
+                updated.latest = MediaItemMerger.merge(
+                    current.latest, serverInfo: resolve, identitySources: sources
+                )
+                guard !Task.isCancelled else { return nil }
+                updated.watchlist = MediaItemMerger.merge(
+                    current.watchlist, serverInfo: resolve, identitySources: sources
+                )
+                // Keep the existing order and avoid publishing an unchanged snapshot.
+                return updated == current ? nil : updated
+            }
+            let updated = await withTaskCancellationHandler {
+                await merge.value
+            } onCancel: {
+                merge.cancel()
+            }
 
-        // Republish only on a real change so an index warm that adds no new source
-        // to any visible card doesn't churn the view or disturb focus.
-        guard updated != current else { return }
-        state = .loaded(updated)
+            guard !Task.isCancelled, generation == reenrichGeneration else { return }
+            // A reload or watch mutation can land while the merge is running.
+            // Re-fold that newer content instead of restoring stale cards or progress.
+            guard stateRevision == revision else { continue }
+            if let updated { state = .loaded(updated) }
+            return
+        }
     }
 
     /// Coalesced entry point for the `identityIndexDidUpdate` notification. The
     /// index publishes once per warmed account, so on a multi-server boot this
     /// fires in a tight burst; debouncing collapses it to a single ``reenrich()``
-    /// once the burst settles, avoiding O(accounts × rows) redundant main-actor
+    /// once the burst settles, avoiding O(accounts × rows) redundant
     /// merges. A prior pending pass is cancelled so only the latest snapshot is
-    /// folded. Callers that need a synchronous fold (tests, explicit refresh) call
+    /// folded. Callers that need to await the fold (tests, explicit refresh) call
     /// ``reenrich()`` directly.
     public func scheduleReenrich(
         onSettled: @escaping @MainActor () -> Void = {}
@@ -1655,7 +1763,8 @@ public final class HomeViewModel {
         reenrichTask = Task { [weak self] in
             try? await Task.sleep(for: Self.reenrichDebounce)
             guard !Task.isCancelled, let self else { return }
-            self.reenrich()
+            await self.reenrich()
+            guard !Task.isCancelled else { return }
             onSettled()
         }
     }

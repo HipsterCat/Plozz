@@ -45,6 +45,53 @@ import UIKit
 @Observable
 public final class AppState {
     public private(set) var state: SessionState = .launching
+    private let appAdmission: AppAdmissionModel
+
+    public static var isStandalonePlaybackAvailable: Bool {
+        #if DEBUG
+        true
+        #else
+        false
+        #endif
+    }
+
+    public var admissionContext: AppAdmissionContext {
+        appAdmission.context(
+            hasMediaAccounts: !accountsProviders.accounts.isEmpty,
+            standalonePlaybackAvailable: Self.isStandalonePlaybackAvailable
+        )
+    }
+
+    public var canEnterApp: Bool { admissionContext.canEnterApp }
+    var isLiveTVProfileAuthorized: Bool {
+        guard canEnterApp, case .ready = state else { return false }
+        let profile = profilesModel.activeProfile
+        return !profileFlow.isChoosingProfile
+            && profileFlow.pendingLockedProfile == nil
+            && profileFlow.pendingParentalSwitch == nil
+            && profileFlow.pendingIdentityAccountID == nil
+            && profileFlow.pendingSetupProfile == nil
+            && profileFlow.pendingLockOfferProfile == nil
+            && !profileFlow.isPickingAppearanceForNewProfile
+            && !profileFlow.hasResumableSetup
+            && plexHomeUsers.pendingPlexPINRequest == nil
+            && (!profile.isLocked || profileFlow.isUnlockedThisRun(profile.id))
+            && !profile.awaitsIdentity(amongAccounts: accountsProviders.activeAccountIDs)
+    }
+    public var allowsStandalonePlayback: Bool { admissionContext.explicitStandaloneChoice }
+    public var pendingStandaloneLiveTVEntry: Bool { appAdmission.pendingLiveTVEntry }
+
+    @discardableResult
+    public func consumeStandaloneLiveTVEntryIntent() -> Bool {
+        appAdmission.consumeLiveTVEntryIntent()
+    }
+
+    /// Call only after a user-requested playlist/free-channel setup succeeds.
+    /// This records admission without changing the session or navigation.
+    @discardableResult
+    public func recordSuccessfulIPTVSetup() -> Bool {
+        appAdmission.recordStandaloneChoice(isAvailable: Self.isStandalonePlaybackAvailable)
+    }
 
     /// Provider chosen for the add-account flow currently in progress, so that
     /// cancelling Quick Connect returns to *that* provider's server picker
@@ -449,6 +496,10 @@ public final class AppState {
             applier: applier,
             onPersistenceFailure: {
                 PlozzLog.app.error("Durable watch outbox write failed")
+            },
+            onServerStateApplied: { mutation in
+                guard let refresh = MediaItemMutation(confirmedWatchMutation: mutation) else { return }
+                Task { @MainActor in refresh.post() }
             }
         )
     }
@@ -509,11 +560,9 @@ public final class AppState {
         Task { await reconciler.beginLiveSession(accountID: accountID, itemID: itemID) }
     }
 
-    /// Ends the live session for `(accountID, itemID)` and enqueues the optional
-    /// final convergence `mutation`, **in that order**, so the just-played server
-    /// is no longer deferred and its final resume/played write goes out. Sequenced
-    /// in a single task so the end always precedes the enqueue's drain. `accountID`
-    /// is optional so a barely-started/untargeted stop still flushes deferred work.
+    /// Queues the final convergence mutation before ending the live session, so
+    /// an old progress checkpoint cannot drain over the just-finished episode.
+    /// `accountID` is optional so a barely-started/untargeted stop still flushes deferred work.
     public func finishLiveWatchSession(accountID: String?, itemID: String, watchedPercent: Double, mutation: WatchMutation?, item: MediaItem? = nil) {
         let reconciler = watchReconciler
         // (a) Index state captured at the moment of stop — the value the fan-out
@@ -522,13 +571,7 @@ public final class AppState {
         FanoutDiagnostics.emit(FanoutDiagnostics.indexStateLine(identityIndex.identitySnapshotStore.current, phase: "stop-index"))
         publishOptimisticWatchState(itemID: itemID, mutation: mutation, watchedPercent: watchedPercent, item: item)
         Task {
-            if let accountID {
-                await reconciler.endLiveSession(accountID: accountID, itemID: itemID)
-            }
-            if let mutation {
-                await reconciler.enqueue(mutation)
-                await reconciler.drain()
-            }
+            await reconciler.finishLiveSession(accountID: accountID, itemID: itemID, mutation: mutation)
         }
     }
 
@@ -613,6 +656,14 @@ public final class AppState {
     /// state location can be resolved. See `AppState+CloudSync`.
     @ObservationIgnored
     public private(set) lazy var cloudSync: CloudConfigSyncService? = Self.makeCloudSync(for: self)
+
+    #if DEBUG
+    @ObservationIgnored
+    public private(set) lazy var liveTVPortableSync: LiveTVPortableSyncBridge? =
+        Self.makeLiveTVPortableSync(profiles: profilesModel)
+    @ObservationIgnored
+    var liveTVPortableSyncLifecycle: LiveTVPortableSyncLifecycle?
+    #endif
 
     /// Debounces bursts of local config edits into a single cloud publish.
     @ObservationIgnored
@@ -715,7 +766,8 @@ public final class AppState {
                 expected += 1
                 let server = MediaServer(id: desc.serverID, name: desc.serverName, baseURL: baseURL,
                                          provider: .mediaShare,
-                                         connectionURLs: desc.candidateBaseURLs.isEmpty ? nil : desc.candidateBaseURLs)
+                                         connectionURLs: desc.candidateBaseURLs.isEmpty ? nil : desc.candidateBaseURLs,
+                                         mediaShareLibraryConfiguration: desc.mediaShareLibraryConfiguration)
                 let account = Account(id: desc.id, server: server, userID: desc.userID, userName: desc.userName,
                                       avatarURL: desc.avatarURL, deviceID: store.deviceID())
                 do { try store.addMediaShare(account, credential: envelope, generatedPrivateKey: nil); added += 1 }
@@ -849,8 +901,10 @@ public final class AppState {
         anilistService: AniListService? = nil,
         malService: MALService? = nil,
         lastfmService: LastFmService? = nil,
-        runtimeFeatureFlags: RuntimeFeatureFlags = .productionDefault
+        runtimeFeatureFlags: RuntimeFeatureFlags = .productionDefault,
+        appAdmissionStore: any AppAdmissionStoring = AppAdmissionStore()
     ) {
+        self.appAdmission = AppAdmissionModel(store: appAdmissionStore)
         let resolvedAccountStore = accountStore ?? Self.makeDefaultAccountStore()
         let resolvedDurableLocalStateStore: DurableLocalStateStore?
         if let durableLocalStateStore {
@@ -1280,7 +1334,13 @@ public final class AppState {
         // When the toggle is OFF, the remembered selection (or default
         // profile) is used silently and the picker stays hidden.
         profileFlow.prepareLaunchPicker()
-        apply(.restored(accountsProviders.accounts))
+        if allowsStandalonePlayback,
+           accountsProviders.accounts.isEmpty,
+           !profilesModel.firstRunProfileSetupComplete {
+            apply(.standalonePlaybackRequested(needsProfileSetup: true))
+        } else {
+            apply(.restored(accountsProviders.accounts))
+        }
         // Honor a remembered/auto-landed profile's Plex Home-user mapping at
         // launch. When the picker is shown, the switch happens once the user
         // picks instead.
@@ -1326,16 +1386,48 @@ public final class AppState {
     /// profile, so a mapping change takes effect on the next request.
     public func setSeerrUserForProfile(profileID: String, user: SeerUser?) {
         guard let profile = profilesModel.profiles.first(where: { $0.id == profileID }) else { return }
+        if let user {
+            guard let userServer = user.serverIdentity,
+                  let currentServer = seerService.serverIdentity,
+                  userServer == currentServer else {
+                PlozzLog.auth.error(
+                    "Rejected Seerr profile mapping without matching server provenance"
+                )
+                return
+            }
+        }
         let updated = profile.settingSeerrUser(
             id: user?.id,
             name: user?.name,
-            avatarURL: user?.avatarURL?.absoluteString
+            avatarURL: user?.avatarURL?.absoluteString,
+            serverIdentity: user?.serverIdentity
         )
         profilesModel.update(updated)
     }
 
 
     // MARK: Events
+
+    /// Explicit, device-wide opt-in; never inferred from imported sources.
+    /// Profile confirmation and all existing access gates remain in place.
+    @discardableResult
+    public func enterStandalonePlayback() -> Bool {
+        guard Self.isStandalonePlaybackAvailable else { return false }
+        switch state {
+        case .onboarding(.selectingServer, _), .ready:
+            break
+        default:
+            return false
+        }
+        guard appAdmission.enterStandalonePlayback(isAvailable: Self.isStandalonePlaybackAvailable) else {
+            return false
+        }
+        pendingOnboardingProvider = nil
+        apply(.standalonePlaybackRequested(
+            needsProfileSetup: !profilesModel.firstRunProfileSetupComplete
+        ))
+        return true
+    }
 
     /// Handles an incoming deep link. Recognised `plozz://item/<id>` links queue
     /// the item for playback once the user is signed in.
@@ -1670,7 +1762,9 @@ public final class AppState {
     /// never re-runs it.
     public func confirmFirstRunProfile() {
         profilesModel.markFirstRunProfileSetupComplete()
-        apply(.profileConfirmed)
+        apply(accountsProviders.accounts.isEmpty && allowsStandalonePlayback
+            ? .standaloneProfileConfirmed
+            : .profileConfirmed)
     }
 
     /// Completes the first profile's Seerr connection/acting-user step.
@@ -1774,7 +1868,8 @@ public final class AppState {
         username: String,
         password: String,
         displayName: String,
-        subpath: String = ""
+        subpath: String = "",
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) {
         let service = MediaShareAccountConfigurationService(
             accountStore: accountsProviders.accountStore
@@ -1788,7 +1883,8 @@ public final class AppState {
                 username: username,
                 password: password,
                 displayName: displayName,
-                subpath: subpath
+                subpath: subpath,
+                libraryConfiguration: libraryConfiguration
             )
         } catch {
             apply(.authenticationFailed(.unknown("Invalid share address")))
@@ -1917,7 +2013,8 @@ public final class AppState {
         baseURL: URL,
         auth: WebDAVShareAuth,
         trustPin: SHA256Fingerprint? = nil,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) {
         if trustPin != nil, baseURL.scheme?.lowercased() != "https" {
             apply(.authenticationFailed(.unknown("A certificate pin requires HTTPS")))
@@ -1932,7 +2029,8 @@ public final class AppState {
                 baseURL: baseURL,
                 auth: auth,
                 trustPin: trustPin,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
         } catch is MediaShareAccountConfigurationError {
             apply(.authenticationFailed(.unknown("Invalid WebDAV address")))
@@ -2009,7 +2107,8 @@ public final class AppState {
         port: Int?,
         exportPath: String,
         subpath: String = "",
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) {
         let service = MediaShareAccountConfigurationService(
             accountStore: accountsProviders.accountStore
@@ -2021,7 +2120,8 @@ public final class AppState {
                 port: port,
                 exportPath: exportPath,
                 subpath: subpath,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
         } catch {
             apply(.authenticationFailed(.unknown("Invalid NFS address")))
@@ -2059,7 +2159,8 @@ public final class AppState {
         username: String,
         password: String,
         hostKeyPin: SHA256Fingerprint,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) {
         let service = MediaShareAccountConfigurationService(
             accountStore: accountsProviders.accountStore
@@ -2073,7 +2174,8 @@ public final class AppState {
                 username: username,
                 password: password,
                 hostKeyPin: hostKeyPin,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
         } catch {
             apply(.authenticationFailed(.unknown("Invalid SFTP address or credentials")))
@@ -2108,7 +2210,8 @@ public final class AppState {
         baseURL: URL,
         auth: MediaShareFTPAuth,
         trustPin: SHA256Fingerprint? = nil,
-        displayName: String
+        displayName: String,
+        libraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) {
         let service = MediaShareAccountConfigurationService(
             accountStore: accountsProviders.accountStore
@@ -2119,7 +2222,8 @@ public final class AppState {
                 baseURL: baseURL,
                 auth: auth,
                 trustPin: trustPin,
-                displayName: displayName
+                displayName: displayName,
+                libraryConfiguration: libraryConfiguration
             )
         } catch {
             apply(.authenticationFailed(.unknown("Invalid FTP address or credentials")))
@@ -2187,7 +2291,7 @@ public final class AppState {
         pendingPlexUserApplyToAccountIDs = []
     }
 
-    /// Removes one account; drops to onboarding if it was the last.
+    /// Removes one account; the last removal onboards only server-only installs.
     public func removeAccount(id: String) {
         let removedAccount = accountsProviders.accounts.first { $0.id == id }
         let shareAccountKey = mediaShare.accountService.mediaShareAccountKey(for: removedAccount)
@@ -2227,7 +2331,7 @@ public final class AppState {
         }
     }
 
-    /// Removes every account (full reset).
+    /// Removes every media account without revoking standalone admission.
     public func signOutAll() {
         let removedAccounts = accountsProviders.accounts
         let shareAccountKeys = mediaShare.accountService.mediaShareAccountKeys(in: removedAccounts)
@@ -2301,6 +2405,10 @@ public final class AppState {
         }
         plexHomeUsers.resetAllForDebug()
         profilesModel.resetToPristineDefaultForDebugging()
+        #if DEBUG
+        resetLiveTVPortableSync()
+        #endif
+        appAdmission.resetForDebugging()
         var recents = lastServerStore
         recents.recentServers = []
         pendingLibrarySelectionAccountIDs = []
@@ -2451,7 +2559,7 @@ public final class AppState {
     }
 
     private func apply(_ event: SessionEvent) {
-        machine.apply(event)
+        machine.apply(event, allowsStandalonePlayback: allowsStandalonePlayback)
         state = machine.state
     }
 

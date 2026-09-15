@@ -67,6 +67,23 @@ public final class LibraryBrowseViewModel {
     /// Stable share id used to select this grid's status from ShareScanStatusModel.
     public var sourceServerID: String { provider.session.server.id }
 
+    public var availableSortFields: [SortField] {
+        (provider as? any MediaSortFieldProviding)?
+            .supportedSortFields(in: containerID, kind: containerKind)
+            ?? SortField.allCases
+    }
+
+    public var fileBrowserLibrary: MediaLibrary? {
+        guard let browser = provider as? any MediaFileBrowsing else { return nil }
+        var library = browser.fileBrowserLibrary
+        guard library.id != containerID else { return nil }
+        if let accountID = sourceAccountID ?? library.sourceAccountID {
+            library.sourceAccountID = accountID
+            library.sourceContainerIDByAccount[accountID] = library.id
+        }
+        return library
+    }
+
     /// Below this library size the alphabet rail isn't worth showing (a short
     /// list scrolls fine on its own) or the round-trips to build it.
     private static let minItemsForLetterRail = 30
@@ -131,6 +148,10 @@ public final class LibraryBrowseViewModel {
         self.sortKeySuffix = sortKeySuffix
         self.sourceAccountID = sourceAccountID
         self.sort = Self.loadSort(for: containerKind, suffix: sortKeySuffix, from: defaults)
+        if !availableSortFields.contains(sort.field) {
+            let field = availableSortFields.first ?? .name
+            self.sort = CoreModels.SortDescriptor(field: field, direction: field.defaultDirection)
+        }
     }
 
     /// The item at `index`, or `nil` if it hasn't been loaded yet (placeholder).

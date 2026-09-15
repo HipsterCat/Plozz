@@ -71,9 +71,10 @@ public final class ProfileSettingsModel {
     /// other per-profile models.
     public private(set) var watchStatusIndicatorModel: WatchStatusIndicatorSettingsModel
     /// The active profile's navigation chrome (top bar vs. collapsible sidebar vs.
-    /// the custom library rail) **and**, for the rail, its library arrangement.
-    /// Injected into the environment at the app root like `cardStyleModel`, and
-    /// rebuilt on profile switch like the other per-profile models.
+    /// the custom library rail), accidental-exit preference, and library
+    /// arrangement. Injected into the environment at the app root like
+    /// `cardStyleModel`, and rebuilt on profile switch like the other per-profile
+    /// models.
     public private(set) var navigationStyleModel: NavigationStyleSettingsModel
     /// The active profile's transparency (liquid-glass) preference. Injected into
     /// the environment at the app root like `cardStyleModel`, and rebuilt on

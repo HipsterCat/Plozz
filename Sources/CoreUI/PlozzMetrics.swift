@@ -194,7 +194,7 @@ public struct PlozzMetrics: Equatable, Sendable {
     /// own offset must both come from here, or the card's footprint changes with
     /// focus and the whole row shifts.
     public func focusCaptionPush(for focusStyle: CardFocusStyle) -> CGFloat {
-        guard !focusStyle.drawsFocusOutline else { return focusCaptionPush }
+        guard focusStyle == .highlight else { return focusCaptionPush }
         return (focusCaptionPush * PlozzTheme.Metrics.highlightCaptionPushRatio).rounded()
     }
 
@@ -263,6 +263,10 @@ public struct PlozzMetrics: Equatable, Sendable {
     public var landscapeCaptionTopSpacing: CGFloat {
         PlozzTheme.Metrics.cardCaptionSpacing + landscapeCaptionInset * PlozzTheme.Metrics.captionTopClearanceFactor
     }
+
+    /// No extra resting gap beyond the native image's reserved focus frame.
+    /// Caption travel is reserved separately, without resizing its slot.
+    public var nativePosterCaptionSpacing: CGFloat { 0 }
 
     /// - Parameter dynamicTypeSize: the reader's current text size. Pass the
     ///   view's `\.dynamicTypeSize` so the metrics REBUILD when it changes —

@@ -99,6 +99,9 @@ public struct Profile: Codable, Hashable, Identifiable, Sendable {
     /// a `Profile`. Independent of `plexHomeUserID`/`linkedAccountID`: a Seerr
     /// user is a separate identity from Plex/Jellyfin playback.
     public var seerrUserID: Int?
+    /// Endpoint this user was selected from. A legacy mapping without a binding
+    /// must be confirmed again before it can make requests.
+    public var seerrServerIdentity: SeerServerIdentity?
     /// Cached Seerr display name, so Settings can label the mapping without a
     /// network fetch. May go stale if the user is renamed/deleted in Seerr;
     /// the settings screen refreshes and re-validates on open.
@@ -321,6 +324,7 @@ public struct Profile: Codable, Hashable, Identifiable, Sendable {
         seerrUserID: Int? = nil,
         seerrUserName: String? = nil,
         seerrUserAvatarURL: String? = nil,
+        seerrServerIdentity: SeerServerIdentity? = nil,
         lock: ProfileLock? = nil,
         lockRevision: ProfileLockRevision? = nil,
         parentalPIN: ParentalPIN? = nil,
@@ -347,6 +351,7 @@ public struct Profile: Codable, Hashable, Identifiable, Sendable {
         self.seerrUserID = seerrUserID
         self.seerrUserName = seerrUserName
         self.seerrUserAvatarURL = seerrUserAvatarURL
+        self.seerrServerIdentity = seerrUserID == nil ? nil : seerrServerIdentity
         self.lock = lock
         self.lockRevision = lockRevision
         self.parentalPIN = parentalPIN
@@ -706,12 +711,23 @@ extension Profile {
     /// Returns a copy of this profile mapped to the given Seerr user (its id +
     /// cached display fields), or with the mapping cleared when `id` is `nil`
     /// (reverts to requesting as admin). Non-secret metadata only.
-    public func settingSeerrUser(id: Int?, name: String? = nil, avatarURL: String? = nil) -> Profile {
+    public func settingSeerrUser(
+        id: Int?,
+        name: String? = nil,
+        avatarURL: String? = nil,
+        serverIdentity: SeerServerIdentity? = nil
+    ) -> Profile {
         var copy = self
         copy.seerrUserID = id
         copy.seerrUserName = id == nil ? nil : name
         copy.seerrUserAvatarURL = id == nil ? nil : avatarURL
+        copy.seerrServerIdentity = id == nil ? nil : serverIdentity
         return copy
+    }
+
+    public var seerrRequestIdentity: SeerRequestIdentity {
+        guard let seerrUserID else { return .admin }
+        return .user(id: seerrUserID, server: seerrServerIdentity)
     }
 }
 

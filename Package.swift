@@ -50,7 +50,10 @@ let package = Package(
         .library(name: "FeatureHome", targets: ["FeatureHome"]),
         .library(name: "FeatureSearchCore", targets: ["FeatureSearchCore"]),
         .library(name: "FeaturePlayback", targets: ["FeaturePlayback"]),
+        .library(name: "EnginePlozzigen", targets: ["EnginePlozzigen"]),
         .library(name: "FeatureSearch", targets: ["FeatureSearch"]),
+        .library(name: "FeatureLiveTVCore", targets: ["FeatureLiveTVCore"]),
+        .library(name: "FeatureLiveTV", targets: ["FeatureLiveTV"]),
         .library(name: "FeatureSettings", targets: ["FeatureSettings"]),
         .library(name: "FeatureProfiles", targets: ["FeatureProfiles"]),
         .library(name: "FeatureWatchlistCore", targets: ["FeatureWatchlistCore"]),
@@ -181,12 +184,16 @@ let package = Package(
         // their products, so the direct declarations were removed (SwiftPM flagged
         // them as unused). AetherEngine owns their version alignment.
 
-        // Sentry (getsentry/sentry-cocoa) — powers the OPT-IN, off-by-default
+        // Sentry's official binary-only package powers the OPT-IN, off-by-default
         // crash reporter (Settings ▸ Help & Diagnostics ▸ Share Crash Reports).
-        // Prebuilt binary xcframework (no build-time compilation of the SDK).
+        // It preserves the static prebuilt SDK while avoiding the main package's
+        // unused dynamic, ARM64e, no-UI, and Objective-C binary variants.
         // Nothing is sent unless the user opts in AND a DSN was baked into the
         // build; see the `CrashReporting` target for the privacy-hardened config.
-        .package(url: "https://github.com/getsentry/sentry-cocoa", from: "9.19.0"),
+        .package(
+            url: "https://github.com/getsentry/sentry-apple-binaries",
+            exact: "9.27.0"
+        ),
 
         // SMBClient — pure-Swift, MIT SMB client over NWConnection. Declared here
         // for the isolated **MediaTransportSMB** adapter and ProviderShare's
@@ -402,6 +409,14 @@ let package = Package(
             dependencies: ["CoreModels", "CoreUI", "FeatureSearchCore"]
         ),
         .target(
+            name: "FeatureLiveTVCore",
+            dependencies: ["CoreModels"]
+        ),
+        .target(
+            name: "FeatureLiveTV",
+            dependencies: ["CoreModels", "CoreUI", "FeatureLiveTVCore"]
+        ),
+        .target(
             name: "FeatureSettings",
             dependencies: ["CoreModels", "CoreUI", "CoreNetworking", "CrashReporting", "FeatureProfiles", "TraktService", "SeerService", "SimklService", "AniListService", "MALService", "LastFmService"]
         ),
@@ -468,7 +483,7 @@ let package = Package(
         .target(
             name: "CrashReporting",
             dependencies: [
-                .product(name: "Sentry", package: "sentry-cocoa"),
+                .product(name: "Sentry-Static", package: "sentry-apple-binaries"),
             ]
         ),
 
@@ -643,6 +658,8 @@ let package = Package(
                 // The universal watchlist runtime lives here so tvOS and iOS share
                 // one implementation instead of two 560-line copies.
                 "FeatureHomeCore",
+                "FeatureLiveTVCore",
+                "FeaturePlayback",
                 "FeatureWatchlistCore",
                 "ProviderKinoPubDemo",
                 "MediaTransportCore",
@@ -713,6 +730,7 @@ let package = Package(
                 "MALService",
                 "LastFmService",
                 "FeatureHome",
+                "FeatureLiveTV",
                 "FeaturePlayback",
                 "FeatureSearch",
                 "FeatureSettings",
@@ -739,6 +757,7 @@ let package = Package(
                 "FeatureDiscoveryCore",
                 "FeatureHomeCore",
                 "HeroUI",
+                "FeatureLiveTV",
                 "FeaturePlayback",
                 "FeatureProfiles",
                 "FeatureSearchCore",
@@ -811,7 +830,7 @@ let package = Package(
         ),
         .testTarget(
             name: "AppRuntimeTests",
-            dependencies: ["AppRuntime", "CoreModels", "FeatureAuthCore"]
+            dependencies: ["AppRuntime", "CoreModels", "FeatureAuthCore", "CrashReporting"]
         ),
         .testTarget(
             name: "MediaDownloadsTests",
@@ -896,16 +915,24 @@ let package = Package(
             dependencies: ["FeatureSearchCore", "CoreModels"]
         ),
         .testTarget(
+            name: "FeatureLiveTVCoreTests",
+            dependencies: ["CoreModels", "FeatureLiveTVCore"]
+        ),
+        .testTarget(
+            name: "FeatureLiveTVTests",
+            dependencies: ["FeatureLiveTV", "FeatureLiveTVCore"]
+        ),
+        .testTarget(
             name: "FeatureProfilesTests",
             dependencies: ["FeatureProfiles", "CoreModels"]
         ),
         .testTarget(
             name: "FeatureMusicTests",
-            dependencies: ["FeatureMusic", "CoreModels"]
+            dependencies: ["FeatureMusic", "CoreModels", "CoreUI"]
         ),
         .testTarget(
             name: "FeaturePlaybackTests",
-            dependencies: ["FeaturePlayback", "CoreModels"]
+            dependencies: ["FeaturePlayback", "CoreModels", "CoreUI"]
         ),
         .testTarget(
             name: "ProviderShareTests",

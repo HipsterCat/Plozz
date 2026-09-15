@@ -220,7 +220,8 @@ extension PlozziOSAppModel {
                 let server = MediaServer(
                     id: desc.serverID, name: desc.serverName, baseURL: baseURL,
                     provider: .mediaShare,
-                    connectionURLs: desc.candidateBaseURLs.isEmpty ? nil : desc.candidateBaseURLs)
+                    connectionURLs: desc.candidateBaseURLs.isEmpty ? nil : desc.candidateBaseURLs,
+                    mediaShareLibraryConfiguration: desc.mediaShareLibraryConfiguration)
                 let account = Account(
                     id: desc.id, server: server, userID: desc.userID, userName: desc.userName,
                     avatarURL: desc.avatarURL, deviceID: accountStore.deviceID())

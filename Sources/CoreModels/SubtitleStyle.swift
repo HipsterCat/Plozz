@@ -8,13 +8,15 @@ import Foundation
 /// app (Latin glyphs only); the renderer cascades to the tvOS system CJK fonts for
 /// Japanese/Korean/Chinese so mixed-language and dual-subtitle lines still render.
 /// `system` falls back to SF (no bundle). The enum is deliberately small and
-/// additive — more bundled faces (e.g. a neutral grotesque) can be appended.
+/// additive. Avenir Next uses the face supplied by iOS/tvOS rather than a bundled font.
 public enum SubtitleFontFamily: String, Codable, Sendable, Equatable, CaseIterable {
     case atkinson
     case system
-    case sfRounded
     case roboto
+    // Preserve the stored identifier so existing Avenir selections upgrade in place.
+    case avenirNext = "avenir"
     case lexend
+    case sfRounded
     case fredoka
     case openDyslexic
 
@@ -27,14 +29,12 @@ public enum SubtitleFontFamily: String, Codable, Sendable, Equatable, CaseIterab
         case .lexend: return "Lexend"
         case .fredoka: return "Fredoka"
         case .openDyslexic: return "OpenDyslexic"
+        case .avenirNext: return "Avenir Next"
         }
     }
 
-    /// The PostScript family stem of the bundled face, or `nil` to use the system
-    /// font. The renderer appends the weight/slant suffix (`-Regular`/`-Medium`/
-    /// `-SemiBold`/`-Bold`/`-Italic`/`-BoldItalic`), degrading to a lighter/upright
-    /// face when a family doesn't bundle every combination (e.g. Lexend ships no
-    /// italics). `system` and `sfRounded` render via the system font (no bundle).
+    /// The PostScript family stem of a named face, or `nil` for SF.
+    /// Use `postScriptNameCandidates` to resolve family-specific weight/slant names.
     public var postScriptStem: String? {
         switch self {
         case .atkinson: return "AtkinsonHyperlegible"
@@ -43,11 +43,11 @@ public enum SubtitleFontFamily: String, Codable, Sendable, Equatable, CaseIterab
         case .lexend: return "Lexend"
         case .fredoka: return "Fredoka"
         case .openDyslexic: return "OpenDyslexic"
+        case .avenirNext: return "AvenirNext"
         }
     }
 
-    /// True when the family is drawn with the tvOS system font rather than a
-    /// bundled face (SF and SF Rounded).
+    /// True for the default system-font APIs (SF and SF Rounded), not named faces.
     public var usesSystemFont: Bool { postScriptStem == nil }
 
     /// True when the system font should adopt the rounded design (SF Rounded).
@@ -57,14 +57,43 @@ public enum SubtitleFontFamily: String, Codable, Sendable, Equatable, CaseIterab
     /// the nearest of these, so the picker only ever shows real faces: the system
     /// families expose the full range; the static bundled faces (Atkinson,
     /// OpenDyslexic) only Regular/Bold; the variable-derived faces (Lexend,
-    /// Roboto, Fredoka) ship Regular/Medium/SemiBold/Bold.
+    /// Roboto, Fredoka) ship Regular/Medium/SemiBold/Bold. Avenir Next maps those
+    /// choices to its built-in Regular/Medium/DemiBold/Bold faces.
     public var availableWeights: [SubtitleFontWeight] {
         switch self {
         case .atkinson, .openDyslexic:
             return [.regular, .bold]
-        case .system, .sfRounded, .roboto, .lexend, .fredoka:
+        case .system, .sfRounded, .roboto, .lexend, .fredoka, .avenirNext:
             return [.regular, .medium, .semibold, .bold]
         }
+    }
+
+    /// Ordered face names for rendering and picker previews. Unsupported bundled
+    /// italic weights preserve slant first, then fall back to an upright face.
+    public func postScriptNameCandidates(
+        weight: SubtitleFontWeight = .regular, isItalic: Bool = false
+    ) -> [String] {
+        guard let stem = postScriptStem else { return [] }
+        let weight = weight.snapped(to: availableWeights)
+        if self == .avenirNext {
+            let face: String
+            switch weight {
+            case .regular: face = isItalic ? "Italic" : "Regular"
+            case .medium: face = isItalic ? "MediumItalic" : "Medium"
+            case .semibold: face = isItalic ? "DemiBoldItalic" : "DemiBold"
+            case .bold: face = isItalic ? "BoldItalic" : "Bold"
+            }
+            return ["\(stem)-\(face)"]
+        }
+        var candidates: [String] = []
+        if isItalic {
+            if weight == .bold { candidates.append("\(stem)-BoldItalic") }
+            candidates.append("\(stem)-Italic")
+        }
+        let downChain = availableWeights.filter { $0.value <= weight.value }.sorted { $0.value > $1.value }
+        candidates += downChain.map { "\(stem)-\($0.faceToken)" }
+        if !downChain.contains(.regular) { candidates.append("\(stem)-Regular") }
+        return candidates
     }
 }
 
@@ -159,6 +188,37 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
 
     // MARK: Size & placement
 
+    /// Stored values describe the drawing anchor; labels describe where extra
+    /// lines grow, so a bottom anchor is presented as "Above".
+    public enum VerticalAnchor: String, Codable, Sendable, Equatable, CaseIterable {
+        case bottom, center, top
+
+        public var displayName: LocalizedStringResource {
+            switch self {
+            case .bottom: "Above"
+            case .center: LocalizedStringResource(
+                "Center",
+                comment: "Extra Line Position option: additional subtitle lines expand around the same vertical midpoint, rather than only above or below."
+            )
+            case .top: "Below"
+            }
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            let value = try container.decode(String.self)
+            if value == "automatic" {
+                self = .bottom
+            } else if let anchor = Self(rawValue: value) {
+                self = anchor
+            } else {
+                throw DecodingError.dataCorruptedError(
+                    in: container, debugDescription: "Unknown subtitle vertical anchor: \(value)"
+                )
+            }
+        }
+    }
+
     /// The subtitle typeface. Defaults to bundled Atkinson Hyperlegible.
     public var fontFamily: SubtitleFontFamily
     /// The global typeface weight. The active family snaps this to the nearest
@@ -167,9 +227,22 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
     public var fontWeight: SubtitleFontWeight
     /// Multiplier on the base caption size (1.0 == default).
     public var fontScale: Double
-    /// Vertical seat of the subtitle block, `0` = bottom safe edge … `1` = top.
-    /// Default sits just above the bottom safe area.
+    /// Vertical position measured upward from the screen bottom. The chosen
+    /// anchor stays fixed as lines change.
+    /// `0` aligns the block's bottom with the screen bottom, `1` aligns its top.
+    /// Negative values deliberately move the block past the bottom edge.
     public var verticalPosition: Double
+    /// Which part of the block stays fixed when a cue gains or loses lines.
+    /// Screen-edge limits take precedence so 0% and 100% remain fully visible.
+    public var verticalAnchor: VerticalAnchor
+    public static let verticalPositionRange: ClosedRange<Double> = -0.05...1
+    public static let verticalPositionStep: Double = 0.005
+    /// Integer indices avoid accumulating floating-point error while stepping.
+    public static let verticalPositionOptions: [Double] = {
+        let first = Int((verticalPositionRange.lowerBound / verticalPositionStep).rounded())
+        let last = Int((verticalPositionRange.upperBound / verticalPositionStep).rounded())
+        return (first...last).map { Double($0) * verticalPositionStep }
+    }()
     /// Horizontal nudge, `-1` … `1` (0 = centred). Lets users dodge burned-in
     /// signage or letterbox furniture.
     public var horizontalOffset: Double
@@ -308,6 +381,7 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
         fontWeight: SubtitleFontWeight = .regular,
         fontScale: Double = 1.0,
         verticalPosition: Double = 0.06,
+        verticalAnchor: VerticalAnchor = .bottom,
         horizontalOffset: Double = 0,
         textColor: Color = .white,
         opacity: Double = 1.0,
@@ -322,6 +396,7 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
         self.fontWeight = fontWeight
         self.fontScale = fontScale
         self.verticalPosition = verticalPosition
+        self.verticalAnchor = verticalAnchor
         self.horizontalOffset = horizontalOffset
         self.textColor = textColor
         self.opacity = opacity
@@ -441,7 +516,7 @@ public extension SubtitleStyle {
 
 extension SubtitleStyle {
     private enum CodingKeys: String, CodingKey {
-        case fontFamily, fontWeight, fontScale, verticalPosition, horizontalOffset
+        case fontFamily, fontWeight, fontScale, verticalPosition, verticalAnchor, horizontalOffset
         case textColor, opacity, hdrLuminanceScale
         case background, edge, border, secondary, followsSystemStyle
     }
@@ -456,6 +531,7 @@ extension SubtitleStyle {
             fontWeight: try c.decodeIfPresent(SubtitleFontWeight.self, forKey: .fontWeight) ?? d.fontWeight,
             fontScale: try c.decodeIfPresent(Double.self, forKey: .fontScale) ?? d.fontScale,
             verticalPosition: try c.decodeIfPresent(Double.self, forKey: .verticalPosition) ?? d.verticalPosition,
+            verticalAnchor: try c.decodeIfPresent(VerticalAnchor.self, forKey: .verticalAnchor) ?? d.verticalAnchor,
             horizontalOffset: try c.decodeIfPresent(Double.self, forKey: .horizontalOffset) ?? d.horizontalOffset,
             textColor: try c.decodeIfPresent(Color.self, forKey: .textColor) ?? d.textColor,
             opacity: try c.decodeIfPresent(Double.self, forKey: .opacity) ?? d.opacity,

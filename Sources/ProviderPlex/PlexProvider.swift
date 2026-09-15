@@ -13,6 +13,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
     public let accountID: String
     public let credentialRevision: CredentialRevision
     let client: PlexClient
+    let liveTVLeases = PlexLiveTVLeaseStore()
     let themeArchiveResolver: @Sendable (String?) async -> URL?
     private let artworkOriginHistoryKey: String
 
@@ -147,16 +148,17 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
     /// `onDeck` keeps offering forever. Reading the hub is therefore what makes
     /// this row agree with Plex rather than merely resemble it.
     ///
-    /// The fallback is not a formality: only newer servers route the `home`
-    /// variant, and a viewer on an older one must still get a row. The plain hub
-    /// is tried next, and `onDeck` last.
+    /// Use the hub's `/items` endpoint, not `/hubs/home/continueWatching`, which
+    /// can omit untouched next episodes. Older servers may not route `/items`;
+    /// the plain hub is tried next, and `onDeck` last.
     public func continueWatching(limit: Int) async throws -> [MediaItem] {
-        // The series-recency map is needed by every path and costs nothing next to
-        // the feed request, so it starts now regardless of which feed wins.
-        async let seriesDatesTask = seriesLastPlayedDatesBestEffort(limit: limit)
         let (items, endpoint) = try await resumeFeed(limit: limit)
-        let seriesDates = await seriesDatesTask
-        logContinueWatchingFeed(items, endpoint: endpoint)
+        let seriesDates = try await seriesLastPlayedDatesBestEffort(for: items)
+        logContinueWatchingFeed(
+            items,
+            endpoint: endpoint,
+            requestedLimit: limit
+        )
         return items.map(map(metadata:)).map { stampingSeriesRecency($0, using: seriesDates) }
     }
 
@@ -168,16 +170,34 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
     /// dismissed titles.
     private func resumeFeed(limit: Int) async throws -> ([PlexMetadata], String) {
         do {
-            return (try await client.continueWatchingHub(limit: limit, homeVariant: true), "/hubs/home/continueWatching")
+            return (try await client.continueWatchingHub(limit: limit, itemsVariant: true), "/hubs/continueWatching/items")
+        } catch let cancellation as CancellationError {
+            throw cancellation
+        } catch AppError.cancelled {
+            throw AppError.cancelled
+        } catch let pagingFailure as PlexClient.ResumeFeedPagingFailure {
+            throw pagingFailure.underlying
         } catch {
-            PlozzLog.networking.error("Plex home Continue Watching hub unavailable; trying the plain hub")
+            try Task.checkCancellation()
+            PlozzLog.networking.error("Plex Continue Watching items unavailable; trying the plain hub")
         }
         do {
-            return (try await client.continueWatchingHub(limit: limit, homeVariant: false), "/hubs/continueWatching")
+            return (try await client.continueWatchingHub(limit: limit, itemsVariant: false), "/hubs/continueWatching")
+        } catch let cancellation as CancellationError {
+            throw cancellation
+        } catch AppError.cancelled {
+            throw AppError.cancelled
+        } catch let pagingFailure as PlexClient.ResumeFeedPagingFailure {
+            throw pagingFailure.underlying
         } catch {
+            try Task.checkCancellation()
             PlozzLog.networking.error("Plex Continue Watching hub unavailable; falling back to /library/onDeck")
         }
-        return (try await client.onDeck(limit: limit), "/library/onDeck")
+        do {
+            return (try await client.onDeck(limit: limit), "/library/onDeck")
+        } catch let pagingFailure as PlexClient.ResumeFeedPagingFailure {
+            throw pagingFailure.underlying
+        }
     }
 
     /// Records the resume feed exactly as Plex returned it, before any mapping.
@@ -188,7 +208,11 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
     /// Continue Watching" action. So a row built from it can disagree with the
     /// Plex app while every line of client code behaves correctly — and only the
     /// raw feed can tell us that is what happened. Gated and free when off.
-    private func logContinueWatchingFeed(_ items: [PlexMetadata], endpoint: String) {
+    private func logContinueWatchingFeed(
+        _ items: [PlexMetadata],
+        endpoint: String,
+        requestedLimit: Int
+    ) {
         guard ContinueWatchingDiagnostics.isEnabled else { return }
         let rows = items.map(Self.diagnosticRow)
         ContinueWatchingDiagnostics.emit(
@@ -209,7 +233,9 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
         // Ask the legacy feed for materially more than the hub returned. Capping it
         // at the hub's size makes anything past that cut look like a disagreement,
         // which reads as a finding and is only an artefact of the request.
-        let limit = max(items.count * 2, 100)
+        let limit = requestedLimit == Int.max
+            ? Int.max
+            : max(items.count * 2, 100)
         Task.detached(priority: .utility) {
             await Self.logHubVersusOnDeck(hub: rows, client: client, limit: limit)
         }
@@ -256,32 +282,67 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
     }
 
     /// Best-effort map of `series ratingKey → last-viewed date`, used to stamp
-    /// onDeck *next* episodes (unwatched, so no `lastViewedAt` of their own) with
-    /// their series' true recency. Mirrors
-    /// ``JellyfinProvider``'s Jellyfin-side stamping. Run concurrently with the
-    /// onDeck fetch; a failure yields an empty map and Continue Watching falls back
-    /// to unstamped ordering.
-    private func seriesLastPlayedDatesBestEffort(limit: Int) async -> [String: Date] {
-        guard let shows = try? await client.recentlyViewedShows(limit: limit) else { return [:] }
+    /// next episodes with their series' true recency. A suggested episode may
+    /// already have an older resume date, so timestamped episodes need this too.
+    /// Only series actually referenced by this feed are
+    /// fetched. That keeps both finite and exhaustive Continue Watching loads from
+    /// turning into a broad `/library/all` scan or an `Int.max` HTTP request.
+    private func seriesLastPlayedDatesBestEffort(
+        for items: [PlexMetadata]
+    ) async throws -> [String: Date] {
+        let seriesIDs = Set(
+            items.compactMap { item -> String? in
+                guard item.type == "episode" else {
+                    return nil
+                }
+                guard let seriesID = item.grandparentRatingKey,
+                      !seriesID.isEmpty else { return nil }
+                return seriesID
+            }
+        ).sorted()
+        guard !seriesIDs.isEmpty else { return [:] }
+
+        let batchSize = 50
         var result: [String: Date] = [:]
-        for show in shows {
-            guard let ratingKey = show.ratingKey, let seconds = show.lastViewedAt else { continue }
-            result[ratingKey] = Date(timeIntervalSince1970: TimeInterval(seconds))
+        for start in stride(from: 0, to: seriesIDs.count, by: batchSize) {
+            try Task.checkCancellation()
+            let end = min(start + batchSize, seriesIDs.count)
+            let shows: [PlexMetadata]
+            do {
+                shows = try await client.metadata(
+                    ratingKeys: Array(seriesIDs[start..<end])
+                )
+            } catch let cancellation as CancellationError {
+                throw cancellation
+            } catch AppError.cancelled {
+                throw AppError.cancelled
+            } catch {
+                try Task.checkCancellation()
+                PlozzLog.networking.error(
+                    "Plex Continue Watching series-recency enrichment failed: \(String(describing: error))"
+                )
+                return result
+            }
+            for show in shows {
+                guard let ratingKey = show.ratingKey,
+                      let seconds = show.lastViewedAt else { continue }
+                result[ratingKey] = Date(
+                    timeIntervalSince1970: TimeInterval(seconds)
+                )
+            }
         }
         return result
     }
 
-    /// Stamps a Continue Watching item that carries no play timestamp of its own —
-    /// a next-episode suggestion whose `lastViewedAt` is nil — with its series'
-    /// last-viewed date (keyed by the episode's `grandparentRatingKey`, carried as
-    /// `seriesID`), so a just-finished show sorts by real recency in a merged
-    /// Continue Watching row instead of sinking to the bottom or inheriting a
-    /// foreign timestamp. In-progress items (already timestamped) and non-episode
-    /// items are returned unchanged.
+    /// Uses the newer of an episode's own activity and its exact series' activity
+    /// to order Plex's chosen Continue Watching card. Finishing one episode must
+    /// not bury its successor under an old resume date. Membership, resume
+    /// position and watched state remain server-owned; no timestamp is backdated.
     private func stampingSeriesRecency(_ item: MediaItem, using seriesDates: [String: Date]) -> MediaItem {
-        guard item.lastPlayedAt == nil,
+        guard item.kind == .episode,
               let seriesID = item.seriesID,
-              let date = seriesDates[seriesID] else { return item }
+              let date = seriesDates[seriesID],
+              item.lastPlayedAt.map({ date > $0 }) ?? true else { return item }
         var copy = item
         copy.lastPlayedAt = date
         return copy
@@ -1458,7 +1519,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
 
     // MARK: - Mapping
 
-    private func map(metadata dto: PlexMetadata) -> MediaItem {
+    func map(metadata dto: PlexMetadata) -> MediaItem {
         let kind = Self.kind(forItemType: dto.type)
         let isEpisode = kind == .episode
         // For an episode, the series title is the grandparent; otherwise the
@@ -2141,7 +2202,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
         )
     }
 
-    private func map(
+    func map(
         stream dto: PlexStream,
         itemID: String,
         mediaSourceID: String?
@@ -2179,7 +2240,8 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
             isForced: dto.forced ?? false,
             channels: isSubtitle ? nil : dto.channels,
             deliverySource: deliverySource,
-            isImageBasedSubtitle: isSubtitle && !isTextSubtitleCodec(dto.codec)
+            isImageBasedSubtitle: isSubtitle && !isTextSubtitleCodec(dto.codec),
+            isExternal: isSubtitle && dto.key != nil
         )
     }
 

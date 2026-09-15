@@ -2,8 +2,101 @@
 import XCTest
 import CoreModels
 @testable import CoreUI
+final class MediaFileBrowserNavigationTests: XCTestCase {
+    func testFileBrowserTargetsOwningShareNotSelectedPlaybackServer() throws {
+        let item = MediaItem(
+            id: "series:show", title: "Show", kind: .series,
+            fileBrowserContainerID: "share:files:d:TV/Show",
+            sourceAccountID: "owning-share",
+            additionalSourceAccountIDs: ["other-server"],
+            selectedSourceAccountID: "other-server"
+        )
+        let target = try XCTUnwrap(item.navigationTarget(for: .browseFiles))
+        XCTAssertEqual(target.id, "share:files:d:TV/Show")
+        XCTAssertEqual(target.kind, .folder)
+        XCTAssertEqual(target.sourceAccountID, "owning-share")
+        XCTAssertFalse(target.allowsTitleBasedMetadataMatching)
+        XCTAssertTrue(target.sources.isEmpty)
+        XCTAssertNil(target.selectedSourceAccountID)
+        XCTAssertNil(target.fileBrowserContainerID)
+        XCTAssertNil(target.navigationTarget(for: .browseFiles))
+    }
+}
+
+#if canImport(UIKit)
+import SwiftUI
+import UIKit
+#endif
+
+#if canImport(UIKit)
+@MainActor
+final class MediaFolderCardLayoutTests: XCTestCase {
+    func testMixedFolderAndMediaCardsKeepIdenticalHeights() {
+        for style in [CardStyle.framed, .borderless] {
+            for width in [CGFloat(126), 220] {
+                let plain = MediaItem(id: "d:Movies", title: "Movies", kind: .folder)
+                let long = MediaItem(
+                    id: "d:long", title: "A very long folder title that should never add extra lines",
+                    kind: .folder, productionYear: 2020
+                )
+                let movie = MediaItem(id: "movie:film", title: "Film", kind: .movie, productionYear: 2020)
+                let expected = height(
+                    PosterCardView(item: movie, enablesAsyncArtworkFallback: false, action: {}),
+                    width: width, style: style
+                )
+                for folder in [plain, long] {
+                    XCTAssertEqual(
+                        height(MediaFolderCardLabel(item: folder), width: width, style: style),
+                        expected, accuracy: 0.5
+                    )
+                }
+            }
+        }
+    }
+
+    private func height<Content: View>(_ content: Content, width: CGFloat, style: CardStyle) -> CGFloat {
+        let view = content
+            .environment(\.plozzCardStyle, style)
+            .frame(width: width, alignment: .topLeading)
+        return UIHostingController(rootView: view)
+            .sizeThatFits(in: CGSize(width: width, height: 1_000))
+            .height
+    }
+}
+#endif
 
 final class PosterCardPresentationTests: XCTestCase {
+    func testMissingLibraryArtworkUsesNeutralMediaInsteadOfPlaybackSymbol() {
+        for status in [
+            MediaAvailabilityStatus.unknown, .pending, .processing,
+            .partiallyAvailable, .available,
+        ] {
+            let item = MediaItem(
+                id: "metadata", title: "Not in Library", kind: .movie,
+                availability: status, locallyValidatedPlayableSource: false
+            )
+            XCTAssertEqual(MediaArtworkPlaceholder.Symbol(for: item), .media)
+        }
+        XCTAssertEqual(MediaArtworkPlaceholder.Symbol.media.rawValue, "rectangle.dashed")
+    }
+
+    func testLibraryItemsWithMissingArtworkKeepTheirPlaybackSymbol() {
+        for kind in [MediaItemKind.movie, .series, .season, .episode] {
+            let item = MediaItem(id: "library-item", title: "In Library", kind: kind)
+            XCTAssertEqual(MediaArtworkPlaceholder.Symbol(for: item), .playback)
+        }
+    }
+
+    func testSchedulePlaceholdersNeverSuggestPlaybackEvenAfterTheirAirDate() {
+        for date in [Date(timeIntervalSince1970: 0), Date.distantFuture] {
+            let item = MediaItem(
+                id: "scheduled", title: "Scheduled Episode", kind: .episode,
+                scheduledAirDate: date
+            )
+            XCTAssertEqual(MediaArtworkPlaceholder.Symbol(for: item), .media)
+        }
+    }
+
     func testFolderUsesDedicatedArtworkWithoutPlaybackChrome() {
         XCTAssertTrue(PosterCardPresentation.usesFolderArtwork(for: .folder))
         XCTAssertFalse(PosterCardPresentation.showsWatchStatus(for: .folder))

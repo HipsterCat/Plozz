@@ -253,11 +253,8 @@ final class HomeAggregatorTests: XCTestCase {
             resolved("acct-b", user: "B", server: "S-B", kind: .jellyfin, provider: b)
         ]
 
-        // Ordering is the subject here, so curation is switched off: the dates above
-        // are ordering tokens a few thousand seconds past the epoch, which a
-        // real-world staleness cutoff reads as decades old and retires. That a stale
-        // Next Up IS retired is covered by `HomeAggregatorCurationTests`.
-        let content = await HomeAggregator().content(from: accounts, policy: .unbounded)
+        // Even decades-old next-up episodes remain eligible under the Home default.
+        let content = await HomeAggregator().content(from: accounts)
 
         XCTAssertEqual(
             content.continueWatching.map(\.id),

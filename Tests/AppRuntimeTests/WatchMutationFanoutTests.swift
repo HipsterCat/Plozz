@@ -17,6 +17,41 @@ import CoreModels
 /// instead. So this parameter matters for movies and other non-episode kinds.
 /// These tests pin both halves of that contract.
 final class WatchMutationFanoutTests: XCTestCase {
+    @MainActor
+    func testSeasonMenuQueuesOnlyTheChosenSeasonAndPublishesItsCascade() throws {
+        for played in [false, true] {
+            var queued: [WatchMutation] = []
+            let coordinator = MediaItemActionCoordinator(
+                providerResolver: { _ in nil },
+                primaryAccountID: { "a" },
+                crossServerWatchSyncEnabled: { true },
+                enqueueWatchMutation: { queued.append($0) }
+            )
+            let season = MediaItem(
+                id: "s2", title: "Season 2", kind: .season,
+                seasonNumber: 2, sourceAccountID: "a"
+            )
+            let received = expectation(forNotification: .mediaItemDidMutate, object: nil) { note in
+                let mutation = MediaItemMutation.from(note)
+                XCTAssertEqual(mutation?.scopedItemIDs, ["a:s2"])
+                XCTAssertEqual(mutation?.cascadesToSeasonEpisodes, true)
+                XCTAssertEqual(mutation?.played, played)
+                return true
+            }
+            coordinator.perform(
+                played ? .markWatched : .markUnwatched,
+                on: season,
+                context: MediaItemActionContext(precedingContainerIDs: ["s1"])
+            )
+            wait(for: [received], timeout: 1)
+            let intent = try XCTUnwrap(queued.first)
+            XCTAssertEqual(queued.count, 1)
+            XCTAssertEqual(intent.targets.map(\.id), ["a:s2"])
+            XCTAssertEqual(intent.kind, .season)
+            XCTAssertEqual(intent.played, played)
+        }
+    }
+
     private func makeItem() -> MediaItem {
         // A title reached from a Home row that only ONE server populated: it
         // carries no `sources` of its own, so the index is the only way to learn

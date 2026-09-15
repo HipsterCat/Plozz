@@ -202,11 +202,39 @@ public struct JellyfinClient: Sendable {
     }
 
     func resumeItems(userID: String, limit: Int, parentID: String? = nil) async throws -> [BaseItemDto] {
+        if limit == Int.max {
+            return try await exhaustiveContinueWatchingItems { startIndex, pageSize in
+                return try await resumeItemsPage(
+                    userID: userID,
+                    startIndex: startIndex,
+                    limit: pageSize,
+                    parentID: parentID
+                )
+            }
+        }
+        return try await resumeItemsPage(
+            userID: userID,
+            startIndex: nil,
+            limit: limit,
+            parentID: parentID
+        ).Items
+    }
+
+    private func resumeItemsPage(
+        userID: String,
+        startIndex: Int?,
+        limit: Int,
+        parentID: String?
+    ) async throws -> ItemsResponse {
         var queryItems = [
             URLQueryItem(name: "Limit", value: String(limit)),
             URLQueryItem(name: "MediaTypes", value: "Video"),
             URLQueryItem(name: "Fields", value: "Overview,OriginalTitle,PrimaryImageAspectRatio,ProviderIds")
         ]
+        if let startIndex {
+            queryItems.append(URLQueryItem(name: "StartIndex", value: String(startIndex)))
+            queryItems.append(URLQueryItem(name: "EnableTotalRecordCount", value: "true"))
+        }
         if let parentID {
             queryItems.append(URLQueryItem(name: "ParentId", value: parentID))
         }
@@ -215,7 +243,7 @@ public struct JellyfinClient: Sendable {
             queryItems: queryItems,
             headers: authHeaders
         )
-        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL).Items
+        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
     }
 
     /// `GET /Shows/NextUp` — the next unwatched episode for each series the user
@@ -229,7 +257,36 @@ public struct JellyfinClient: Sendable {
     /// in-progress episodes already come back from `/Items/Resume`, so NextUp is
     /// scoped to the next-after-completed episode. `EnableRewatching=false` avoids
     /// resurfacing fully-watched series.
-    func nextUpItems(userID: String, limit: Int, parentID: String? = nil) async throws -> [BaseItemDto] {
+    func nextUpItems(
+        userID: String, limit: Int, parentID: String? = nil, seriesID: String? = nil
+    ) async throws -> [BaseItemDto] {
+        if limit == Int.max {
+            return try await exhaustiveContinueWatchingItems { startIndex, pageSize in
+                return try await nextUpItemsPage(
+                    userID: userID,
+                    startIndex: startIndex,
+                    limit: pageSize,
+                    parentID: parentID,
+                    seriesID: seriesID
+                )
+            }
+        }
+        return try await nextUpItemsPage(
+            userID: userID,
+            startIndex: nil,
+            limit: limit,
+            parentID: parentID,
+            seriesID: seriesID
+        ).Items
+    }
+
+    private func nextUpItemsPage(
+        userID: String,
+        startIndex: Int?,
+        limit: Int,
+        parentID: String?,
+        seriesID: String?
+    ) async throws -> ItemsResponse {
         var queryItems = [
             URLQueryItem(name: "UserId", value: userID),
             URLQueryItem(name: "Limit", value: String(limit)),
@@ -238,43 +295,147 @@ public struct JellyfinClient: Sendable {
             URLQueryItem(name: "EnableRewatching", value: "false"),
             URLQueryItem(name: "Fields", value: "Overview,PrimaryImageAspectRatio,ProviderIds")
         ]
+        if let startIndex {
+            queryItems.append(URLQueryItem(name: "StartIndex", value: String(startIndex)))
+            queryItems.append(URLQueryItem(name: "EnableTotalRecordCount", value: "true"))
+        }
         if let parentID {
             queryItems.append(URLQueryItem(name: "ParentId", value: parentID))
+        }
+        if let seriesID {
+            queryItems.append(URLQueryItem(name: "SeriesId", value: seriesID))
         }
         let endpoint = Endpoint(
             path: "/Shows/NextUp",
             queryItems: queryItems,
             headers: authHeaders
         )
-        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL).Items
+        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
     }
 
-    /// Series the user has watched, most-recently-played first, each carrying its
-    /// series-level `UserData.LastPlayedDate` (the date of the most recent episode
-    /// play). Used to stamp NextUp suggestions — whose own episode
-    /// `LastPlayedDate` is nil — with their series' true last-watched time.
-    ///
-    /// Without this a just-finished show (present only in `/Shows/NextUp`, after
-    /// the whole `/Items/Resume` block) has no timestamp and either inherits an
-    /// unrelated in-progress item's date or sinks to the bottom of a merged
-    /// Continue Watching row — so the row stops reflecting what was watched last.
-    /// `/Users/{id}/Items` returns `UserData` by default, so no extra field is
-    /// requested. Best-effort at the call site: an older server that rejects the
-    /// query degrades to unstamped ordering.
-    func recentlyWatchedSeries(userID: String, limit: Int) async throws -> [BaseItemDto] {
+    /// Drains a MediaBrowser item feed in fixed-size pages. Some servers return
+    /// fewer rows than requested even when more exist, so progress follows the
+    /// actual row count and a missing total is completed only by an empty page.
+    /// Duplicate/non-advancing pages fail closed instead of hanging or presenting
+    /// a silently truncated "unlimited" row.
+    private func exhaustiveContinueWatchingItems(
+        page: (Int, Int) async throws -> ItemsResponse
+    ) async throws -> [BaseItemDto] {
+        let pageSize = 100
+        var collected: [BaseItemDto] = []
+        var seenIDs: Set<String> = []
+        var startIndex = 0
+        var expectedTotal: Int?
+
+        while true {
+            try Task.checkCancellation()
+            let response = try await page(startIndex, pageSize)
+            guard response.Items.count <= pageSize else {
+                throw AppError.invalidResponse
+            }
+            if let total = response.TotalRecordCount {
+                guard total >= 0 else { throw AppError.invalidResponse }
+                if let expectedTotal {
+                    guard total == expectedTotal else {
+                        throw AppError.invalidResponse
+                    }
+                } else {
+                    expectedTotal = total
+                }
+            }
+
+            guard !response.Items.isEmpty else {
+                if let expectedTotal, collected.count < expectedTotal {
+                    throw AppError.invalidResponse
+                }
+                return collected
+            }
+            for item in response.Items {
+                guard !item.Id.isEmpty, seenIDs.insert(item.Id).inserted else {
+                    throw AppError.invalidResponse
+                }
+            }
+            collected.append(contentsOf: response.Items)
+            if let expectedTotal {
+                guard collected.count <= expectedTotal else {
+                    throw AppError.invalidResponse
+                }
+                if collected.count == expectedTotal {
+                    return collected
+                }
+            }
+
+            let (nextStart, overflow) = startIndex.addingReportingOverflow(response.Items.count)
+            guard !overflow, nextStart > startIndex else {
+                throw AppError.invalidResponse
+            }
+            startIndex = nextStart
+        }
+    }
+
+    /// Lightweight metadata for exact series IDs, in bounded batches. Home needs
+    /// only external IDs; Continue Watching also needs UserData to stamp next-up
+    /// recency. Neither lookup needs artwork or playback metadata.
+    func seriesMetadata(
+        userID: String, seriesIDs: [String], includeUserData: Bool = true
+    ) async throws -> [BaseItemDto] {
+        let uniqueIDs = Array(Set(seriesIDs.filter { !$0.isEmpty })).sorted()
+        guard !uniqueIDs.isEmpty else { return [] }
+
+        let batchSize = 50
+        var result: [BaseItemDto] = []
+        var seenIDs: Set<String> = []
+        for start in stride(from: 0, to: uniqueIDs.count, by: batchSize) {
+            try Task.checkCancellation()
+            let end = min(start + batchSize, uniqueIDs.count)
+            let batch = Array(uniqueIDs[start..<end])
+            let endpoint = Endpoint(
+                path: "/Users/\(userID)/Items",
+                queryItems: [
+                    URLQueryItem(name: "Ids", value: batch.joined(separator: ",")),
+                    URLQueryItem(name: "IncludeItemTypes", value: "Series"),
+                    URLQueryItem(name: "Recursive", value: "true"),
+                    URLQueryItem(name: "Limit", value: String(batch.count)),
+                    URLQueryItem(name: "Fields", value: "ProviderIds"),
+                    URLQueryItem(name: "EnableImages", value: "false"),
+                    URLQueryItem(name: "EnableUserData", value: String(includeUserData)),
+                    URLQueryItem(name: "EnableTotalRecordCount", value: "false")
+                ],
+                headers: authHeaders
+            )
+            let items = try await http.decode(
+                ItemsResponse.self,
+                from: endpoint,
+                baseURL: baseURL
+            ).Items
+            let requestedIDs = Set(batch)
+            for item in items where requestedIDs.contains(item.Id) && seenIDs.insert(item.Id).inserted {
+                result.append(item)
+            }
+        }
+        return result
+    }
+
+    /// Series-level UserData often has no LastPlayedDate. Read the latest episode
+    /// activity under that exact series rather than treating it as never watched.
+    func lastPlayedEpisode(userID: String, seriesID: String) async throws -> BaseItemDto? {
         let endpoint = Endpoint(
             path: "/Users/\(userID)/Items",
             queryItems: [
-                URLQueryItem(name: "IncludeItemTypes", value: "Series"),
+                URLQueryItem(name: "ParentId", value: seriesID),
+                URLQueryItem(name: "IncludeItemTypes", value: "Episode"),
                 URLQueryItem(name: "Recursive", value: "true"),
                 URLQueryItem(name: "SortBy", value: "DatePlayed"),
                 URLQueryItem(name: "SortOrder", value: "Descending"),
-                URLQueryItem(name: "Limit", value: String(limit)),
-                URLQueryItem(name: "Fields", value: "ProviderIds")
+                URLQueryItem(name: "Limit", value: "1"),
+                URLQueryItem(name: "EnableImages", value: "false"),
+                URLQueryItem(name: "EnableUserData", value: "true"),
+                URLQueryItem(name: "EnableTotalRecordCount", value: "false")
             ],
             headers: authHeaders
         )
-        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL).Items
+        let items = try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL).Items
+        return items.first { $0.Type == "Episode" && $0.SeriesId == seriesID }
     }
 
     /// `/Users/{id}/Items?PersonIds=…` — everything in the viewer's library
@@ -507,7 +668,8 @@ public struct JellyfinClient: Sendable {
         recursive: Bool,
         startIndex: Int,
         limit: Int,
-        sort: CoreModels.SortDescriptor
+        sort: CoreModels.SortDescriptor,
+        fields: String = "PrimaryImageAspectRatio,ProviderIds"
     ) async throws -> ItemsResponse {
         var queryItems = [
             URLQueryItem(name: "ParentId", value: parentID),
@@ -518,7 +680,7 @@ public struct JellyfinClient: Sendable {
             // Minimal fields keep the first-page payload small for a fast grid;
             // ProviderIds is included so the aggregated cross-server library
             // browse can collapse a title that lives on multiple servers.
-            URLQueryItem(name: "Fields", value: "PrimaryImageAspectRatio,ProviderIds"),
+            URLQueryItem(name: "Fields", value: fields),
             URLQueryItem(name: "ImageTypeLimit", value: "1"),
             URLQueryItem(name: "EnableTotalRecordCount", value: "true")
         ]
@@ -679,6 +841,119 @@ public struct JellyfinClient: Sendable {
             DeviceProfile: capabilityProfile
         ))
         return try await http.decode(PlaybackInfoResponse.self, from: endpoint, baseURL: baseURL)
+    }
+
+    // MARK: Live TV
+
+    func liveTVSend(_ request: Endpoint) async throws -> Data {
+        var request = request
+        request.headers.merge(authHeaders) { _, authentication in authentication }
+        request.headers["Accept"] = "application/json"
+        request.headers["Cache-Control"] = "no-store"
+        request.redirectPolicy = .sameOrigin
+        let (data, response) = try await http.sendRaw(request, baseURL: baseURL)
+        switch response.statusCode {
+        case 200..<300: return data
+        case 401: throw AppError.unauthorized
+        case 402: throw ServerLiveTVError.subscriptionRequired
+        case 403: throw ServerLiveTVError.permissionDenied
+        case 404: throw AppError.notFound
+        case 409: throw ServerLiveTVError.tunerUnavailable
+        case 429: throw AppError.rateLimited(
+            retryAfter: response.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
+        )
+        default: throw AppError.invalidResponse
+        }
+    }
+
+    func liveTVPlaybackInfo(userID: String, itemID: String) async throws -> Data {
+        let endpoint = try Endpoint(
+            method: .post,
+            path: "/Items/\(itemID)/PlaybackInfo",
+            queryItems: [URLQueryItem(name: "UserId", value: userID)]
+        ).jsonBody(PlaybackInfoBody(
+            UserId: userID,
+            MaxStreamingBitrate: capabilityProfile.maxStreamingBitrate,
+            AutoOpenLiveStream: false,
+            MediaSourceId: nil,
+            EnableDirectPlay: true,
+            EnableDirectStream: true,
+            EnableTranscoding: true,
+            DeviceProfile: capabilityProfile
+        ))
+        return try await liveTVSend(endpoint)
+    }
+
+    func liveTVOpen(
+        userID: String,
+        itemID: String,
+        openToken: String,
+        playSessionID: String?
+    ) async throws -> Data {
+        let wireItemID: JellyfinLiveTVOpenItemID
+        if providerKind == .emby {
+            guard let value = Int64(itemID), value >= 0 else {
+                throw ServerLiveTVError.invalidChannel
+            }
+            wireItemID = .integer(value)
+        } else {
+            wireItemID = .string(itemID)
+        }
+        let endpoint = try Endpoint(method: .post, path: "/LiveStreams/Open")
+            .jsonBody(JellyfinLiveTVOpenBody(
+                OpenToken: openToken,
+                UserId: userID,
+                ItemId: wireItemID,
+                PlaySessionId: playSessionID,
+                MaxStreamingBitrate: capabilityProfile.maxStreamingBitrate,
+                DeviceProfile: capabilityProfile
+            ))
+        return try await liveTVSend(endpoint)
+    }
+
+    func liveTVClose(liveStreamID: String) async throws {
+        guard !liveStreamID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AppError.invalidResponse
+        }
+        _ = try await liveTVSend(Endpoint(
+            method: .post,
+            path: "/LiveStreams/Close",
+            queryItems: [
+                URLQueryItem(
+                    name: providerKind == .emby ? "LiveStreamId" : "liveStreamId",
+                    value: liveStreamID
+                )
+            ]
+        ))
+    }
+
+    func liveTVReport(_ body: JellyfinLiveTVProgressBody, path: String) async throws {
+        _ = try await liveTVSend(
+            Endpoint(method: .post, path: path).jsonBody(body)
+        )
+    }
+
+    func liveTVStopEncoding(playSessionID: String) async throws {
+        // A server may not expose this legacy endpoint. Never broaden a failed
+        // session-scoped request to a device-only stop.
+        guard !playSessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !deviceProfile.deviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AppError.invalidResponse
+        }
+        _ = try await liveTVSend(Endpoint(
+            method: .delete,
+            path: "/Videos/ActiveEncodings",
+            queryItems: [
+                URLQueryItem(
+                    name: providerKind == .emby ? "DeviceId" : "deviceId",
+                    value: deviceProfile.deviceID
+                ),
+                URLQueryItem(
+                    name: providerKind == .emby ? "PlaySessionId" : "playSessionId",
+                    value: playSessionID
+                )
+            ]
+        ))
     }
 
     func reportPlaybackProgress(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {
@@ -1146,6 +1421,17 @@ struct ReachabilityObservingHTTPClient: HTTPClient {
         do {
             let result = try await wrapped.send(endpoint, baseURL: baseURL)
             latch.confirm()
+            return result
+        } catch AppError.serverUnreachable {
+            latch.invalidate()
+            throw AppError.serverUnreachable
+        }
+    }
+
+    func sendRaw(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
+        do {
+            let result = try await wrapped.sendRaw(endpoint, baseURL: baseURL)
+            if (200..<300).contains(result.1.statusCode) { latch.confirm() }
             return result
         } catch AppError.serverUnreachable {
             latch.invalidate()

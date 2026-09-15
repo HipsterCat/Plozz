@@ -16,6 +16,37 @@ import MediaTransportCore
 // AetherPlayerView, etc.) are resolved from the module import directly.
 private typealias AEEngine = AetherEngine
 
+struct PlozzigenLiveAttemptGate {
+    private(set) var generation: UInt64 = 0
+    private(set) var activeGeneration: UInt64?
+    private var failureReportedGeneration: UInt64?
+
+    mutating func begin() -> UInt64 {
+        generation &+= 1
+        activeGeneration = generation
+        failureReportedGeneration = nil
+        return generation
+    }
+
+    mutating func invalidate() {
+        generation &+= 1
+        activeGeneration = nil
+        failureReportedGeneration = nil
+    }
+
+    func accepts(_ generation: UInt64) -> Bool {
+        activeGeneration == generation
+    }
+
+    mutating func consumeFailure(for generation: UInt64) -> Bool {
+        guard accepts(generation), failureReportedGeneration != generation else {
+            return false
+        }
+        failureReportedGeneration = generation
+        return true
+    }
+}
+
 /// `VideoEngine` implementation backed by AetherEngine (branded "Plozzigen").
 ///
 /// AetherEngine handles the full native pipeline internally:
@@ -27,7 +58,7 @@ private typealias AEEngine = AetherEngine
 /// protocol so it plugs into the existing `PlayerViewModel` / routing
 /// infrastructure without changes to the rest of the app.
 @MainActor
-public final class PlozzigenVideoEngine: VideoEngine {
+public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
 
     // MARK: - VideoEngine State
 
@@ -46,8 +77,14 @@ public final class PlozzigenVideoEngine: VideoEngine {
     public private(set) var subtitleTracks: [MediaTrack] = []
     private var sourceFormatCancellable: AnyCancellable?
     private var probePublicationGate = PlozzigenProbePublicationGate()
+    private var liveAttemptGate = PlozzigenLiveAttemptGate()
+    private var liveSourceResetCancellable: AnyCancellable?
 
     public var currentTime: TimeInterval { engine.currentTime }
+    public var isPlaybackPositionReady: Bool {
+        status == .ready && engine.isSessionReady && engine.hasFirstFrameReadyForDisplay
+            && !engine.isSeeking && !outputLoadInProgress && outputPolicyReload == nil
+    }
     public var duration: TimeInterval { engine.duration }
 
     public var videoAspectRatio: Double? {
@@ -65,6 +102,33 @@ public final class PlozzigenVideoEngine: VideoEngine {
     /// FFmpeg AVStream-index space, so this maps directly onto `MediaTrack.id`.
     public var currentAudioTrackID: Int? { engine.activeAudioTrackIndex }
     public var bufferedPosition: TimeInterval { engine.clock.bufferedPosition }
+
+    public var liveSnapshot: LiveChannelEngineSnapshot {
+        let range: ClosedRange<TimeInterval>?
+        if engine.videoRoute == .remoteBypass {
+            // Aether 6.66 reports 0...edge on the bypass, not the sliding
+            // origin's actual lower bound. Do not advertise evicted media.
+            let ranges: [(start: TimeInterval, duration: TimeInterval)] =
+                (engine.currentAVPlayer?.currentItem?.seekableTimeRanges ?? []).map {
+                let range = $0.timeRangeValue
+                return (start: range.start.seconds, duration: range.duration.seconds)
+            }
+            range = LiveSeekableWindow(ranges: ranges).map { $0.lowerBound...$0.upperBound }
+        } else {
+            range = engine.clock.seekableLiveRange
+        }
+        return LiveChannelEngineSnapshot(
+            phase: Self.livePhase(engine.playbackPhase),
+            firstFrameReady: engine.hasFirstFrameReadyForDisplay,
+            position: engine.clock.currentTime,
+            bufferedPosition: engine.clock.bufferedPosition,
+            seekableRange: range,
+            behindLiveSeconds: liveAttemptGate.activeGeneration != nil || engine.isLive
+                ? engine.clock.behindLiveSeconds
+                : nil,
+            route: Self.liveRoute(engine.videoRoute)
+        )
+    }
 
     /// Bridge AetherEngine's live telemetry into the diagnostics overlay so the
     /// Plozzigen path shows real dropped frames / observed FPS / bitrate instead
@@ -156,6 +220,8 @@ public final class PlozzigenVideoEngine: VideoEngine {
 
     deinit {
         progressTimer?.cancel()
+        liveSourceResetCancellable?.cancel()
+        outputPolicyReload?.cancel()
     }
 
     // MARK: - Callbacks
@@ -163,6 +229,7 @@ public final class PlozzigenVideoEngine: VideoEngine {
     public var onProgress: (@MainActor () -> Void)?
     public var onFailure: (@MainActor (AppError) -> Void)?
     public var onEnded: (@MainActor () -> Void)?
+    public var onLiveSourceReset: (@MainActor () -> Void)?
     /// Fired after `syncTracks()` re-reads AetherEngine's async-published track
     /// lists, so the VM can repopulate its (otherwise-empty-at-load) options menu.
     public var onTracksChanged: (@MainActor () -> Void)?
@@ -182,6 +249,12 @@ public final class PlozzigenVideoEngine: VideoEngine {
     private let engine: AEEngine
     private let networkFileResolver: (any MediaTransportNetworkFileResolving)?
     private let authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)?
+    private var liveOutputPolicy = LiveChannelOutputPolicy()
+    private var outputPolicyReload: Task<Void, Never>?
+    private var outputLoadGeneration = UUID()
+    private var outputLoadInProgress = false
+    private var loadedDisplaySuppression: Bool?
+    private var failedDisplaySuppression: Bool?
     private var cancellables = Set<AnyCancellable>()
     private var progressTimer: Task<Void, Never>?
     /// A foreground reload reports its error directly to `PlayerViewModel`.
@@ -223,15 +296,17 @@ public final class PlozzigenVideoEngine: VideoEngine {
 
     /// Mirror AetherEngine's own diagnostics (`EngineLog`) to our `PLZSEEK` stdout
     /// channel when seek tracing is on. This surfaces the engine's internal
-    /// decisions verbatim — most importantly the `seek(to:) ignored: no active
-    /// session (state=.ended)` line that proves a backward seek after end-of-media
-    /// is a no-op. Gated, so it's free (and unhooked) in normal runs.
+    /// decisions after the shared URL/credential redaction pass — most
+    /// importantly the `seek(to:) ignored: no active session (state=.ended)`
+    /// line that proves a backward seek after end-of-media is a no-op. Gated,
+    /// so it's free (and unhooked) in normal runs.
     private func installEngineLogMirror() {
         let trace = PlaybackTrace.enabled
         let handoff = HandoffDiagnostics.isEnabled
         guard trace || handoff else { return }
         EngineLog.handler = { line in
-            if trace { PlaybackTrace.note("AE " + line) }
+            let redacted = HandoffDiagnostics.redactedDetail(line)
+            if trace { PlaybackTrace.note("AE " + redacted) }
             // Forward AetherEngine's load() phase timings AND display-criteria
             // apply/reset lines to the hand-off telemetry stdout channel, so
             // time-to-first-frame and the panel HDR/DV enter/exit are visible on
@@ -256,7 +331,7 @@ public final class PlozzigenVideoEngine: VideoEngine {
                 || isStallDiag
                 || isFailureDetail {
                 HandoffDiagnostics.emit(
-                    "aether " + HandoffDiagnostics.redactedDetail(line)
+                    "aether " + redacted
                 )
             }
         }
@@ -265,6 +340,10 @@ public final class PlozzigenVideoEngine: VideoEngine {
     // MARK: - VideoEngine Lifecycle
 
     public func load(request: PlaybackRequest, startPosition: TimeInterval) async {
+        guard let outputGeneration = await beginOutputLoad() else { return }
+        let outputPolicy = liveOutputPolicy
+        defer { finishOutputLoad(outputGeneration, policy: outputPolicy) }
+        endLiveAttempt()
         let probeGeneration = probePublicationGate.beginLoad()
         sourceFormatCancellable?.cancel()
         sourceFormatCancellable = nil
@@ -284,6 +363,7 @@ public final class PlozzigenVideoEngine: VideoEngine {
             matchContentEnabled: true,
             audioBridgeMode: channels > 6 ? .lossless : .surroundCompat
         )
+        Self.applyLiveOutputPolicy(outputPolicy, to: &options)
         // Build the native WebVTT renditions so subtitles can travel into a
         // Picture in Picture window, where our own overlay cannot follow: it is a
         // view in this app's hierarchy and the window only carries what is in the
@@ -393,6 +473,244 @@ public final class PlozzigenVideoEngine: VideoEngine {
         }
     }
 
+    public func loadLive(url: URL, httpHeaders: [String: String]) async {
+        guard let outputGeneration = await beginOutputLoad() else { return }
+        let outputPolicy = liveOutputPolicy
+        defer { finishOutputLoad(outputGeneration, policy: outputPolicy) }
+        let liveGeneration = beginLiveAttempt()
+        _ = probePublicationGate.beginLoad()
+        sourceFormatCancellable?.cancel()
+        sourceFormatCancellable = nil
+        suppressFailureCallbackForForegroundReload = false
+        progressTimer?.cancel()
+        progressTimer = nil
+        status = .loading
+        isPaused = false
+        intendsPause = false
+        furthestObservedPosition = 0
+
+        var stage = "engine.load"
+        do {
+            var options = Self.liveLoadOptions(httpHeaders: httpHeaders)
+            Self.applyLiveOutputPolicy(outputPolicy, to: &options)
+            try await engine.load(url: url, options: options)
+            guard liveAttemptGate.accepts(liveGeneration) else { return }
+            if case .error(let message) = engine.state {
+                reportLiveFailure(
+                    message,
+                    generation: liveGeneration,
+                    stage: "completion"
+                )
+                return
+            }
+            stage = "audio-session"
+            // Aether's load prologue awaits its detached category/multichannel
+            // declaration. Activate only after that boundary: the bare
+            // AetherPlayerView has no AVPlayerViewController to do it for us,
+            // while Aether remains the sole owner of category configuration.
+            try Self.activateLiveAudioSession()
+            if intendsPause {
+                engine.pause()
+                isPaused = true
+            } else {
+                engine.play()
+                isPaused = false
+            }
+            syncTracks()
+        } catch is CancellationError {
+            // A stop or replacement load owns the session now.
+        } catch {
+            guard liveAttemptGate.accepts(liveGeneration) else { return }
+            let detail: String
+            if stage == "engine.load",
+               case .error(let message) = engine.state {
+                detail = message
+            } else {
+                detail = String(describing: error)
+            }
+            reportLiveFailure(
+                detail,
+                generation: liveGeneration,
+                stage: stage
+            )
+        }
+    }
+
+    public func seekToLiveEdge() async {
+        await engine.seekToLiveEdge()
+    }
+
+    public var supportsConcurrentPlayback: Bool { true }
+
+    public func configureLiveOutput(_ policy: LiveChannelOutputPolicy) {
+        if liveOutputPolicy.suppressesDisplayMatching != policy.suppressesDisplayMatching {
+            failedDisplaySuppression = nil
+        }
+        liveOutputPolicy = policy
+        engine.volume = policy.isAudible ? 1 : 0
+        engine.deactivatesAudioSessionOnStop = !policy.sharesAudioSession
+        reconcileLiveDisplayPolicy()
+    }
+
+    private func beginOutputLoad() async -> UUID? {
+        outputLoadGeneration = UUID()
+        let generation = outputLoadGeneration
+        outputLoadInProgress = true
+        loadedDisplaySuppression = nil
+        failedDisplaySuppression = nil
+        let pending = outputPolicyReload
+        outputPolicyReload = nil
+        pending?.cancel()
+        await pending?.value
+        guard outputLoadGeneration == generation, !Task.isCancelled else {
+            if outputLoadGeneration == generation { outputLoadInProgress = false }
+            return nil
+        }
+        return generation
+    }
+
+    private func finishOutputLoad(_ generation: UUID, policy: LiveChannelOutputPolicy) {
+        guard outputLoadGeneration == generation else { return }
+        outputLoadInProgress = false
+        loadedDisplaySuppression = policy.suppressesDisplayMatching
+        reconcileLiveDisplayPolicy()
+    }
+
+    private func reconcileLiveDisplayPolicy() {
+        #if os(tvOS)
+        guard !outputLoadInProgress, outputPolicyReload == nil, status == .ready, engine.isSessionReady,
+              let loadedDisplaySuppression,
+              failedDisplaySuppression != liveOutputPolicy.suppressesDisplayMatching,
+              loadedDisplaySuppression != liveOutputPolicy.suppressesDisplayMatching else { return }
+        let generation = outputLoadGeneration
+        let policy = liveOutputPolicy
+        outputPolicyReload = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if outputLoadGeneration == generation {
+                    outputPolicyReload = nil
+                    reconcileLiveDisplayPolicy()
+                }
+            }
+            guard outputLoadGeneration == generation, !Task.isCancelled,
+                  liveOutputPolicy.suppressesDisplayMatching == policy.suppressesDisplayMatching else { return }
+            do {
+                // Changing load options through Aether's session-preserving reload
+                // keeps the broadcast cursor, pause state and selected tracks.
+                try await reloadSession(outputPolicy: policy)
+                guard outputLoadGeneration == generation, !Task.isCancelled else { return }
+                self.loadedDisplaySuppression = policy.suppressesDisplayMatching
+            } catch is CancellationError {
+                // A newer source, stop or foreground teardown owns playback.
+            } catch {
+                guard outputLoadGeneration == generation, !Task.isCancelled else { return }
+                let failure = (error as? AppError) ?? .unknown(String(describing: error))
+                failedDisplaySuppression = policy.suppressesDisplayMatching
+                PlozzLog.playback.error("Channel display policy could not be applied")
+                onFailure?(failure)
+            }
+        }
+        #endif
+    }
+
+    nonisolated static func liveLoadOptions(
+        httpHeaders: [String: String]
+    ) -> LoadOptions {
+        // Aether 6.66 gives nativeRemoteHLS its AVPlayer-backed live window
+        // without a host-selected DVR duration. Keep nil so an ingest reroute
+        // does not silently opt the app into an arbitrary disk timeshift policy.
+        LoadOptions(
+            httpHeaders: httpHeaders,
+            isLive: true,
+            dvrWindowSeconds: nil,
+            liveJoinProfile: .standard,
+            nativeRemoteHLS: true,
+            nativeRemoteHLSIngestFallback: true
+        )
+    }
+
+    nonisolated static func applyLiveOutputPolicy(_ policy: LiveChannelOutputPolicy, to options: inout LoadOptions) {
+        options.suppressDisplayCriteria = policy.suppressesDisplayMatching
+        options.matchContentEnabled = !policy.suppressesDisplayMatching
+    }
+
+    private nonisolated static func activateLiveAudioSession() throws {
+        #if os(iOS) || os(tvOS)
+        try AVAudioSession.sharedInstance().setActive(true)
+        #endif
+    }
+
+    nonisolated static func livePhase(
+        _ phase: PlaybackPhase
+    ) -> LiveChannelEnginePhase {
+        switch phase {
+        case .idle: .idle
+        case .loading: .loading
+        case .playing: .playing
+        case .paused: .paused
+        case .seeking: .seeking
+        case .rebuffering: .rebuffering
+        case .stalled(let reconnecting): .stalled(reconnecting: reconnecting)
+        case .ended: .ended
+        case .error: .failed
+        }
+    }
+
+    nonisolated static func liveRoute(
+        _ route: VideoRoute
+    ) -> LiveChannelEngineRoute {
+        switch route {
+        case .none: .none
+        case .remoteBypass: .nativeHLS
+        case .loopback: .localHLS
+        case .software: .software
+        case .audio: .audio
+        }
+    }
+
+    private func beginLiveAttempt() -> UInt64 {
+        let generation = liveAttemptGate.begin()
+        liveSourceResetCancellable?.cancel()
+        liveSourceResetCancellable = engine.liveSourceReset
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in
+                guard let self,
+                      self.liveAttemptGate.accepts(generation) else {
+                    return
+                }
+                self.onLiveSourceReset?()
+            }
+        return generation
+    }
+
+    private func endLiveAttempt() {
+        liveAttemptGate.invalidate()
+        liveSourceResetCancellable?.cancel()
+        liveSourceResetCancellable = nil
+    }
+
+    private func reportLiveFailure(
+        _ detail: String,
+        generation: UInt64,
+        stage: String
+    ) {
+        guard liveAttemptGate.consumeFailure(for: generation) else { return }
+        // A queued state publication may outlive its errorInfo. Never classify
+        // an older message using a replacement session's failure.
+        let info = engine.errorInfo.flatMap { $0.message == detail ? $0 : nil }
+        let classification = PlozzigenLiveFailure.diagnostic(info)
+        let redacted = HandoffDiagnostics.redactedDetail(detail)
+        HandoffDiagnostics.emit(
+            "aether LIVE_FAILED stage=\(stage) \(classification) detail=\(redacted)"
+        )
+        PlozzLog.playback.error(
+            "Plozzigen live playback failed at \(stage): \(classification) \(redacted)"
+        )
+        let error = PlozzigenLiveFailure.appError(info)
+        status = .failed(error)
+        onFailure?(error)
+    }
+
     /// Optional container short-name hint for the demuxer probe, derived from the
     /// typed locator. nil lets AetherEngine probe from content.
     private static func networkFileFormatHint(for locator: NetworkFileLocator) -> String? {
@@ -433,6 +751,29 @@ public final class PlozzigenVideoEngine: VideoEngine {
     }
 
     public func reloadAfterForeground() async throws {
+        if let pending = outputPolicyReload {
+            await pending.value
+            try Task.checkCancellation()
+            if case .failed(let error) = status { throw error }
+            return
+        }
+        let generation = outputLoadGeneration
+        let policy = liveOutputPolicy
+        outputLoadInProgress = true
+        defer {
+            if outputLoadGeneration == generation {
+                outputLoadInProgress = false
+                reconcileLiveDisplayPolicy()
+            }
+        }
+        try await reloadSession(outputPolicy: policy)
+        if outputLoadGeneration == generation {
+            loadedDisplaySuppression = policy.suppressesDisplayMatching
+        }
+    }
+
+    private func reloadSession(outputPolicy: LiveChannelOutputPolicy) async throws {
+        try Task.checkCancellation()
         let probeGeneration = probePublicationGate.currentGeneration
         guard probePublicationGate.accepts(probeGeneration) else { return }
         // AetherEngine resets sourceVideoFormat to its provisional `.sdr` value
@@ -443,7 +784,11 @@ public final class PlozzigenVideoEngine: VideoEngine {
         defer { suppressFailureCallbackForForegroundReload = false }
         status = .loading
         do {
-            try await engine.reloadAtCurrentPosition()
+            try Task.checkCancellation()
+            try await engine.reloadAtCurrentPosition { options in
+                Self.applyLiveOutputPolicy(outputPolicy, to: &options)
+            }
+            try Task.checkCancellation()
             // Custom-source reloads report failure through `state = .error` and
             // return normally. Drain the adapter's queued Combine delivery, then
             // inspect engine truth before declaring recovery successful.
@@ -468,6 +813,8 @@ public final class PlozzigenVideoEngine: VideoEngine {
                 isPaused = false
             }
             status = .ready
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             guard probePublicationGate.accepts(probeGeneration) else { return }
             let appError = (error as? AppError) ?? .unknown(String(describing: error))
@@ -499,12 +846,19 @@ public final class PlozzigenVideoEngine: VideoEngine {
     }
 
     private func stopEngine(resetDisplayCriteria: Bool) {
+        outputLoadGeneration = UUID()
+        outputPolicyReload?.cancel()
+        outputPolicyReload = nil
+        outputLoadInProgress = false
+        loadedDisplaySuppression = nil
+        failedDisplaySuppression = nil
+        endLiveAttempt()
         probePublicationGate.invalidate()
         sourceFormatCancellable?.cancel()
         sourceFormatCancellable = nil
         progressTimer?.cancel()
         progressTimer = nil
-        engine.stop(resetDisplayCriteria: resetDisplayCriteria)
+        engine.stop(resetDisplayCriteria: resetDisplayCriteria && !liveOutputPolicy.sharesAudioSession)
         status = .idle
         intendsPause = true
         isPaused = true
@@ -526,6 +880,8 @@ public final class PlozzigenVideoEngine: VideoEngine {
     public func setPlaybackSpeed(_ rate: Double) {
         engine.setRate(Float(rate))
     }
+
+    public var maximumPlaybackSpeed: Double { Double(engine.maxSupportedRate) }
 
     public func setAudioDelay(_ seconds: TimeInterval) {}
     public func setSubtitleDelay(_ seconds: TimeInterval) {}
@@ -559,6 +915,22 @@ public final class PlozzigenVideoEngine: VideoEngine {
     #if canImport(UIKit)
     public func makeVideoOutputView() -> UIView {
         videoView
+    }
+
+    public var nowPlayingPlayer: AVPlayer? { engine.currentAVPlayer }
+    public var needsBackgroundReload: Bool { !engine.isSessionReady }
+
+    private var backgroundAudioEnabled = false
+
+    public func setBackgroundAudioEnabled(_ enabled: Bool) {
+        #if os(iOS)
+        backgroundAudioEnabled = enabled
+        engine.currentAVPlayer?.audiovisualBackgroundPlaybackPolicy = enabled ? .continuesIfPossible : .automatic
+        // Leave Aether's PiP/background master enabled. The host pauses ordinary
+        // video by default; the engine keeps native or software audio alive only
+        // when the host intentionally leaves it playing.
+        engine.backgroundPlaybackEnabled = true
+        #endif
     }
 
     /// The layer actually presenting video on the native path, for a host-built
@@ -661,6 +1033,10 @@ public final class PlozzigenVideoEngine: VideoEngine {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] player in
                 guard let player else { return }
+                #if os(iOS)
+                player.audiovisualBackgroundPlaybackPolicy =
+                    self?.backgroundAudioEnabled == true ? .continuesIfPossible : .automatic
+                #endif
                 player.allowsExternalPlayback = true
                 player.usesExternalPlaybackWhileExternalScreenIsActive = true
                 // A new player means a new layer. Announce it on the next turn so
@@ -687,7 +1063,15 @@ public final class PlozzigenVideoEngine: VideoEngine {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
                 guard let self else { return }
-                PlaybackTrace.note("engine.state -> \(state) intendsPause=\(self.intendsPause) curr=\(String(format: "%.2f", self.currentTime)) dur=\(String(format: "%.2f", self.duration))")
+                let stateDetail = HandoffDiagnostics.redactedDetail(
+                    String(describing: state)
+                )
+                PlaybackTrace.note("engine.state -> \(stateDetail) intendsPause=\(self.intendsPause) curr=\(String(format: "%.2f", self.currentTime)) dur=\(String(format: "%.2f", self.duration))")
+                // Combine delivery is queued onto the main run loop. A stop or
+                // replacement load can advance engine truth before an older
+                // event arrives; never let that retired session mutate the
+                // successor's status or transport intent.
+                guard self.engine.state == state else { return }
                 switch state {
                 case .idle:
                     break
@@ -706,7 +1090,9 @@ public final class PlozzigenVideoEngine: VideoEngine {
                     } else {
                         self.isPaused = false
                         self.status = .ready
-                        self.startProgressTimer()
+                        if self.liveAttemptGate.activeGeneration == nil {
+                            self.startProgressTimer()
+                        }
                     }
                 case .paused:
                     self.isPaused = true
@@ -714,8 +1100,17 @@ public final class PlozzigenVideoEngine: VideoEngine {
                 case .seeking:
                     break
                 case .ended:
-                    self.onEnded?()
+                    if !self.suppressFailureCallbackForForegroundReload { self.onEnded?() }
                 case .error(let msg):
+                    if self.suppressFailureCallbackForForegroundReload { return }
+                    if let generation = self.liveAttemptGate.activeGeneration {
+                        self.reportLiveFailure(
+                            msg,
+                            generation: generation,
+                            stage: "state"
+                        )
+                        return
+                    }
                     HandoffDiagnostics.emit(
                         "aether STATE_ERROR detail="
                             + HandoffDiagnostics.redactedDetail(msg)
@@ -730,6 +1125,7 @@ public final class PlozzigenVideoEngine: VideoEngine {
                         self.onFailure?(err)
                     }
                 }
+                self.reconcileLiveDisplayPolicy()
             }
             .store(in: &cancellables)
 
@@ -738,6 +1134,7 @@ public final class PlozzigenVideoEngine: VideoEngine {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] time in
                 guard let self else { return }
+                guard self.liveAttemptGate.activeGeneration == nil else { return }
                 if time > self.furthestObservedPosition {
                     self.furthestObservedPosition = time
                 }

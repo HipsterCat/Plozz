@@ -128,6 +128,11 @@ func seerRequestResult(_ outcome: SeerRequestOutcome, actingName: String?) -> Me
                 title: "Seerr User Not Found",
                 message: .copy("The linked Seerr user no longer exists. Re-link this profile in Settings ▸ Everyone ▸ Seerr.")
             )
+        case .mappingNeedsRelink:
+            return .failure(
+                title: "Relink Seerr User",
+                message: .copy(reason.userMessage)
+            )
         case .unreachable:
             return .failure(
                 title: "Can’t Reach Seerr",
@@ -785,8 +790,7 @@ func makePlaybackStoppedHandler(
             resumePosition: mutation?.resumePosition,
             watchedPercent: percent
         ))
-        // End the live session (so the just-played server is no longer deferred)
-        // and enqueue the final convergence write, in that order. `percent` rides
+        // Queue the final write before lifting the live-session guard. `percent` rides
         // along so the surface the user returns to can flip its resume bar in place.
         watchBridge.finishPlayback(liveAccountID, liveItemID, percent, mutation, convergingItem)
     }

@@ -136,6 +136,14 @@ extension AppState {
             Task { await appState?.cloudSync?.publishLocalChanges() }
         }
 
+        var channels = [mediaChannel, trackerTokenChannel]
+        #if DEBUG
+        channels.append(Self.makeLiveTVSyncChannel(
+            bridge: appState.liveTVPortableSync,
+            stateFileURL: syncDir.appendingPathComponent("cloud-live-tv-state-v1.json")
+        ))
+        appState.observeLiveTVPortableSync()
+        #endif
         return CloudConfigSyncService(.init(
             containerIdentifier: cloudContainerIdentifier,
             stateFileURL: configStateURL,
@@ -151,7 +159,7 @@ extension AppState {
                 await appState?.clearRemoteDerivedSyncState()
             },
             status: appState.cloudSyncStatus
-        ), channels: [mediaChannel, trackerTokenChannel])
+        ), channels: channels)
     }
 
     /// Force an immediate two-way sync (manual "Sync Now").
@@ -307,6 +315,9 @@ extension AppState {
         let config = cloudSync
         Task { @MainActor in
             await config?.deleteAllServerData()
+            #if DEBUG
+            resetLiveTVPortableSync()
+            #endif
             for profileID in profilesModel.profiles.map(\.id) {
                 do {
                     try await mediaAliasLedger.removeProfile(profileID)
@@ -442,7 +453,8 @@ extension AppState {
 
     /// Apply the EXACT local changes the ledger dictated (nil value = delete). CONFIG
     /// ONLY: roster + settings + membership + the pending-server list. Never signs a
-    /// device in, never writes the Keychain. Applying exactly these keeps
+    /// device in, never changes credentials. Authorized shares also receive their
+    /// non-secret library configuration. Applying exactly these keeps
     /// capture(apply) == record (no clobber).
     public func applySyncRecords(_ changes: SyncLocalChanges) {
         var profileUpserts: [String: ProfileSyncDTO] = [:]
@@ -452,6 +464,7 @@ extension AppState {
         var settingWrites: [(pid: String, key: String, blob: Data)] = []
         var settingRemoves: [(pid: String, key: String)] = []
         var descriptorsTouched = false
+        var receivedDescriptors: [SyncedAccountDescriptor] = []
         var pendingStore = PendingSyncedServersStore()
         var removalUpserts: [String: Int] = [:]
         var removalClears: Set<String> = []
@@ -478,6 +491,7 @@ extension AppState {
                 descriptorsTouched = true
                 if let value, let d = CanonicalJSON.decode(SyncedAccountDescriptor.self, from: value) {
                     pendingStore.upsertSynced(d.sanitizingURLs())
+                    receivedDescriptors.append(d.sanitizingURLs())
                 } else if value == nil {
                     pendingStore.removeSynced(key.id)
                 }
@@ -508,6 +522,8 @@ extension AppState {
             }
             for id in removalClears { removed.clear(id) }
         }
+
+        accountsProviders.applySyncedMediaShareLibraries(receivedDescriptors)
 
         // 1. Profiles: cosmetic upserts + deletions (default never deleted).
         // Accounts this device KNOWS aren't Plex. Synced ids for servers not
@@ -830,6 +846,9 @@ extension AppState {
     }
 
     func removeMediaAliases(forProfileID profileID: String) {
+        #if DEBUG
+        removeLiveTVPortableProfile(profileID)
+        #endif
         removeUniversalWatchlist(forProfileID: profileID)
         Task { @MainActor [weak self] in
             guard let self else { return }

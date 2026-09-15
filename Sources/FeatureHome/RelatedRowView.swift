@@ -104,4 +104,31 @@ struct RelatedRowView: View {
         })
     }
 }
+
+// maybe STEAL basic poster row section
+
+#if DEBUG
+#Preview("Related") {
+    RelatedRowView(
+        entries: [
+            RelatedEntry(
+                related: RelatedTitle(title: "Dune", year: 2021, kind: .movie, source: .tmdb),
+                libraryItem: MediaItem(id: "m1", title: "Dune", kind: .movie, productionYear: 2021)
+            ),
+            RelatedEntry(
+                related: RelatedTitle(title: "Arrival", year: 2016, kind: .movie, source: .tmdb),
+                libraryItem: MediaItem(id: "m2", title: "Arrival", kind: .movie, productionYear: 2016)
+            ),
+            RelatedEntry(
+                related: RelatedTitle(title: "Blade Runner 2049", year: 2017, kind: .movie, source: .tmdb),
+                libraryItem: MediaItem(id: "m3", title: "Blade Runner 2049", kind: .movie, productionYear: 2017)
+            )
+        ],
+        onSelect: { _ in }
+    )
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
 #endif

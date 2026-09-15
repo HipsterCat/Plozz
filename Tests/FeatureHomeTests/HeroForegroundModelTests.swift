@@ -1,5 +1,8 @@
 import XCTest
 import CoreModels
+#if canImport(UIKit)
+import UIKit
+#endif
 @testable import FeatureHome
 
 /// Pure-logic coverage for the env-gated imperative UIKit hero foreground's value
@@ -55,6 +58,38 @@ final class HeroForegroundModelTests: XCTestCase {
     }
 
     // MARK: - seasonEpisodeButtonText
+
+    func testStartWatchingPillNamesTheFirstEpisode() {
+        let pill = Builder.pill(for: .init(
+            kind: .play, isStarting: true, seasonEpisodeText: "S1, E1"
+        ))
+        XCTAssertNotNil(pill.localizedTitle)
+        XCTAssertEqual(pill.text, " · S1, E1")
+    }
+
+#if canImport(UIKit)
+    @MainActor
+    func testStartWatchingPillResolvesCopyAtTheUIKitBoundary() {
+        let pill = Builder.pill(for: .init(
+            kind: .play, isStarting: true, seasonEpisodeText: "S1, E1"
+        ))
+        let view = HeroForegroundPillView(frame: .zero)
+        view.configure(pill, selected: false, locale: Locale(identifier: "en"))
+        XCTAssertEqual(
+            view.subviews.compactMap { $0 as? UILabel }.first?.text,
+            "Start watching · S1, E1"
+        )
+    }
+#endif
+
+    func testInProgressFirstEpisodeKeepsTheResumePill() {
+        let pill = Builder.pill(for: .init(
+            kind: .play, resumeProgress: 0.3, isResume: true, isStarting: true,
+            resumeRemainingText: "35m", seasonEpisodeText: "S1, E1"
+        ))
+        XCTAssertEqual(pill.text, "S1, E1 • 35m")
+        XCTAssertEqual(pill.progress, 0.3)
+    }
 
     private func episode(
         id: String = "e1",
@@ -192,6 +227,42 @@ final class HeroForegroundModelTests: XCTestCase {
         XCTAssertEqual(pill.text, "Request")
         XCTAssertEqual(pill.systemImage, "plus.circle")
     }
+
+    func testSeasonRequestPillKeepsCountedCopyAndStatusIcon() {
+        for selected in [[7], [2, 7, 14], Array(1...20)] {
+            let availability = MediaRequestAvailability(
+                status: .unknown,
+                seasons: (1...20).map {
+                    MediaSeasonRequestState(number: $0, title: "Season \($0)", status: .unknown)
+                }
+            ).markingRequested(selected)
+            let presentation = SeasonRequestPresentation(availability: availability)
+            let pill = Builder.pill(for: PillInput(
+                kind: .request,
+                requestTitle: presentation.title,
+                requestSystemImage: presentation.systemImage
+            ))
+            XCTAssertEqual(pill.kind, .request, "Status must remain an actionable season picker")
+            XCTAssertEqual(pill.localizedTitle, presentation.title)
+            XCTAssertEqual(pill.systemImage, presentation.systemImage)
+            XCTAssertNil(pill.progress, "A requested subset is not a whole-series download")
+        }
+    }
+
+#if canImport(UIKit)
+    @MainActor
+    func testSeasonStatusResolvesAtTheUIKitBoundary() {
+        let title: LocalizedStringResource = "S\(7) Requested"
+        let pill = Builder.pill(for: PillInput(
+            kind: .request,
+            requestTitle: title,
+            requestSystemImage: "clock"
+        ))
+        let view = HeroForegroundPillView(frame: .zero)
+        view.configure(pill, selected: false, locale: Locale(identifier: "en"))
+        XCTAssertEqual(view.subviews.compactMap { $0 as? UILabel }.first?.text, "S7 Requested")
+    }
+#endif
 
     func testDownloadStatusPillShowsPercentWhenDownloading() {
         let pill = Builder.pill(for: PillInput(kind: .downloadStatus, downloadProgress: 0.826))

@@ -207,6 +207,7 @@ public struct TransportCursorDownloadEngine:
 
         let reader = try await opener.open(source)
         do {
+            try Task.checkCancellation()
             let total = try await copyBytes(
                 from: reader,
                 to: destination,
@@ -247,6 +248,7 @@ public struct TransportCursorDownloadEngine:
             let length = Int(min(Int64(chunkSize), total - offset))
             try await rateLimiter.waitToTransfer(byteCount: length)
             let data = try await reader.read(at: offset, length: length)
+            try Task.checkCancellation()
             guard !data.isEmpty else {
                 throw MediaDownloadError.unexpectedEndOfFile(
                     expected: total,
@@ -263,6 +265,7 @@ public struct TransportCursorDownloadEngine:
             offset += Int64(data.count)
             await onProgress(offset, total)
         }
+        try Task.checkCancellation()
         try handle.synchronize()
         guard offset == total else {
             throw MediaDownloadError.unexpectedEndOfFile(

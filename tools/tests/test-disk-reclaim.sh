@@ -5,7 +5,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d -t plozz-reclaim-tests)"
 TEST_HOME="$TMP/home"
 DD="$TEST_HOME/Library/Developer/Xcode/DerivedData"
-LOCK="$TEST_HOME/Library/Caches/reclaim-test.lock"
+INTERLOCK_ROOT="$TEST_HOME/.config/smart-disk-maintenance/apple-build-interlock-v1"
+ROLLOUT="$INTERLOCK_ROOT/rollout-policy-v1"
 LOG="$TMP/reclaim.log"
 ACTIVE_PID=""
 MAINTENANCE_PID=""
@@ -44,8 +45,9 @@ assert_contains() {
 run_guarded() {
   env \
     HOME="$TEST_HOME" \
+    APPLE_BUILD_INTERLOCK_TESTING=1 \
+    APPLE_BUILD_INTERLOCK_TEST_ROOT="$INTERLOCK_ROOT" \
     DERIVED_DATA_DIR="${RUN_DD:-$DD}" \
-    RECLAIM_LOCK_FILE="$LOCK" \
     APPLE_BUILD_QUIET_SECONDS="${QUIET_SECONDS:-1}" \
     APPLE_BUILD_MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-3}" \
     APPLE_BUILD_POLL_SECONDS=1 \
@@ -58,6 +60,22 @@ run_guarded() {
     RECLAIM_LOG="${RECLAIM_LOG:-}" \
     OPEN_TARGET="${OPEN_TARGET:-}" \
     "$@"
+}
+
+reset_interlock() {
+  rm -rf "$INTERLOCK_ROOT"
+  mkdir -p "$(dirname "$INTERLOCK_ROOT")"
+  : > "$(dirname "$INTERLOCK_ROOT")/.apple-build-interlock-test-root"
+  chmod 600 "$(dirname "$INTERLOCK_ROOT")/.apple-build-interlock-test-root"
+  HOME="$TEST_HOME" \
+  APPLE_BUILD_INTERLOCK_TESTING=1 \
+  APPLE_BUILD_INTERLOCK_TEST_ROOT="$INTERLOCK_ROOT" \
+    /usr/bin/python3 "$ROOT/tools/lib/apple_build_lease.py" prepare
+  HOME="$TEST_HOME" \
+  APPLE_BUILD_INTERLOCK_TESTING=1 \
+  APPLE_BUILD_INTERLOCK_TEST_ROOT="$INTERLOCK_ROOT" \
+    /usr/bin/python3 "$ROOT/tools/lib/apple_build_lease.py" required-rollout > "$ROLLOUT"
+  chmod 600 "$ROLLOUT"
 }
 
 start_fake_tool() {
@@ -89,6 +107,8 @@ stop_fake_tool() {
 }
 
 mkdir -p "$DD"
+chmod 700 "$TEST_HOME"
+reset_interlock
 mkdir -p "$QUIET_TOOLS"
 printf '%s\n' \
   '#!/bin/sh' \
@@ -100,7 +120,9 @@ QUIET_PATH="$QUIET_TOOLS:$PATH"
 for tool in xcodebuild SWBBuildService XCBBuildService swiftc swift-frontend clang actool ibtool; do
   start_fake_tool "$tool"
   activity="$(
-    HOME="$TEST_HOME" RECLAIM_LOCK_FILE="$LOCK" \
+    HOME="$TEST_HOME" \
+    APPLE_BUILD_INTERLOCK_TESTING=1 \
+    APPLE_BUILD_INTERLOCK_TEST_ROOT="$INTERLOCK_ROOT" \
       bash -c 'source "$1"; apple_build_activity' _ "$ROOT/tools/lib/apple-build-guard.sh"
   )"
   printf '%s\n' "$activity" | grep -F "pid=$ACTIVE_PID " >/dev/null ||
@@ -113,7 +135,9 @@ idle_service="$TMP/bin/SWBBuildService"
 ACTIVE_PID=$!
 sleep 0.1
 activity="$(
-  HOME="$TEST_HOME" RECLAIM_LOCK_FILE="$LOCK" \
+  HOME="$TEST_HOME" \
+  APPLE_BUILD_INTERLOCK_TESTING=1 \
+  APPLE_BUILD_INTERLOCK_TEST_ROOT="$INTERLOCK_ROOT" \
     bash -c 'source "$1"; apple_build_activity' _ "$ROOT/tools/lib/apple-build-guard.sh"
 )"
 if printf '%s\n' "$activity" | grep -F "pid=$ACTIVE_PID " >/dev/null; then
@@ -137,14 +161,15 @@ set -e
 [ "$prune_status" -eq 75 ] || fail "prune active-build status was $prune_status, expected 75"
 assert_exists "$DD/PruneCandidate"
 assert_contains "$TMP/prune-active.log" "Apple build activity detected"
+reset_interlock
 
-BUILD_ROOT="$TMP/worktrees"
+BUILD_ROOT="$TEST_HOME/worktrees"
 mkdir -p "$BUILD_ROOT/idle/.build"
 touch -t 202001010000 "$BUILD_ROOT/idle/.build"
 set +e
 RECLAIM_BUILD_ROOTS="$BUILD_ROOT" \
-RECLAIM_MAIN_REPOS="$TMP/no-main" \
-MCP_WORKSPACES_DIR="$TMP/no-mcp" \
+RECLAIM_MAIN_REPOS="$TEST_HOME/no-main" \
+MCP_WORKSPACES_DIR="$TEST_HOME/no-mcp" \
 RECLAIM_LOG="$LOG" \
 MAX_WAIT_SECONDS=0 \
   run_guarded "$ROOT/tools/reclaim-disk.sh" --days 0 --no-extras >"$TMP/reclaim-active.log" 2>&1
@@ -154,8 +179,9 @@ set -e
 assert_exists "$BUILD_ROOT/idle/.build"
 assert_contains "$TMP/reclaim-active.log" "Apple build activity detected"
 stop_fake_tool
+reset_interlock
 
-LOCK_DD="$TMP/lock-dd"
+LOCK_DD="$TEST_HOME/lock-dd"
 mkdir -p "$LOCK_DD"
 QUIET_SECONDS=2 MAX_WAIT_SECONDS=3 RUN_DD="$LOCK_DD" TEST_PATH="$QUIET_PATH" \
   run_guarded "$ROOT/tools/prune-deriveddata.sh" --all >"$TMP/lock-first.log" 2>&1 &
@@ -163,7 +189,7 @@ first_pid=$!
 MAINTENANCE_PID="$first_pid"
 lock_held=0
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-  if [ -f "$LOCK" ] && ! /usr/bin/lockf -s -t 0 "$LOCK" /usr/bin/true; then
+  if [ -n "$(find "$INTERLOCK_ROOT/leases" -mindepth 1 -maxdepth 1 -type f -name '*.json' 2>/dev/null | head -n1)" ]; then
     lock_held=1
     break
   fi
@@ -176,15 +202,44 @@ RUN_DD="$LOCK_DD" TEST_PATH="$QUIET_PATH" \
 overlap_status=$?
 set -e
 [ "$overlap_status" -eq 75 ] || fail "overlap status was $overlap_status, expected 75"
-assert_contains "$TMP/lock-second.log" "refusing overlap"
+assert_contains "$TMP/lock-second.log" "destructive maintenance refused"
 wait "$first_pid"
 MAINTENANCE_PID=""
 
-printf 'stale owner metadata\n' > "$LOCK"
-mkdir -p "$DD/StaleLockCandidate"
-touch -t 202001010000 "$DD/StaleLockCandidate"
-TEST_PATH="$QUIET_PATH" run_guarded "$ROOT/tools/prune-deriveddata.sh" --all >"$TMP/stale-lock.log" 2>&1
-assert_missing "$DD/StaleLockCandidate"
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  [ -z "$(find "$INTERLOCK_ROOT/leases" -mindepth 1 -maxdepth 1 -type f -name '*.json' 2>/dev/null | head -n1)" ] && break
+  sleep 0.1
+done
+[ -z "$(find "$INTERLOCK_ROOT/leases" -mindepth 1 -maxdepth 1 -type f -name '*.json' 2>/dev/null | head -n1)" ] ||
+  fail "completed maintenance lease did not finalize"
+
+mkdir -p "$DD/SuspendedCandidate"
+touch -t 202001010000 "$DD/SuspendedCandidate"
+touch "$TEST_HOME/.config/smart-disk-maintenance/SUSPENDED"
+set +e
+TEST_PATH="$QUIET_PATH" run_guarded "$ROOT/tools/prune-deriveddata.sh" --all >"$TMP/suspended.log" 2>&1
+suspended_status=$?
+set -e
+[ "$suspended_status" -eq 75 ] || fail "suspended status was $suspended_status, expected 75"
+assert_exists "$DD/SuspendedCandidate"
+assert_contains "$TMP/suspended.log" "destructive maintenance is suspended"
+
+mkdir -p "$BUILD_ROOT/suspended/.build"
+touch -t 202001010000 "$BUILD_ROOT/suspended/.build"
+set +e
+RECLAIM_BUILD_ROOTS="$BUILD_ROOT" \
+RECLAIM_MAIN_REPOS="$TEST_HOME/no-main" \
+MCP_WORKSPACES_DIR="$TEST_HOME/no-mcp" \
+RECLAIM_LOG="$LOG" \
+TEST_PATH="$QUIET_PATH" \
+  run_guarded "$ROOT/tools/reclaim-disk.sh" --days 0 --no-extras >"$TMP/reclaim-suspended.log" 2>&1
+reclaim_suspended_status=$?
+set -e
+[ "$reclaim_suspended_status" -eq 75 ] ||
+  fail "suspended reclaim status was $reclaim_suspended_status, expected 75"
+assert_exists "$BUILD_ROOT/suspended/.build"
+assert_contains "$TMP/reclaim-suspended.log" "destructive maintenance is suspended"
+rm -f "$TEST_HOME/.config/smart-disk-maintenance/SUSPENDED"
 
 mkdir -p "$DD/OpenPathCandidate"
 FAKE_LSOF="$TMP/fake-lsof"
@@ -203,12 +258,55 @@ set -e
 }
 assert_exists "$DD/OpenPathCandidate"
 assert_contains "$TMP/open-path.log" "Open files detected"
+reset_interlock
 TEST_PATH="$QUIET_PATH" run_guarded "$ROOT/tools/prune-deriveddata.sh" --all >"$TMP/open-path-clear.log" 2>&1
 assert_missing "$DD/OpenPathCandidate"
 
+# Test-only rollout and lock state can never authorize deletion outside the
+# matching temporary HOME fixture.
+OUTSIDE_DD="$TMP/outside-test-home/DerivedData"
+mkdir -p "$OUTSIDE_DD/ForbiddenCandidate"
+touch -t 202001010000 "$OUTSIDE_DD/ForbiddenCandidate"
+reset_interlock
+set +e
+RUN_DD="$OUTSIDE_DD" TEST_PATH="$QUIET_PATH" \
+  run_guarded "$ROOT/tools/prune-deriveddata.sh" --all >"$TMP/outside-test-home.log" 2>&1
+outside_status=$?
+set -e
+[ "$outside_status" -eq 75 ] ||
+  fail "outside-test-home status was $outside_status, expected 75"
+assert_exists "$OUTSIDE_DD/ForbiddenCandidate"
+assert_contains "$TMP/outside-test-home.log" "outside the test HOME fixture"
+
+# A linked worktree under the fixture cannot redirect `git worktree prune` to a
+# common Git directory outside that fixture.
+OUTSIDE_GIT="$TMP/outside-git-common"
+LINKED_REPO="$TEST_HOME/linked-repo"
+git init -q "$OUTSIDE_GIT"
+git -C "$OUTSIDE_GIT" config user.name "Fixture"
+git -C "$OUTSIDE_GIT" config user.email "fixture@example.invalid"
+printf 'fixture\n' > "$OUTSIDE_GIT/file.txt"
+git -C "$OUTSIDE_GIT" add file.txt
+git -C "$OUTSIDE_GIT" commit -q -m "fixture"
+git -C "$OUTSIDE_GIT" worktree add -q -b fixture-linked "$LINKED_REPO"
+reset_interlock
+set +e
+RECLAIM_BUILD_ROOTS="$TEST_HOME/no-build-roots" \
+RECLAIM_MAIN_REPOS="$LINKED_REPO" \
+MCP_WORKSPACES_DIR="$TEST_HOME/no-mcp" \
+RECLAIM_LOG="$LOG" \
+TEST_PATH="$QUIET_PATH" \
+  run_guarded "$ROOT/tools/reclaim-disk.sh" --days 0 --no-extras >"$TMP/linked-common-dir.log" 2>&1
+linked_common_status=$?
+set -e
+[ "$linked_common_status" -eq 75 ] ||
+  fail "linked-common-dir status was $linked_common_status, expected 75"
+assert_contains "$TMP/linked-common-dir.log" "unsafe Git common directory"
+reset_interlock
+
 RECLAIM_BUILD_ROOTS="$BUILD_ROOT" \
-RECLAIM_MAIN_REPOS="$TMP/no-main" \
-MCP_WORKSPACES_DIR="$TMP/no-mcp" \
+RECLAIM_MAIN_REPOS="$TEST_HOME/no-main" \
+MCP_WORKSPACES_DIR="$TEST_HOME/no-mcp" \
 RECLAIM_LOG="$LOG" \
 TEST_PATH="$QUIET_PATH" \
   run_guarded "$ROOT/tools/reclaim-disk.sh" --days 0 --no-extras >"$TMP/reclaim-clear.log" 2>&1
@@ -216,7 +314,10 @@ assert_missing "$BUILD_ROOT/idle/.build"
 
 mkdir -p "$TEST_HOME/Library/Caches/org.swift.swiftpm/repository"
 set +e
-HOME="$TEST_HOME" APPLE_BUILD_OPEN_PATH_CHECK=0 \
+HOME="$TEST_HOME" \
+APPLE_BUILD_INTERLOCK_TESTING=1 \
+APPLE_BUILD_INTERLOCK_TEST_ROOT="$INTERLOCK_ROOT" \
+APPLE_BUILD_OPEN_PATH_CHECK=0 \
   bash -c 'source "$1"; guard_cache_path_for_delete "$HOME/Library/Caches/org.swift.swiftpm/repository"' \
   _ "$ROOT/tools/lib/apple-build-guard.sh" >"$TMP/swiftpm.log" 2>&1
 swiftpm_status=$?
@@ -226,7 +327,10 @@ assert_contains "$TMP/swiftpm.log" "Refusing unsafe cache deletion target"
 
 for unsafe in / "$TEST_HOME" relative-cache; do
   set +e
-  HOME="$TEST_HOME" APPLE_BUILD_OPEN_PATH_CHECK=0 \
+  HOME="$TEST_HOME" \
+  APPLE_BUILD_INTERLOCK_TESTING=1 \
+  APPLE_BUILD_INTERLOCK_TEST_ROOT="$INTERLOCK_ROOT" \
+  APPLE_BUILD_OPEN_PATH_CHECK=0 \
     bash -c 'source "$1"; guard_cache_path_for_delete "$2"' \
     _ "$ROOT/tools/lib/apple-build-guard.sh" "$unsafe" >"$TMP/unsafe.log" 2>&1
   unsafe_status=$?
@@ -235,7 +339,10 @@ for unsafe in / "$TEST_HOME" relative-cache; do
 done
 
 set +e
-HOME="$TEST_HOME" bash -c 'source "$1"; validate_cache_container /' \
+HOME="$TEST_HOME" \
+APPLE_BUILD_INTERLOCK_TESTING=1 \
+APPLE_BUILD_INTERLOCK_TEST_ROOT="$INTERLOCK_ROOT" \
+  bash -c 'source "$1"; validate_cache_container /' \
   _ "$ROOT/tools/lib/apple-build-guard.sh" >"$TMP/unsafe-container.log" 2>&1
 container_status=$?
 set -e

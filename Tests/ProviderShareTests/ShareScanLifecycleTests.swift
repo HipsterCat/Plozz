@@ -17,6 +17,23 @@ final class ShareScanLifecycleTests: XCTestCase {
 
     // MARK: - Test doubles
 
+    private actor LifecycleShutdownGate {
+        private var isOpen = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func wait() async {
+            guard !isOpen else { return }
+            await withCheckedContinuation { waiters.append($0) }
+        }
+
+        func open() {
+            isOpen = true
+            let pending = waiters
+            waiters.removeAll()
+            pending.forEach { $0.resume() }
+        }
+    }
+
     /// Captures the secret-safe non-completion records the coordinator emits so a test
     /// can assert the exact owner/generation of each scan that did not stamp completion.
     private final class ScanDiagnosticsSpy: ShareScanDiagnostics, @unchecked Sendable {
@@ -160,26 +177,37 @@ final class ShareScanLifecycleTests: XCTestCase {
         let key: MediaTransportSessionKey
         let fileSystem: any MediaTransportFileSystem
         private let controller: LifecycleListController
+        private let shutdownGate: LifecycleShutdownGate?
 
-        init(key: MediaTransportSessionKey, controller: LifecycleListController) {
+        init(
+            key: MediaTransportSessionKey,
+            controller: LifecycleListController,
+            shutdownGate: LifecycleShutdownGate? = nil
+        ) {
             self.key = key
             self.controller = controller
+            self.shutdownGate = shutdownGate
             self.fileSystem = LifecycleFileSystem(controller: controller)
         }
 
-        func shutdown() async { controller.noteShutdown() }
-            /// Always healthy: this fake models a stateless session, so the registry
+        func shutdown() async {
+            controller.noteShutdown()
+            await shutdownGate?.wait()
+        }
+
+        /// Always healthy: this fake models a stateless session, so the registry
         /// reuses it while idle. Health-driven eviction is covered by
         /// `ResolverStaleSessionTests`.
         func isHealthy() async -> Bool { true }
-}
+    }
 
     // MARK: - Harness
 
     private func makeSessionFactory(
         accountID: String,
         revision: CredentialRevision,
-        controller: LifecycleListController
+        controller: LifecycleListController,
+        shutdownGate: LifecycleShutdownGate? = nil
     ) -> ShareTransportSessionFactory {
         { role in
             LifecycleSession(
@@ -194,7 +222,8 @@ final class ShareScanLifecycleTests: XCTestCase {
                     trustRevision: UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)),
                     role: role
                 ),
-                controller: controller
+                controller: controller,
+                shutdownGate: shutdownGate
             )
         }
     }
@@ -223,6 +252,83 @@ final class ShareScanLifecycleTests: XCTestCase {
     }
 
     // MARK: - A5: completion gating and owner attribution
+
+    func testReopenedFreshCatalogKeepsOriginalCompletionDeadline() async throws {
+        let accountID = "fresh-deadline-\(UUID().uuidString)"
+        let revision = CredentialRevision()
+        let diagnostics = ScanDiagnosticsSpy()
+        let controller = LifecycleListController(blocksRoot: false)
+        let factory = makeSessionFactory(accountID: accountID, revision: revision, controller: controller)
+        let original = makeCoordinator(diagnostics: diagnostics)
+        let store = await original.store(
+            accountKey: accountID, displayName: "NAS",
+            credentialRevision: revision, sessionFactory: factory
+        )
+        let completed = await poll { await original.backgroundScanCompletedAt(accountID) != nil }
+        XCTAssertTrue(completed)
+        await original.invalidate(accountKey: accountID)
+        let lastScan = Date().addingTimeInterval(-170)
+        await store.setMeta("last_full_scan_at", String(lastScan.timeIntervalSince1970))
+        let reopened = makeCoordinator(diagnostics: diagnostics)
+        _ = await reopened.store(
+            accountKey: accountID, displayName: "NAS",
+            credentialRevision: revision, sessionFactory: factory
+        )
+        let coalesced = await poll { await reopened.backgroundScanCompletedAt(accountID) != nil }
+        XCTAssertTrue(coalesced)
+        let completion = await reopened.backgroundScanCompletedAt(accountID)
+        XCTAssertEqual(try XCTUnwrap(completion).timeIntervalSince1970,
+                       lastScan.timeIntervalSince1970, accuracy: 0.001,
+                       "a no-op must not buy another three minutes from the current time")
+        XCTAssertEqual(controller.rootLists, 1)
+        await reopened.invalidate(accountKey: accountID)
+    }
+
+    func testConcurrentCatalogAccessDoesNotSupersedeItsOwnScanAdmission() async throws {
+        let accountID = "admission-burst-\(UUID().uuidString)"
+        let revision = CredentialRevision()
+        let diagnostics = ScanDiagnosticsSpy()
+        let controller = LifecycleListController(blocksRoot: true)
+        let factory = makeSessionFactory(accountID: accountID, revision: revision, controller: controller)
+        let coordinator = makeCoordinator(diagnostics: diagnostics)
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<32 {
+                group.addTask {
+                    _ = await coordinator.store(
+                        accountKey: accountID, displayName: "NAS",
+                        credentialRevision: revision, sessionFactory: factory
+                    )
+                }
+            }
+        }
+        await controller.waitUntilListing()
+        XCTAssertEqual(controller.rootLists, 1)
+        XCTAssertTrue(diagnostics.records.isEmpty,
+                      "passive reads must not cancel competing admissions for the same scan")
+        await coordinator.invalidate(accountKey: accountID)
+    }
+
+    func testPersonalVideoConfigurationCompletesWithoutListingOrMetadataPipeline() async throws {
+        let accountID = "personal-scan-\(UUID().uuidString)"
+        let revision = CredentialRevision()
+        let diagnostics = ScanDiagnosticsSpy()
+        let controller = LifecycleListController(blocksRoot: false)
+        let pipeline = PipelineFactorySpy(resolver: MetadataResolverSpy())
+        let coordinator = ShareCatalogCoordinator(diagnostics: diagnostics, pipelineFactory: pipeline)
+        let store = await coordinator.store(
+            accountKey: accountID, displayName: "Videos",
+            credentialRevision: revision,
+            libraryConfiguration: MediaShareLibraryConfiguration(name: "Videos", contentType: .personalVideos),
+            sessionFactory: makeSessionFactory(accountID: accountID, revision: revision, controller: controller)
+        )
+        let completed = await poll { await coordinator.backgroundScanCompletedAt(accountID) != nil }
+        XCTAssertTrue(completed, "live-only configuration maintenance must not remain pending forever")
+        let configuration = await store.meta("library_configuration")
+        XCTAssertEqual(configuration, "personalVideos:standard")
+        XCTAssertEqual(controller.rootLists, 0)
+        XCTAssertEqual(pipeline.makeCount, 0)
+        await coordinator.invalidate(accountKey: accountID)
+    }
 
     /// A clean pass stamps completion, and a subsequent access within the coalesce
     /// window spawns no additional walk (fresh no-op). No non-completion record.
@@ -317,13 +423,18 @@ final class ShareScanLifecycleTests: XCTestCase {
             accountID: accountID, revision: revision, controller: controller
         )
 
-        _ = await coordinator.store(
+        let store = await coordinator.store(
             accountKey: accountID, displayName: "NAS",
             credentialRevision: revision, sessionFactory: factory
         )
         await controller.waitUntilListing()
 
         await coordinator.setBackgroundWorkAllowed(false)
+        let suspended = await store.isSuspendedForTesting()
+        XCTAssertTrue(
+            suspended,
+            "inactive transition must close and gate the catalog before returning"
+        )
         let stopped = await poll {
             diagnostics.records.contains { $0.owner == .applicationInactive }
         }
@@ -342,6 +453,13 @@ final class ShareScanLifecycleTests: XCTestCase {
         )
 
         await coordinator.setBackgroundWorkAllowed(true)
+        let resumedStore = await poll {
+            !(await store.isSuspendedForTesting())
+        }
+        XCTAssertTrue(
+            resumedStore,
+            "foreground transition must reopen catalog admission before resuming scans"
+        )
         let resumed = await poll { controller.rootLists > rootListsWhileInactive }
         XCTAssertTrue(
             resumed,
@@ -349,6 +467,246 @@ final class ShareScanLifecycleTests: XCTestCase {
         )
 
         await coordinator.invalidate(accountKey: accountID)
+    }
+
+    func testRuntimeCreatedWhileInactiveStartsSuspended() async throws {
+        let accountID = "created-inactive-\(UUID().uuidString)"
+        let revision = CredentialRevision()
+        let controller = LifecycleListController(blocksRoot: false)
+        let coordinator = makeCoordinator(diagnostics: ScanDiagnosticsSpy())
+        let factory = makeSessionFactory(
+            accountID: accountID, revision: revision, controller: controller
+        )
+
+        await coordinator.setBackgroundWorkAllowed(false, revision: 1)
+        let store = await coordinator.store(
+            accountKey: accountID,
+            displayName: "NAS",
+            credentialRevision: revision,
+            sessionFactory: factory
+        )
+
+        let initiallySuspended = await store.isSuspendedForTesting()
+        XCTAssertTrue(initiallySuspended)
+        XCTAssertEqual(controller.rootLists, 0)
+
+        await coordinator.setBackgroundWorkAllowed(true, revision: 2)
+        let resumed = await store.isSuspendedForTesting()
+        XCTAssertFalse(resumed)
+        let scanned = await poll { controller.rootLists == 1 }
+        XCTAssertTrue(scanned)
+        await coordinator.invalidate(accountKey: accountID)
+    }
+
+    func testRepeatedInactiveRevisionFencesOlderForegroundDelivery() async throws {
+        let accountID = "repeated-inactive-\(UUID().uuidString)"
+        let revision = CredentialRevision()
+        let coordinator = makeCoordinator(diagnostics: ScanDiagnosticsSpy())
+        let factory = makeSessionFactory(
+            accountID: accountID,
+            revision: revision,
+            controller: LifecycleListController(blocksRoot: false)
+        )
+
+        await coordinator.setBackgroundWorkAllowed(false, revision: 1)
+        await coordinator.setBackgroundWorkAllowed(false, revision: 2)
+        let store = await coordinator.store(
+            accountKey: accountID,
+            displayName: "NAS",
+            credentialRevision: revision,
+            sessionFactory: factory
+        )
+        await coordinator.setBackgroundWorkAllowed(true, revision: 1)
+
+        let remainsSuspended = await store.isSuspendedForTesting()
+        XCTAssertTrue(
+            remainsSuspended,
+            "same-state revisions must still advance the stale-delivery fence"
+        )
+        await coordinator.invalidate(accountKey: accountID)
+    }
+
+    func testStaleScannerSuspensionCannotDetachForegroundListers() async {
+        let controller = LifecycleListController(
+            blocksRoot: true,
+            ignoresTaskCancellation: true
+        )
+        let fileSystem = LifecycleFileSystem(controller: controller)
+        let store = ShareCatalogStore(
+            accountKey: "scanner-revision",
+            directory: scannerTempDir()
+        )
+        let scanner = ShareScanner(
+            store: store,
+            concurrency: 1,
+            makeLister: {
+                ShareScanner.ScanLister(
+                    list: { try await fileSystem.list(relativePath: $0) },
+                    close: { controller.noteShutdown() }
+                )
+            }
+        )
+
+        _ = await scanner.setBackgroundWorkAllowed(false, revision: 1)
+        _ = await scanner.setBackgroundWorkAllowed(true, revision: 2)
+        let scan = Task { await scanner.scan() }
+        await controller.waitUntilListing()
+
+        let staleHandoff = await scanner.setBackgroundWorkAllowed(
+            false,
+            revision: 1
+        )
+        XCTAssertTrue(
+            staleHandoff.listers.isEmpty,
+            "an older inactive callback must not detach foreground listers"
+        )
+
+        controller.noteShutdown()
+        _ = await scan.value
+    }
+
+    func testForegroundReopensAfterCheckpointHandoffWhileTransportDrainStalls() async throws {
+        let accountID = "stalled-shutdown-\(UUID().uuidString)"
+        let revision = CredentialRevision()
+        let controller = LifecycleListController(
+            blocksRoot: true,
+            ignoresTaskCancellation: true
+        )
+        let shutdownGate = LifecycleShutdownGate()
+        let coordinator = makeCoordinator(diagnostics: ScanDiagnosticsSpy())
+        let factory = makeSessionFactory(
+            accountID: accountID,
+            revision: revision,
+            controller: controller,
+            shutdownGate: shutdownGate
+        )
+        let store = await coordinator.store(
+            accountKey: accountID,
+            displayName: "NAS",
+            credentialRevision: revision,
+            sessionFactory: factory
+        )
+        await controller.waitUntilListing()
+
+        let suspension = Task {
+            await coordinator.setBackgroundWorkAllowed(false, revision: 1)
+        }
+        let becameSafe = await poll {
+            await store.isSuspendedForTesting()
+        }
+        XCTAssertTrue(
+            becameSafe,
+            "local catalog safety must not wait for transport shutdown"
+        )
+        _ = await suspension.value
+
+        await coordinator.setBackgroundWorkAllowed(true, revision: 2)
+        let resumedAfterCheckpoint = await poll {
+            !(await store.isSuspendedForTesting())
+        }
+        XCTAssertTrue(
+            resumedAfterCheckpoint,
+            "actor checkpoint snapshot must let foreground reads resume before transport closes"
+        )
+        let checkpointScanID = await store.meta("resume_scan_id")
+        let checkpointFrontier = await store.meta("resume_frontier")
+        let checkpointState = await store.meta("resume_checkpoint")
+        XCTAssertNotNil(
+            checkpointScanID,
+            "foreground resume must flush the scanner-owned checkpoint first"
+        )
+        XCTAssertFalse(checkpointFrontier?.isEmpty ?? true)
+        XCTAssertFalse(
+            checkpointState?.isEmpty ?? true,
+            "suspension handoff must preserve the atomic depth/failure-aware checkpoint"
+        )
+        let listsBeforeDrain = controller.rootLists
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(
+            controller.rootLists,
+            listsBeforeDrain,
+            "a replacement scan must still wait for exact old transport ownership to drain"
+        )
+
+        await shutdownGate.open()
+        let rescanned = await poll {
+            controller.rootLists > listsBeforeDrain
+        }
+        XCTAssertTrue(rescanned)
+        await coordinator.invalidate(accountKey: accountID)
+    }
+
+    func testStalledAccountDrainDoesNotBlockUnrelatedCatalogResume() async throws {
+        let stalledAccountID = "stalled-account-\(UUID().uuidString)"
+        let readyAccountID = "ready-account-\(UUID().uuidString)"
+        let stalledRevision = CredentialRevision()
+        let readyRevision = CredentialRevision()
+        let stalledController = LifecycleListController(
+            blocksRoot: true,
+            ignoresTaskCancellation: true
+        )
+        let readyController = LifecycleListController(blocksRoot: false)
+        let shutdownGate = LifecycleShutdownGate()
+        let coordinator = makeCoordinator(diagnostics: ScanDiagnosticsSpy())
+        let stalledStore = await coordinator.store(
+            accountKey: stalledAccountID,
+            displayName: "Stalled",
+            credentialRevision: stalledRevision,
+            sessionFactory: makeSessionFactory(
+                accountID: stalledAccountID,
+                revision: stalledRevision,
+                controller: stalledController,
+                shutdownGate: shutdownGate
+            )
+        )
+        await stalledController.waitUntilListing()
+        let readyStore = await coordinator.store(
+            accountKey: readyAccountID,
+            displayName: "Ready",
+            credentialRevision: readyRevision,
+            sessionFactory: makeSessionFactory(
+                accountID: readyAccountID,
+                revision: readyRevision,
+                controller: readyController
+            )
+        )
+        let readyScanCompleted = await poll {
+            await coordinator.backgroundScanCompletedAt(readyAccountID) != nil
+        }
+        XCTAssertTrue(readyScanCompleted)
+        let readyScanDrained = await poll {
+            (await coordinator.scanTaskCountForTesting(readyAccountID)) == 0
+        }
+        XCTAssertTrue(readyScanDrained)
+
+        await coordinator.setBackgroundWorkAllowed(false, revision: 1)
+        let stalledSuspended = await stalledStore.isSuspendedForTesting()
+        let readySuspended = await readyStore.isSuspendedForTesting()
+        XCTAssertTrue(stalledSuspended)
+        XCTAssertTrue(readySuspended)
+
+        await coordinator.setBackgroundWorkAllowed(true, revision: 2)
+        let readyStillSuspended = await readyStore.isSuspendedForTesting()
+        XCTAssertFalse(
+            readyStillSuspended,
+            "an unrelated account must resume independently"
+        )
+        let stalledResumedAfterCheckpoint = await poll {
+            !(await stalledStore.isSuspendedForTesting())
+        }
+        XCTAssertTrue(
+            stalledResumedAfterCheckpoint,
+            "the stalled account must reopen from its actor checkpoint snapshot"
+        )
+
+        let stalledListsBeforeDrain = stalledController.rootLists
+        await shutdownGate.open()
+        let stalledScanRestarted = await poll {
+            stalledController.rootLists > stalledListsBeforeDrain
+        }
+        XCTAssertTrue(stalledScanRestarted)
+        await coordinator.invalidate(accountKey: stalledAccountID)
+        await coordinator.invalidate(accountKey: readyAccountID)
     }
 
     func testStaleInactiveDeliveryCannotOverrideNewerActiveRevision() async throws {

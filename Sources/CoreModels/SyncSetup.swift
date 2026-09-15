@@ -72,6 +72,9 @@ public struct SyncedAccountDescriptor: Codable, Hashable, Identifiable, Sendable
     public var originDeviceName: String?
     /// Kind of the origin device ("tv" / "phone" / "pad" / "mac"), to pick an icon.
     public var originDeviceKind: String?
+    /// Non-secret network-share indexing intent. Nil for managed servers and
+    /// legacy share descriptors.
+    public var mediaShareLibraryConfiguration: MediaShareLibraryConfiguration?
 
     public static let currentSchemaVersion = 1
 
@@ -87,7 +90,8 @@ public struct SyncedAccountDescriptor: Codable, Hashable, Identifiable, Sendable
         recordVersion: Int = 1,
         schemaVersion: Int = SyncedAccountDescriptor.currentSchemaVersion,
         originDeviceName: String? = nil,
-        originDeviceKind: String? = nil
+        originDeviceKind: String? = nil,
+        mediaShareLibraryConfiguration: MediaShareLibraryConfiguration? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -101,6 +105,7 @@ public struct SyncedAccountDescriptor: Codable, Hashable, Identifiable, Sendable
         self.schemaVersion = schemaVersion
         self.originDeviceName = originDeviceName
         self.originDeviceKind = originDeviceKind
+        self.mediaShareLibraryConfiguration = mediaShareLibraryConfiguration
     }
 
     /// A copy stamped with this device as the origin — used only when FIRST publishing a
@@ -209,7 +214,8 @@ public extension SyncedAccountDescriptor {
             avatarURL: SyncURLSanitizer.sanitize(account.avatarURL),
             candidateBaseURLs: (account.server.connectionURLs ?? [account.server.baseURL])
                 .map(SyncURLSanitizer.sanitize),
-            recordVersion: recordVersion
+            recordVersion: recordVersion,
+            mediaShareLibraryConfiguration: account.server.mediaShareLibraryConfiguration
         )
     }
 
@@ -235,6 +241,7 @@ public extension SyncedAccountDescriptor {
             && userID == other.userID
             && userName == other.userName
             && avatarURL == other.avatarURL
+            && mediaShareLibraryConfiguration == other.mediaShareLibraryConfiguration
     }
 }
 

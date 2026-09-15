@@ -78,6 +78,95 @@ final class JellyfinLibraryScopingTests: XCTestCase {
         XCTAssertTrue(stub.sentPaths.isEmpty, "An empty scope must short-circuit before any request")
     }
 
+    func testUnlimitedScopedContinueWatchingPagesWithinParentLibrary() async throws {
+        let stub = StubHTTPClient()
+        let firstPage = (0..<100).map {
+            #"{"Id":"item-\#($0)","Name":"Item \#($0)","Type":"Movie"}"#
+        }.joined(separator: ",")
+        stub.stubSequence(pathSuffix: "/Users/u1/Items/Resume", jsons: [
+            #"{"Items":[\#(firstPage)],"TotalRecordCount":101}"#,
+            #"{"Items":[{"Id":"item-100","Name":"Item 100","Type":"Movie"}],"TotalRecordCount":101}"#
+        ])
+        stub.stub(pathSuffix: "/Shows/NextUp", json: #"{"Items":[],"TotalRecordCount":0}"#)
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+
+        let items = try await provider.continueWatching(
+            limit: Int.max,
+            inLibraries: ["LIB1"]
+        )
+
+        XCTAssertEqual(items.count, 101)
+        XCTAssertTrue(items.allSatisfy { $0.libraryID == "LIB1" })
+        let requests = Array(zip(stub.sentPaths, stub.sentQueryItems)).filter {
+            $0.0.hasSuffix("/Users/u1/Items/Resume") || $0.0.hasSuffix("/Shows/NextUp")
+        }
+        XCTAssertTrue(requests.allSatisfy {
+            $0.1.first { $0.name == "ParentId" }?.value == "LIB1"
+        })
+        let resumeStarts = requests
+            .filter { $0.0.hasSuffix("/Users/u1/Items/Resume") }
+            .compactMap { $0.1.first { $0.name == "StartIndex" }?.value }
+        XCTAssertEqual(resumeStarts, ["0", "100"])
+        XCTAssertFalse(requests.flatMap { $0.1 }.contains {
+            $0.name == "Limit" && $0.value == String(Int.max)
+        })
+    }
+
+    func testScopedContinueWatchingKeepsNextUpWhenResumeFails() async throws {
+        let stub = StubHTTPClient()
+        stub.stub(pathSuffix: "/Users/u1/Items/Resume", json: "{}", status: 500)
+        stub.stub(pathSuffix: "/Shows/NextUp", json: """
+        {"Items":[{"Id":"next1","Name":"Episode 2","Type":"Episode","SeriesId":"series1",
+        "UserData":{"LastPlayedDate":"2026-01-01T00:00:00Z"}}],"TotalRecordCount":1}
+        """)
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+
+        let items = try await provider.continueWatching(
+            limit: 10,
+            inLibraries: ["LIB1"]
+        )
+
+        XCTAssertEqual(items.map(\.id), ["next1"])
+        XCTAssertEqual(items.first?.libraryID, "LIB1")
+    }
+
+    func testFailedLibraryDoesNotEraseAnotherLibraryResults() async throws {
+        let stub = StubHTTPClient()
+        let libraryA = [URLQueryItem(name: "ParentId", value: "A")]
+        let libraryB = [URLQueryItem(name: "ParentId", value: "B")]
+        stub.stub(
+            pathSuffix: "/Users/u1/Items/Resume",
+            requiring: libraryA,
+            json: "{}",
+            status: 500
+        )
+        stub.stub(
+            pathSuffix: "/Shows/NextUp",
+            requiring: libraryA,
+            json: "{}",
+            status: 500
+        )
+        stub.stub(
+            pathSuffix: "/Users/u1/Items/Resume",
+            requiring: libraryB,
+            json: #"{"Items":[{"Id":"b1","Name":"B","Type":"Movie"}],"TotalRecordCount":1}"#
+        )
+        stub.stub(
+            pathSuffix: "/Shows/NextUp",
+            requiring: libraryB,
+            json: #"{"Items":[],"TotalRecordCount":0}"#
+        )
+        let provider = JellyfinProvider(session: makeSession(), http: stub)
+
+        let items = try await provider.continueWatching(
+            limit: 10,
+            inLibraries: ["A", "B"]
+        )
+
+        XCTAssertEqual(items.map(\.id), ["b1"])
+        XCTAssertEqual(items.first?.libraryID, "B")
+    }
+
     // MARK: Latest
 
     func testScopedLatestSendsParentIDAndStampsLibrary() async throws {

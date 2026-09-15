@@ -17,14 +17,20 @@ final class ShareScannerResourceTests: XCTestCase {
         private var entered = false
         private var opened = false
         private var callCount = 0
+        private var revisions: [UInt64] = []
+        private var generations: [UUID?] = []
         private var enterWaiters: [CheckedContinuation<Void, Never>] = []
         private var openWaiters: [CheckedContinuation<Void, Never>] = []
 
         var invalidateCount: Int { lock.withLock { callCount } }
+        var invalidatedRevisions: [UInt64] { lock.withLock { revisions } }
+        var invalidatedGenerations: [UUID?] { lock.withLock { generations } }
 
-        func invalidateScanGeneration() async {
+        func invalidateScanGeneration(revision: UInt64, scanGeneration: UUID?) async -> Bool {
             let enterWaiters: [CheckedContinuation<Void, Never>] = lock.withLock {
                 callCount += 1
+                revisions.append(revision)
+                generations.append(scanGeneration)
                 entered = true
                 let waiters = self.enterWaiters
                 self.enterWaiters.removeAll()
@@ -39,6 +45,7 @@ final class ShareScannerResourceTests: XCTestCase {
                 }
                 if isOpen { continuation.resume() }
             }
+            return true
         }
 
         func waitUntilEntered() async {
@@ -66,17 +73,28 @@ final class ShareScannerResourceTests: XCTestCase {
     private final class RecordingListerCloser: ScanListerForceClosing, @unchecked Sendable {
         private let lock = NSLock()
         private var count = 0
+        private var generations: [UUID] = []
         var closeCount: Int { lock.withLock { count } }
+        var closedGenerations: [UUID] { lock.withLock { generations } }
 
-        func forceCloseActiveListers() async {
-            lock.withLock { count += 1 }
+        func forceCloseActiveListers(scanGeneration: UUID) async {
+            lock.withLock {
+                count += 1
+                generations.append(scanGeneration)
+            }
         }
     }
 
     func testForceCloseReachesListerClosureDespiteBlockedInvalidator() async throws {
         let invalidator = BlockingInvalidator()
         let closer = RecordingListerCloser()
-        let resource = ShareScannerResource(scanner: closer, store: invalidator)
+        let generation = UUID()
+        let resource = ShareScannerResource(
+            scanner: closer,
+            store: invalidator,
+            lifecycleRevision: 42,
+            scanGeneration: generation
+        )
 
         // A graceful cancel that blocks inside the invalidator, mirroring the hung
         // store dependency the arbiter would otherwise inherit through `forceClose()`.
@@ -106,13 +124,21 @@ final class ShareScannerResourceTests: XCTestCase {
         try await forceCloseTask.value
         // Idempotent bookkeeping: cancel + force-close each invalidate exactly once.
         XCTAssertEqual(invalidator.invalidateCount, 2)
+        XCTAssertEqual(invalidator.invalidatedRevisions, [42, 42])
+        XCTAssertEqual(invalidator.invalidatedGenerations, [generation, generation])
+        XCTAssertEqual(closer.closedGenerations, [generation])
         XCTAssertEqual(closer.closeCount, 1)
     }
 
     func testForceCloseCancelsInFlightScanTaskSynchronously() async throws {
         let invalidator = BlockingInvalidator()
         let closer = RecordingListerCloser()
-        let resource = ShareScannerResource(scanner: closer, store: invalidator)
+        let resource = ShareScannerResource(
+            scanner: closer,
+            store: invalidator,
+            lifecycleRevision: 73,
+            scanGeneration: UUID()
+        )
 
         let observedCancellation = CancellationProbe()
         let scanTask = Task {
@@ -134,6 +160,7 @@ final class ShareScannerResourceTests: XCTestCase {
         invalidator.open()
         await scanTask.value
         try await forceCloseTask.value
+        XCTAssertEqual(invalidator.invalidatedRevisions, [73])
     }
 
     private final class CancellationProbe: @unchecked Sendable {

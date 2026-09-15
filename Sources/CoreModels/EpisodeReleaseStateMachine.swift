@@ -86,11 +86,15 @@ public struct EpisodeGraceConfig: Sendable {
     /// For an exact timestamp: `airDate + exactGrace`. For a date-only schedule: the
     /// start of the **following** local day (so it reads "aired today" all air day).
     public func missingThreshold(for upcoming: UpcomingEpisode) -> Date {
-        switch upcoming.datePrecision {
+        missingThreshold(airDate: upcoming.airDate, datePrecision: upcoming.datePrecision)
+    }
+
+    public func missingThreshold(airDate: Date, datePrecision: AirDatePrecision) -> Date {
+        switch datePrecision {
         case .dateAndTime:
-            return upcoming.airDate.addingTimeInterval(exactGrace)
+            return airDate.addingTimeInterval(exactGrace)
         case .dateOnly:
-            let startOfAirDay = calendar.startOfDay(for: upcoming.airDate)
+            let startOfAirDay = calendar.startOfDay(for: airDate)
             return calendar.date(byAdding: .day, value: 1, to: startOfAirDay) ?? startOfAirDay
         }
     }

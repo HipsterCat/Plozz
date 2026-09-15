@@ -22,6 +22,8 @@ public protocol WatchMutationApplying: Sendable {
     /// for the server's recency stamp so an offline-drained write doesn't falsely
     /// float a stale title to the top of Continue Watching.
     func setResumePosition(_ seconds: TimeInterval, on target: WatchMutationTarget, capturedAt: Date) async throws
+    /// Explicit user dismissal, distinct from clearing a completed item's resume.
+    func removeFromContinueWatching(on target: WatchMutationTarget, capturedAt: Date) async throws
     /// Mirrors a finished watch to Trakt.
     func scrobbleTrakt(_ intent: TraktScrobbleIntent) async throws
     /// Mirrors a finished watch to Simkl.
@@ -36,6 +38,10 @@ public protocol WatchMutationApplying: Sendable {
 }
 
 public extension WatchMutationApplying {
+    func removeFromContinueWatching(on target: WatchMutationTarget, capturedAt: Date) async throws {
+        try await setResumePosition(0, on: target, capturedAt: capturedAt)
+    }
+
     func setPlayed(_ played: Bool, on target: WatchMutationTarget, capturedAt: Date) async throws {
         try await setPlayed(played, on: target)
     }
@@ -73,6 +79,8 @@ public actor WatchStateReconciler {
     /// record can never override a genuine later play made on another client.
     private let resumeRecencyTTL: TimeInterval
     private let onPersistenceFailure: @Sendable () -> Void
+    private let onServerStateApplied: @Sendable (WatchMutation) -> Void
+    private let onAuthorizationRejection: @Sendable (UUID, WatchMutationAuthorizationError) -> Void
 
     private var state: WatchOutboxState
     private var isDraining = false
@@ -96,7 +104,9 @@ public actor WatchStateReconciler {
         traktTTL: TimeInterval = 48 * 3600,
         clockTTL: TimeInterval = 30 * 24 * 3600,
         resumeRecencyTTL: TimeInterval = 30 * 60,
-        onPersistenceFailure: @escaping @Sendable () -> Void = {}
+        onPersistenceFailure: @escaping @Sendable () -> Void = {},
+        onServerStateApplied: @escaping @Sendable (WatchMutation) -> Void = { _ in },
+        onAuthorizationRejection: @escaping @Sendable (UUID, WatchMutationAuthorizationError) -> Void = { _, _ in }
     ) {
         self.store = store
         self.applier = applier
@@ -105,6 +115,8 @@ public actor WatchStateReconciler {
         self.clockTTL = clockTTL
         self.resumeRecencyTTL = resumeRecencyTTL
         self.onPersistenceFailure = onPersistenceFailure
+        self.onServerStateApplied = onServerStateApplied
+        self.onAuthorizationRejection = onAuthorizationRejection
         self.state = store.load()
     }
 
@@ -132,6 +144,16 @@ public actor WatchStateReconciler {
         await drain()
     }
 
+    /// Replace queued progress with the final stop before lifting the live guard.
+    /// Draining first would write the old checkpoint back over a finished episode.
+    public func finishLiveSession(accountID: String?, itemID: String, mutation: WatchMutation?) async {
+        if let mutation { await enqueue(mutation) }
+        if let accountID {
+            liveSessions.remove(WatchMutationTarget(accountID: accountID, itemID: itemID).id)
+        }
+        await drain()
+    }
+
     /// Whether `(accountID, itemID)` is currently a guarded live session — for
     /// diagnostics / tests.
     public func isLiveSession(accountID: String, itemID: String) -> Bool {
@@ -147,22 +169,59 @@ public actor WatchStateReconciler {
     ///  - If a not-yet-drained mutation for the same title is queued, the two
     ///    collapse into one (newest desired state wins, server targets unioned).
     ///
-    /// Returns `true` if the mutation was accepted (or coalesced), `false` if it was
-    /// dropped as stale.
+    /// Returns `false` for stale or unauthorized intents. Guarded enqueue also
+    /// rejects a failed durable save without changing unrelated pending work.
     @discardableResult
-    public func enqueue(_ mutation: WatchMutation) -> Bool {
+    public func enqueue(_ mutation: WatchMutation) async -> Bool {
+        if let authorization = mutation.authorization {
+            do {
+                try await authorization.require()
+                guard applier is any WatchMutationAuthorizationEnforcing else {
+                    throw WatchMutationAuthorizationError.unsupportedApplier
+                }
+            } catch let error as WatchMutationAuthorizationError {
+                rejectAuthorization(mutation, error: error)
+                retireIfUnreferenced(mutation)
+                return false
+            } catch is CancellationError {
+                retireIfUnreferenced(mutation)
+                return false
+            } catch {
+                rejectAuthorization(mutation, error: .denied)
+                retireIfUnreferenced(mutation)
+                return false
+            }
+        }
         let key = mutation.coalesceKey
+        let previous = state
 
         // Stale-write suppression vs the accepted high-water mark.
         if let accepted = state.clock[key], mutation.capturedAt < accepted {
+            retireIfUnreferenced(mutation)
+            return false
+        }
+        // A guarded write must not rewind an ordinary/manual action. Guarded
+        // clocks never advance the ordinary title's high-water mark.
+        if mutation.authorization != nil,
+           let accepted = state.clock[mutation.titleCoalesceKey], mutation.capturedAt < accepted {
+            retireIfUnreferenced(mutation)
+            return false
+        }
+        if mutation.authorization != nil, state.pending.contains(where: {
+            $0.authorization == nil && $0.capturedAt > mutation.capturedAt && Self.sameTitle($0, mutation)
+        }) {
+            retireIfUnreferenced(mutation)
             return false
         }
 
-        if let index = state.pending.firstIndex(where: { $0.coalesceKey == key })
+        if let index = state.pending.firstIndex(where: {
+            $0.coalesceKey == key && $0.authorization == mutation.authorization
+        })
             ?? Self.evidenceMatchIndex(for: mutation, in: state.pending) {
             let existing = state.pending[index]
             if mutation.capturedAt < existing.capturedAt {
                 // Older than what's already queued — stale relative to the queue.
+                retireIfUnreferenced(mutation)
                 return false
             }
             state.pending[index] = Self.coalesce(existing: existing, incoming: mutation)
@@ -170,8 +229,25 @@ public actor WatchStateReconciler {
             state.pending.append(mutation)
         }
 
+        var superseded: [WatchMutation] = []
+        if mutation.authorization == nil {
+            // Supersede, but never union guarded targets/tracker work into a
+            // manual intent that has independent authority.
+            superseded = state.pending.filter {
+                $0.authorization != nil && $0.capturedAt <= mutation.capturedAt
+                    && Self.sameTitle($0, mutation)
+            }
+            let ids = Set(superseded.map(\.id))
+            state.pending.removeAll { $0.authorization != nil && ids.contains($0.id) }
+        }
         state.clock[key] = max(state.clock[key] ?? .distantPast, mutation.capturedAt)
-        persist()
+        for retired in superseded { retireIfUnreferenced(retired) }
+        let saved = persist()
+        if !saved, mutation.authorization != nil {
+            state = previous
+            retireIfUnreferenced(mutation)
+            return false
+        }
         return true
     }
 
@@ -197,7 +273,8 @@ public actor WatchStateReconciler {
         guard !mutation.identities.isEmpty else { return nil }
         let incoming = Set(mutation.identities)
         return pending.firstIndex { candidate in
-            guard candidate.kind == mutation.kind,
+            guard candidate.authorization == mutation.authorization,
+                  candidate.kind == mutation.kind,
                   candidate.seasonNumber == mutation.seasonNumber,
                   candidate.episodeNumber == mutation.episodeNumber,
                   !candidate.identities.isEmpty,
@@ -215,6 +292,37 @@ public actor WatchStateReconciler {
                 kindB: mutation.kind ?? .unknown
             )
         }
+    }
+
+    private static func sameTitle(_ lhs: WatchMutation, _ rhs: WatchMutation) -> Bool {
+        if lhs.titleCoalesceKey == rhs.titleCoalesceKey { return true }
+        guard lhs.kind == rhs.kind, lhs.seasonNumber == rhs.seasonNumber,
+              lhs.episodeNumber == rhs.episodeNumber,
+              !lhs.identities.isEmpty, !rhs.identities.isEmpty,
+              !Set(lhs.identities).isDisjoint(with: rhs.identities) else { return false }
+        return !MediaItemIdentity.titlesPlausiblyContradict(
+            titleA: lhs.anchorTitle ?? "", yearA: lhs.anchorYear, kindA: lhs.kind ?? .unknown,
+            titleB: rhs.anchorTitle ?? "", yearB: rhs.anchorYear, kindB: rhs.kind ?? .unknown
+        )
+    }
+
+    private func retireIfUnreferenced(_ mutation: WatchMutation) {
+        guard let authorization = mutation.authorization else { return }
+        if !state.pending.contains(where: { $0.coalesceKey == mutation.coalesceKey }) {
+            state.clock[mutation.coalesceKey] = nil
+        }
+        if !state.pending.contains(where: { $0.authorization == authorization }) {
+            authorization.retire()
+        }
+    }
+
+    private func rejectAuthorization(_ mutation: WatchMutation, error: WatchMutationAuthorizationError) {
+        FanoutDiagnostics.emit("drain.authorization mutation=\(mutation.id) -> rejected(\(error))")
+        onAuthorizationRejection(mutation.id, error)
+    }
+
+    private func isPending(_ original: WatchMutation) -> Bool {
+        state.pending.contains { $0 == original }
     }
 
     /// Merges a newer mutation into an older queued one for the same title: the
@@ -263,7 +371,8 @@ public actor WatchStateReconciler {
     /// Attempts to apply every pending mutation. Best-effort and idempotent: a
     /// target that fails stays queued for the next drain; a target that succeeds is
     /// removed; a fully-applied mutation is pruned. Never drops a watch on failure —
-    /// only supersession (a newer action) removes a pending write.
+    /// supersession removes a pending write. A guarded intent whose authority
+    /// expires is explicitly rejected instead of being reported as applied.
     public func drain() async {
         if isDraining {
             drainRequestedWhileDraining = true
@@ -281,13 +390,55 @@ public actor WatchStateReconciler {
                 var mutation = state.pending[index]
 
                 // Supersession re-check at drain time.
-                if let accepted = state.clock[mutation.coalesceKey], mutation.capturedAt < accepted {
+                let accepted = state.clock[mutation.coalesceKey] ?? .distantPast
+                let manual = mutation.authorization == nil
+                    ? Date.distantPast : state.clock[mutation.titleCoalesceKey] ?? .distantPast
+                if mutation.capturedAt < max(accepted, manual) {
                     state.pending.removeAll { $0.id == mutationID }
+                    retireIfUnreferenced(mutation)
                     persist()
                     continue
                 }
 
-                await apply(&mutation)
+                let original = mutation
+                do {
+                    let permission: WatchMutationDeliveryAuthorization?
+                    if let authorization = original.authorization {
+                        try await authorization.require()
+                        guard applier is any WatchMutationAuthorizationEnforcing else {
+                            throw WatchMutationAuthorizationError.unsupportedApplier
+                        }
+                        permission = WatchMutationDeliveryAuthorization { [weak self] in
+                            guard let self, await self.isPending(original) else {
+                                throw WatchMutationAuthorizationError.superseded
+                            }
+                            try await authorization.require()
+                            guard await self.isPending(original) else {
+                                throw WatchMutationAuthorizationError.superseded
+                            }
+                        }
+                    } else {
+                        permission = nil
+                    }
+                    try await WatchMutationDeliveryAuthorization.$current.withValue(permission) {
+                        try await apply(&mutation)
+                    }
+                } catch let error as WatchMutationAuthorizationError {
+                    if isPending(original) {
+                        state.pending.removeAll { $0.id == original.id }
+                        rejectAuthorization(original, error: error)
+                    } else {
+                        drainRequestedWhileDraining = true
+                    }
+                    retireIfUnreferenced(original)
+                    persist()
+                    continue
+                } catch {
+                    // Cancellation or a failed dispatch is not a completed watch.
+                    FanoutDiagnostics.emit("drain.interrupted mutation=\(mutationID) -> still pending")
+                    persist()
+                    continue
+                }
                 mutation.attempts += 1
 
                 if let idx = state.pending.firstIndex(where: { $0.id == mutationID }) {
@@ -311,6 +462,7 @@ public actor WatchStateReconciler {
                         drainRequestedWhileDraining = true
                     } else if mutation.isFullyApplied {
                         state.pending.remove(at: idx)
+                        retireIfUnreferenced(mutation)
                     } else {
                         state.pending[idx] = mutation
                     }
@@ -323,7 +475,8 @@ public actor WatchStateReconciler {
     /// Applies a single mutation in place: each remaining server target, then the
     /// Trakt mirror. Successful writes are removed from the mutation so a partial
     /// fan-out resumes precisely.
-    private func apply(_ mutation: inout WatchMutation) async {
+    private func apply(_ mutation: inout WatchMutation) async throws {
+        try await WatchMutationDeliveryAuthorization.check()
         // Expand cross-server episode twins before writing, so a watch played from
         // one server fans out to the same episode on every server hosting the
         // series. Confidence-gated and best-effort: confident twins are unioned in
@@ -333,6 +486,7 @@ public actor WatchStateReconciler {
         // regardless, so expansion never delays or risks the origin write.
         if mutation.expansionPending {
             let expansion = await applier.expandTargets(for: mutation)
+            try await WatchMutationDeliveryAuthorization.check()
             var seen = Set(mutation.targets.map(\.id))
             for target in expansion.targets where seen.insert(target.id).inserted {
                 mutation.targets.append(target)
@@ -362,7 +516,9 @@ public actor WatchStateReconciler {
         ))
 
         var remaining: [WatchMutationTarget] = []
+        var applied: [WatchMutationTarget] = []
         for target in mutation.targets {
+            try await WatchMutationDeliveryAuthorization.check()
             // Never write to a target that is the live in-app playback session:
             // defer it (keep it queued) so a mid-play drain can't disturb the
             // now-playing session. The live player owns that server; the deferred
@@ -382,10 +538,15 @@ public actor WatchStateReconciler {
                 if let played = mutation.played {
                     try await applier.setPlayed(played, on: target, capturedAt: mutation.capturedAt)
                     outcome += "setPlayed(\(played))=OK "
+                    try await WatchMutationDeliveryAuthorization.check()
+                    if played {
+                        state.appliedRecency[target.id] = nil
+                    }
                 }
                 if let resume = mutation.resumePosition {
                     try await applier.setResumePosition(resume, on: target, capturedAt: mutation.capturedAt)
                     outcome += "setResume(\(Int(resume)))=OK"
+                    try await WatchMutationDeliveryAuthorization.check()
                     // Record the play's *real* time for this target so Home's Continue
                     // Watching overlay can clamp a server that stamps its own drain-time
                     // view timestamp (Plex) back down to it — otherwise an offline-drained
@@ -403,8 +564,13 @@ public actor WatchStateReconciler {
                         }
                     }
                 } else if mutation.clearResume {
-                    try await applier.setResumePosition(0, on: target, capturedAt: mutation.capturedAt)
+                    if mutation.played == nil {
+                        try await applier.removeFromContinueWatching(on: target, capturedAt: mutation.capturedAt)
+                    } else {
+                        try await applier.setResumePosition(0, on: target, capturedAt: mutation.capturedAt)
+                    }
                     outcome += "clearResume=OK"
+                    try await WatchMutationDeliveryAuthorization.check()
                     // The in-progress position is gone (a finish clears resume
                     // everywhere), so drop any recency record guarding it.
                     state.appliedRecency[target.id] = nil
@@ -412,7 +578,11 @@ public actor WatchStateReconciler {
                 FanoutDiagnostics.emit(FanoutDiagnostics.drainTargetLine(
                     target,
                     outcome: outcome.isEmpty ? "noop(no state to write)" : outcome.trimmingCharacters(in: .whitespaces)))
+                if mutation.played != nil || mutation.resumePosition != nil || mutation.clearResume {
+                    applied.append(target)
+                }
             } catch {
+                try await WatchMutationDeliveryAuthorization.check()
                 remaining.append(target)
                 FanoutDiagnostics.emit(FanoutDiagnostics.drainTargetLine(
                     target,
@@ -420,6 +590,20 @@ public actor WatchStateReconciler {
             }
         }
         mutation.targets = remaining
+
+        try await WatchMutationDeliveryAuthorization.check()
+        // The optimistic stop notification precedes these writes. Tell Home
+        // when the feed can actually advance, before any slow tracker mirrors.
+        // Superseded writes must not replay older presentation state.
+        let manualClock = mutation.authorization == nil
+            ? Date.distantPast : state.clock[mutation.titleCoalesceKey] ?? .distantPast
+        if !applied.isEmpty,
+           mutation.capturedAt >= max(state.clock[mutation.coalesceKey] ?? .distantPast, manualClock) {
+            var confirmed = mutation
+            confirmed.targets = applied
+            confirmed.optimisticTargets = applied
+            onServerStateApplied(confirmed)
+        }
 
         if mutation.traktPending, let intent = mutation.trakt {
             let key = mutation.traktIdempotencyKey(dayBucket: WatchMutation.dayBucket(for: mutation.capturedAt))
@@ -433,6 +617,7 @@ public actor WatchStateReconciler {
                     mutation.traktPending = false
                     FanoutDiagnostics.emit("drain.trakt canonical=\(mutation.canonicalMediaID) -> applied")
                 } catch {
+                    try await WatchMutationDeliveryAuthorization.check()
                     // keep pending; retry next drain
                     FanoutDiagnostics.emit("drain.trakt canonical=\(mutation.canonicalMediaID) -> THROW(\(error)) -> still pending")
                 }
@@ -440,6 +625,7 @@ public actor WatchStateReconciler {
         }
 
         // Simkl mirror (same idempotency pattern as Trakt).
+        try await WatchMutationDeliveryAuthorization.check()
         if mutation.simklPending, let intent = mutation.trakt {
             let key = mutation.traktIdempotencyKey(dayBucket: WatchMutation.dayBucket(for: mutation.capturedAt))
             if state.appliedSimkl[key] != nil {
@@ -452,6 +638,7 @@ public actor WatchStateReconciler {
                     mutation.simklPending = false
                     FanoutDiagnostics.emit("drain.simkl canonical=\(mutation.canonicalMediaID) -> applied")
                 } catch {
+                    try await WatchMutationDeliveryAuthorization.check()
                     // keep pending; retry next drain
                     FanoutDiagnostics.emit("drain.simkl canonical=\(mutation.canonicalMediaID) -> THROW(\(error)) -> still pending")
                 }
@@ -459,6 +646,7 @@ public actor WatchStateReconciler {
         }
 
         // AniList mirror (anime only; the scrobbler no-ops for non-anime).
+        try await WatchMutationDeliveryAuthorization.check()
         if mutation.anilistPending, let intent = mutation.trakt {
             let key = mutation.traktIdempotencyKey(dayBucket: WatchMutation.dayBucket(for: mutation.capturedAt))
             if state.appliedAniList[key] != nil {
@@ -471,6 +659,7 @@ public actor WatchStateReconciler {
                     mutation.anilistPending = false
                     FanoutDiagnostics.emit("drain.anilist canonical=\(mutation.canonicalMediaID) -> applied")
                 } catch {
+                    try await WatchMutationDeliveryAuthorization.check()
                     // keep pending; retry next drain
                     FanoutDiagnostics.emit("drain.anilist canonical=\(mutation.canonicalMediaID) -> THROW(\(error)) -> still pending")
                 }
@@ -478,6 +667,7 @@ public actor WatchStateReconciler {
         }
 
         // MAL mirror (anime only; the scrobbler no-ops for non-anime).
+        try await WatchMutationDeliveryAuthorization.check()
         if mutation.malPending, let intent = mutation.trakt {
             let key = mutation.traktIdempotencyKey(dayBucket: WatchMutation.dayBucket(for: mutation.capturedAt))
             if state.appliedMAL[key] != nil {
@@ -490,12 +680,14 @@ public actor WatchStateReconciler {
                     mutation.malPending = false
                     FanoutDiagnostics.emit("drain.mal canonical=\(mutation.canonicalMediaID) -> applied")
                 } catch {
+                    try await WatchMutationDeliveryAuthorization.check()
                     // keep pending; retry next drain
                     FanoutDiagnostics.emit("drain.mal canonical=\(mutation.canonicalMediaID) -> THROW(\(error)) -> still pending")
                 }
             }
         }
 
+        try await WatchMutationDeliveryAuthorization.check()
         FanoutDiagnostics.emit(FanoutDiagnostics.drainDoneLine(
             canonicalMediaID: mutation.canonicalMediaID,
             remainingTargets: mutation.targets.count,
@@ -524,11 +716,14 @@ public actor WatchStateReconciler {
         state.appliedRecency = state.appliedRecency.filter { $0.value.appliedAt >= cutoffRecency }
     }
 
-    private func persist() {
+    @discardableResult
+    private func persist() -> Bool {
         do {
             try store.save(state)
+            return true
         } catch {
             onPersistenceFailure()
+            return false
         }
     }
 }

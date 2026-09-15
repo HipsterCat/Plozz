@@ -2,6 +2,28 @@ import XCTest
 @testable import CoreModels
 
 final class MediaItemActionCatalogTests: XCTestCase {
+    func testBrowseFilesRequiresAnExplicitRouteAndSurvivesPersistence() throws {
+        for kind in [MediaItemKind.movie, .series, .season, .episode] {
+            var title = MediaItem(id: "catalog:item", title: "Title", kind: kind)
+            XCTAssertFalse(MediaItemActionCatalog.actions(
+                for: title, supportsWatchState: false
+            ).contains(.browseFiles))
+            title.fileBrowserContainerID = "share:files:d:TV/Title"
+            let restored = try JSONDecoder().decode(MediaItem.self, from: JSONEncoder().encode(title))
+            XCTAssertEqual(restored.fileBrowserContainerID, title.fileBrowserContainerID)
+            XCTAssertTrue(MediaItemActionCatalog.actions(
+                for: restored, supportsWatchState: false
+            ).contains(.browseFiles))
+        }
+        XCTAssertTrue(MediaItemAction.browseFiles.isNavigation)
+        XCTAssertFalse(MediaItemAction.browseFiles.navigatesToSelf)
+        XCTAssertFalse(MediaItemAction.browseFiles.isPrimaryDetailAction)
+        let legacy = try JSONDecoder().decode(
+            MediaItem.self, from: Data(#"{"id":"old","title":"Old","kind":"movie"}"#.utf8)
+        )
+        XCTAssertNil(legacy.fileBrowserContainerID)
+    }
+
     /// "Episode Info" is offered for every episode, wherever it is shown —
     /// including inside its own season's list, unlike the other navigation
     /// actions. The series page shows one episode at a time and episode cards stay

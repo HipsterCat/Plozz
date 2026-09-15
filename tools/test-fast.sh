@@ -29,6 +29,10 @@ cd "$(dirname "$0")/.."
 
 export GIT_CONFIG_PARAMETERS="${GIT_CONFIG_PARAMETERS-'safe.bareRepository=all'}"
 
+source tools/lib/apple-build-lease.sh
+acquire_apple_build_shared_lease "plozz/test-fast"
+install_apple_build_lease_traps
+
 # Architecture layering guard — always gate the inner loop (even on docs-only /
 # --dry-run selections), then tell the delegated run-tests.sh to skip its own
 # copy so the guard runs exactly once per invocation. See tools/arch-guard.py.

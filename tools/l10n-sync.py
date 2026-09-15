@@ -69,7 +69,18 @@ PROJECT = REPO / "Plozz.xcodeproj"
 # A dedicated DerivedData root. Kept separate from the normal build so a routine
 # `deploy-tv.sh` can never leave half-populated extraction output behind, and so
 # wiping it costs a localization rebuild rather than everyone's incremental state.
-DERIVED = REPO / ".build/l10n-deriveddata"
+DERIVED = Path(os.environ.get(
+    "PLOZZ_L10N_DERIVED",
+    REPO / ".build/l10n-deriveddata",
+))
+CLONED_SOURCE_PACKAGES = Path(os.environ.get(
+    "PLOZZ_L10N_CLONED_SOURCE_PACKAGES",
+    REPO / ".build/package-workspaces/l10n",
+))
+PACKAGE_CACHE = Path(os.environ.get(
+    "PLOZZ_PACKAGE_CACHE_PATH",
+    Path.home() / "Library/Caches/org.swift.swiftpm",
+))
 
 # The architecture the extraction build pins (see build_for_extraction). The
 # collector must read the SAME arch or it will mix in a stale snapshot.
@@ -109,6 +120,26 @@ def build_for_extraction(platform_keys: list[str], quiet: bool) -> None:
     # a setdefault would silently leave the build broken.
     env["GIT_CONFIG_PARAMETERS"] = "'safe.bareRepository=all'"
 
+    generate_args = ["--bake-only"] if (PROJECT / "project.pbxproj").exists() else []
+    lease_fds = tuple(
+        int(env[name])
+        for name in ("APPLE_BUILD_LEASE_PROOF_FD", "APPLE_BUILD_LEASE_LOCK_FD")
+        if env.get(name)
+    )
+    generation = subprocess.run(
+        [str(REPO / "tools/generate-project.sh"), *generate_args],
+        cwd=REPO,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE if quiet else None,
+        stderr=subprocess.STDOUT if quiet else None,
+        pass_fds=lease_fds,
+    )
+    if generation.returncode != 0:
+        if quiet and generation.stdout:
+            print("\n".join(generation.stdout.splitlines()[-25:]), file=sys.stderr)
+        sys.exit("✗ Project generation or canonical package-lock sync failed.")
+
     for key in platform_keys:
         scheme, destination = PLATFORMS[key]
         print(f"▸ Extraction build: {scheme} ({destination})")
@@ -119,6 +150,10 @@ def build_for_extraction(platform_keys: list[str], quiet: bool) -> None:
             "-configuration", "Debug",
             "-destination", destination,
             "-derivedDataPath", str(DERIVED),
+            "-clonedSourcePackagesDirPath", str(CLONED_SOURCE_PACKAGES),
+            "-packageCachePath", str(PACKAGE_CACHE),
+            "-onlyUsePackageVersionsFromResolvedFile",
+            "-skipPackageUpdates",
             # Only reachable from the command line — see the module docstring.
             "SWIFT_EMIT_LOC_STRINGS=YES",
             # Extraction never installs or runs anything, so signing is pure cost
@@ -688,5 +723,71 @@ def main() -> int:
     return 1 if conflicts else 0
 
 
+def exec_under_build_lease() -> None:
+    """Restart through the shared shell wrapper before any extraction work."""
+    if os.environ.get("PLOZZ_BUILD_LEASE_WRAPPED") == "1":
+        required = (
+            "APPLE_BUILD_LEASE_MODE",
+            "APPLE_BUILD_LEASE_OWNER",
+            "APPLE_BUILD_LEASE_ID",
+            "APPLE_BUILD_LEASE_TOKEN",
+            "APPLE_BUILD_LEASE_LOCK_FD",
+            "APPLE_BUILD_LEASE_PROOF_FD",
+        )
+        if os.environ.get("APPLE_BUILD_LEASE_PROTOCOL") != "1" or any(
+            not os.environ.get(name) for name in required
+        ):
+            sys.exit("✗ Invalid inherited Apple build lease environment.")
+        try:
+            lock_fd = int(os.environ["APPLE_BUILD_LEASE_LOCK_FD"])
+            proof_fd = int(os.environ["APPLE_BUILD_LEASE_PROOF_FD"])
+        except ValueError:
+            sys.exit("✗ Invalid inherited Apple build lease descriptors.")
+        if lock_fd < 3 or proof_fd < 3 or lock_fd == proof_fd:
+            sys.exit("✗ Invalid inherited Apple build lease descriptors.")
+        validator = REPO / "tools/lib/apple_build_lease.py"
+        result = subprocess.run(
+            [
+                "/usr/bin/python3",
+                str(validator),
+                "validate",
+                "--mode",
+                os.environ["APPLE_BUILD_LEASE_MODE"],
+                "--owner",
+                os.environ["APPLE_BUILD_LEASE_OWNER"],
+                "--lease-id",
+                os.environ["APPLE_BUILD_LEASE_ID"],
+                "--token",
+                os.environ["APPLE_BUILD_LEASE_TOKEN"],
+                "--lock-fd",
+                str(lock_fd),
+                "--proof-fd",
+                str(proof_fd),
+                "--role-exit-code",
+            ],
+            pass_fds=(proof_fd, lock_fd),
+            check=False,
+        )
+        if result.returncode not in {0, 10}:
+            sys.exit("✗ Inherited Apple build lease validation failed.")
+        return
+    wrapper = REPO / "tools/with-apple-build-lease.sh"
+    env = dict(os.environ)
+    env["PLOZZ_BUILD_LEASE_WRAPPED"] = "1"
+    os.execve(
+        wrapper,
+        [
+            str(wrapper),
+            "plozz/l10n-sync",
+            "--",
+            sys.executable,
+            str(Path(__file__).resolve()),
+            *sys.argv[1:],
+        ],
+        env,
+    )
+
+
 if __name__ == "__main__":
+    exec_under_build_lease()
     sys.exit(main())

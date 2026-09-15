@@ -21,9 +21,10 @@ struct ScrubGestureInterpreter {
         /// Still deciding the axis (travel below the dead-zone), or a suppressed
         /// vertical drag — do nothing this sample.
         case ignore
-        /// A deliberate downward swipe — reveal the controls and move focus to the
-        /// bottom control bar.
+        /// A deliberate downward swipe — reveal the Info card.
         case enterControlBar
+        /// A deliberate upward swipe — use the same destination as an Up press.
+        case moveUp
         /// Pause-to-seek gate: a horizontal swipe while playing with seek-without-
         /// pausing off — flash the transport for feedback and suppress the gesture.
         case flashAndSuppress
@@ -117,9 +118,7 @@ struct ScrubGestureInterpreter {
                 lastTranslationX = translationX
             } else {
                 axis = .verticalIgnored
-                // A deliberate downward swipe reveals the controls; an upward one
-                // is simply ignored.
-                return translationY > 0 ? .enterControlBar : .ignore
+                return translationY > 0 ? .enterControlBar : .moveUp
             }
         }
 

@@ -13,9 +13,9 @@
 #   * ModuleCache.noindex — the Clang module cache, shared by every worktree.
 #     Only trimmed when you pass --module-cache AND it exceeds the size limit.
 #   * Any DerivedData folder modified in the last $ACTIVE_MIN minutes.
-#   * All deletion while Apple build processes are active. Apply runs take the
-#     shared maintenance lock, wait for a configurable process-quiet interval,
-#     then recheck process activity and open paths before each deletion.
+#   * All deletion while a shared build/release lease exists. Apply requires the
+#     nonblocking host-wide exclusive lease plus SUSPENDED/rollout approval, then
+#     retains process and open-path checks as defense in depth.
 #   (Historical: ~/Library/Caches/plozz-mpv/mpv was the retired mpv/FFmpeg codec
 #    cache. mpv is gone; that cache is now an orphaned leftover this script never
 #    touches — safe to delete by hand if you want the ~78 MB back.)
@@ -41,10 +41,10 @@
 #   --dry-run        Print what would be deleted; delete nothing.
 #   -h | --help      Show this help.
 #
-# BUILD GUARD ENVIRONMENT
+# BUILD GUARD
 #   APPLE_BUILD_QUIET_SECONDS  Required no-build interval before apply (default 120).
 #   APPLE_BUILD_MAX_WAIT_SECONDS  Maximum wait for quiet (default 900).
-#   See docs/disk-reclaim.md for lock/process/open-path details.
+#   See docs/disk-reclaim.md for lease, rollout, suspension, and process details.
 #
 # EXAMPLES
 #   tools/prune-deriveddata.sh                 # safe periodic cleanup
@@ -85,6 +85,7 @@ done
 [ -d "$DD" ] || { echo "No DerivedData dir at $DD — nothing to do."; exit 0; }
 
 source "$SELF_DIR/lib/apple-build-guard.sh"
+APPLE_BUILD_MAINTENANCE_OWNER="cleanup/prune-deriveddata"
 
 # Resolve a real absolute path (worktrees may be symlinked).
 realpath_safe() { /usr/bin/python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$1" 2>/dev/null || echo "$1"; }
@@ -101,9 +102,20 @@ dir_recently_active() {  # 0 (true) if modified within ACTIVE_MIN minutes
 # --- idle-worktree detection (for --stale-days) --------------------------------
 STALE_REF=""
 cleanup() {
+  local status=$?
+  trap - EXIT HUP INT TERM
   [ -n "$STALE_REF" ] && rm -f "$STALE_REF"
-  release_maintenance_lock
+  if [ "${APPLE_BUILD_LEASE_SIGNALLED:-0}" -eq 1 ] || [ "$status" -ne 0 ]; then
+    abandon_maintenance_lock
+  elif ! release_maintenance_lock; then
+    status=75
+  fi
+  exit "$status"
 }
+APPLE_BUILD_LEASE_SIGNALLED=0
+trap 'apple_build_lease_signal_exit 129' HUP
+trap 'apple_build_lease_signal_exit 130' INT
+trap 'apple_build_lease_signal_exit 143' TERM
 trap cleanup EXIT
 ensure_stale_ref() {  # a marker file stamped exactly STALE_DAYS days ago
   [ -n "$STALE_REF" ] && return

@@ -217,7 +217,22 @@ struct SubtitleStylePanel: View {
         rows.append(StyleRowSpec(slot: slot, title: "Font", kind: .submenu(summary: Text(verbatim: s.fontFamily.displayName), open: { openScreen(.styleFont) }))); slot += 1
         rows.append(choiceRow(slot, "Weight", options: weights, current: s.fontWeight.snapped(to: weights), label: { $0.displayName }) { v in updateStyle { $0.fontWeight = v } }); slot += 1
         rows.append(numberRow(slot, "Text Size", options: Self.sizeOptions, current: Int((s.fontScale * 100).rounded()), label: { Text(verbatim: "\($0)%") }) { v in updateStyle { $0.fontScale = Double(v) / 100 } }); slot += 1
-        rows.append(numberRow(slot, "Position", options: Self.positionOptions, current: Int((s.verticalPosition * 100).rounded()), label: { Text(PlayerControlsFormatting.positionLabel($0)) }) { v in updateStyle { $0.verticalPosition = Double(v) / 100 } }); slot += 1
+        rows.append(numberRow(
+            slot, "Position",
+            options: Self.positionOptions,
+            current: Int((s.verticalPosition / SubtitleStyle.verticalPositionStep).rounded()),
+            label: { Text(Double($0) * SubtitleStyle.verticalPositionStep, format: .percent.precision(.fractionLength(0...1))) }
+        ) { v in updateStyle { $0.verticalPosition = Double(v) * SubtitleStyle.verticalPositionStep } }); slot += 1
+        rows.append(choiceRow(
+            slot,
+            LocalizedStringResource(
+                "Extra Line Position",
+                comment: "Subtitle setting for where additional wrapped lines appear: Above, Center, or Below. Not the placement of a second-language subtitle track."
+            ),
+            options: SubtitleStyle.VerticalAnchor.allCases,
+            current: s.verticalAnchor,
+            label: { $0.displayName }
+        ) { v in updateStyle { $0.verticalAnchor = v } }); slot += 1
         rows.append(numberRow(slot, "Horizontal Offset", options: Self.hOffsetOptions, current: Int((s.horizontalOffset * 100).rounded()), label: { Text(PlayerControlsFormatting.hOffsetLabel($0)) }) { v in updateStyle { $0.horizontalOffset = Double(v) / 100 } }); slot += 1
         rows.append(colorRow(slot, "Text Color", options: Self.textColorOptions, current: s.textColor, label: PlayerControlsFormatting.colorLabel) { c in updateStyle { $0.textColor = c } }); slot += 1
         rows.append(numberRow(slot, "Opacity", options: Self.opacityOptions, current: Int((s.opacity * 100).rounded()), label: { Text(verbatim: "\($0)%") }) { v in updateStyle { $0.opacity = Double(v) / 100 } }); slot += 1
@@ -280,7 +295,7 @@ struct SubtitleStylePanel: View {
     }
 
     /// A SwiftUI `Font` that renders a family's name in that family's own Regular
-    /// face — bundled faces via their PostScript name, SF via the system font, and
+    /// face — named faces via their PostScript name, SF via the system font, and
     /// SF Rounded via the rounded system design.
     private static func fontPreviewFont(for family: SubtitleFontFamily) -> Font {
         // OpenDyslexic's wide, heavy letterforms already read large, so it gets a
@@ -288,7 +303,7 @@ struct SubtitleStylePanel: View {
         // legible list.
         let size: CGFloat = family == .openDyslexic ? 30 : 40
         if family.usesRoundedDesign { return .system(size: size, design: .rounded) }
-        if let stem = family.postScriptStem { return .custom("\(stem)-Regular", size: size) }
+        if let name = family.postScriptNameCandidates().first { return .custom(name, size: size) }
         return .system(size: size)
     }
 
@@ -494,7 +509,9 @@ struct SubtitleStylePanel: View {
 
     // Precise, numeric option grids — no "low / high" buckets.
     private static let sizeOptions: [Int] = Array(stride(from: 60, through: 250, by: 5))
-    private static let positionOptions: [Int] = Array(stride(from: 0, through: 90, by: 1))
+    private static let positionOptions = SubtitleStyle.verticalPositionOptions.map {
+        Int(($0 / SubtitleStyle.verticalPositionStep).rounded())
+    }
     /// Horizontal nudge as a signed percentage of the max offset (±25% of width);
     /// 0 = centred. Lets subtitles dodge burned-in signage / letterbox furniture.
     private static let hOffsetOptions: [Int] = Array(stride(from: -100, through: 100, by: 5))

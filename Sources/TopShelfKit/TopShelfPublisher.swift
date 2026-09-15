@@ -32,8 +32,8 @@ public enum TopShelfPublisher {
     /// per section is what Plex settles on, and it holds up: a scrollable shelf
     /// nobody scrolls is just work done for an audience of none.
     ///
-    /// Deliberately independent of the on-screen row's limit, which is sixty. That
-    /// row is for browsing and should hold everything; this one should not.
+    /// Deliberately independent of the unlimited on-screen row. That row is for
+    /// browsing and holds everything; this one should not.
     private static let maxItemsPerSection = 3
 
     public static func publish(

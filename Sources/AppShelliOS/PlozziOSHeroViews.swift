@@ -12,21 +12,20 @@ import SwiftUI
 import UIKit
 
 enum PlozziOSHeroMetrics {
+    static let compactDetailActionSpacing: CGFloat = 20
+    static let detailContentTopInset: CGFloat = 24
+
     /// Whether this hero fills its stage by **mirroring** its own bottom edge
     /// into the space the picture doesn't reach, rather than by cropping the
     /// picture until it does.
     ///
-    /// Only the portrait Home hero: it is the one that stands a fixed fraction
-    /// of the window tall (see ``HeroStageMetrics``) regardless of how the
-    /// artwork is shaped, so it is the one whose crop would otherwise be
-    /// dictated by the length of the phone. The detail hero is the top of a
-    /// scrolling page rather than a full screen, and a regular-width layout puts
-    /// its metadata in a side column where height is not the constraint.
+    /// Portrait Home and detail share the same picture/continuation geometry.
+    /// Detail has a shorter artwork-only stage; its information grows below it.
     static func extendsArtwork(
         style: HeroArtworkStyle,
         surfaceRole: HeroTrailerSurfaceRole
     ) -> Bool {
-        style == .compactPortrait && surfaceRole == .home
+        style == .compactPortrait
     }
 
     static func height(
@@ -42,7 +41,7 @@ enum PlozziOSHeroMetrics {
         // has to reach far enough down that the metadata sits in the lower part
         // of the screen, while still leaving the next row peeking. See
         // `HeroStageMetrics`.
-        if extendsArtwork(style: style, surfaceRole: surfaceRole) {
+        if style == .compactPortrait && surfaceRole == .home {
             return HeroStageMetrics.portraitHomeHeight(
                 windowHeight: containerHeight,
                 fallback: 610,
@@ -50,9 +49,11 @@ enum PlozziOSHeroMetrics {
             )
         }
         let base: CGFloat = style == .compactPortrait
-            ? 610
+            ? (surfaceRole == .detail ? 420 : 610)
             : (surfaceRole == .detail ? 760 : 680)
-        return base + accessibilityExtra
+        // Grow the layout instead of offsetting it so the sections below move with the hero.
+        let detailExtra = surfaceRole == .detail ? detailContentTopInset : 0
+        return base + accessibilityExtra + detailExtra
     }
 
 }
@@ -256,12 +257,14 @@ struct PlozziOSHeroRequest {
     var actingName: String?
     var onRequest: (MediaItem) -> Void
     /// For a **series**: the loaded Seerr season-request availability (nil while it
-    /// loads), plus a per-season request callback. When both are present and there
-    /// is season content, the Request CTA becomes a season-picker menu ("Request
-    /// All Seasons" + per-season) instead of a one-tap whole-title request. Movies
-    /// (and series whose availability hasn't loaded yet) keep the one-tap button.
+    /// loads), plus per-season request/refresh callbacks. Series never fall back to
+    /// a whole-title request while coverage is unresolved.
     var seasonAvailability: MediaRequestAvailability? = nil
     var onRequestSeasons: (([Int]) -> Void)? = nil
+    var seasonRefreshFailed = false
+    var onRefreshSeasons: (() -> Void)? = nil
+    /// Detail pages reuse their season manager rather than opening a second request flow.
+    var onOpenSeasonRequests: (() -> Void)? = nil
 }
 
 /// The shared Seerr request / download-status CTA for both the Home and detail
@@ -275,63 +278,110 @@ struct PlozziOSHeroRequestButton: View {
     let request: PlozziOSHeroRequest
 
     var body: some View {
-        switch request.cta {
-        case .request:
-            if item.kind == .series,
-               let onRequestSeasons = request.onRequestSeasons,
-               let availability = request.seasonAvailability,
-               availability.hasSeasonRequestContent {
+        if let onOpenSeasonRequests = request.onOpenSeasonRequests {
+            Button(action: onOpenSeasonRequests) {
+                if let availability = request.seasonAvailability {
+                    PlozziOSSeasonRequestSummaryLabel(
+                        presentation: SeasonRequestPresentation(
+                            availability: availability,
+                            isSubmitting: request.isRequesting
+                        )
+                    )
+                } else {
+                    Label("Request Seasons", systemImage: "plus.circle")
+                }
+            }
+            .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
+            .accessibilityHint("Choose seasons and review their request status.")
+        } else if showsSeasonRequestControl,
+           let onRequestSeasons = request.onRequestSeasons {
+            if let availability = request.seasonAvailability {
+                let presentation = SeasonRequestPresentation(
+                    availability: availability,
+                    isSubmitting: request.isRequesting
+                )
+                let accessibilityHint =
+                    presentation.detail
+                    ?? "Choose seasons and review their request status."
+                let accessibilityHintText = request.actingName.map {
+                    Text(
+                        "Requests as \($0). Choose seasons and review their request status."
+                    )
+                } ?? Text(accessibilityHint)
                 Menu {
                     SeasonRequestMenuContent(
                         availability: availability,
+                        isSubmitting: request.isRequesting,
+                        refreshFailed: request.seasonRefreshFailed,
+                        onRefresh: request.onRefreshSeasons,
                         onRequest: onRequestSeasons
                     )
                 } label: {
-                    requestLabel
-                }
-                .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
-                .disabled(request.isRequesting)
-                .accessibilityLabel(
-                    request.actingName.map { "Request seasons as \($0)" }
-                        ?? "Request seasons"
-                )
-            } else {
-                Button {
-                    request.onRequest(item)
-                } label: {
-                    requestLabel
-                }
-                .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
-                .disabled(request.isRequesting)
-                .accessibilityLabel(
-                    request.actingName.map { "Request as \($0)" } ?? "Request"
-                )
-            }
-        case .requested:
-            statusPill {
-                Label("Requested", systemImage: "clock")
-            }
-        case let .downloading(progress):
-            statusPill {
-                HStack(spacing: 10) {
-                    Image(systemName: "arrow.down.circle")
-                    ResumeProgressCapsule(
-                        progress: progress,
-                        // The status pill uses the secondary (card) surface, so
-                        // the bar's ink tracks the *palette* lightness — dark ink
-                        // on a light theme, light ink on dark — not the raw
-                        // colour scheme (which left a dark bar on the dark pill).
-                        onLight: palette.isLight,
-                        width: 54,
-                        height: 5,
-                        floorsMinimumFill: false
+                    PlozziOSSeasonRequestSummaryLabel(
+                        presentation: presentation
                     )
-                    Text("\(Int((progress * 100).rounded()))%")
-                        .lineLimit(1)
                 }
+                .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
+                .accessibilityLabel(Text(presentation.title))
+                .accessibilityHint(accessibilityHintText)
+            } else if request.seasonRefreshFailed,
+                      let onRefreshSeasons = request.onRefreshSeasons {
+                Button(action: onRefreshSeasons) {
+                    Label("Retry Season Status", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
+            } else {
+                Button {} label: {
+                    Label("Loading Seasons…", systemImage: "clock")
+                }
+                .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
+                .disabled(true)
             }
-        case .play, .unavailable:
-            EmptyView()
+        } else {
+            switch request.cta {
+            case .request:
+                if item.kind == .series {
+                    Label("Season Status Unavailable", systemImage: "exclamationmark.circle")
+                        .font(.subheadline)
+                } else {
+                    Button {
+                        request.onRequest(item)
+                    } label: {
+                        requestLabel
+                    }
+                    .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
+                    .disabled(request.isRequesting)
+                    .accessibilityLabel(
+                        request.actingName.map { Text("Request as \($0)") }
+                            ?? Text("Request")
+                    )
+                }
+            case .requested:
+                statusPill {
+                    Label("Requested", systemImage: "clock")
+                }
+            case let .downloading(progress):
+                statusPill {
+                    DownloadProgressButtonLabel(
+                        progress: progress,
+                        onLight: palette.isLight
+                    )
+                }
+            case .play, .unavailable:
+                EmptyView()
+            }
+        }
+    }
+
+    private var showsSeasonRequestControl: Bool {
+        guard item.kind == .series, request.onRequestSeasons != nil else {
+            return false
+        }
+        switch request.cta {
+        case .play:
+            return false
+        case .request, .requested, .downloading, .unavailable:
+            return true
         }
     }
 
@@ -351,6 +401,27 @@ struct PlozziOSHeroRequestButton: View {
             Label("Request", systemImage: "plus.circle")
         }
     }
+
+}
+
+struct PlozziOSSeasonRequestSummaryLabel: View {
+    let presentation: SeasonRequestPresentation
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: presentation.systemImage)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(presentation.title)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let detail = presentation.detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
 }
 
 struct PlozziOSDetailHeroSection: View {
@@ -361,7 +432,7 @@ struct PlozziOSDetailHeroSection: View {
     let item: MediaItem
     let backdropItem: MediaItem
     let playableItem: MediaItem?
-    let downloadItem: MediaItem?
+    var showsPlayPlaceholder: Bool = false
     let sources: [MediaSourceRef]
     /// The air-schedule badge for a series, resolved by the detail page.
     var scheduleLine: LocalizedStringResource? = nil
@@ -405,6 +476,7 @@ struct PlozziOSDetailHeroSection: View {
             // background shows through and the episode's own still leads
             // instead. The show's artwork here made every episode look the same.
             showsBackdrop: !presentsEpisodeStill,
+            scheduleLine: scheduleLine,
             pullDistance: pullDistance,
             trailerController: trailerController,
             backgroundSettings: appModel.settings.heroBackground,
@@ -414,7 +486,7 @@ struct PlozziOSDetailHeroSection: View {
                 item: item,
                 rootItem: backdropItem,
                 playableItem: playableItem,
-                downloadItem: downloadItem,
+                showsPlayPlaceholder: showsPlayPlaceholder,
                 sources: sources,
                 scheduleLine: scheduleLine,
                 selectedSourceAccountID: selectedSourceAccountID,
@@ -440,6 +512,7 @@ struct PlozziOSDetailHeroSection: View {
 private struct PlozziOSHeroStage<Foreground: View>: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.plozziOSHeroContainerHeight) private var containerHeight
+    @Environment(\.themePalette) private var palette
     @State private var artworkAppearanceID = UUID().uuidString
 
     let item: MediaItem
@@ -449,6 +522,8 @@ private struct PlozziOSHeroStage<Foreground: View>: View {
     let isActive: Bool
     var showsBackdrop = true
     var showsScrim = true
+    /// Compact detail renders the availability badge with its separate title/logo.
+    var scheduleLine: LocalizedStringResource? = nil
     /// Overscroll pull (points) from the enclosing scroll view. Stretches the
     /// backdrop just like the Home hero; 0 leaves the hero at rest.
     var pullDistance: CGFloat = 0
@@ -487,6 +562,10 @@ private struct PlozziOSHeroStage<Foreground: View>: View {
         )
     }
 
+    private var separatesContent: Bool {
+        surfaceRole == .detail && style == .compactPortrait
+    }
+
     var body: some View {
         // Overscroll stretch, mirroring the Home hero: grow the backdrop by the
         // pull distance and pull it up so its top tracks the finger while the
@@ -506,7 +585,7 @@ private struct PlozziOSHeroStage<Foreground: View>: View {
                 placement: artworkPlacement
             )
         }
-        return ZStack {
+        let background = Group {
             if showsBackdrop {
                 PlozziOSReflectedHeroStage(height: height, ancestorScale: pullScale) { _ in
                     PlozziOSHeroBackdrop(
@@ -540,29 +619,58 @@ private struct PlozziOSHeroStage<Foreground: View>: View {
             } else {
                 Color.clear
             }
-
-            foreground()
-                .frame(
-                    maxWidth: PlozziOSPageLayout.heroStageMaxWidth(
-                        for: style,
-                        surfaceRole: surfaceRole
-                    )
-                )
-                .frame(
-                    maxWidth: .infinity,
-                    maxHeight: .infinity,
-                    alignment: style == .compactPortrait
-                        ? .bottom
-                        : .bottomLeading
-                )
-                .padding(
-                    .horizontal,
-                    PlozziOSPageLayout.horizontalInset(for: style)
-                )
-                .padding(.bottom, style == .compactPortrait ? 30 : 42)
-
         }
-        .frame(height: height)
+
+        return Group {
+            if separatesContent {
+                VStack(spacing: 0) {
+                    if showsBackdrop {
+                        ZStack(alignment: .bottom) {
+                            background
+                            PlozziOSHeroMetadata(
+                                presentation: presentation,
+                                style: style,
+                                mode: .detail,
+                                scheduleLine: scheduleLine,
+                                logoFallback: PlozziOSHeroMetadata.tmdbLogoFallback(for: item),
+                                content: .identity
+                            )
+                            .padding(.horizontal, PlozziOSPageLayout.horizontalInset(for: style))
+                            .padding(.bottom, 12)
+                        }
+                        .frame(height: height)
+                    }
+                    foreground()
+                        .padding(.horizontal, PlozziOSPageLayout.horizontalInset(for: style))
+                        .padding(
+                            .top,
+                            showsBackdrop ? 12 : 80 + PlozziOSHeroMetrics.detailContentTopInset
+                        )
+                        .padding(.bottom, 8)
+                        .frame(maxWidth: .infinity)
+                        .background(palette.backgroundBase)
+                }
+            } else {
+                ZStack {
+                    background
+                    foreground()
+                        .frame(
+                            maxWidth: PlozziOSPageLayout.heroStageMaxWidth(
+                                for: style,
+                                surfaceRole: surfaceRole
+                            )
+                        )
+                        .frame(
+                            maxWidth: .infinity,
+                            maxHeight: .infinity,
+                            alignment: style == .compactPortrait ? .bottom : .bottomLeading
+                        )
+                        .padding(.horizontal, PlozziOSPageLayout.horizontalInset(for: style))
+                        .padding(.bottom, style == .compactPortrait ? 30 : 42)
+                }
+                .frame(height: height)
+            }
+        }
         .task(
             id: PlozziOSHeroPlaybackID(
                 itemID: item.id,
@@ -850,6 +958,7 @@ private struct PlozziOSHeroBackdrop: View {
             if appliesFadeMask {
                 PlozziOSHeroFadeMask(
                     extendsArtwork: extendsArtwork,
+                    protectsCompactDetailText: surfaceRole == .detail && style == .compactPortrait,
                     // Detail is intentionally shorter than Home, so its light-mode
                     // dissolve needs more runway to keep the white handoff subtle.
                     upwardExtension:
@@ -968,6 +1077,7 @@ struct PlozziOSHeroFadeMask: View {
     /// background, which is what a fixed 0.62 produced on a hero this tall — and
     /// one that carries all the way behind the buttons and then melts.
     var extendsArtwork: Bool = false
+    var protectsCompactDetailText = false
     /// Additional fraction of the hero covered by the bottom-anchored artwork
     /// dissolve. Positive values move only its upper edge farther into the image.
     var upwardExtension: CGFloat = 0
@@ -1000,6 +1110,13 @@ struct PlozziOSHeroFadeMask: View {
     }
 
     private func start(in size: CGSize) -> CGFloat {
+        if protectsCompactDetailText {
+            return HeroStageMetrics.compactDetailMeltStart(
+                width: size.width,
+                height: size.height,
+                isLight: colorScheme == .light
+            )
+        }
         let baseStart = extendsArtwork
             ? HeroStageMetrics.meltStart(
                 width: size.width,
@@ -1519,8 +1636,10 @@ struct PlozziOSHomeHeroForeground: View {
             PlozziOSStableHomeHeroMetadata(
                 presentation: presentation,
                 style: style,
-                hidesRatings: appModel.settings.spoilers.settings
-                    .shouldHideRatings(for: item),
+                hidesRatings: !appModel.settings.hero.settings.shouldShowRatings(
+                    for: item,
+                    spoilerSettings: appModel.settings.spoilers.settings
+                ),
                 scheduleLine: scheduleLine,
                 logoFallback: PlozziOSHeroMetadata.tmdbLogoFallback(for: item)
             )
@@ -1530,10 +1649,12 @@ struct PlozziOSHomeHeroForeground: View {
             // the progress bar) so the row fits instead of wrapping. A vertical
             // stack is only the last resort (e.g. very large Dynamic Type).
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { actionButtons(resumeTrailingStyle: .full) }
-                HStack(spacing: 12) { actionButtons(resumeTrailingStyle: .seasonEpisodeOnly) }
-                HStack(spacing: 12) { actionButtons(resumeTrailingStyle: .hidden) }
-                VStack(spacing: 12) { actionButtons(resumeTrailingStyle: .full) }
+                HeroActionRow { actionButtons(resumeTrailingStyle: .full) }
+                HeroActionRow { actionButtons(resumeTrailingStyle: .seasonEpisodeOnly) }
+                HeroActionRow { actionButtons(resumeTrailingStyle: .hidden) }
+                HeroActionRow(stacksVertically: true) {
+                    actionButtons(resumeTrailingStyle: .full, wrapsText: true)
+                }
             }
             .controlSize(.large)
         }
@@ -1543,21 +1664,24 @@ struct PlozziOSHomeHeroForeground: View {
 
     @ViewBuilder
     private func actionButtons(
-        resumeTrailingStyle: PlayResumeButtonLabel.ResumeTrailingStyle
+        resumeTrailingStyle: PlayResumeButtonLabel.ResumeTrailingStyle,
+        wrapsText: Bool = false
     ) -> some View {
         if hasPlayAction {
             Button {
                 onPlay(item)
             } label: {
                 PlayResumeButtonLabel(
-                    title: "Play",
+                    title: item.playActionTitle,
                     progress: item.resumeProgressFraction,
                     remainingText: item.resumeRemainingText,
                     seasonEpisodeText: seasonEpisodeText,
                     onLight: colorScheme == .dark,
                     spacing: 10,
                     capsuleWidth: 60,
-                    resumeTrailingStyle: resumeTrailingStyle
+                    resumeTrailingStyle: resumeTrailingStyle,
+                    separatesEpisodeText: item.startsWatching,
+                    wrapsText: wrapsText
                 )
             }
             .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
@@ -1669,14 +1793,11 @@ struct PlozziOSHomeHeroForeground: View {
 private struct PlozziOSDetailHeroForeground: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(PlozziOSAppModel.self) private var appModel
-    @State private var downloadRecord: DownloadedMediaRecord?
-    @State private var downloadError: String?
-    @State private var showsDownloadConfirmation = false
 
     let item: MediaItem
     let rootItem: MediaItem
     let playableItem: MediaItem?
-    let downloadItem: MediaItem?
+    var showsPlayPlaceholder: Bool = false
     let sources: [MediaSourceRef]
     /// The air-schedule badge for a series, resolved by the detail page.
     var scheduleLine: LocalizedStringResource? = nil
@@ -1719,7 +1840,9 @@ private struct PlozziOSDetailHeroForeground: View {
         for target in [item, watchlistSubject, rootItem] {
             for action in actionHandler.actions(for: target, context: .none)
                 where offersAction(action) && seen.insert(action).inserted {
-                entries.append(ActionEntry(action: action, target: target))
+                let subject = action == .browseFiles && rootItem.fileBrowserContainerID != nil
+                    ? rootItem : target
+                entries.append(ActionEntry(action: action, target: subject))
             }
         }
         return entries
@@ -1740,7 +1863,9 @@ private struct PlozziOSDetailHeroForeground: View {
 
     /// this page can't otherwise reach, and only when something can route it.
     private func offersAction(_ action: MediaItemAction) -> Bool {
+        guard !action.isDownload else { return false }
         guard action.isNavigation else { return true }
+        if action == .browseFiles { return navigator != nil }
         return offersParentNavigation && !action.navigatesToSelf && navigator != nil
     }
 
@@ -1768,11 +1893,15 @@ private struct PlozziOSDetailHeroForeground: View {
     /// episode page has a *visible* way back to its show rather than one buried
     /// in a long-press menu.
     private var parentNavigationEntry: ActionEntry? {
-        actions.first { $0.action.isNavigation && !$0.action.navigatesToSelf }
+        actions.first { $0.action == .goToSeason }
     }
 
     private var hasSourceVersionOptions: Bool {
         sources.count > 1 || versions.count > 1
+    }
+
+    private var fileBrowserAction: ActionEntry? {
+        actions.first { $0.action == .browseFiles }
     }
 
     /// The episode's own 16:9 still, shown above its details on an episode page.
@@ -1784,7 +1913,9 @@ private struct PlozziOSDetailHeroForeground: View {
             asyncFallbackURL: { await ArtworkRouter.shared.artworkURL(.thumbnail, for: item) },
             pinIdentity: item.stablePresentationID
         ) {
-            MediaArtworkPlaceholder()
+            MediaArtworkPlaceholder(
+                symbol: .init(for: item), cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius
+            )
         }
         .blur(radius: appModel.settings.spoilers.settings.shouldHideThumbnail(for: item) ? 24 : 0)
         .aspectRatio(16 / 9, contentMode: .fit)
@@ -1822,7 +1953,10 @@ private struct PlozziOSDetailHeroForeground: View {
                 },
                 subjectTitle: presentsEpisodeStill ? item.title : nil,
                 scheduleLine: scheduleLine,
-                logoFallback: PlozziOSHeroMetadata.tmdbLogoFallback(for: item)
+                logoFallback: PlozziOSHeroMetadata.tmdbLogoFallback(for: item),
+                usesCompactDetailLayout: style == .compactPortrait,
+                content: style == .compactPortrait && !presentsEpisodeStill ? .information : .all,
+                detailPageSettings: appModel.settings.detailPage.settings
             )
 
             // Progressive overflow: try every inline layout from "all buttons
@@ -1858,8 +1992,15 @@ private struct PlozziOSDetailHeroForeground: View {
                     labelledTrailer: false,
                     resume: .hidden
                 )
+                actionRow(
+                    collapsing: orderedInlineExtras.count,
+                    labelledTrailer: false,
+                    resume: .full,
+                    stacksVertically: true
+                )
             }
             .controlSize(.large)
+            .padding(.top, style == .compactPortrait ? PlozziOSHeroMetrics.compactDetailActionSpacing : 0)
         }
         .frame(
             maxWidth: PlozziOSPageLayout.heroTextMaxWidth(for: style),
@@ -1882,81 +2023,6 @@ private struct PlozziOSDetailHeroForeground: View {
         .contextMenu {
             detailContextMenu
         }
-        // Keyed on version too: switching version must re-check whether THAT
-        // file is downloaded, not leave the button showing the old answer.
-        .task(id: "\(downloadItem?.id ?? "")|\(downloadItem?.selectedVersionID ?? "")") {
-            guard let downloadItem else {
-                downloadRecord = nil
-                return
-            }
-            downloadRecord = await appModel.downloads
-                .record(forSelectedVersionOf: downloadItem)
-            if let provider = appModel.provider(for: downloadItem) {
-                await appModel.downloads.refreshReducedQualitySupport(
-                    for: downloadItem,
-                    provider: provider
-                )
-            }
-        }
-        .alert(
-            "Download Failed",
-            isPresented: Binding(
-                get: { downloadError != nil },
-                set: { if !$0 { downloadError = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(verbatim: downloadError ?? "")
-        }
-        .confirmationDialog(
-            downloadItem.map {
-                if currentDownloadRecord?.status == .completed {
-                    return Text("Change Offline Copy of ")
-                        + Text(verbatim: $0.title)
-                        + Text(verbatim: "?")
-                }
-                return Text("Download ")
-                    + Text(verbatim: $0.title)
-                    + Text(verbatim: "?")
-            } ?? Text("Download?"),
-            isPresented: $showsDownloadConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button(
-                currentDownloadRecord?.status == .completed
-                    ? "Use Original"
-                    : "Download Original"
-            ) {
-                Task { await startDownload(quality: .original) }
-            }
-            if let downloadItem,
-               appModel.downloads.supportsReducedQuality(for: downloadItem) {
-                Button("Download 1080p • 20 Mbps") {
-                    Task { await startDownload(quality: .hd1080) }
-                }
-                Button("Download 720p • 4 Mbps") {
-                    Task { await startDownload(quality: .hd720) }
-                }
-                Button("Download 480p • 1.5 Mbps") {
-                    Task { await startDownload(quality: .sd480) }
-                }
-                if let custom = appModel.downloads.customDownloadQuality,
-                   let title = appModel.downloads.customDownloadQualityTitle {
-                    Button(title) {
-                        Task { await startDownload(quality: custom) }
-                    }
-                }
-            }
-            if currentDownloadRecord?.status == .completed {
-                Button("Remove Download", role: .destructive) {
-                    Task { await removeDownload() }
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            downloadConfirmationMessage
-        }
     }
 
     /// A secondary hero action that can either sit inline as its own button or
@@ -1965,13 +2031,11 @@ private struct PlozziOSDetailHeroForeground: View {
     /// the least-used action is the first to move into "…".
     private enum InlineExtra: Identifiable {
         case primary(ActionEntry)
-        case download
         case trailer
 
         var id: String {
             switch self {
             case .primary(let entry): return "media.\(entry.action.rawValue)"
-            case .download: return "download"
             case .trailer: return "trailer"
             }
         }
@@ -1997,19 +2061,15 @@ private struct PlozziOSDetailHeroForeground: View {
         if !presentsEpisodeStill, let parentNavigationEntry {
             extras.append(.primary(parentNavigationEntry))
         }
-        if downloadItem != nil {
-            extras.append(.download)
-        }
         return extras
     }
 
-    /// Fold priority, lowest folds into "…" first. The power-user Download goes
+    /// Fold priority, lowest folds into "…" first. Navigation goes
     /// before everyday watch-state actions, and the trailer is the last to leave
     /// the row. It sheds its label first (see `actionRow`), which usually buys
     /// enough width that it never has to leave at all.
     private func foldRank(_ extra: InlineExtra) -> Int {
         switch extra {
-        case .download: return 0
         case .primary(let entry):
             return entry.action.isNavigation ? 1 : 2
         case .trailer: return 3
@@ -2022,7 +2082,8 @@ private struct PlozziOSDetailHeroForeground: View {
     private func actionRow(
         collapsing collapseCount: Int,
         labelledTrailer: Bool,
-        resume: PlayResumeButtonLabel.ResumeTrailingStyle
+        resume: PlayResumeButtonLabel.ResumeTrailingStyle,
+        stacksVertically: Bool = false
     ) -> some View {
         let extras = orderedInlineExtras
         // Fold by priority, then render what survives in display order, so the
@@ -2040,20 +2101,23 @@ private struct PlozziOSDetailHeroForeground: View {
             .map(\.element)
         let collapsed = doomed.map(\.element)
         let menu = menuActions(collapsing: collapsed)
-        return HStack(spacing: 12) {
-            playActionButton(resume: resume)
+        return HeroActionRow(
+            stacksVertically: stacksVertically,
+            alignment: style == .compactPortrait ? .center : .leading
+        ) {
+            playActionButton(resume: resume, wrapsText: stacksVertically)
             heroRequestButton
             ForEach(inline) { extra in
                 inlineExtraButton(extra, labelled: labelledTrailer)
             }
-            if hasSourceVersionOptions || !menu.isEmpty {
+            if hasSourceVersionOptions || !menu.isEmpty || fileBrowserAction != nil {
                 sourceVersionMenuButton(actions: menu)
             }
         }
     }
 
     /// Overflow-menu entries for the collapsed extras, preserving the canonical
-    /// menu ordering (primary actions, then Download) regardless of which subset
+    /// menu ordering regardless of which subset
     /// happens to be collapsed at the current width.
     private func menuActions(collapsing extras: [InlineExtra]) -> [PlaybackSourceMenuAction] {
         let ids = Set(extras.map(\.id))
@@ -2068,17 +2132,12 @@ private struct PlozziOSDetailHeroForeground: View {
         switch extra {
         case .primary(let entry):
             primaryActionButton(entry)
-        case .download:
-            downloadActionButton
         case .trailer:
             trailerActionButton(labelled: labelledTrailer)
         }
     }
 
-    /// The Seerr request CTA for a discovery (not-in-library) title — matching
-    /// tvOS, which surfaces Request in the hero itself rather than in a separate
-    /// block. Uses the shared `PlozziOSHeroRequestButton` so Home and detail read
-    /// identically (Request / Requested / live download progress).
+    /// Request-only titles keep their primary request action out of overflow.
     @ViewBuilder
     private var heroRequestButton: some View {
         if let heroRequest {
@@ -2118,27 +2177,32 @@ private struct PlozziOSDetailHeroForeground: View {
 
     @ViewBuilder
     private func playActionButton(
-        resume: PlayResumeButtonLabel.ResumeTrailingStyle = .full
+        resume: PlayResumeButtonLabel.ResumeTrailingStyle = .full,
+        wrapsText: Bool = false
     ) -> some View {
-        if let playableItem {
+        if playableItem != nil || showsPlayPlaceholder {
             Button {
-                onPlay(playableItem, false)
+                if let playableItem { onPlay(playableItem, false) }
             } label: {
                 PlayResumeButtonLabel(
-                    title: "Play",
-                    progress: playableItem.resumeProgressFraction,
-                    remainingText: playableItem.resumeRemainingText,
-                    seasonEpisodeText: seasonEpisodeText(for: playableItem),
+                    title: playableItem?.playActionTitle ?? "Play",
+                    progress: playableItem?.resumeProgressFraction,
+                    remainingText: playableItem?.resumeRemainingText,
+                    seasonEpisodeText: playableItem.flatMap { seasonEpisodeText(for: $0) },
                     onLight: colorScheme == .dark,
                     spacing: 10,
                     capsuleWidth: 60,
-                    resumeTrailingStyle: resume
+                    resumeTrailingStyle: resume,
+                    isPlaceholder: playableItem == nil,
+                    separatesEpisodeText: playableItem?.startsWatching ?? false,
+                    wrapsText: wrapsText
                 )
-                // ViewThatFits can only collapse lower-priority actions when the
-                // Play label reports its readable width instead of truncating.
-                .fixedSize(horizontal: true, vertical: false)
             }
-            .buttonStyle(PlozziOSHeroActionButtonStyle(kind: .primary))
+            .buttonStyle(PlozziOSHeroActionButtonStyle(
+                kind: .primary,
+                minimumWidth: style == .compactPortrait && !wrapsText ? 180 : nil
+            ))
+            .disabled(playableItem == nil)
         }
     }
 
@@ -2163,19 +2227,6 @@ private struct PlozziOSDetailHeroForeground: View {
         .accessibilityLabel(entry.action.title)
     }
 
-    @ViewBuilder
-    private var downloadActionButton: some View {
-        if downloadItem != nil {
-            downloadMenuAction
-                .buttonStyle(
-                    PlozziOSHeroActionButtonStyle(
-                        kind: .secondary,
-                        circular: true
-                    )
-                )
-        }
-    }
-
     private func sourceVersionMenuButton(
         actions: [PlaybackSourceMenuAction] = []
     ) -> some View {
@@ -2184,7 +2235,13 @@ private struct PlozziOSDetailHeroForeground: View {
             selectedSourceID: selectedSourceAccountID,
             versions: versions,
             selectedVersionID: selectedVersionID,
-            actions: actions,
+            actions: actions + (fileBrowserAction.map { entry in
+                [PlaybackSourceMenuAction(
+                    id: "media.\(entry.action.rawValue)",
+                    title: entry.action.title,
+                    systemImage: entry.action.systemImage
+                )]
+            } ?? []),
             onSelectSource: onSelectSource,
             onSelectVersion: onSelectVersion,
             onPerformAction: performCompactPanelAction
@@ -2209,13 +2266,6 @@ private struct PlozziOSDetailHeroForeground: View {
                 systemImage: primaryActionSymbol(for: entry)
             )
         }
-        if downloadItem != nil {
-            result.append(PlaybackSourceMenuAction(
-                id: "download",
-                title: downloadActionTitle,
-                systemImage: downloadActionSymbol
-            ))
-        }
         // So a collapsed Trailer is still reachable rather than simply gone.
         if trailerItem != nil, onPlayTrailer != nil {
             result.append(PlaybackSourceMenuAction(
@@ -2228,8 +2278,8 @@ private struct PlozziOSDetailHeroForeground: View {
     }
 
     private func performCompactPanelAction(_ id: String) {
-        if id == "download" {
-            Task { await performDownloadAction() }
+        if id == "media.browseFiles", let fileBrowserAction {
+            perform(fileBrowserAction)
             return
         }
         if id == "trailer" {
@@ -2355,211 +2405,19 @@ private struct PlozziOSDetailHeroForeground: View {
         return "S\(season), E\(episode)"
     }
 
-    @ViewBuilder
-    private var downloadMenuAction: some View {
-        Button {
-            Task { await performDownloadAction() }
-        } label: {
-            Image(systemName: downloadActionSymbol)
-                .font(.headline)
-        }
-        .accessibilityLabel(downloadActionTitle)
-    }
-
-    /// Reuses `MediaItemAction`'s labels rather than repeating them: these were
-    /// four duplicate literals of the same copy, which meant a wording change had
-    /// to be made twice and — once localized — would have produced two catalog
-    /// entries translators had to keep in sync by hand.
-    private var downloadActionTitle: LocalizedStringResource {
-        switch currentDownloadRecord?.status {
-        case .queued, .preparing, .downloading:
-            return MediaItemAction.pauseDownload.title
-        case .paused, .failed:
-            return MediaItemAction.resumeDownload.title
-        case .completed:
-            return MediaItemAction.removeDownload.title
-        case nil:
-            return MediaItemAction.startDownload.title
-        }
-    }
-
-    private var downloadActionSymbol: String {
-        switch currentDownloadRecord?.status {
-        case .queued, .preparing, .downloading:
-            return "pause.circle"
-        case .paused, .failed:
-            return "arrow.clockwise.circle"
-        case .completed:
-            return "trash"
-        case nil:
-            return "arrow.down.circle"
-        }
-    }
-
-    private func performDownloadAction() async {
-        switch currentDownloadRecord?.status {
-        case .queued, .preparing, .downloading:
-            await pauseDownload()
-        case .paused, .failed:
-            await resumeDownload()
-        case .completed:
-            showsDownloadConfirmation = true
-        case nil:
-            if appModel.downloads.asksBeforeDownloading {
-                showsDownloadConfirmation = true
-            } else {
-                await startDownload()
-            }
-        }
-    }
-
-    private var currentDownloadRecord: DownloadedMediaRecord? {
-        guard let downloadRecord else { return nil }
-        return appModel.downloads.records.first {
-            $0.identityKey == downloadRecord.identityKey
-        } ?? downloadRecord
-    }
-
-    private func startDownload(
-        quality: DownloadQuality? = nil
-    ) async {
-        guard let downloadItem else { return }
-        do {
-            guard let provider = appModel.provider(for: downloadItem) else {
-                downloadError = String(localized: "The selected server is no longer available.") // l10n:content — alert storage requires resolved text
-                return
-            }
-            downloadRecord = try await appModel.downloads.enqueue(
-                item: downloadItem,
-                provider: provider,
-                quality: quality
-            )
-        } catch {
-            downloadError = error.localizedDescription
-        }
-    }
-
-    private var downloadConfirmationMessage: Text {
-        let source = selectedSource.map {
-            Text(verbatim: $0.displayName)
-        } ?? Text("Selected server")
-        let size = selectedVersion?.sizeBytes.map {
-            Text(verbatim: $0.formatted(.byteCount(style: .file)))
-        } ?? Text("Size unavailable")
-        return source
-            + Text(verbatim: " • ")
-            + size
-            + Text(verbatim: ". ")
-            + Text("Reduced qualities are transcoded by your media server.")
-    }
-
-    private func pauseDownload() async {
-        guard let record = currentDownloadRecord else { return }
-        await appModel.downloads.pause(record)
-        downloadRecord = appModel.downloads.records.first {
-            $0.identityKey == record.identityKey
-        }
-    }
-
-    private func resumeDownload() async {
-        guard let record = currentDownloadRecord else { return }
-        await appModel.downloads.resume(record)
-        downloadRecord = appModel.downloads.records.first {
-            $0.identityKey == record.identityKey
-        }
-    }
-
-    private func removeDownload() async {
-        guard let record = currentDownloadRecord else { return }
-        await appModel.downloads.remove(record)
-        downloadRecord = nil
-    }
 }
 
-private struct PlozziOSHeroActionButtonStyle: ButtonStyle {
-    enum Kind {
-        case primary
-        case secondary
-    }
-
-    let kind: Kind
-    var circular = false
-    @Environment(\.themePalette) private var palette
-
-    func makeBody(configuration: Configuration) -> some View {
-        styledLabel(configuration)
-            .contentShape(circular ? AnyShape(Circle()) : AnyShape(Capsule()))
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .opacity(configuration.isPressed ? 0.86 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-    }
-
-    @ViewBuilder
-    private func styledLabel(_ configuration: Configuration) -> some View {
-        if circular {
-            configuration.label
-                .foregroundStyle(
-                    kind == .primary
-                        ? palette.backgroundBase
-                        : palette.primaryText
-                )
-                .frame(width: 48, height: 48)
-                .background {
-                    Circle()
-                        .fill(backgroundColor)
-                        .overlay {
-                            if kind == .secondary {
-                                Circle()
-                                    .strokeBorder(
-                                        palette.primaryText.opacity(0.2),
-                                        lineWidth: 1
-                                    )
-                            }
-                        }
-                }
-        } else {
-            configuration.label
-            .font(.headline.weight(.semibold))
-            .foregroundStyle(
-                kind == .primary
-                    ? palette.backgroundBase
-                    : palette.primaryText
-            )
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .frame(minHeight: 48)
-            .background {
-                Capsule()
-                    .fill(
-                        kind == .primary
-                            ? palette.primaryText
-                            : palette.cardSurface.opacity(0.92)
-                    )
-                    .overlay {
-                        if kind == .secondary {
-                            Capsule()
-                                .strokeBorder(
-                                    palette.primaryText.opacity(0.2),
-                                    lineWidth: 1
-                                )
-                        }
-                    }
-            }
-            .contentShape(Capsule())
-        }
-    }
-
-    private var backgroundColor: Color {
-        kind == .primary
-            ? palette.primaryText
-            : palette.cardSurface.opacity(0.92)
-    }
-}
+private typealias PlozziOSHeroActionButtonStyle = TouchHeroActionButtonStyle
 
 private struct PlozziOSHeroMetadata: View {
     enum Mode {
         case home
         case detail
+    }
+    enum Content {
+        case all
+        case identity
+        case information
     }
 
     @Environment(\.themePalette) private var palette
@@ -2589,6 +2447,10 @@ private struct PlozziOSHeroMetadata: View {
     /// payload refreshes may update other chrome, but must not replace a visible
     /// overview with a newly arrived tagline.
     var descriptionOverride: DescriptionOverride? = nil
+    /// Compact detail uses a two-line expandable synopsis and a two-genre preview.
+    var usesCompactDetailLayout = false
+    var content: Content = .all
+    var detailPageSettings: DetailPageSettings = .default
 
     struct DescriptionOverride {
         let text: String?
@@ -2616,144 +2478,152 @@ private struct PlozziOSHeroMetadata: View {
     }
 
     var body: some View {
+        let contextParts =
+            usesCompactDetailLayout
+            ? factComponents
+                + HeroContentPolicy.compactDetailGenres(
+                    focused: presentation, root: rootPresentation
+                )
+            : effectiveGenres
         VStack(
             alignment: style == .compactPortrait ? .center : .leading,
             spacing: 9
         ) {
-            if let seriesBreadcrumb {
-                // The episode is this page's subject, so the show is context
-                // rather than identity — and naming it says both where you are
-                // and that you can leave. See `DetailHeroView` on tvOS.
-                Button {
-                    onTapBreadcrumb?()
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(seriesBreadcrumb)
-                            .lineLimit(1)
-                        Image(systemName: "chevron.forward")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(palette.secondaryText)
-                }
-                .buttonStyle(.plain)
-                .disabled(onTapBreadcrumb == nil)
-                .accessibilityLabel(Text("Go to \(seriesBreadcrumb)"))
-
-                // `presentation.title` resolves an episode to its *show's* name,
-                // which is right when a series hero fronts an episode but wrong
-                // here: the breadcrumb above already names the show.
-                Text(subjectTitle ?? presentation.title)
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-                    .foregroundStyle(palette.primaryText)
-                    .lineLimit(2)
-                    .accessibilityAddTraits(.isHeader)
-            } else {
+            if content != .information {
                 if let scheduleLine {
                     scheduleBadge(scheduleLine)
                 }
-                let logoBox = PlozziOSPageLayout.heroLogoBox(for: style)
-                HeroLogoArtwork(
-                    references: presentation.logoReferences,
-                    asyncFallbackURL: logoFallback,
-                    // Without this the analysis cannot prove a logo is safe and so
-                    // keeps its halo on for EVERY title — which is why iOS drew a
-                    // shadow behind logos that plainly did not need one while tvOS,
-                    // which has always sampled, did not. Memoised per reference by
-                    // `HeroBackgroundSampler`, so a carousel pays for each slide
-                    // once.
-                    backgroundSample: heroBackgroundSample,
-                    maxWidth: logoBox.width,
-                    maxHeight: logoBox.height,
-                    alignment: style == .compactPortrait ? .center : .leading
-                ) {
-                    Text(presentation.title)
-                        .font(style == .compactPortrait ? .largeTitle : .largeTitle)
+                if let seriesBreadcrumb {
+                    // The episode is this page's subject, so the show is context
+                    // rather than identity — and naming it says both where you are
+                    // and that you can leave. See `DetailHeroView` on tvOS.
+                    Button {
+                        onTapBreadcrumb?()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(seriesBreadcrumb)
+                                .lineLimit(1)
+                            Image(systemName: "chevron.forward")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(palette.secondaryText)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(onTapBreadcrumb == nil)
+                    .accessibilityLabel(Text("Go to \(seriesBreadcrumb)"))
+
+                    // `presentation.title` resolves an episode to its *show's* name,
+                    // which is right when a series hero fronts an episode but wrong
+                    // here: the breadcrumb above already names the show.
+                    Text(subjectTitle ?? presentation.title)
+                        .font(.largeTitle)
                         .fontWeight(.bold)
                         .foregroundStyle(palette.primaryText)
                         .lineLimit(2)
+                        .accessibilityAddTraits(.isHeader)
+                } else {
+                    let logoBox = PlozziOSPageLayout.heroLogoBox(for: style)
+                    HeroLogoArtwork(
+                        references: presentation.logoReferences,
+                        asyncFallbackURL: logoFallback,
+                        // Without this the analysis cannot prove a logo is safe and so
+                        // keeps its halo on for EVERY title — which is why iOS drew a
+                        // shadow behind logos that plainly did not need one while tvOS,
+                        // which has always sampled, did not. Memoised per reference by
+                        // `HeroBackgroundSampler`, so a carousel pays for each slide
+                        // once.
+                        backgroundSample: heroBackgroundSample,
+                        maxWidth: logoBox.width,
+                        maxHeight: logoBox.height,
+                        alignment: style == .compactPortrait ? .center : .leading
+                    ) {
+                        Text(presentation.title)
+                            .font(style == .compactPortrait ? .largeTitle : .largeTitle)
+                            .fontWeight(.bold)
+                            .foregroundStyle(palette.primaryText)
+                            .lineLimit(2)
+                    }
+                    .accessibilityLabel(Text(presentation.title))
+                    .accessibilityAddTraits(.isHeader)
                 }
-                .accessibilityLabel(Text(presentation.title))
-                .accessibilityAddTraits(.isHeader)
             }
 
-            if effectiveRatingBadge != nil || !effectiveGenres.isEmpty {
-                HStack(spacing: 10) {
-                    if let badge = effectiveRatingBadge {
-                        MediaBadgeChip(badge: badge)
+            if content != .identity {
+                if effectiveRatingBadge != nil || !contextParts.isEmpty {
+                    HStack(spacing: 10) {
+                        if let badge = effectiveRatingBadge {
+                            MediaBadgeChip(badge: badge)
+                        }
+                        if !contextParts.isEmpty {
+                            Text(contextParts.joined(separator: "  ·  "))
+                                .font(.subheadline.weight(.medium))
+                                .lineLimit(usesCompactDetailLayout ? 2 : 1)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
-                    if !effectiveGenres.isEmpty {
-                        Text(effectiveGenres.joined(separator: "  ·  "))
-                            .font(.subheadline.weight(.medium))
-                            .lineLimit(1)
+                    .foregroundStyle(palette.primaryText.opacity(0.92))
+                }
+
+                if let descriptionText {
+                    if usesCompactDetailLayout {
+                        ExpandableOverviewText(
+                            text: descriptionText,
+                            title: subjectTitle ?? presentation.title,
+                            lineLimit: 2,
+                            font: .body,
+                            alignment: .center,
+                            style: .inline
+                        )
+                        .frame(maxWidth: PlozziOSPageLayout.heroTextMaxWidth(for: style))
+                    } else {
+                        Text(
+                            descriptionText.overviewMarkdownWithLegibleLinks(
+                                textColor: palette.primaryText,
+                                accent: palette.accent
+                            )
+                        )
+                        .font(.subheadline)
+                        .plozzForeground(.secondary)
+                        .lineLimit(mode == .home ? 2 : 3)
+                        .frame(
+                            maxWidth: PlozziOSPageLayout.heroTextMaxWidth(
+                                for: style
+                            ),
+                            alignment: style == .compactPortrait
+                                ? .center
+                                : .leading
+                        )
+                        .multilineTextAlignment(
+                            style == .compactPortrait ? .center : .leading
+                        )
                     }
                 }
-                .foregroundStyle(palette.primaryText.opacity(0.92))
-            }
 
-            if let descriptionText {
-                Text(descriptionText.overviewMarkdownWithLegibleLinks(
-                    textColor: palette.primaryText,
-                    accent: palette.accent
-                ))
-                    .font(.subheadline)
-                    // Same 60% tier as tvOS.
-                    .plozzForeground(.secondary)
-                    .lineLimit(3)
+                if mode == .home, !effectiveRatings.isEmpty {
+                    RatingsBadgeRow(
+                        ratings: effectiveRatings
+                    )
                     .frame(
-                        maxWidth: PlozziOSPageLayout.heroTextMaxWidth(
-                            for: style
-                        ),
+                        maxWidth: .infinity,
                         alignment: style == .compactPortrait
                             ? .center
                             : .leading
                     )
-                    .multilineTextAlignment(
-                        style == .compactPortrait ? .center : .leading
-                    )
-            }
-
-            if mode == .home, !effectiveRatings.isEmpty {
-                RatingsBadgeRow(
-                    ratings: effectiveRatings
-                )
-                .frame(
-                    maxWidth: .infinity,
-                    alignment: style == .compactPortrait
-                        ? .center
-                        : .leading
-                )
-            } else if mode == .detail,
-                      !factComponents.isEmpty
+                } else if mode == .detail, usesCompactDetailLayout {
+                    DetailHeaderMetadataRow(ratings: effectiveRatings, badges: effectiveTechnicalBadges)
+                } else if mode == .detail,
+                    !factComponents.isEmpty
                         || !effectiveRatings.isEmpty
-                        || !effectiveTechnicalBadges.isEmpty {
-                WrappingHStackLayout(
-                    alignment: style == .compactPortrait ? .center : .leading,
-                    spacing: 12,
-                    lineSpacing: 8
-                ) {
-                    if !factComponents.isEmpty {
-                        // Full strength, matching tvOS: these sit in a row with
-                        // the ratings and capability chips, so a dimmer tier read
-                        // as faded beside them.
-                        Text(factComponents.joined(separator: "  ·  "))
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(palette.primaryText)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                    ForEach(effectiveRatings) { rating in
-                        RatingBadge(rating: rating)
-                    }
-                    ForEach(effectiveTechnicalBadges) { badge in
-                        MediaBadgeChip(badge: badge)
-                    }
+                        || !effectiveTechnicalBadges.isEmpty
+                {
+                    AdaptiveMediaMetadataRow(
+                        facts: factComponents,
+                        ratings: effectiveRatings,
+                        badges: effectiveTechnicalBadges,
+                        centered: style == .compactPortrait
+                    )
                 }
-                .frame(
-                    maxWidth: .infinity,
-                    alignment: style == .compactPortrait ? .center : .leading
-                )
             }
         }
     }
@@ -2824,6 +2694,13 @@ private struct PlozziOSHeroMetadata: View {
         case .home:
             return rootPresentation.ratings
         case .detail:
+            if usesCompactDetailLayout {
+                return detailPageSettings.headerRatings(
+                    from: HeroContentPolicy.ratings(focused: presentation, root: rootPresentation),
+                    isAnime: rootPresentation.isAnime,
+                    hidesRatings: hidesRatings
+                )
+            }
             return HeroContentPolicy.ratings(
                 focused: presentation,
                 root: rootPresentation

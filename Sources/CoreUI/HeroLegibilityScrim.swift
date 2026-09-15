@@ -201,4 +201,17 @@ public struct HeroLegibilityScrim: View {
         ]
     }
 }
+// seems reasonable to take as an option STEAL
+
+
+#if DEBUG
+#Preview("Scrim") {
+    Color.white
+        .overlay {
+            HeroLegibilityScrim(tone: .black, edgePeak: 0.55)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.black)
+}
+#endif
 #endif

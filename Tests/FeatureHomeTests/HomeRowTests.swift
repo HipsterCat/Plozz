@@ -62,6 +62,18 @@ final class HomeRowTests: XCTestCase {
         XCTAssertEqual(rows.first?.items.map(\.id), ["lt"])
     }
 
+    func testContinueWatchingKeepsAllVisibleTitlesInOrder() {
+        let items = (0..<125).map {
+            taggedItem("cw\($0)", account: "a", library: "L1")
+        }
+        let c = content(continueWatching: items + [
+            taggedItem("hidden", account: "a", library: "L2")
+        ])
+        let rows = HomeRow.rows(for: c) { $0 != "a:L2" }
+        XCTAssertEqual(rows.first?.kind, .continueWatching)
+        XCTAssertEqual(rows.first?.items.map(\.id), items.map(\.id))
+    }
+
     func testHiddenLibrariesAreFilteredOut() {
         let visible = library(account: "a", id: "1")
         let hidden = library(account: "b", id: "2")

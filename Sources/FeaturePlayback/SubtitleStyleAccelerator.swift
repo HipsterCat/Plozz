@@ -36,8 +36,8 @@ struct SubtitleStyleAccelerator {
 
     /// Grid-index magnitude for a streak length: the first few repeats stay fine
     /// (1) so deliberate taps land exactly, then a sustained hold ramps up to
-    /// cover large ranges quickly. On the 1% Position grid this reads as
-    /// 1→2→4→8 % per repeat.
+    /// cover large ranges quickly. On the 0.5% Position grid this reads as
+    /// 0.5→1→2→4 % per repeat.
     static func rampMagnitude(_ streak: Int) -> Int {
         switch streak {
         case ..<3: return 1

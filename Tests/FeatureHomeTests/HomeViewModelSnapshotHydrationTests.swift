@@ -9,6 +9,108 @@ import CoreModels
 /// aggregate blank out good content already on screen.
 @MainActor
 final class HomeViewModelSnapshotHydrationTests: XCTestCase {
+    private func resolved(_ provider: FakeMediaProvider, accountID: String) -> ResolvedAccount {
+        ResolvedAccount(
+            account: Account(
+                id: accountID, server: provider.session.server,
+                userID: provider.session.userID, userName: provider.session.userName,
+                deviceID: provider.session.deviceID
+            ),
+            provider: provider
+        )
+    }
+
+    private func waitForResume(_ vm: HomeViewModel, id: String) async {
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline, !vm.continueWatchingForDetail.contains(where: { $0.id == id }) {
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+    }
+
+    func testFirstDetailCanResumeBeforeOtherServersAndHomeMetadataFinish() async {
+        for merged in [true, false] {
+            let show = MediaItem(id: "show", title: "Show", kind: .series, sourceAccountID: "fast")
+            let episode = MediaItem(
+                id: "s4e1", title: "Resume", kind: .episode,
+                seasonNumber: 4, episodeNumber: 1,
+                seriesID: show.id, resumePosition: 867
+            )
+            let fast = FakeMediaProvider(allItems: [show], kind: .plex)
+            fast.continueWatchingItems = [episode]
+            let metadataGate = HomeRefreshGate()
+            fast.latestGate = { await metadataGate.wait() }
+            let slow = FakeMediaProvider(allItems: [], kind: .jellyfin)
+            let slowGate = HomeRefreshGate()
+            slow.continueWatchingGate = { await slowGate.wait() }
+            let visibility = HomeLibraryVisibility(mergeLibrariesOnHome: merged)
+            let home = HomeViewModel(
+                accounts: [resolved(fast, accountID: "fast"), resolved(slow, accountID: "slow")],
+                layoutStore: InMemoryHomeLayoutStore(),
+                contentStore: InMemoryHomeContentStore(),
+                currentVisibility: { visibility }
+            )
+            let load = Task { await home.load() }
+            await waitForResume(home, id: episode.id)
+            XCTAssertTrue(home.isRefreshing, "The slow server and metadata are still blocked")
+            XCTAssertNil(home.state.value, "The visible Home rows still await complete aggregation")
+            let environment = DetailOpenEnvironment(
+                resolveProvider: { _ in fast },
+                resolveOptionalProvider: { _ in fast },
+                identitySources: { _ in [] },
+                crossServerSourceResolver: nil,
+                continueWatchingSnapshot: { home.continueWatchingForDetail }
+            )
+            let detail = environment.makeViewModel(for: show, libraryOrigin: nil)
+            XCTAssertEqual(detail.serverResumeEpisode?.id, episode.id, "merged=\(merged)")
+            XCTAssertEqual(detail.serverResumeEpisode?.resumePosition, 867)
+            home.applyWatchedState(MediaItemMutation(
+                itemIDs: [episode.id], scopedItemIDs: ["fast:\(episode.id)"], played: true
+            ))
+            XCTAssertTrue(home.continueWatchingForDetail.isEmpty, "Completed native hints must be removed too")
+
+            metadataGate.open()
+            slowGate.open()
+            await load.value
+        }
+    }
+
+    func testMergedHomeKeepsEachServersNativeResumeEpisodeForDetail() async {
+        let plexShow = MediaItem(
+            id: "plex-show", title: "Show", kind: .series,
+            providerIDs: ["Tmdb": "10"], sourceAccountID: "plex"
+        )
+        let jellyShow = MediaItem(
+            id: "jelly-show", title: "Show", kind: .series,
+            providerIDs: ["Tmdb": "10"], sourceAccountID: "jelly"
+        )
+        let plexEpisode = MediaItem(
+            id: "plex-e1", title: "Episode", kind: .episode,
+            seasonNumber: 4, episodeNumber: 1, seriesID: plexShow.id,
+            resumePosition: 867, providerIDs: ["SeriesTmdb": "10"]
+        )
+        var jellyEpisode = plexEpisode
+        jellyEpisode.id = "jelly-e1"
+        jellyEpisode.seriesID = jellyShow.id
+        let plex = FakeMediaProvider(allItems: [plexShow], kind: .plex)
+        plex.continueWatchingItems = [plexEpisode]
+        let jelly = FakeMediaProvider(allItems: [jellyShow], kind: .jellyfin)
+        jelly.continueWatchingItems = [jellyEpisode]
+        let home = HomeViewModel(
+            accounts: [resolved(plex, accountID: "plex"), resolved(jelly, accountID: "jelly")],
+            layoutStore: InMemoryHomeLayoutStore(),
+            contentStore: InMemoryHomeContentStore()
+        )
+        await home.load()
+
+        XCTAssertEqual(home.state.value?.continueWatching.count, 1)
+        for (show, expectedID) in [(plexShow, "plex-e1"), (jellyShow, "jelly-e1")] {
+            let resume = DetailPlaybackSelection.resumeItem(for: show, in: home.continueWatchingForDetail)
+            XCTAssertEqual(resume?.id, expectedID)
+            XCTAssertEqual(resume?.seriesID, show.id)
+            XCTAssertEqual(resume?.sourceAccountID, show.sourceAccountID)
+        }
+    }
+
     private func makeViewModel(
         provider: FakeMediaProvider,
         contentStore: HomeContentStoring
@@ -48,6 +150,7 @@ final class HomeViewModelSnapshotHydrationTests: XCTestCase {
         let vm = makeViewModel(provider: FakeMediaProvider(allItems: []), contentStore: store)
         // Painted from cache BEFORE any load — no network, no skeleton.
         XCTAssertEqual(loadedContent(vm)?.continueWatching.map(\.id), ["cachedA", "cachedB"])
+        XCTAssertTrue(vm.continueWatchingForDetail.isEmpty, "A launch cache is not a current resume answer")
     }
 
     func testNoCacheLeavesIdleForNormalLoadingState() {
@@ -72,6 +175,7 @@ final class HomeViewModelSnapshotHydrationTests: XCTestCase {
 
         XCTAssertEqual(provider.librariesCallCount, 1, "The silent refresh actually re-aggregated")
         XCTAssertEqual(loadedContent(vm)?.continueWatching.map(\.id), ["freshA", "freshB"], "Fresh content swapped in")
+        XCTAssertEqual(vm.continueWatchingForDetail.map(\.id), ["freshA", "freshB"])
     }
 
     func testSilentRefreshNeverEntersLoadingState() async {
@@ -115,6 +219,7 @@ final class HomeViewModelSnapshotHydrationTests: XCTestCase {
         let vm = makeViewModel(provider: provider, contentStore: store)
 
         await vm.loadIfNeeded(for: .default)
+        XCTAssertTrue(vm.continueWatchingForDetail.isEmpty, "Revealing a fallback row is not a live resume answer")
 
         XCTAssertEqual(
             loadedContent(vm)?.continueWatching.map(\.id), ["cachedA", "cachedB"],

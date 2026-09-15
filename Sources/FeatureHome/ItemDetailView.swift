@@ -47,7 +47,7 @@ public struct ItemDetailView: View {
     /// server/version pickers, watchlist/watched actions) instead of the library
     /// detail layout, and a season/series discovery title is NOT routed into
     /// `SeriesDetailView` (which expects real library seasons/episodes).
-    private let isDiscoveryItem: Bool
+    private var isDiscoveryItem: Bool { viewModel.isDiscoveryItem }
     /// Whether Seerr is currently connected — gates the discovery Request pill.
     private let seerConnected: Bool
     /// One-tap Seerr request for a not-in-library discovery title. Returns a
@@ -81,6 +81,8 @@ public struct ItemDetailView: View {
     /// it auto-scroll the page down on arrival. Mirrors `SeriesDetailView`.
     @FocusState private var playFocused: Bool
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.seasonRequestContextID) private var seasonRequestContextID
     @FocusState private var emptyBackFocused: Bool
 
     /// This device's capabilities, used only as a conservative ordering hint for
@@ -107,7 +109,10 @@ public struct ItemDetailView: View {
     /// Drives the "Request as Admin?" confirmation dialog for the unmapped case.
     @State private var showingAdminConfirm = false
     @State private var pendingAdminRequest: PendingRequestIntent?
-    @State private var seasonRequestAvailability: MediaRequestAvailability?
+    @State private var seasonRequestState = SeasonRequestState()
+    @State private var seasonRequestScope: String?
+    @State private var seasonRequestRefreshID = UUID()
+    private var seasonRequestAvailability: MediaRequestAvailability? { seasonRequestState.availability }
     @State private var seasonRequestAvailabilityResolved = false
     @State private var seasonRequestAvailabilityFailed = false
     @State private var seasonRequestRetryToken = 0
@@ -145,7 +150,6 @@ public struct ItemDetailView: View {
         preservesHeroTrailerOnDisappear: Bool = false,
         initialSeasonID: String? = nil,
         initialEpisode: MediaItem? = nil,
-        isDiscoveryItem: Bool = false,
         seerConnected: Bool = false,
         onRequest: ((MediaItem) async -> MediaRequestActionResult)? = nil,
         requestAvailabilityRefresh: (@Sendable (MediaItem) async -> MediaRequestAvailability?)? = nil,
@@ -166,7 +170,6 @@ public struct ItemDetailView: View {
         self.preservesHeroTrailerOnDisappear = preservesHeroTrailerOnDisappear
         self.initialSeasonID = initialSeasonID
         self.initialEpisode = initialEpisode
-        self.isDiscoveryItem = isDiscoveryItem
         self.seerConnected = seerConnected
         self.onRequest = onRequest
         self.requestAvailabilityRefresh = requestAvailabilityRefresh
@@ -209,11 +212,13 @@ public struct ItemDetailView: View {
                     viewModel: viewModel,
                     spoilerSettings: spoilerSettings,
                     onPlay: onPlay,
-                    requestAvailability: seasonRequestAvailability?.markingAvailable(
+                    requestAvailability: seasonRequestAvailability?.markingPresentInLibrary(
                         detail.children.compactMap { child in
                             child.kind == .season || child.kind == .episode ? child.seasonNumber : nil
                         }
                     ),
+                    requestAvailabilityFailed: seasonRequestAvailabilityFailed,
+                    onRefreshRequests: { seasonRequestRetryToken += 1 },
                     isRequestingSeasons: isSeasonRequestInFlight,
                     onRequestSeasons: onRequestSeasons == nil ? nil : { seasons in
                         requestTapped(detail.item, seasons: seasons)
@@ -248,6 +253,16 @@ public struct ItemDetailView: View {
         }
         // Detail is a full-screen sub-page: hide the top tab bar.
         .toolbar(.hidden, for: .tabBar)
+        .cinematicDetailPage(isEnabled:
+            initialEpisode != nil
+                || viewModel.state.value?.item.kind == .movie
+                || viewModel.state.value?.item.kind == .series
+                || viewModel.state.value?.item.kind == .season,
+            waitsForBackdrop: true,
+            revealsEpisodesLast: initialEpisode != nil
+                || viewModel.state.value?.item.kind == .series
+                || viewModel.state.value?.item.kind == .season
+        )
         // Always run load(), even when the page was seeded with the tapped list
         // item for instant first paint. The seed only paints a hero; load() must
         // still fetch the full detail AND its children (seasons/episodes). Skipping
@@ -276,7 +291,7 @@ public struct ItemDetailView: View {
             }
         }
         .task(id: seasonRequestRefreshKey) {
-            await refreshSeasonRequestAvailability()
+            await refreshVisibleSeasonRequests()
         }
         .task(id: heroTrailerTaskID) {
             guard heroBackground.settings.detailMode == .trailer,
@@ -429,46 +444,82 @@ public struct ItemDetailView: View {
 
     private func performSeasonRequest(_ item: MediaItem, seasons: [Int]) {
         guard let onRequestSeasons, !seasons.isEmpty, !isSeasonRequestInFlight else { return }
-        let previous = seasonRequestAvailability
-        seasonRequestAvailability = previous?.markingRequested(seasons)
+        let eligible = Set(seasonRequestAvailability?.requestableSeasonNumbers ?? [])
+        let selected = Set(seasons).intersection(eligible).sorted()
+        guard !selected.isEmpty else {
+            seasonRequestRetryToken += 1
+            return
+        }
+        let scope = seasonRequestScope
         isSeasonRequestInFlight = true
         Task {
-            let result = await onRequestSeasons(item, seasons)
-            if !result.isSuccess {
-                seasonRequestAvailability = previous
-            }
+            let result = await onRequestSeasons(item, selected)
+            guard seasonRequestScope == scope else { return }
+            if result.isSuccess { seasonRequestState.accept(selected) }
             isSeasonRequestInFlight = false
+            seasonRequestRetryToken += 1
             if let title = result.failureTitle {
                 requestFailure = RequestFailureAlert(title: title, message: result.failureMessage)
             }
         }
     }
 
-    private var seasonRequestRefreshKey: String {
+    private var seasonRequestScopeKey: String {
         guard seerConnected,
               let item = viewModel.state.value?.item,
               item.kind == .series,
               item.providerIDs["Tmdb"] != nil
         else { return "disabled" }
+        return "\(seasonRequestContextID)|\(item.sourceAccountID ?? "_")|\(item.id)|\(item.providerIDs["Tmdb"] ?? "")"
+    }
+
+    private var seasonRequestRefreshKey: String {
         let sources = viewModel.sources.map(\.id).sorted().joined(separator: ",")
-        return "\(item.sourceAccountID ?? "_")|\(item.id)|\(item.providerIDs["Tmdb"] ?? "")|\(sources)|\(seasonRequestRetryToken)"
+        return "\(seasonRequestScopeKey)|\(sources)|\(seasonRequestRetryToken)|\(scenePhase == .active)|\(!hasChildOnTop)"
+    }
+
+    private func refreshVisibleSeasonRequests() async {
+        let scope = seasonRequestScopeKey
+        if seasonRequestScope != scope {
+            seasonRequestScope = scope
+            seasonRequestState.reset()
+            seasonRequestAvailabilityResolved = false
+            seasonRequestAvailabilityFailed = false
+            isSeasonRequestInFlight = false
+            pendingAdminRequest = nil
+            showingAdminConfirm = false
+        }
+        guard scenePhase == .active, !hasChildOnTop else { return }
+        repeat {
+            await refreshSeasonRequestAvailability()
+            guard !seasonRequestAvailabilityFailed,
+                  seasonRequestAvailability?.seasons.contains(where: \.isInFlight) == true,
+                  !Task.isCancelled else { return }
+            do { try await Task.sleep(for: .seconds(15)) }
+            catch { return }
+        } while !Task.isCancelled
     }
 
     private func refreshSeasonRequestAvailability() async {
-        guard seasonRequestRefreshKey != "disabled",
+        let scope = seasonRequestScopeKey
+        let refreshID = UUID()
+        seasonRequestRefreshID = refreshID
+        guard scope != "disabled",
               let item = viewModel.state.value?.item,
               let requestAvailabilityRefresh
         else {
-            seasonRequestAvailability = nil
+            seasonRequestState.reset()
             seasonRequestAvailabilityResolved = true
             seasonRequestAvailabilityFailed = false
             return
         }
-        seasonRequestAvailability = nil
-        seasonRequestAvailabilityResolved = false
-        seasonRequestAvailabilityFailed = false
+        if seasonRequestAvailability == nil {
+            seasonRequestAvailabilityResolved = false
+            seasonRequestAvailabilityFailed = false
+        }
         guard let availability = await requestAvailabilityRefresh(item) else {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, seasonRequestScope == scope,
+                  seasonRequestRefreshID == refreshID else { return }
             seasonRequestAvailabilityResolved = true
             seasonRequestAvailabilityFailed = true
             return
@@ -476,8 +527,9 @@ public struct ItemDetailView: View {
         let ownedSeasonNumbers = isDiscoveryItem
             ? Set<Int>()
             : await viewModel.ownedSeasonNumbersAcrossSources()
-        guard !Task.isCancelled else { return }
-        seasonRequestAvailability = availability.markingAvailable(Array(ownedSeasonNumbers))
+        guard !Task.isCancelled, seasonRequestScope == scope,
+              seasonRequestRefreshID == refreshID else { return }
+        seasonRequestState.apply(availability, presentInLibrary: Array(ownedSeasonNumbers))
         seasonRequestAvailabilityResolved = true
         seasonRequestAvailabilityFailed = false
     }
@@ -600,6 +652,11 @@ public struct ItemDetailView: View {
                             let liveVersionID = self.effectiveVersionID(for: detail.item, in: liveVersions)
                             onPlay(self.playItem(for: detail.item, sources: liveSources, activeAccountID: liveSource?.accountID, versionID: liveVersionID))
                         } : nil,
+                        showsPlayPlaceholder: !usesExternalDetail && DetailPlaybackSelection.showsPlayPlaceholder(
+                            for: detail.item, hasPlayTarget: canPlay,
+                            childrenLoaded: detail.childrenLoaded,
+                            seasonLoadState: nil
+                        ),
                         playProgress: canPlay ? detail.item.resumeProgressFraction : nil,
                         playRemainingText: canPlay ? detail.item.resumeRemainingText : nil,
                         playSeasonEpisodeText: canPlay ? HeroForegroundModelBuilder.seasonEpisodeButtonText(for: detail.item) : nil,
@@ -616,6 +673,9 @@ public struct ItemDetailView: View {
                         // Whenever focus lands on (or moves between) any hero action
                         // button, re-pin the page to the hero top.
                         onHeroActionFocused: {
+                            #if os(tvOS)
+                            guard !DetailTransitionNavigation.isRestoringSourcePage else { return }
+                            #endif
                             withAnimation(.easeInOut(duration: 0.4)) {
                                 proxy.scrollTo(Self.topAnchorID, anchor: .top)
                             }
@@ -695,12 +755,7 @@ public struct ItemDetailView: View {
             // — which on an episode page is the show breadcrumb above the title,
             // so the page opened focused on "leave" instead of "play".
             .defaultFocus($playFocused, true, priority: .userInitiated)
-            // Pin to the top on first load: the Play button is bottom-anchored in
-            // the full-screen hero, so initial focus on it makes tvOS auto-scroll
-            // the page down. Snap back to the hero top so focus stays on Play.
             .task {
-                try? await Task.sleep(nanoseconds: 50_000_000)
-                proxy.scrollTo(Self.topAnchorID, anchor: .top)
                 // An episode page puts a focusable breadcrumb above the title,
                 // and tvOS takes that topmost element on entry no matter what
                 // `defaultFocus` declares (tried at both `.automatic` and
@@ -715,6 +770,9 @@ public struct ItemDetailView: View {
             // Without this the movie hero stays scrolled down after tvOS frames
             // the bottom-anchored Play button on first focus.
             .onChange(of: playFocused) { _, focused in
+                #if os(tvOS)
+                guard !DetailTransitionNavigation.isRestoringSourcePage else { return }
+                #endif
                 if focused {
                     withAnimation(.easeInOut(duration: 0.4)) {
                         proxy.scrollTo(Self.topAnchorID, anchor: .top)
@@ -955,19 +1013,6 @@ public struct ItemDetailView: View {
     /// series' key so a whole show remembers one preferred version.
     private func versionPreferenceKey(for item: MediaItem) -> String {
         DetailPlaybackSelection.versionPreferenceKey(for: item)
-    }
-}
-
-private struct DetailTopSafeAreaBreakout: ViewModifier {
-    func body(content: Content) -> some View {
-        #if os(tvOS)
-        // `ignoresSafeArea(.top)` also consumes tvOS's transient horizontal safe
-        // region during a cold NavigationStack push, briefly proposing a
-        // 2,408-point ScrollView. Pull only the known 60-point top inset outward.
-        content.padding(.top, -60)
-        #else
-        content.ignoresSafeArea(.container, edges: .top)
-        #endif
     }
 }
 

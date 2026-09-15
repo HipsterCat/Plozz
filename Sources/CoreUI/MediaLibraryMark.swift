@@ -3,18 +3,20 @@ import CoreModels
 import SwiftUI
 
 /// The corner mark a card wears when the title behind it **isn't in your
-/// library** — an external credit surfaced from TMDb/Wikidata/TVmaze on a
-/// person's page or in the in-player cast panel.
+/// library** — in search, discovery rows, a person's credits, or the in-player
+/// cast panel.
 ///
-/// Two meanings, deliberately distinct, because they land on different people:
+/// Distinguishes absence, requestability, and an existing request:
 ///
 /// - ``notInLibrary`` is purely informational. Most viewers will never run
 ///   Seerr, so for them an unowned title is simply not actionable, and the mark
 ///   only has to answer "why can't I play this?" before they select it.
 /// - ``requestable`` is an affordance, shown only while Seerr is connected: the
 ///   title isn't yours *yet* and you can ask for it.
+/// - ``requested`` indicates an existing pending or approved request, not another
+///   invitation to submit the same title.
 ///
-/// Both sit in the artwork's **top-trailing** corner — the watch-status slot,
+/// These sit in the artwork's **top-trailing** corner — the watch-status slot,
 /// which is free here rather than contested: watch state cannot apply to a title
 /// you don't have (you have neither watched it nor left it unwatched), so an
 /// unowned card shows this instead of a check or an unwatched flag.
@@ -23,6 +25,8 @@ public enum MediaLibraryMark: Equatable, Sendable {
     case notInLibrary
     /// Not in your library, but Seerr is connected so it can be requested.
     case requestable
+    /// A request already exists; the title is awaiting approval or processing.
+    case requested
 
     /// Chosen from the on-device comparison screen, over ~22 alternatives.
     ///
@@ -35,11 +39,12 @@ public enum MediaLibraryMark: Equatable, Sendable {
     ///
     /// The filled plus keeps continuity with the Request button's `plus.circle`
     /// while gaining a disc, because the outline's ring is the first thing to go
-    /// at 25pt.
+    /// at 25pt. The requested clock is outlined over the same subtle grey disc.
     var systemImage: String {  // l10n:content — SF Symbol name, not copy
         switch self {
         case .notInLibrary: return "binoculars.fill"
         case .requestable: return "plus.circle.fill"
+        case .requested: return "clock"
         }
     }
 
@@ -64,21 +69,44 @@ public enum MediaLibraryMark: Equatable, Sendable {
                     a state; selecting the card opens the title, it does not request it.
                     """
             )
+        case .requested:
+            return LocalizedStringResource(
+                "libraryMark.requested",
+                defaultValue: "Not in your library — already requested",
+                comment: """
+                    Accessibility label for the clock on a poster with an existing \
+                    pending or approved Seerr request. It does not mean the title \
+                    is playable or that a download has started.
+                    """
+            )
         }
     }
 
     /// The mark for an item, or `nil` when it's an ordinary library title.
     ///
-    /// `seerConnected` only ever *upgrades* the informational mark to the
-    /// actionable one — a title you don't own is still worth flagging when Seerr
-    /// is absent, which is the majority case and the reason this exists.
+    /// A title you don't own remains worth flagging when Seerr is absent.
+    /// While connected, existing requests take precedence over the plus.
     public static func mark(for item: MediaItem, seerConnected: Bool) -> MediaLibraryMark? {
         // One shared ownership answer (`TitleClassifier`), so a poster's mark can
         // never contradict the page it opens.
-        guard TitleClassifier.isNotOwnedForBadge(item) else {
-            return nil
+        mark(
+            isNotInLibrary: TitleClassifier.isNotOwnedForBadge(item),
+            availability: item.availability,
+            seerConnected: seerConnected
+        )
+    }
+
+    static func mark(
+        isNotInLibrary: Bool,
+        availability: MediaAvailabilityStatus?,
+        seerConnected: Bool
+    ) -> MediaLibraryMark? {
+        guard isNotInLibrary else { return nil }
+        guard seerConnected else { return .notInLibrary }
+        switch availability {
+        case .pending, .processing: return .requested
+        default: return .requestable
         }
-        return seerConnected ? .requestable : .notInLibrary
     }
 }
 
@@ -91,10 +119,10 @@ public enum MediaLibraryMark: Equatable, Sendable {
 /// of the card. For the same reason it carries no drop shadow.
 ///
 /// Rendered `.palette` rather than `.hierarchical`, with both layers named. The
-/// two symbols are white shapes on a white secondary layer (the plus's disc, the
-/// binoculars' body), and hierarchical separates them only by an alpha gap it
-/// picks itself — about half, which is transparent enough that artwork bleeds
-/// through and unstable enough that the mark changes tone from poster to poster.
+/// symbols are white shapes on a white secondary layer (the plus's disc, the
+/// binoculars' body), and hierarchical separates them only
+/// by an alpha gap it picks itself — about half. Artwork bleeds through, and the
+/// mark changes tone from poster to poster.
 /// Naming that second layer as a **fixed grey** fixes both: the tone stays put
 /// across artwork, and because the layer is now darker than the glyph rather than
 /// the same white, it no longer competes with it.
@@ -114,6 +142,13 @@ public struct MediaLibraryMarkView: View {
 
     public var body: some View {
         Image(systemName: mark.systemImage)
+            .background {
+                if mark == .requested {
+                    Image(systemName: "circle.fill")
+                        .foregroundStyle(Self.secondaryLayer)
+                        .accessibilityHidden(true)
+                }
+            }
             .font(.system(size: size, weight: .semibold))
             .symbolRenderingMode(.palette)
             .foregroundStyle(.white, Self.secondaryLayer)

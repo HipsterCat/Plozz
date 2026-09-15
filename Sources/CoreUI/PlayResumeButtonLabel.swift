@@ -137,6 +137,9 @@ public struct PlayResumeButtonLabel: View {
     /// How much of the resume trailing text to render. Defaults to `.full`; a
     /// width-constrained caller can request a shorter form to avoid wrapping.
     public var resumeTrailingStyle: ResumeTrailingStyle
+    public var isPlaceholder: Bool
+    public var separatesEpisodeText: Bool
+    public var wrapsText: Bool
 
     /// Supplies the default bar height, which tracks the reader's text size.
     @Environment(\.plozzMetrics) private var metrics
@@ -150,7 +153,10 @@ public struct PlayResumeButtonLabel: View {
         spacing: CGFloat = 16,
         capsuleWidth: CGFloat = 75,
         barHeight: CGFloat? = nil,
-        resumeTrailingStyle: ResumeTrailingStyle = .full
+        resumeTrailingStyle: ResumeTrailingStyle = .full,
+        isPlaceholder: Bool = false,
+        separatesEpisodeText: Bool = false,
+        wrapsText: Bool = false
     ) {
         self.title = title
         self.progress = progress
@@ -161,6 +167,9 @@ public struct PlayResumeButtonLabel: View {
         self.capsuleWidth = capsuleWidth
         self.barHeight = barHeight
         self.resumeTrailingStyle = resumeTrailingStyle
+        self.isPlaceholder = isPlaceholder
+        self.separatesEpisodeText = separatesEpisodeText
+        self.wrapsText = wrapsText
     }
 
     /// The in-progress fraction that switches the label to the resume form: a
@@ -196,10 +205,39 @@ public struct PlayResumeButtonLabel: View {
     /// String would drop the title's localization on the floor.
     private var plainTitle: Text {
         guard let seasonEpisodeText else { return Text(title) }
-        return Text(title) + Text(verbatim: " " + seasonEpisodeText)
+        let separator = separatesEpisodeText ? " · " : " "
+        return Text(title) + Text(verbatim: separator + seasonEpisodeText)
     }
 
     public var body: some View {
+        ZStack(alignment: .leading) {
+            Text(title).lineLimit(1).hidden().frame(width: 0).accessibilityHidden(true)
+            if isPlaceholder {
+                placeholderContent
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Text(title))
+            } else {
+                resolvedContent
+            }
+        }
+    }
+
+    private var placeholderContent: some View {
+        HStack(spacing: spacing) {
+            Image(systemName: "play.fill")
+            Text(title)
+                .lineLimit(1)
+                .hidden()
+                .padding(.trailing, capsuleWidth)
+                .overlay {
+                    Capsule()
+                        .fill(onLight ? Color.black.opacity(0.18) : Color.white.opacity(0.18))
+                        .frame(height: barHeight ?? metrics.heroProgressBarHeight)
+                }
+        }
+    }
+
+    private var resolvedContent: some View {
         HStack(spacing: spacing) {
             Image(systemName: "play.fill")
             if let resumeProgress {
@@ -207,16 +245,36 @@ public struct PlayResumeButtonLabel: View {
                     progress: resumeProgress,
                     onLight: onLight,
                     width: capsuleWidth,
-                    height: barHeight ?? metrics.heroProgressBarHeight
+                    height: barHeight ?? metrics.heroProgressBarHeight,
+                    flexesToFitRow: wrapsText
                 )
                 if let resumeTrailing {
                     Text(resumeTrailing)
-                        .lineLimit(1)
+                        .lineLimit(wrapsText ? nil : 1)
+                        .fixedSize(horizontal: false, vertical: wrapsText)
+                        .layoutPriority(wrapsText ? 1 : 0)
                 }
             } else {
                 plainTitle
-                    .lineLimit(1)
+                    .lineLimit(wrapsText ? nil : 1)
+                    .fixedSize(horizontal: false, vertical: wrapsText)
             }
         }
     }
 }
+
+#if DEBUG
+#Preview("In progress") {
+    PlayResumeButtonLabel(
+        title: "Resume",
+        progress: 0.4,
+        remainingText: "32m",
+        onLight: false
+    )
+    .font(.title2.weight(.semibold))
+    .foregroundStyle(.white)
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    .background(.black)
+}
+#endif
