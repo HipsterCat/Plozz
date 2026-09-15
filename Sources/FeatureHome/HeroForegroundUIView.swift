@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 import Observation
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 @MainActor
 @Observable

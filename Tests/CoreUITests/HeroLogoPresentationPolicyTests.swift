@@ -1,5 +1,5 @@
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 final class HeroLogoPresentationPolicyTests: XCTestCase {
     func testWhenReadyAlwaysAdoptsResolvedLogo() {

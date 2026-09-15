@@ -1,6 +1,6 @@
 #if os(iOS)
 import AniListService
-import CoreUI
+import PlozzCoreUI
 import MALService
 import SimklService
 import SwiftUI

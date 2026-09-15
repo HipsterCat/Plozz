@@ -1,6 +1,6 @@
 #if os(iOS)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 import FeatureSyncSetup
 
 /// Focused pairing send flow presented when the app is opened from a Sync & Setup

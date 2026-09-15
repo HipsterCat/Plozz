@@ -1,5 +1,5 @@
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 /// Deterministic coverage of the loading-message threshold + cycling logic.
 final class LoadingMessageSequencerTests: XCTestCase {

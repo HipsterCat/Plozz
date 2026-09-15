@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureAuthCore
 
 /// TV-friendly username/password sign-in screen. The lower-priority sibling of

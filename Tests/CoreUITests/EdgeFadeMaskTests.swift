@@ -1,6 +1,6 @@
 #if canImport(SwiftUI) && canImport(UIKit)
 import CoreGraphics
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 import XCTest
 

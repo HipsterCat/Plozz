@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// Everything the metadata Settings surface needs, bundled so `SettingsView`'s init
 /// grows by a single parameter. The two `@Observable` models are app-wide (created

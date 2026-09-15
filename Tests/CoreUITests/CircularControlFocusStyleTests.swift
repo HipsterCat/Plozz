@@ -1,6 +1,6 @@
 import CoreModels
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 final class CircularControlFocusStyleTests: XCTestCase {
     func testSystemUsesTheExistingCircularOutline() {

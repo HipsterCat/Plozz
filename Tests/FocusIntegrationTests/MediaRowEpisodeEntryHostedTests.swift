@@ -1,7 +1,7 @@
 import CoreModels
 import SwiftUI
 import XCTest
-import CoreUI
+import PlozzCoreUI
 #if os(tvOS)
 import Observation
 import UIKit

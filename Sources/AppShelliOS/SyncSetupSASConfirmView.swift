@@ -1,6 +1,6 @@
 #if os(iOS)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 import FeatureSyncSetup
 
 extension View {

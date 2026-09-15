@@ -1,7 +1,7 @@
 #if canImport(UIKit)
 import SwiftUI
 import UIKit
-import CoreUI
+import PlozzCoreUI
 import FeatureHomeCore
 
 /// The hero's paging dots, drawn as Core Animation layers.

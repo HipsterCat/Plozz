@@ -1,6 +1,6 @@
 #if os(tvOS)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 
 /// The native-style page affordance: a separate chevron beside a glass capsule.
 struct PinnedSidebarPageButton: View {

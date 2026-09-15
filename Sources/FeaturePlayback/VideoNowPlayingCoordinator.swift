@@ -3,7 +3,7 @@ import Foundation
 import AVFoundation
 import MediaPlayer
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 @MainActor
 protocol VideoNowPlayingHost: AnyObject {

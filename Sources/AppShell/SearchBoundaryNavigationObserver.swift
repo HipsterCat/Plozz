@@ -2,7 +2,7 @@
 import SwiftUI
 import UIKit
 import FeatureHome
-import CoreUI
+import PlozzCoreUI
 
 /// The native keyboard moves between keys inside one UIKit focus item. Only
 /// UIKit's failed-movement notification proves that Left reached its boundary.

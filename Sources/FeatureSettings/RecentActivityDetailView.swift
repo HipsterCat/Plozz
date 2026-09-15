@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 
 /// Full-page, scrollable view of the recent-activity log.
 ///

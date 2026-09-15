@@ -7,7 +7,7 @@ import AppRuntime
 import CoreModels
 import ProviderKinoPubDemo
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 import FeatureHomeCore
 import FeatureProfiles
 import CrashReporting
@@ -124,31 +124,29 @@ public struct RootView: View {
     @State private var detailCacheFactory = DetailSnapshotCacheFactory()
 
     @MainActor
-public init(
-    appState: AppState? = nil,
-    featureIntroductionStore: (any FeatureIntroductionStoring)? = nil
-) {
-    _appState = State(initialValue: appState ?? Self.makeAppState())
-    self.featureIntroductionStore =
-        featureIntroductionStore ?? FeatureIntroductionStore()
-}
-
-/// The demo swaps only the account store and the provider registry — every
-/// other model, setting and screen is the real one, which is the point: what
-/// you see is Plozz, not a mock of Plozz.
-@MainActor
-private static func makeAppState() -> AppState {
-    guard KinoPubDemo.isEnabled else { return AppState() }
-    if let account = KinoPubDemoAccountStore().loadAccounts().first {
-        let session = account.session(token: "demo")
-        Task { await KinoPubDemo.runSelfCheckIfRequested(session: session) }
+    public init(
+        appState: AppState? = nil,
+        featureIntroductionStore: (any FeatureIntroductionStoring)? = nil
+    ) {
+        _appState = State(initialValue: appState ?? Self.makeAppState())
+        self.featureIntroductionStore =
+            featureIntroductionStore ?? FeatureIntroductionStore()
     }
-    return AppState(
-        accountStore: KinoPubDemoAccountStore(),
-        registry: KinoPubDemo.makeRegistry()
-    )
-}
 
+    /// The demo swaps only the account store and the provider registry — every
+    /// other model, setting and screen is the real one, which is the point: what
+    /// you see is Plozz, not a mock of Plozz.
+    @MainActor
+    private static func makeAppState() -> AppState {
+        guard KinoPubDemo.isEnabled else { return AppState() }
+        if let account = KinoPubDemoAccountStore().loadAccounts().first {
+            let session = account.session(token: "demo")
+            Task { await KinoPubDemo.runSelfCheckIfRequested(session: session) }
+        }
+        return AppState(
+            accountStore: KinoPubDemoAccountStore(),
+            registry: KinoPubDemo.makeRegistry()
+        )
     }
 
     /// The name THIS device holds for the offer's requested account. Since a per-server

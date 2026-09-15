@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 struct AppearanceDetailView: View {
     /// The household's libraries + per-profile availability, needed by the

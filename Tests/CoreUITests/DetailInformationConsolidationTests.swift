@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import CoreModels
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 @MainActor
 final class DetailInformationConsolidationTests: XCTestCase {

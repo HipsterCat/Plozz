@@ -1,7 +1,7 @@
 #if canImport(UIKit)
 import XCTest
 import UIKit
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 /// The gauge is handed to Core Animation rather than ticked, so the properties
 /// that matter are about what it leaves behind: the shape must stay a capsule at

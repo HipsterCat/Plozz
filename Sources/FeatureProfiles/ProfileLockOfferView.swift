@@ -1,6 +1,6 @@
 #if canImport(SwiftUI)
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 /// Full-page lock offer shown as the last step of new-profile setup.

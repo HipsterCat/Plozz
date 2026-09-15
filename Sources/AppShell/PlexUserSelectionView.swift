@@ -2,7 +2,7 @@
 import SwiftUI
 import AppRuntime
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// "Which Plex user are you?" — shown after signing into a Plex account that has
 /// two or more Home users, the first time a Plozz profile encounters that

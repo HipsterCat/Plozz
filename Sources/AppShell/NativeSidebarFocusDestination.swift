@@ -3,6 +3,8 @@ import CoreModels
 import SwiftUI
 
 /// Native TabView owns the transition; only the presented page may accept focus.
+/// Native tab chrome remains system-owned — do not force content focus or retry
+/// claims here (that fights Left-to-sidebar and spams rejected requests).
 struct NativeSidebarFocusDestination<Content: View>: View {
     let destination: NavigationRailDestination
     let selection: NavigationRailDestination

@@ -3,7 +3,7 @@ import CoreNetworking
 import SwiftUI
 import Observation
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import MetadataKit
 #if canImport(UIKit)
 import UIKit

@@ -1,6 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 
 /// The shared bordered container that groups a checkmark list in the Settings
 /// detail pane — the same treatment as the Customize Home "Rows on Home" cards,

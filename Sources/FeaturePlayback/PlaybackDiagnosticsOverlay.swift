@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// A compact, **non-interactive** heads-up panel that overlays the player with
 /// live stream diagnostics, organized into logical sections.

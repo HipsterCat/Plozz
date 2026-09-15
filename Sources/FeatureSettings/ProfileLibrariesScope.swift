@@ -1,6 +1,6 @@
 #if canImport(SwiftUI)
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 /// Exactly what the Libraries screen needs, and nothing else.

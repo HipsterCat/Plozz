@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// "Choose your libraries" — shown right after one or more servers are added
 /// (both first run and later adds). It lists the just-added servers' libraries

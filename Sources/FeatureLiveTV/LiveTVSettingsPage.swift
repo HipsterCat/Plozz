@@ -1,5 +1,5 @@
 #if DEBUG
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 struct LiveTVSettingsPage<Content: View>: View {

@@ -3,7 +3,7 @@ import CoreModels
 #if canImport(UIKit)
 import UIKit
 #endif
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 final class ArtworkImageVariantTests: XCTestCase {
     private let url = URL(string: "https://media.example.com/Items/abc/Images/Primary?maxWidth=1280")!

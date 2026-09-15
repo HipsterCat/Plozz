@@ -14,7 +14,7 @@ public enum WatchlistNavigationPolicy {
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// The compact, in-Settings picker for the navigation style: a row of preview
 /// cards (`PreviewCard` + `NavigationStyleSwatch`) that share the detail pane's

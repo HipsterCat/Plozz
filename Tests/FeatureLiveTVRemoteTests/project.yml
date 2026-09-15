@@ -31,7 +31,7 @@ targets:
       - package: Plozz
         product: AppShell
       - package: Plozz
-        product: CoreUI
+        product: PlozzCoreUI
       - package: Plozz
         product: FeaturePlayback
     settings:

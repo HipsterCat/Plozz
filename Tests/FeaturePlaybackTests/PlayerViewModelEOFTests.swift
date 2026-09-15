@@ -1,7 +1,7 @@
 #if canImport(AVFoundation)
 import XCTest
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import MediaPlayer
 @testable import FeaturePlayback
 #if canImport(UIKit)

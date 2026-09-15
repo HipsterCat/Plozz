@@ -1,6 +1,6 @@
 import XCTest
 import CoreModels
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 final class ArtworkResolveKeyTests: XCTestCase {
     /// The regression: posterless cards have no direct references, but their

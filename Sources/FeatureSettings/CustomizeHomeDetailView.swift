@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// **Home Page** — the single place that controls what appears on the Home
 /// screen. Everything Home-only lives here (nothing else does):

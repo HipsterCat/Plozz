@@ -1,6 +1,6 @@
 import SwiftUI
 import UIKit
-import CoreUI
+import PlozzCoreUI
 import CoreModels
 
 @main

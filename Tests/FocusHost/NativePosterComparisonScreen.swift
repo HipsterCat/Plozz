@@ -1,7 +1,7 @@
 import SwiftUI
 import TVUIKit
 import UIKit
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 struct NativePosterComparisonScreen: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> NativePosterComparisonController {

@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// Shared label-column width for every row in the Circadian pane (Location /
 /// Turns on-off / Fade / Darkness / Warmth / Preview), so their controls all line

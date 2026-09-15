@@ -2,7 +2,7 @@
 import SwiftUI
 import CoreModels
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 import FeatureHome
 import FeatureHomeCore
 import FeatureMusic

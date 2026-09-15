@@ -1,6 +1,6 @@
 #if canImport(SwiftUI) && canImport(UIKit)
 import CoreImage.CIFilterBuiltins
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 import UIKit
 

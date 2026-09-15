@@ -2,7 +2,7 @@
 import CoreModels
 import FeatureSearchCore
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 
 struct PlozziOSSearchView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass

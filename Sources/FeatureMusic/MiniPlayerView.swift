@@ -1,7 +1,7 @@
 #if canImport(SwiftUI) && canImport(AVFoundation)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// An action that opens the full-screen Now Playing screen, plumbed down the
 /// Music tab's view tree so the scrolling `NowPlayingCard` (which now lives

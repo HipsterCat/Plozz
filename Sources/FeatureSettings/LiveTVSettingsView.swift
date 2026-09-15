@@ -1,6 +1,6 @@
 #if DEBUG && canImport(SwiftUI)
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import Observation
 import SwiftUI
 

@@ -1,5 +1,5 @@
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 #if canImport(SwiftUI)
 import SwiftUI

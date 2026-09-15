@@ -444,7 +444,7 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
     dependencies:
       - package: Plozz
-        product: CoreUI
+        product: PlozzCoreUI
       - package: Plozz
         product: CoreModels
       - package: Plozz
@@ -478,7 +478,7 @@ targets:
     dependencies:
       - target: PlozzFocusHost
       - package: Plozz
-        product: CoreUI
+        product: PlozzCoreUI
       - package: Plozz
         product: CoreModels
       - package: Plozz

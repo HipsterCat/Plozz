@@ -1,5 +1,5 @@
 #if canImport(UIKit)
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 import UIKit
 import XCTest

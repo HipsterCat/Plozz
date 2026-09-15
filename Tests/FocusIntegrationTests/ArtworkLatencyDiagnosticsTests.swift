@@ -1,5 +1,5 @@
 import CoreModels
-@testable import CoreUI
+@testable import PlozzCoreUI
 import FeatureHomeCore
 import Foundation
 import MetadataKit

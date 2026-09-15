@@ -2,7 +2,7 @@
 import SwiftUI
 import UIKit
 import FeatureHome
-import CoreUI
+import PlozzCoreUI
 
 /// Resolves a directional press that had nowhere else to go: Left opens the
 /// navigation rail, Right returns focus to the page.

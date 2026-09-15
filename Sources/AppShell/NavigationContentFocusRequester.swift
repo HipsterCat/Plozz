@@ -1,5 +1,5 @@
 #if os(tvOS)
-import CoreUI
+import PlozzCoreUI
 import CoreNetworking
 import SwiftUI
 import UIKit

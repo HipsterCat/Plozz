@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import CoreModels
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 import FeatureProfiles
 import SwiftUI
 

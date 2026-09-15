@@ -1,6 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 
 /// One focusable, checkable row for the Settings detail pane — a leading optional
 /// icon, a title, and a trailing checkmark shown when `isChecked`.

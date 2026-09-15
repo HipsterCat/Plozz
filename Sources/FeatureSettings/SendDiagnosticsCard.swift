@@ -2,7 +2,7 @@
 import SwiftUI
 import CoreModels
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 import CrashReporting
 
 /// One-tap "send my recent activity to the developer" card, shared by the Help &

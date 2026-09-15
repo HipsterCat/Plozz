@@ -2,7 +2,7 @@
 import SwiftUI
 import FeatureShareOnboarding
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureAuth
 import FeatureDiscovery
 import FeatureDiscoveryCore

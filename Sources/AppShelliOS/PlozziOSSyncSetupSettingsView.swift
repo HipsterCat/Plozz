@@ -1,5 +1,5 @@
 #if os(iOS)
-import CoreUI
+import PlozzCoreUI
 import FeatureSettings
 import SwiftUI
 import FeatureSyncSetup

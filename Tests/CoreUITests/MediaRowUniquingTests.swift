@@ -1,6 +1,6 @@
 import XCTest
 import CoreModels
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 /// Guards the row's `ForEach` precondition.
 ///

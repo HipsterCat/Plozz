@@ -2,7 +2,7 @@
 import SwiftUI
 import UIKit
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 @testable import TopShelfKit
 
 /// The Top Shelf's progress bar is burned into a PNG by Core Graphics, so it

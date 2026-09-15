@@ -1,5 +1,5 @@
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 /// Drives `LoadingMessageModel`'s async loop deterministically by gating every
 /// `sleep` call, so we can assert state between the threshold and each cycle.

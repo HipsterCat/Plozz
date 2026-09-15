@@ -1,6 +1,6 @@
 #if canImport(SwiftUI)
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 /// The PIN screen for the household's Parental PIN.

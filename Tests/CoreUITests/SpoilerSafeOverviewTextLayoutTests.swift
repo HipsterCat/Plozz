@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 import XCTest
 import CoreModels
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 @MainActor
 final class SpoilerSafeOverviewTextLayoutTests: XCTestCase {

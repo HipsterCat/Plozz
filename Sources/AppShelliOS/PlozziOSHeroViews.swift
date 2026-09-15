@@ -2,7 +2,7 @@
 import AVFoundation
 import CoreModels
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 import FeatureHomeCore
 import HeroUI
 import MediaDownloads

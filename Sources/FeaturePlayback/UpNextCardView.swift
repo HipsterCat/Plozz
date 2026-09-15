@@ -1,7 +1,7 @@
 #if canImport(SwiftUI) && canImport(UIKit)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// The focusable "Up Next" card shown in the lower-right during an episode's
 /// closing credits when a next episode is queued. Hosted in its own UIKit focus

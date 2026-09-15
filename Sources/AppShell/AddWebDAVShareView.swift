@@ -1,5 +1,5 @@
 #if canImport(SwiftUI)
-import CoreUI
+import PlozzCoreUI
 import FeatureShareOnboarding
 import FeatureAuth
 import Foundation

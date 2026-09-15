@@ -1,6 +1,6 @@
 #if canImport(SwiftUI)
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureMusic
 import SwiftUI
 

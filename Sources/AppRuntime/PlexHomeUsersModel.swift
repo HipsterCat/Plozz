@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import CoreNetworking
 import ProviderPlex
 

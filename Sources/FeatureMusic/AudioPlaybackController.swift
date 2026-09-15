@@ -9,7 +9,7 @@ import MediaPlayer
 #endif
 #if canImport(UIKit)
 import UIKit
-import CoreUI
+import PlozzCoreUI
 #endif
 
 // `MediaPlayer` transitively imports AudioToolbox, which declares a C `MusicTrack`

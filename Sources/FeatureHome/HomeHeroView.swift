@@ -2,7 +2,7 @@
 import SwiftUI
 import UIKit
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureHomeCore
 import HeroUI
 import MetadataKit

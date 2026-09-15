@@ -1,7 +1,7 @@
 import Foundation
 import CoreModels
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 import FeatureAuthCore
 import MediaTransportCore
 import MetadataKit

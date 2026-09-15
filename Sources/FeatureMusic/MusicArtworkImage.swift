@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// Square async artwork for a music node, with a symbol placeholder while
 /// loading or when no image exists. Mirrors CoreUI's fallback-image behaviour but

@@ -1,7 +1,7 @@
 #if canImport(SwiftUI) && canImport(AVFoundation)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 #if canImport(UIKit)
 import UIKit
 #endif

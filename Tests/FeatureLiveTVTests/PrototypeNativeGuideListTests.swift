@@ -1,5 +1,5 @@
 #if DEBUG && os(tvOS)
-import CoreUI
+import PlozzCoreUI
 import FeatureLiveTVCore
 import SwiftUI
 import UIKit

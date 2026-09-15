@@ -1,6 +1,6 @@
 import XCTest
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 @testable import AppShell
 
 /// Locks the profile-isolation invariant behind the Home tab's `.id`: the

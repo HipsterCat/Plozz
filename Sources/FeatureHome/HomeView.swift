@@ -3,7 +3,7 @@ import Observation
 import SwiftUI
 import CoreModels
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 import FeatureHomeCore
 import HeroUI
 import MetadataKit

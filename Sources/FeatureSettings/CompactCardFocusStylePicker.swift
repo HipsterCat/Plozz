@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// The compact, in-Settings picker for what focus does to a card: a three-up row of
 /// preview cards (`PreviewCard` + `CardFocusStyleSwatch`) that share the detail

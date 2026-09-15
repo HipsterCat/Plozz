@@ -1,6 +1,6 @@
 import CoreGraphics
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 /// Coverage for the geometry behind a Continue Watching card, which is taller
 /// than the 16:9 art it carries so its chrome — play glyph, progress bar,

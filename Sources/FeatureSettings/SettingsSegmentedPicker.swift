@@ -1,6 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 
 /// A connected, segmented "pick one of a few" control for the Settings detail
 /// pane.

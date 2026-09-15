@@ -1,4 +1,4 @@
-import CoreUI
+import PlozzCoreUI
 import Foundation
 
 /// Pure auto-hide decisions for the player transport (the control bar), extracted

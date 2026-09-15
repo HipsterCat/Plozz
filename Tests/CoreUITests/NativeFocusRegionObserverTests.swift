@@ -1,7 +1,7 @@
 #if os(tvOS)
 import UIKit
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 @MainActor
 final class NativeFocusRegionObserverTests: XCTestCase {

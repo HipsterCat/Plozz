@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// The detail-pane content for the "Music Player" settings row: the style
 /// preview cards with the "Show track details" toggle beneath.

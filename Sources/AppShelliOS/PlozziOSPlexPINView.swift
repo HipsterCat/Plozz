@@ -1,6 +1,6 @@
 #if os(iOS)
 import AppRuntime
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 struct PlozziOSPlexPINView: View {

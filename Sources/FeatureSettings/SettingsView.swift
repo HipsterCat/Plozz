@@ -1,7 +1,7 @@
 #if os(tvOS)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureProfiles
 import TraktService
 import SeerService

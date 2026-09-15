@@ -1,6 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 
 /// Card picker for the Continue Watching card style, mirroring the spoiler,
 /// theme and music-player pickers: a preview of each option with the active card

@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// Renders a profile's avatar at `size` pt. Prefers the opt-in real photo
 /// (`Profile.avatarImageURL`) when present and reachable; otherwise falls

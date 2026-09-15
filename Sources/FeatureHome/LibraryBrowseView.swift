@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureHomeCore
 
 /// A sparse, lazily-loaded poster grid for browsing a single library. Each cell

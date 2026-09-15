@@ -2,7 +2,7 @@
 import AppRuntime
 import CoreModels
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 import FeatureSyncCloud
 import FeatureLiveTV
 import Foundation

@@ -2,7 +2,7 @@
 import XCTest
 import SwiftUI
 import CoreModels
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 final class EpisodeColumnPresentationTests: XCTestCase {
     func testUnwatchedEpisodeShowsIdentityRuntimeAndOverview() {

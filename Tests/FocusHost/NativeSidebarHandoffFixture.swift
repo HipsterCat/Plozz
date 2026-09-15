@@ -1,5 +1,5 @@
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import Observation
 import SwiftUI
 import UIKit
@@ -93,6 +93,32 @@ private struct NativeSidebarHandoffButton: UIViewRepresentable {
 
     final class Button: UIButton {
         var onFocus: (() -> Void)?
+        private var claimGeneration = 0
+
+        override var isEnabled: Bool {
+            didSet {
+                if isEnabled { claimFocusIfNeeded() }
+                else { claimGeneration &+= 1 }
+            }
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if window != nil, isEnabled { claimFocusIfNeeded() }
+        }
+
+        private func claimFocusIfNeeded() {
+            claimGeneration &+= 1
+            let generation = claimGeneration
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.claimGeneration == generation,
+                      let window = self.window, self.isEnabled, self.canBecomeFocused else { return }
+                let system = UIFocusSystem.focusSystem(for: window)
+                guard system?.focusedItem as AnyObject? !== self else { return }
+                system?.requestFocusUpdate(to: self)
+                system?.updateFocusIfNeeded()
+            }
+        }
 
         override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
             super.didUpdateFocus(in: context, with: coordinator)

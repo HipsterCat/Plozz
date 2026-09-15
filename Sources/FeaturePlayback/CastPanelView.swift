@@ -1,6 +1,6 @@
 #if canImport(SwiftUI) && canImport(UIKit)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 import CoreModels
 
 /// The Cast tab's card: a row of the people on screen.

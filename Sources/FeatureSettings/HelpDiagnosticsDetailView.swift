@@ -2,7 +2,7 @@
 import SwiftUI
 import CoreModels
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 
 /// Level-2 "Help & Diagnostics" page: the user-facing bug-report path plus the
 /// on-device diagnostics controls.

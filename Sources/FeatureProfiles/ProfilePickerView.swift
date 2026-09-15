@@ -1,7 +1,7 @@
 #if os(tvOS)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// tvOS profile picker — the "Who's watching?" screen.
 ///

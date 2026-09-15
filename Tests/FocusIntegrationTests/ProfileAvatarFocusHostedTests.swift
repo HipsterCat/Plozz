@@ -1,5 +1,5 @@
 import CoreModels
-@testable import CoreUI
+@testable import PlozzCoreUI
 import FeatureProfiles
 import SwiftUI
 import TVUIKit

@@ -1,7 +1,7 @@
 #if DEBUG && canImport(SwiftUI) && canImport(AVFoundation) && canImport(UIKit)
 import AVFoundation
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import Observation
 import SwiftUI
 import UIKit

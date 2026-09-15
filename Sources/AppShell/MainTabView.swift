@@ -3,7 +3,7 @@ import SwiftUI
 import AppRuntime
 import CoreModels
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 import FeatureHomeCore
 import FeatureHome
 import FeatureMusic

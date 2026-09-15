@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureAuthCore
 
 /// TV-friendly Quick Connect screen: shows the big code, a live expiry timer,

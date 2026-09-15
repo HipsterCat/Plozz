@@ -2,7 +2,7 @@
 import SwiftUI
 import CoreModels
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 import MetadataKit
 
 /// The credits a person page can show, and how they were obtained.

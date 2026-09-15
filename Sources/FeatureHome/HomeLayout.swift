@@ -1,6 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 
 /// Layout tokens local to the Home feature's full-screen sub-pages (library
 /// browse, item detail). Kept in lock-step with the shared

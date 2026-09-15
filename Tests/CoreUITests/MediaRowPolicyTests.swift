@@ -2,7 +2,7 @@
 import Foundation
 import XCTest
 import CoreModels
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 final class MediaRowPolicyTests: XCTestCase {
     func testPrefetchWindowFollowsRightwardTraversal() {

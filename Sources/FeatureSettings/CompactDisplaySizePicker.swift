@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// The compact, in-Settings picker for Display Size: a grid of preview cards
 /// (`PreviewCard` + `DisplaySizeSwatch`) mirroring the Card Style / Watched

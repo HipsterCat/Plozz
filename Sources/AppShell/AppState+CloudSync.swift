@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import AppRuntime
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import CoreSecureStore
 import CoreNetworking
 import FeatureSyncSetup

@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// The compact, in-Settings picker for the watch-status indicator: a row of
 /// preview cards (`PreviewCard` + `WatchStatusIndicatorSwatch`) that share the

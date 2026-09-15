@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import XCTest
 import CoreModels
-@testable import CoreUI
+@testable import PlozzCoreUI
 final class MediaFileBrowserNavigationTests: XCTestCase {
     func testFileBrowserTargetsOwningShareNotSelectedPlaybackServer() throws {
         let item = MediaItem(

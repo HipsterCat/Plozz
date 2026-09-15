@@ -1,5 +1,5 @@
 @testable import AppShell
-@testable import CoreUI
+@testable import PlozzCoreUI
 import UIKit
 import XCTest
 

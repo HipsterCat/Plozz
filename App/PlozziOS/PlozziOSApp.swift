@@ -1,6 +1,6 @@
 import AppShelliOS
 import AppRuntime
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 import UIKit
 

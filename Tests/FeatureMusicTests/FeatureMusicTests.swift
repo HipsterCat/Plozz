@@ -1,6 +1,6 @@
 import XCTest
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import AVFoundation
 import MediaPlayer
 @testable import FeatureMusic

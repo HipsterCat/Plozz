@@ -4,7 +4,7 @@ import AVFoundation
 import Observation
 import CoreModels
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 import TraktService
 import MetadataKit
 #if canImport(UIKit)

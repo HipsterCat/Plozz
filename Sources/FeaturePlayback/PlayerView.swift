@@ -5,7 +5,7 @@ import AVFoundation
 import AVKit
 #endif
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// Full-screen playback using Plozz's **custom** player: an `AVPlayer` rendered
 /// into an `AVPlayerLayer` with a hand-built transport overlay and Siri Remote

@@ -1,6 +1,6 @@
 #if os(iOS)
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 /// iOS/iPadOS first-run onboarding — mirrors the tvOS entry: the branded Plozz

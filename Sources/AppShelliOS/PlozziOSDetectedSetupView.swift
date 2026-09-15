@@ -1,6 +1,6 @@
 #if os(iOS)
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 /// Full-page "we found your setup" screen — the promoted, full-screen version of the

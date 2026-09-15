@@ -1,6 +1,6 @@
 #if DEBUG
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 /// Sources-page section for peer descriptors that cannot be transferred safely.

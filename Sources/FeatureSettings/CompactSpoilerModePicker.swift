@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// Card picker for the spoiler hide-mode, mirroring the theme and music-player
 /// pickers: a live preview of each mode (a blurred still vs. generic placeholder

@@ -1,6 +1,6 @@
 import AppRuntime
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import EnginePlozzigen
 import FeatureAuthCore
 import ProviderShare

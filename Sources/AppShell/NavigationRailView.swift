@@ -1,7 +1,7 @@
 #if os(tvOS)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureProfiles
 
 /// Fixed geometry for the custom navigation rail. Collected here so the shell's

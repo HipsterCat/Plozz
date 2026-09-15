@@ -2,7 +2,7 @@
 import MediaPlayer
 import AVFoundation
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 @MainActor
 final class NowPlayingSessionTests: XCTestCase {

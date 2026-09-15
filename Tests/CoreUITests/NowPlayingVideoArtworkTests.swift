@@ -4,7 +4,7 @@ import CoreText
 import MediaPlayer
 import UIKit
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 @MainActor
 final class NowPlayingVideoArtworkTests: XCTestCase {

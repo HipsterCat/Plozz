@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// The edits collected by `ProfileEditorView`, handed back to the app so it
 /// can create or update a profile.

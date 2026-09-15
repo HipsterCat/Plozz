@@ -1,6 +1,6 @@
 #if canImport(SwiftUI) && canImport(UIKit)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 import CoreModels
 
 /// A reusable full-width column of selectable / toggle track rows, extracted from

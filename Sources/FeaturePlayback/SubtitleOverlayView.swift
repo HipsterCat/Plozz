@@ -2,7 +2,7 @@
 import SwiftUI
 import UIKit
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 enum SubtitleOverlayGeometry {
     static func aspectFitRect(

@@ -1,5 +1,5 @@
 #if DEBUG
-import CoreUI
+import PlozzCoreUI
 import CoreModels
 import FeatureLiveTVCore
 import SwiftUI
@@ -594,7 +594,26 @@ struct PrototypeBrowser: View {
             let target = PrototypeBrowseFocus.defaultContent(in: model, row: row, from: guideStart, hours: guideHours)
             lastFocused = target
             pendingFocus = target
-            focused = target
+            // Apply selection immediately. `confirmedFocus` only updates once a
+            // guide cell actually receives UIKit focus — if chrome (Now) still
+            // holds it, the probe/selection would otherwise stay on the previous
+            // programme until the next focus movement.
+            switch target {
+            case .channel, .channelContent:
+                focusedProgram = nil
+            case .program(let channelID, let programID, _):
+                focusedProgram = model.programs(for: channelID, from: guideStart, hours: guideHours)
+                    .first { $0.id == programID }
+            }
+            selectedID = target.channelID
+            selectedRowID = target.rowID
+            // Defer FocusState until after the timeline reset commits so the
+            // matching programme cell exists to receive focus.
+            Task { @MainActor in
+                await Task.yield()
+                guard pendingFocus == target else { return }
+                focused = target
+            }
         }
     }
 

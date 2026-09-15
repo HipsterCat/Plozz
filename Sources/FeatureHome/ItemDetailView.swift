@@ -2,7 +2,7 @@
 import CoreNetworking
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureHomeCore
 #if canImport(UIKit)
 import UIKit

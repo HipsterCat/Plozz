@@ -1,6 +1,6 @@
 #if os(iOS)
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 /// A friendly bottom-sheet card shown once when a server added on another device

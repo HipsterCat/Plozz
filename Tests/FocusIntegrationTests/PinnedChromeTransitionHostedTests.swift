@@ -1,6 +1,6 @@
 @testable import AppShell
 import CoreModels
-@testable import CoreUI
+@testable import PlozzCoreUI
 import Observation
 import SwiftUI
 import UIKit

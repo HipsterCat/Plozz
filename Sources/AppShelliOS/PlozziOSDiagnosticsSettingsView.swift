@@ -1,7 +1,7 @@
 #if os(iOS)
 import CoreModels
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 import CrashReporting
 import Foundation
 import SwiftUI

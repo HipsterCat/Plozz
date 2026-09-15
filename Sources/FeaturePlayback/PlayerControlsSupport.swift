@@ -1,6 +1,6 @@
 #if canImport(SwiftUI) && canImport(UIKit)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 import CoreModels
 
 struct ControlsHeightKey: PreferenceKey {

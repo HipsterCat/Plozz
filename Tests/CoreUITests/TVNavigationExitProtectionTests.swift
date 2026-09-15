@@ -1,7 +1,7 @@
 #if os(tvOS) && canImport(UIKit)
 import XCTest
 import UIKit
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 @MainActor
 final class TVNavigationExitProtectionTests: XCTestCase {

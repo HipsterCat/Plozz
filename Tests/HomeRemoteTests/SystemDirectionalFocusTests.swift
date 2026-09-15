@@ -54,11 +54,26 @@ final class SystemDirectionalFocusTests: XCTestCase {
     }
 
     private static func assertFocus(_ label: String, in app: XCUIApplication) throws {
-        let card = app.buttons.containing(.staticText, identifier: label).firstMatch
-        let focused = card.descendants(matching: .any)
+        // System / highlight styles may put focus on an inner container rather
+        // than the Button whose accessibility label is the title.
+        let focused = app.descendants(matching: .any)
             .matching(NSPredicate(format: "hasFocus == true")).firstMatch
-        XCTAssertTrue(focused.waitForExistence(timeout: 3), "Expected \(label). \(app.debugDescription)")
+        let predicate = NSPredicate { _, _ in
+            focused.exists && (focused.label == label || focused.staticTexts[label].exists
+                || focused.descendants(matching: .any)
+                    .matching(NSPredicate(format: "label == %@", label)).count > 0)
+        }
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: 3),
+            .completed,
+            "Expected \(label). \(app.debugDescription)"
+        )
         Thread.sleep(forTimeInterval: 0.35)
-        XCTAssertTrue(focused.exists, "Focus bounced away from \(label). \(app.debugDescription)")
+        let still = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "hasFocus == true")).firstMatch
+        let stillOnTarget = still.exists && (still.label == label || still.staticTexts[label].exists
+            || still.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == %@", label)).count > 0)
+        XCTAssertTrue(stillOnTarget, "Focus bounced away from \(label). \(app.debugDescription)")
     }
 }

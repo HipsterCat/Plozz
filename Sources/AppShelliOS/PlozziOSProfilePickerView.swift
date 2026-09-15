@@ -3,7 +3,7 @@ import CoreModels
 import FeatureProfiles
 import Foundation
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 
 /// "Who's watching?" — the one screen for choosing a profile, and for changing
 /// or adding one.

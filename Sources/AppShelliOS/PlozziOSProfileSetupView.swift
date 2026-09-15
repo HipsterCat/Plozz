@@ -1,7 +1,7 @@
 #if os(iOS)
 import AppRuntime
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureProfiles
 import FeatureSettings
 import SwiftUI

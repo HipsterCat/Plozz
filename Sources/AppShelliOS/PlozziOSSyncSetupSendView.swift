@@ -2,7 +2,7 @@
 import SwiftUI
 import AVFoundation
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureProfiles
 import FeatureSyncSetup
 

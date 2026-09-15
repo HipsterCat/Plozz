@@ -2,7 +2,7 @@
 import SwiftUI
 import Foundation
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// Picker for the app's own UI language.
 ///

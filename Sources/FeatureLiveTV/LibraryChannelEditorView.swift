@@ -1,6 +1,6 @@
 #if DEBUG
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureLiveTVCore
 import Observation
 import SwiftUI

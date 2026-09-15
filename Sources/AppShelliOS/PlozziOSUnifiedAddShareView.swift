@@ -1,7 +1,7 @@
 #if os(iOS)
 import FeatureShareOnboarding
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import ProviderShare
 import SwiftUI
 

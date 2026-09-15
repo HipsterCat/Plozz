@@ -1,6 +1,6 @@
 #if os(tvOS)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 
 enum NavigationGlassPart: Hashable {
     case button

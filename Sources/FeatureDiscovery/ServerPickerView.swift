@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureDiscoveryCore
 
 /// tvOS server picker: discovered servers, last-used reconnect, and manual entry.

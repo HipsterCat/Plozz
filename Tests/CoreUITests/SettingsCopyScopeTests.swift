@@ -1,5 +1,5 @@
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 /// The scope subtitles are the entire mechanism by which someone can tell what a
 /// settings section actually covers, so the selection between them is worth

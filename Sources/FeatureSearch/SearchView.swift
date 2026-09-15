@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// The Search screen: a `.searchable` field over a sectioned poster grid of
 /// results (Movies / TV Shows / Episodes), with the standard loading, empty and

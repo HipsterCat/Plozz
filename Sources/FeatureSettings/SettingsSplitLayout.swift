@@ -1,6 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 
 /// Shared metrics for the Settings detail panes so spacing is consistent (and
 /// tunable in one place) across every feature form.

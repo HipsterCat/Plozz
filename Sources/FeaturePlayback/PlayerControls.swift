@@ -1,7 +1,7 @@
 #if canImport(SwiftUI) && canImport(UIKit)
 import SwiftUI
 import UIKit
-import CoreUI
+import PlozzCoreUI
 import CoreModels
 
 /// Lightweight value-type bag of options callbacks. Mirrors the tunable subset

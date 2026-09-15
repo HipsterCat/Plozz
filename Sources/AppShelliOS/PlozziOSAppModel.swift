@@ -4,7 +4,7 @@ import AppRuntime
 import CoreModels
 import ProviderKinoPubDemo
 import CoreNetworking
-import CoreUI
+import PlozzCoreUI
 import CrashReporting
 import FeatureAuthCore
 import FeatureHomeCore

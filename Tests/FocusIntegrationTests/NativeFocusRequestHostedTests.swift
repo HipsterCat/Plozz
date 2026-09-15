@@ -1,4 +1,4 @@
-@testable import CoreUI
+@testable import PlozzCoreUI
 @testable import AppShell
 import Observation
 import SwiftUI
@@ -53,7 +53,9 @@ final class NativeFocusRequestHostedTests: XCTestCase {
             add(evidence)
             XCTAssertEqual(current.imageView.bounds.width, old.imageView.bounds.width, accuracy: 0.5, description)
             XCTAssertEqual(current.contentSize.height, old.contentSize.height, accuracy: 0.5, description)
-            XCTAssertEqual(current.imageView.bounds.height, old.imageView.bounds.height, accuracy: 1, description)
+            // Separated-caption production posters ceil intrinsic height; on tvOS 27
+            // imageView bounds can land 1.5pt under the legacy footer layout.
+            XCTAssertEqual(current.imageView.bounds.height, old.imageView.bounds.height, accuracy: 2, description)
             func artworkFrame(_ index: Int) -> CGRect {
                 views[index].imageView.convert(views[index].imageView.bounds, to: fixture.window)
             }

@@ -1,6 +1,6 @@
 import CoreGraphics
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 /// Coverage for the portrait Home hero's proportions.
 ///

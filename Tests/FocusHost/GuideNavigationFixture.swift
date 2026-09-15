@@ -1,5 +1,5 @@
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureLiveTVCore
 import SwiftUI
 @testable import FeatureLiveTV

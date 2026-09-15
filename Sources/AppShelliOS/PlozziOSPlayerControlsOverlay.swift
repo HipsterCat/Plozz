@@ -4,7 +4,7 @@ import CoreModels
 import FeaturePlayback
 import AVKit
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 
 private enum PlozziOSPlayerSheet: String, Identifiable {
     case info

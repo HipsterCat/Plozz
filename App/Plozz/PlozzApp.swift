@@ -2,7 +2,7 @@ import SwiftUI
 import AppShell
 import AppRuntime
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 #if DEBUG
 import FeaturePlayback
 #endif

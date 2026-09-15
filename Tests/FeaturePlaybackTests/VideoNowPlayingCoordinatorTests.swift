@@ -2,7 +2,7 @@ import AVFoundation
 import MediaPlayer
 import UIKit
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import XCTest
 @testable import FeaturePlayback
 

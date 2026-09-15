@@ -1,4 +1,4 @@
-import CoreUI
+import PlozzCoreUI
 import XCTest
 
 @MainActor

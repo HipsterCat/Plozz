@@ -1,6 +1,6 @@
 import CoreGraphics
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 /// Coverage for `HeroLogoFit`, which sizes a hero wordmark by **area** so a show's
 /// presence on screen doesn't come down to the shape of its logo.

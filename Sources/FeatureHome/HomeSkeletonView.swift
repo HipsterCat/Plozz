@@ -1,6 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 import FeatureHomeCore
 
 /// A 1:1 placeholder for the Home screen shown while content loads. It renders

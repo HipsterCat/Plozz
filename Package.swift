@@ -28,7 +28,7 @@ let package = Package(
     products: [
         .library(name: "CoreModels", targets: ["CoreModels"]),
         .library(name: "CoreNetworking", targets: ["CoreNetworking"]),
-        .library(name: "CoreUI", targets: ["CoreUI"]),
+        .library(name: "PlozzCoreUI", targets: ["PlozzCoreUI"]),
         .library(name: "MetadataKit", targets: ["MetadataKit"]),
         .library(name: "FeatureDiscoveryCore", targets: ["FeatureDiscoveryCore"]),
         .library(name: "FeatureDiscovery", targets: ["FeatureDiscovery"]),
@@ -250,9 +250,13 @@ let package = Package(
         ),
 
         // MARK: Shared UI (design system + reusable tvOS components)
+        // Named PlozzCoreUI so the embedded framework is not CoreUI.framework —
+        // that name shadows Apple's private CoreUI (CUICatalog) and crashes SwiftUI
+        // on FocusHost / simulator (unrecognized selector / objc_fatal).
         .target(
-            name: "CoreUI",
+            name: "PlozzCoreUI",
             dependencies: ["CoreModels", "MetadataKit"],
+            path: "Sources/CoreUI",
             resources: [.process("Resources")]
         ),
 
@@ -351,7 +355,7 @@ let package = Package(
         ),
         .target(
             name: "FeatureDiscovery",
-            dependencies: ["CoreModels", "CoreUI", "FeatureDiscoveryCore"]
+            dependencies: ["CoreModels", "PlozzCoreUI", "FeatureDiscoveryCore"]
         ),
         .target(
             name: "CoreSecureStore",
@@ -363,7 +367,7 @@ let package = Package(
         ),
         .target(
             name: "FeatureAuth",
-            dependencies: ["CoreModels", "CoreUI", "FeatureAuthCore", "ProviderPlex"]
+            dependencies: ["CoreModels", "PlozzCoreUI", "FeatureAuthCore", "ProviderPlex"]
         ),
         .target(
             name: "FeatureHomeCore",
@@ -373,7 +377,7 @@ let package = Package(
                 // For `PersonDetailViewModel`, which lives here rather than in
                 // FeatureHome so BOTH shells can build it: FeatureHome carries
                 // unguarded tvOS-only API and is never compiled for iOS.
-                "CoreUI",
+                "PlozzCoreUI",
                 "MetadataKit",
                 "RatingsService",
                 "ProviderTrailers"
@@ -381,15 +385,15 @@ let package = Package(
         ),
         .target(
             name: "HeroUI",
-            dependencies: ["CoreModels", "CoreUI", "FeatureHomeCore", "MetadataKit"]
+            dependencies: ["CoreModels", "PlozzCoreUI", "FeatureHomeCore", "MetadataKit"]
         ),
         .target(
             name: "FeatureHome",
-            dependencies: ["CoreModels", "CoreNetworking", "CoreUI", "FeatureHomeCore", "HeroUI", "MetadataKit", "TopShelfKit", "RatingsService", "ProviderTrailers"]
+            dependencies: ["CoreModels", "CoreNetworking", "PlozzCoreUI", "FeatureHomeCore", "HeroUI", "MetadataKit", "TopShelfKit", "RatingsService", "ProviderTrailers"]
         ),
         .target(
             name: "FeaturePlayback",
-            dependencies: ["CoreModels", "CoreNetworking", "CoreUI", "TraktService", "MetadataKit"],
+            dependencies: ["CoreModels", "CoreNetworking", "PlozzCoreUI", "TraktService", "MetadataKit"],
             linkerSettings: [
                 // Force-link AVKit on tvOS so its `UIWindow (AVAdditions)`
                 // category (which adds `avDisplayManager`, used to drive the
@@ -406,7 +410,7 @@ let package = Package(
         ),
         .target(
             name: "FeatureSearch",
-            dependencies: ["CoreModels", "CoreUI", "FeatureSearchCore"]
+            dependencies: ["CoreModels", "PlozzCoreUI", "FeatureSearchCore"]
         ),
         .target(
             name: "FeatureLiveTVCore",
@@ -414,15 +418,15 @@ let package = Package(
         ),
         .target(
             name: "FeatureLiveTV",
-            dependencies: ["CoreModels", "CoreUI", "FeatureLiveTVCore"]
+            dependencies: ["CoreModels", "PlozzCoreUI", "FeatureLiveTVCore"]
         ),
         .target(
             name: "FeatureSettings",
-            dependencies: ["CoreModels", "CoreUI", "CoreNetworking", "CrashReporting", "FeatureProfiles", "TraktService", "SeerService", "SimklService", "AniListService", "MALService", "LastFmService"]
+            dependencies: ["CoreModels", "PlozzCoreUI", "CoreNetworking", "CrashReporting", "FeatureProfiles", "TraktService", "SeerService", "SimklService", "AniListService", "MALService", "LastFmService"]
         ),
         .target(
             name: "FeatureProfiles",
-            dependencies: ["CoreModels", "CoreUI"]
+            dependencies: ["CoreModels", "PlozzCoreUI"]
         ),
         .target(
             name: "FeatureWatchlistCore",
@@ -457,7 +461,7 @@ let package = Package(
         // it stays decoupled from the video feature modules.
         .target(
             name: "FeatureMusic",
-            dependencies: ["CoreModels", "CoreUI", "MetadataKit", "CoreNetworking"]
+            dependencies: ["CoreModels", "PlozzCoreUI", "MetadataKit", "CoreNetworking"]
         ),
 
         // MARK: Top Shelf (shared with the tvOS Top Shelf extension)
@@ -653,7 +657,7 @@ let package = Package(
             dependencies: [
                 "CoreModels",
                 "CoreNetworking",
-                "CoreUI",
+                "PlozzCoreUI",
                 "FeatureAuthCore",
                 // The universal watchlist runtime lives here so tvOS and iOS share
                 // one implementation instead of two 560-line copies.
@@ -702,7 +706,7 @@ let package = Package(
                 "AppRuntime",
                 "CoreModels",
                 "CoreNetworking",
-                "CoreUI",
+                "PlozzCoreUI",
                 "EnginePlozzigen",
                 "FeatureDiscovery",
                 "FeatureDiscoveryCore",
@@ -750,7 +754,7 @@ let package = Package(
                 "AppRuntime",
                 "CoreModels",
                 "CoreNetworking",
-                "CoreUI",
+                "PlozzCoreUI",
                 "CrashReporting",
                 "EnginePlozzigen",
                 "FeatureAuthCore",
@@ -810,7 +814,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CoreModelsTests",
-            dependencies: ["CoreModels", "CoreUI"]
+            dependencies: ["CoreModels", "PlozzCoreUI"]
         ),
         .testTarget(
             name: "CrashReportingTests",
@@ -842,7 +846,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CoreUITests",
-            dependencies: ["CoreUI", "CoreModels", "TopShelfKit"]
+            dependencies: ["PlozzCoreUI", "CoreModels", "TopShelfKit"]
         ),
         .testTarget(
             name: "CoreNetworkingTests",
@@ -928,11 +932,11 @@ let package = Package(
         ),
         .testTarget(
             name: "FeatureMusicTests",
-            dependencies: ["FeatureMusic", "CoreModels", "CoreUI"]
+            dependencies: ["FeatureMusic", "CoreModels", "PlozzCoreUI"]
         ),
         .testTarget(
             name: "FeaturePlaybackTests",
-            dependencies: ["FeaturePlayback", "CoreModels", "CoreUI"]
+            dependencies: ["FeaturePlayback", "CoreModels", "PlozzCoreUI"]
         ),
         .testTarget(
             name: "ProviderShareTests",

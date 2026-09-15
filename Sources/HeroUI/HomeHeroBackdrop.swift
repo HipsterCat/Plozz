@@ -1,6 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 import CoreModels
 import FeatureHomeCore
 import MetadataKit

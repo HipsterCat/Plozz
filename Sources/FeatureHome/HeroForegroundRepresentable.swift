@@ -2,7 +2,7 @@
 import SwiftUI
 import UIKit
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// SwiftUI bridge for the **imperative UIKit hero foreground** (POC, gated by
 /// ``HeroForegroundConfig``). It hosts a single persistent ``HeroForegroundUIView``

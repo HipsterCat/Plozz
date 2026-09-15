@@ -1,7 +1,7 @@
 #if DEBUG && os(iOS)
 import CoreModels
 import CoreSecureStore
-import CoreUI
+import PlozzCoreUI
 import AppRuntime
 import EnginePlozzigen
 import FeatureLiveTV

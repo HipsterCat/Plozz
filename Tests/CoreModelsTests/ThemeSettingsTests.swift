@@ -71,7 +71,7 @@ final class ThemeSettingsStoreTests: XCTestCase {
 
 #if canImport(SwiftUI)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 
 final class ThemePaletteResolutionTests: XCTestCase {
     func testEveryThemeResolvesAPalette() {

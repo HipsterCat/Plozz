@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// The compact, in-Settings variant of the onboarding theme picker: a row of
 /// smaller preview cards (`ThemeOptionCard(compact:)`) that share the detail

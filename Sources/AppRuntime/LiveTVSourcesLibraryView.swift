@@ -1,5 +1,5 @@
 #if DEBUG && canImport(SwiftUI)
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 /// Keep generated-channel editing on the profile's existing library runtime,

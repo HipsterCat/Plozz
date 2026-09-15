@@ -1,6 +1,6 @@
 #if DEBUG && canImport(SwiftUI) && canImport(UIKit)
 import CoreGraphics
-import CoreUI
+import PlozzCoreUI
 import FeatureLiveTVCore
 import SwiftUI
 import UIKit

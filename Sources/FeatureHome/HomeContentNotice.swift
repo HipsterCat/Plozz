@@ -1,5 +1,5 @@
 #if canImport(SwiftUI)
-import CoreUI
+import PlozzCoreUI
 import SwiftUI
 
 /// Why Home has little or nothing to show, when the reason is a SETTING rather

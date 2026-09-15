@@ -1,6 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
-import CoreUI
+import PlozzCoreUI
 
 enum PlayerCardLayout {
     /// The tvOS/iPad card: a wide, short band of columns sitting under the

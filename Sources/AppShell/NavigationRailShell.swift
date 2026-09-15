@@ -1,7 +1,7 @@
 #if os(tvOS)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import FeatureProfiles
 
 /// The container for ``NavigationStyle/rail``: the custom navigation rail on the

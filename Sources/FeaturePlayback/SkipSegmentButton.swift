@@ -1,7 +1,7 @@
 #if canImport(SwiftUI) && canImport(UIKit)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// The focusable "Skip Intro" / "Skip Credits" button shown in the lower-right,
 /// lifted to sit just above the scrub bar, while playback is inside a

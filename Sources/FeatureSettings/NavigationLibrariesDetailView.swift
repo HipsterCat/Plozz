@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 
 /// Shared navigation arrangement. Hiding a shortcut never disables its content.
 public struct NavigationLibrariesDetailView: View {

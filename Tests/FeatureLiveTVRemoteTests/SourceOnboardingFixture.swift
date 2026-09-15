@@ -1,5 +1,5 @@
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import Foundation
 import FeatureLiveTVCore
 import FeatureSettings

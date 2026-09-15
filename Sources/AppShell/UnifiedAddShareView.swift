@@ -2,7 +2,7 @@
 import SwiftUI
 import FeatureShareOnboarding
 import CoreModels
-import CoreUI
+import PlozzCoreUI
 import ProviderShare
 
 /// The one unified "Add a Media Share" screen for every transport, replacing the

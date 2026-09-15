@@ -1,7 +1,7 @@
 import CoreModels
 import Foundation
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 @MainActor
 final class LiveTVPortableSyncPresentationTests: XCTestCase {

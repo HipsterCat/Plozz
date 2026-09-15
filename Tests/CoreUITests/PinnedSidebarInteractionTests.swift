@@ -1,7 +1,7 @@
 #if canImport(SwiftUI)
 import XCTest
 import Combine
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 @MainActor
 final class PinnedSidebarInteractionTests: XCTestCase {

@@ -2,7 +2,7 @@
 import SwiftUI
 import UIKit
 import XCTest
-@testable import CoreUI
+@testable import PlozzCoreUI
 
 @MainActor
 final class ChannelLogoArtworkTests: XCTestCase {
