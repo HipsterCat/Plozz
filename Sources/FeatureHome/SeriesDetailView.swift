@@ -53,6 +53,9 @@ struct SeriesDetailView: View {
     let initialEpisode: MediaItem?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #if os(tvOS)
+    @Environment(\.detailEntranceSession) private var detailEntrance
+    #endif
 
     /// Which season's episodes the rail is currently showing. Driven by season
     /// tab focus; seeded to the "next up" season on first appearance.
@@ -71,6 +74,9 @@ struct SeriesDetailView: View {
     /// so left/right moves freely between seasons; it resets when focus leaves.
     @State private var seasonBarEngaged = false
     @State private var browserEntry = SeriesBrowserEntry.hero
+    @State private var browserPresentationSettled = false
+    @State private var browserPresentationGeneration = 0
+    @State private var hasPresentedEpisodeBrowser = false
     /// Whether focus is currently somewhere inside the episode browser.
     ///
     /// Gates the hero-blur backstop below. Focus leaving the hero does NOT imply
@@ -266,7 +272,7 @@ struct SeriesDetailView: View {
             .scrollClipDisabled()
             // Let the hero bleed into the top overscan inset instead of the
             // ScrollView reserving it as a blank bar above the backdrop.
-            .ignoresSafeArea(.container, edges: .top)
+            .modifier(DetailTopSafeAreaBreakout())
             // Re-run when the season set changes — not just once on first appear.
             // A seeded page first renders with empty `seasons` (children haven't
             // loaded yet); keying on the season ids re-runs this the moment they
@@ -352,13 +358,8 @@ struct SeriesDetailView: View {
         // Whole-show/season entry lands on Hero Play. Individual episode entry
         // lands on its rail card through MediaRowView's initial focus.
         //
-        // Only on a genuine open. `defaultFocus` is declarative and re-fires on
-        // every appearance, so on a pop back from a pushed page it yanked focus
-        // off whatever the user was on — and because Play taking focus restores
-        // the hero, that also collapsed the episode browser and hid the cast.
-        // Designating `false` leaves no target (nothing binds `equals: false`),
-        // which keeps the modifier applied unconditionally so view identity is
-        // stable, rather than branching it in or out of the hierarchy.
+        // Only a genuine open claims Play. Reappearing after a child page must
+        // preserve the episode browser's own focus restoration.
         scroll
             .defaultFocus(
                 $playFocused,
@@ -431,7 +432,10 @@ struct SeriesDetailView: View {
     /// user's — while a child page is on top, or while the rail is reclaiming
     /// focus just after one pops.
     private var ignoresSystemFocusMoves: Bool {
-        hasChildOnTop || isReclaimingFocus
+        #if os(tvOS)
+        if DetailTransitionNavigation.isRestoringSourcePage { return true }
+        #endif
+        return hasChildOnTop || isReclaimingFocus
     }
 
     private var scroll: some View {
@@ -567,7 +571,9 @@ struct SeriesDetailView: View {
                             episodeRail { revealBrowser(using: proxy) }
                         }
                     )
+                    .detailEntranceStage(.episodes)
 
+                    if showsLowerDetailContent {
                     DetailExtrasView(
                         item: series,
                         selectedSource: distinctServerChoices.first { $0.accountID == series.sourceAccountID }
@@ -588,7 +594,7 @@ struct SeriesDetailView: View {
                         leadingInset: PlozzTheme.Metrics.heroLeadingPadding,
                         seriesRecedeModel: recedeModel,
                         revealsSeriesCastWithoutBrowser: revealsCastWithoutBrowser,
-                        suppressesFocus: hasChildOnTop,
+                        suppressesFocus: hasChildOnTop || holdsHeroFocusDuringEntrance,
                         onCastFocusEntered: {
                             seasonBarEngaged = false
                             // Cast/Related sit BELOW the browser, so the page
@@ -621,6 +627,7 @@ struct SeriesDetailView: View {
                         )
                         .id(Self.extrasAnchorID)
                     }
+                    }
                     // Static. The column's layout position never changes — it is
                     // permanently at its browsing position, which is what keeps
                     // the season bar and episode rail inside the viewport and the
@@ -637,7 +644,8 @@ struct SeriesDetailView: View {
                             : SeriesEpisodeBrowserLayout.browserRestDrop
                     )
                 }
-                .padding(.bottom, PlozzTheme.Metrics.screenVerticalPadding)
+                .frame(minHeight: SeriesEpisodeBrowserLayout.screenHeightReference, alignment: .topLeading)
+                .padding(.bottom, showsLowerDetailContent ? PlozzTheme.Metrics.screenVerticalPadding : 0)
                 // Cap the whole scroll column to the proposed (safe viewport)
                 // width. The hero backdrop still bleeds edge-to-edge via its own
                 // `.ignoresSafeArea`, but its layout footprint — and any over-wide
@@ -646,6 +654,9 @@ struct SeriesDetailView: View {
                 // sideways and shove focus off the left edge.
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // The scroll view can focus a synthetic filler even while its real
+            // controls are gated. Do not let early Down scroll through that gap.
+            .scrollDisabled(holdsHeroFocusDuringEntrance)
             // Keep the page pinned to the top on first load. The Play button is
             // bottom-anchored in the full-screen hero, so when initial focus
             // lands on it tvOS auto-scrolls to frame it "comfortably", nudging
@@ -764,9 +775,27 @@ struct SeriesDetailView: View {
     /// and Season → Episode moves cost nothing either.
     private func revealBrowser(using proxy: ScrollViewProxy) {
         SeriesFocusTrace.record("revealBrowser")
-        withAnimation(.smooth(duration: Self.recedeAnimationDuration)) {
+        guard !recedeModel.isReceded else {
+            withAnimation(.smooth(duration: Self.recedeAnimationDuration)) {
+                proxy.scrollTo(Self.topAnchorID, anchor: .top)
+            }
+            return
+        }
+        browserPresentationSettled = false
+        browserPresentationGeneration &+= 1
+        let generation = browserPresentationGeneration
+        withAnimation(
+            reduceMotion ? nil : .smooth(duration: Self.recedeAnimationDuration),
+            completionCriteria: .logicallyComplete
+        ) {
             recedeModel.isReceded = true
             proxy.scrollTo(Self.topAnchorID, anchor: .top)
+        } completion: {
+            guard generation == browserPresentationGeneration, recedeModel.isReceded else { return }
+            browserPresentationSettled = true
+            if browserEntry == .browser, !seasonBarEngaged {
+                hasPresentedEpisodeBrowser = true
+            }
         }
     }
 
@@ -775,6 +804,8 @@ struct SeriesDetailView: View {
         guard !suppressesDuplicateHeroFocus else { return }
         SeriesFocusTrace.record("heroFocusAccepted")
         rearmEpisodeRailOnHeroFocusIfNeeded()
+        browserPresentationGeneration &+= 1
+        browserPresentationSettled = false
         browserEntry = .hero
         seasonBarEngaged = false
         browserHoldsFocus = false
@@ -859,7 +890,8 @@ struct SeriesDetailView: View {
         }
         .background {
             #if os(tvOS)
-            NativeFocusRegionObserver(isEnabled: !ignoresSystemFocusMoves) {
+            NativeFocusRegionObserver(isEnabled: !hasChildOnTop && !isReclaimingFocus) {
+                guard !ignoresSystemFocusMoves else { return }
                 SeriesFocusTrace.record("nativeSeasonEntry")
                 enterSeasonBrowser(onFocusEntered: onFocusEntered)
             }
@@ -902,7 +934,12 @@ struct SeriesDetailView: View {
                         ? PlozzTheme.Metrics.screenPadding + SeriesEpisodeBrowserLayout.seasonRequestFadeWidth
                         : PlozzTheme.Metrics.screenPadding
                 )
-                .padding(.leading, hasRequestAccessory ? PlozzTheme.Metrics.heroLeadingPadding : 0)
+                .padding(
+                    .leading,
+                    hasRequestAccessory
+                        ? PlozzTheme.Metrics.heroLeadingPadding
+                        : PlozzTheme.Metrics.screenVerticalPadding
+                )
                 // Headroom for the focused chip's lift so it is never clipped.
                 .padding(.vertical, 12)
             }
@@ -1156,6 +1193,7 @@ struct SeriesDetailView: View {
             episodeEntry: MediaRowEpisodeEntry(
                 phase: episodeEntryPhase,
                 isActive: browserEntry == .hero || seasonBarEngaged,
+                isEnabled: !holdsHeroFocusDuringEntrance,
                 onPlaceholderFocus: {
                     // Entering a loading slot is not an explicit choice of a
                     // season. Let the arriving resume answer select the right one.
@@ -1211,6 +1249,19 @@ struct SeriesDetailView: View {
         return currentEpisodes.isEmpty && upcomingPlaceholders.isEmpty ? .empty : .ready
     }
 
+    private var holdsHeroFocusDuringEntrance: Bool {
+        #if os(tvOS)
+        initialEpisode == nil && detailEntrance?.blocksNavigation == true
+            && detailEntrance?.isClosing != true
+        #else
+        false
+        #endif
+    }
+
+    private var showsLowerDetailContent: Bool {
+        hasPresentedEpisodeBrowser || entersBrowserOnOpen
+    }
+
     private func enterEpisodeBrowser(isPlaceholder: Bool, onFocusEntered: () -> Void) {
         guard !ignoresSystemFocusMoves else { return }
         let shouldReveal = !browserHoldsFocus || !recedeModel.isReceded
@@ -1219,6 +1270,9 @@ struct SeriesDetailView: View {
         browserHoldsFocus = true
         if !isPlaceholder { hasUserDirectedFocus = true }
         hasSettledOpeningFocus = true
+        if browserPresentationSettled && recedeModel.isReceded {
+            hasPresentedEpisodeBrowser = true
+        }
         if shouldReveal { onFocusEntered() }
     }
 
@@ -1914,11 +1968,14 @@ private struct SeasonRequestBoundaryModifier: ViewModifier {
                     .padding(.vertical, -SeriesEpisodeBrowserLayout.seasonBarFocusOverflow)
                 }
         } else {
-            // Exact pre-request rail geometry: the viewport begins at the hero
-            // keyline and allows focused pills to overflow its bounds.
+            // Keep the first chip on the hero keyline, but put its focus
+            // clearance inside the viewport instead of relying on overflow.
             content
                 .scrollClipDisabled()
-                .padding(.leading, PlozzTheme.Metrics.heroLeadingPadding)
+                .padding(
+                    .leading,
+                    max(0, PlozzTheme.Metrics.heroLeadingPadding - PlozzTheme.Metrics.screenVerticalPadding)
+                )
         }
     }
 }

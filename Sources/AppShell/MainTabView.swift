@@ -179,7 +179,7 @@ struct MainTabView: View {
     #if DEBUG
     private var liveTVTabLabel: some View {
         RootNavigationTabLabel(
-            title: Text("Live TV"),
+            title: Text("Live TV (Experimental)"),
             systemImage: "antenna.radiowaves.left.and.right",
             usesCompactSidebarText: navigationStyle == .sidebar
         )
@@ -492,6 +492,8 @@ struct MainTabView: View {
     /// switching chrome never lands on a destination the other style can't show.
     @SceneStorage("navigationRail.selection")
     private var railSelectionRaw = NavigationRailDestination.home.storageValue
+    @SceneStorage("mainTab.processLaunch") private var recordedProcessLaunch = ""
+    private static let processLaunch = UUID().uuidString
     /// Carries the currently-visible top-bar destination into rail/sidebar when
     /// the style changes, without erasing the separately remembered library
     /// destination. Cleared when the viewer chooses a real library-navigation
@@ -501,6 +503,7 @@ struct MainTabView: View {
     /// step aside. Owned here and injected, so the stacks that know their depth can
     /// report it without any of them knowing about the chrome.
     @State private var navigationChrome = NavigationChromeModel()
+    @State private var nativeSidebarFocus = NavigationDestinationFocusHandoff()
     /// The libraries the rail offers. Seeded from the per-profile snapshot on
     /// appearance (instant chrome) and then refreshed from live discovery.
     @State private var railLibraries: [AggregatedLibrary] = []
@@ -520,6 +523,7 @@ struct MainTabView: View {
     /// A title the in-player Cast card asked for, waiting to be pushed once the
     /// player has closed. Same hand-off as `pendingPersonRoute`.
     @State private var pendingTitleRoute: MediaItem?
+    @State private var retainsTitleHomeEntry = false
     /// Settings navigation identity owned above all three navigation shells.
     /// MainTabView passes the reference but never reads its path, so Settings
     /// pushes do not invalidate this large shell body.
@@ -532,6 +536,7 @@ struct MainTabView: View {
             // library selected in rail/sidebar mode, use the top bar, then return
             // without that library destination being erased.
             set: {
+                recordedProcessLaunch = Self.processLaunch
                 releaseExplicitLiveTVEntry(ifLeavingFor: destination(for: $0))
                 selectedTabRaw = resolvedTopBarTab($0).rawValue
             }
@@ -539,7 +544,10 @@ struct MainTabView: View {
     }
 
     private var resolvedSelectedTab: MainTab {
-        let stored = MainTab(rawValue: selectedTabRaw) ?? .home
+        let stored = mainTab(for: Self.launchDestination(
+            stored: destination(for: MainTab(rawValue: selectedTabRaw) ?? .home),
+            recordedProcess: recordedProcessLaunch, currentProcess: Self.processLaunch
+        ))
         if let startup = standaloneStartupDestination(
             current: destination(for: stored),
             destinations: topBarDestinations
@@ -616,7 +624,22 @@ struct MainTabView: View {
         if pendingStandaloneLiveTVEntry { onConsumeStandaloneLiveTVEntry?() }
     }
 
+    static func launchDestination(
+        stored: NavigationRailDestination, recordedProcess: String, currentProcess: String
+    ) -> NavigationRailDestination {
+        recordedProcess == currentProcess ? stored : .home
+    }
+
+    private func settleFreshLaunch() {
+        guard recordedProcessLaunch != Self.processLaunch else { return }
+        selectedTabRaw = MainTab.home.rawValue
+        railSelectionRaw = NavigationRailDestination.home.storageValue
+        libraryNavigationEntryOverride = nil
+        recordedProcessLaunch = Self.processLaunch
+    }
+
     private func releaseExplicitLiveTVEntry(ifLeavingFor destination: NavigationRailDestination) {
+        if destination != .home { retainsTitleHomeEntry = false }
         #if DEBUG
         if destination != .liveTV { retainsExplicitLiveTVEntry = false }
         #endif
@@ -625,6 +648,9 @@ struct MainTabView: View {
     private func includingExplicitLiveTVEntry(
         _ destinations: [NavigationRailDestination]
     ) -> [NavigationRailDestination] {
+        let destinations = Self.includingTitleHome(
+            destinations, isRequested: retainsTitleHomeEntry
+        )
         #if DEBUG
         return AppAdmissionNavigation.destinations(
             destinations,
@@ -655,6 +681,7 @@ struct MainTabView: View {
         Binding(
             get: { activeLibraryNavigationDestination },
             set: { destination in
+                recordedProcessLaunch = Self.processLaunch
                 releaseExplicitLiveTVEntry(ifLeavingFor: destination)
                 libraryNavigationEntryOverride = nil
                 railSelectionRaw = destination.storageValue
@@ -669,8 +696,12 @@ struct MainTabView: View {
             set: { destination in
                 switch destination {
                 case .profile:
+                    nativeSidebarFocus.cancel()
                     openProfileSwitcher()
                 case let .content(content):
+                    if content != activeLibraryNavigationDestination {
+                        nativeSidebarFocus.begin(content)
+                    }
                     libraryNavigationSelection.wrappedValue = content
                 }
             }
@@ -737,9 +768,25 @@ struct MainTabView: View {
         }
     }
 
+    private func openTitleFromLiveTV(_ item: MediaItem) {
+        retainsTitleHomeEntry = true
+        pendingTitleRoute = item
+        requireHomeDestination()
+    }
+
+    static func includingTitleHome(
+        _ destinations: [NavigationRailDestination], isRequested: Bool
+    ) -> [NavigationRailDestination] {
+        guard isRequested, !destinations.contains(.home) else { return destinations }
+        return [.home] + destinations
+    }
+
     /// The stored selection before pruning. Only used to notice divergence.
     private var storedRailSelection: NavigationRailDestination {
-        NavigationRailDestination(storageValue: railSelectionRaw) ?? .home
+        Self.launchDestination(
+            stored: NavigationRailDestination(storageValue: railSelectionRaw) ?? .home,
+            recordedProcess: recordedProcessLaunch, currentProcess: Self.processLaunch
+        )
     }
 
     /// Commits the pruning, so a destination that has genuinely gone away stops
@@ -1209,7 +1256,8 @@ struct MainTabView: View {
                 didConfigurePlaylist: onConfiguredIPTVPlaylist,
                 completeLibraryChannelPlayback: completeLibraryChannelPlayback,
                 isProfileAuthorized: isLiveTVProfileAuthorized,
-                usesNativeNavigation: true
+                usesNativeNavigation: true,
+                onOpenTitle: openTitleFromLiveTV
             ))
         #endif
         case .search:
@@ -1247,7 +1295,8 @@ struct MainTabView: View {
                 didConfigurePlaylist: onConfiguredIPTVPlaylist,
                 completeLibraryChannelPlayback: completeLibraryChannelPlayback,
                 isProfileAuthorized: isLiveTVProfileAuthorized,
-                usesNativeNavigation: true
+                usesNativeNavigation: true,
+                onOpenTitle: openTitleFromLiveTV
             ))
         #endif
         case .search:
@@ -1307,7 +1356,8 @@ struct MainTabView: View {
     }
 
     /// Native tvOS sidebar. Uses the same ordered/hidden library plan as custom
-    /// rail, but lets SwiftUI own presentation, focus and expansion.
+    /// rail, but lets SwiftUI own presentation and expansion. Content focus waits
+    /// for the selected page's appearance and first rendered frame.
     ///
     /// Keep every tab's content and label erased at this boundary. Adding the
     /// Watchlist destination made the nested `TabContentBuilder` type large enough
@@ -1328,7 +1378,12 @@ struct MainTabView: View {
 
             ForEach(sidebarDestinations, id: \.storageValue) { destination in
                 Tab(value: NativeSidebarDestination.content(destination)) {
-                    AnyView(sidebarDestinationContent(destination).tvNavigationExitProtectionContent())
+                    AnyView(NativeSidebarFocusDestination(
+                        destination: destination,
+                        selection: activeLibraryNavigationDestination,
+                        handoff: nativeSidebarFocus,
+                        content: sidebarDestinationContent(destination)
+                    ).tvNavigationExitProtectionContent())
                 } label: {
                     rootNavigationLabel(for: destination)
                 }
@@ -1336,6 +1391,12 @@ struct MainTabView: View {
         }
         .tabViewStyle(.sidebarAdaptable)
         .tvNavigationExitProtection(isEnabled: navigationStyleModel.preventsAccidentalExit)
+        .onChange(of: activeLibraryNavigationDestination) { _, destination in
+            if let request = nativeSidebarFocus.request, request.destination != destination {
+                nativeSidebarFocus.cancel()
+            }
+        }
+        .onDisappear { nativeSidebarFocus.cancel() }
     }
 
     /// Plozz's own chrome: the collapsible library rail plus the selected
@@ -1349,6 +1410,7 @@ struct MainTabView: View {
             onOpenProfileSwitcher: openProfileSwitcher,
             chrome: navigationChrome,
             content: railContent,
+            contentDestination: activeLibraryNavigationDestination,
             preventsAccidentalExit: navigationStyleModel.preventsAccidentalExit
         )
         .environment(navigationChrome)
@@ -1365,6 +1427,7 @@ struct MainTabView: View {
         ZStack {
             railDestination
                 .opacity(showsLiveTV ? 0 : 1)
+                .disabled(showsLiveTV)
                 .allowsHitTesting(!showsLiveTV)
                 .accessibilityHidden(showsLiveTV)
 
@@ -1378,9 +1441,11 @@ struct MainTabView: View {
                 didConfigurePlaylist: onConfiguredIPTVPlaylist,
                 completeLibraryChannelPlayback: completeLibraryChannelPlayback,
                 isProfileAuthorized: isLiveTVProfileAuthorized,
-                onExpandedChange: updateLiveTVChrome
+                onExpandedChange: updateLiveTVChrome,
+                onOpenTitle: openTitleFromLiveTV
             )
             .opacity(showsLiveTV ? 1 : 0)
+            .disabled(!showsLiveTV)
             .allowsHitTesting(showsLiveTV)
             .accessibilityHidden(!showsLiveTV)
         }
@@ -1495,6 +1560,7 @@ struct MainTabView: View {
         let _ = PlozzBodyRate.tick("MainTabView")
         return shellContent
         .onChange(of: pendingStandaloneLiveTVEntry, initial: true) { _, _ in
+            settleFreshLaunch()
             settleStandaloneStartup()
         }
         .background {

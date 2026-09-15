@@ -88,10 +88,12 @@ private struct CastMemberCard: View {
             onFocusChange: { focused in
                 if focused { onFocusEntered?() }
             },
+            nativeName: person.name,
             avatar: { avatar },
             caption: { _ in
                 VStack(spacing: 2) {
                     Text(person.name)
+                        .accessibilityIdentifier("cast-name-\(person.id)")
                         .font(.system(size: 22 * Self.scale, weight: .semibold))
                         .foregroundStyle(.primary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -106,6 +108,7 @@ private struct CastMemberCard: View {
                 .multilineTextAlignment(.center)
             }
         )
+        .plozzCircularFocusStyle()
     }
 
     @ViewBuilder

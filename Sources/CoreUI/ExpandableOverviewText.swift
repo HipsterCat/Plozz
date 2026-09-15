@@ -91,43 +91,26 @@ public struct ExpandableOverviewText: View {
     public var body: some View {
         Group {
             if isTruncated {
-                Button { isExpanded = true } label: {
-                    // The padding belongs to the *label*: PlozzCardButtonStyle
-                    // supplies the glass surface but no inset, so without this
-                    // the surface hugs the glyphs and reads as a different
-                    // control from the About card it is meant to match.
-                    clipped.padding(Self.cardPadding)
-                }
-                .buttonStyle(
-                    PlozzCardButtonStyle(
-                        cornerRadius: Self.cardCornerRadius,
-                        focusedScale: PlozzTheme.Metrics.readOnlyFocusedCardScale
-                    )
-                )
-                // `fullScreenCover` on tvOS, NOT `sheet`.
-                //
-                // A sheet is presented by `UISheetPresentationController`, which
-                // lays the PRESENTING hierarchy out synchronously as part of its
-                // transition. Behind this button that hierarchy is a person or
-                // title page full of `MediaRowView` rails, so opening the card
-                // rebuilt every card in every row inside one layout pass and blew
-                // the 10-second scene-update watchdog — the device kills the app
-                // with `0x8BADF00D`, which is the freeze. A full-screen cover
-                // does not run that layout dance, and a sheet was never the right
-                // idiom on tvOS anyway: this already draws its own dimmed
-                // backdrop and card.
-                #if os(tvOS)
-                .fullScreenCover(isPresented: $isExpanded) { expandedCard }
-                #else
-                .sheet(isPresented: $isExpanded) { expandedCard }
-                #endif
+                Button { isExpanded = true } label: { clipped }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(palette.primaryText.opacity(0.92))
             } else {
-                // Nothing to open, so no button — a focusable control that does
-                // nothing reads as broken (the cast tiles spent a release like
-                // that). Padded identically so the text sits in the same place
-                // whether or not it happens to overflow.
+                clipped
+                    .foregroundStyle(palette.primaryText.opacity(0.92))
+            }
+        } else if isTruncated {
+            Button { isExpanded = true } label: {
+                // Card styling supplies the surface; the label owns its inset.
                 clipped.padding(Self.cardPadding)
             }
+            .buttonStyle(
+                PlozzCardButtonStyle(
+                    cornerRadius: Self.cardCornerRadius,
+                    focusedScale: PlozzTheme.Metrics.readOnlyFocusedCardScale
+                )
+            )
+        } else {
+            clipped.padding(Self.cardPadding)
         }
     }
 

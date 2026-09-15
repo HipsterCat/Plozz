@@ -145,7 +145,7 @@ private struct BrowseButton: View {
     let title: LocalizedStringResource
     let action: () -> Void
 
-    @FocusState private var isFocused: Bool
+    @PlozzCardFocus private var isFocused: Bool
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
     @Environment(\.plozzMetrics) private var metrics
     @Environment(\.plozzCardFocusStyle) private var focusStyle
@@ -159,23 +159,64 @@ private struct BrowseButton: View {
     }
 
     var body: some View {
+        #if os(tvOS)
+        if focusStyle.usesSystemEffect {
+            NativeMusicBrowseButton(title: title, action: action)
+        } else {
+            customButton
+        }
+        #else
+        customButton
+        #endif
+    }
+
+    private var customButton: some View {
         Text(title)
             .font(.system(size: metrics.cardTitleFontSize, weight: .semibold))
             .foregroundStyle(titleColor)
             .padding(.horizontal, PlozzTheme.Spacing.xLarge)
             .frame(height: NowPlayingCard.nominalHeight)
             .plozzGlassCard(cornerRadius: metrics.landscapeCardCornerRadius, isFocused: surfaceFocused)
-            .focusableCard(isFocused: $isFocused, cornerRadius: metrics.landscapeCardCornerRadius, action: action)
             .plozzCardRasterize(reduceTransparency: reduceTransparency)
-            .shadow(color: .black.opacity(isFocused ? 0.36 : 0.15), radius: isFocused ? 20 : 8, y: isFocused ? 10 : 4)
+            .plozzRestingCardShadow(isFocused: isFocused)
             .plozzCardFocusLift(
                 isFocused: isFocused,
                 cornerRadius: metrics.landscapeCardCornerRadius,
                 outlineScale: PlozzTheme.Metrics.mediumFocusedCardScale
             )
+            .focusableCard(isFocused: $isFocused, cornerRadius: metrics.landscapeCardCornerRadius, action: action)
             .plozzCardFocusTransition(isFocused: isFocused)
     }
 }
+
+#if os(tvOS)
+private struct NativeMusicBrowseButton: View {
+    let title: LocalizedStringResource
+    let action: () -> Void
+    @Environment(\.plozzMetrics) private var metrics
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: metrics.cardTitleFontSize, weight: .semibold))
+        }
+        .modifier(NativeMusicBrowseStyle())
+        .buttonBorderShape(.roundedRectangle(radius: metrics.landscapeCardCornerRadius))
+        .fixedSize(horizontal: true, vertical: false)
+    }
+}
+
+private struct NativeMusicBrowseStyle: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(tvOS 26.0, *) {
+            content.buttonStyle(.glass)
+        } else {
+            content.buttonStyle(.bordered)
+        }
+    }
+}
+#endif
 
 /// A horizontal rail with a title.
 private struct MusicRow<Content: View>: View {
@@ -188,6 +229,7 @@ private struct MusicRow<Content: View>: View {
     @Environment(\.plozzMetrics) private var metrics
     @Environment(\.plozzNavigationContentInset) private var navigationContentInset
     @Environment(\.plozzPinnedSidebarActive) private var pinnedSidebarActive
+    @Environment(\.plozzCardFocusStyle) private var focusStyle
 
     var body: some View {
         VStack(alignment: .leading, spacing: metrics.sectionTitleSpacing) {
@@ -216,13 +258,12 @@ private struct MusicRow<Content: View>: View {
                         content()
                     }
                     .padding(.horizontal, PlozzTheme.Metrics.screenPadding)
-                    // Keep the rail clipping (no `scrollClipDisabled`) so the focus
-                    // engine holds the first/last card at its inset, and reserve room
-                    // *inside* the clip for the focused card's lift + shadow. The
-                    // negative outer padding restores the original vertical inset, so
-                    // the row's height is unchanged — only the clip grows.
+                    // Reserve space for focus growth without changing row spacing.
                     .padding(.vertical, metrics.railShadowClearance)
                 }
+                #if os(tvOS)
+                .scrollClipDisabled(focusStyle.usesSystemEffect)
+                #endif
                 // Match the shared rails: a tight `railTopPadding`-based gap above the
                 // cards (not the wide `railVerticalPadding` used below the row), so the
                 // section header hugs the cards instead of floating far above them.
@@ -343,7 +384,7 @@ private struct GenreCard: View {
     /// always differ in colour.
     let index: Int
     let action: () -> Void
-    @FocusState private var isFocused: Bool
+    @PlozzCardFocus private var isFocused: Bool
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
     @Environment(\.plozzCardFocusStyle) private var focusStyle
 
@@ -380,22 +421,28 @@ private struct GenreCard: View {
                 .padding(18)
         }
         .frame(width: 280, height: 160)
-        .clipShape(shape)
+        .plozzCardArtworkClip(shape)
         .overlay {
-            shape.strokeBorder(.white.opacity(showsFocusRim ? 0.95 : 0.10), lineWidth: showsFocusRim ? 4 : 1)
+            if !focusStyle.usesSystemEffect {
+                shape.strokeBorder(.white.opacity(showsFocusRim ? 0.95 : 0.10), lineWidth: showsFocusRim ? 4 : 1)
+            }
         }
         // Same proven modifier order as MusicCard (works in this exact grid):
         // visual → focusableCard → rasterize → shadow → scale. `plozzCardRasterize`
         // flattens the layer tree into one GPU pass; omitting it on a `.focusable`
         // card in this grid is what froze the render server.
-        .focusableCard(isFocused: $isFocused, cornerRadius: PlozzTheme.Metrics.Radius.card, action: action)
         .plozzCardRasterize(reduceTransparency: reduceTransparency)
-        .shadow(color: .black.opacity(isFocused ? 0.4 : 0.15), radius: isFocused ? 22 : 8, y: isFocused ? 12 : 4)
+        .shadow(
+            color: .black.opacity(focusStyle.usesSystemEffect ? 0 : (isFocused ? 0.4 : 0.15)),
+            radius: isFocused && !focusStyle.usesSystemEffect ? 22 : 8,
+            y: isFocused && !focusStyle.usesSystemEffect ? 12 : 4
+        )
         .plozzCardFocusLift(
             isFocused: isFocused,
             cornerRadius: PlozzTheme.Metrics.Radius.card,
             outlineScale: PlozzTheme.Metrics.mediumFocusedCardScale
         )
+        .focusableCard(isFocused: $isFocused, cornerRadius: PlozzTheme.Metrics.Radius.card, action: action)
         .plozzCardFocusTransition(isFocused: isFocused)
     }
 }
