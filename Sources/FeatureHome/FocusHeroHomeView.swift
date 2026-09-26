@@ -563,8 +563,10 @@ struct FocusHeroSkeletonView: View {
                 onSelect: { _ in }
             )
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { firstRowHeight = $0 }
+            // A blank title keeps the peek at the real next row's height; its
+            // name isn't known until the rows arrive.
             MediaRowView(
-                title: nil,
+                title: Text(verbatim: " "),
                 items: [],
                 style: .poster,
                 loadingPlaceholderCount: Self.fallbackCount,
