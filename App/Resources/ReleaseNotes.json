@@ -2,6 +2,51 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/044",
+      "version": "2026.9.25",
+      "build": 44,
+      "releasedAt": "2026-09-27",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            {
+              "text": "Browse with the new Showcase Home layout: artwork and details follow the selected title, with optional card titles, ratings, and a Discover row.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Choose Fullscreen Hero or Showcase during setup or in Home Layout. Existing users get a one-time chooser that preserves their current settings.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            {
+              "text": "More consistent poster alignment, loading placeholders, and native focus spacing.",
+              "platforms": ["tvOS"]
+            },
+            "Clearer device subtitle-style matching and font lists, with Apple's subtitle fonts grouped separately.",
+            {
+              "text": "Hold Left or Right to repeat subtitle adjustments, and press Right to open subtitle submenus.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            {
+              "text": "Left and Right no longer jump from subtitle adjustments to Back.",
+              "platforms": ["tvOS"]
+            },
+            "Stopped old watch updates from resurfacing titles in Continue Watching or undoing watched status while another server is offline."
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/043",
       "version": "2026.9.25",
       "build": 43,

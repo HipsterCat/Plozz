@@ -212,12 +212,12 @@ private struct MobileSubtitleFontView: View {
                 }
             }
             Section {
-                NavigationLink("System") {
+                NavigationLink("System Fonts") {
                     List {
                         Section { systemFontRows(SubtitleSystemFonts.captionFonts) }
                         Section { systemFontRows(SubtitleSystemFonts.installedFonts) }
                     }
-                    .navigationTitle("System")
+                    .navigationTitle("System Fonts")
                     .navigationBarTitleDisplayMode(.inline)
                 }
                 .font(.body)

@@ -387,7 +387,7 @@ struct SubtitleStylePanel: View {
 
     private var systemFontRow: StyleRowSpec {
         StyleRowSpec(
-            slot: SubtitleFontFamily.allCases.count, title: "System",
+            slot: SubtitleFontFamily.allCases.count, title: "System Fonts",
             kind: .submenu(
                 summary: effectiveStyle.fontDescriptor.map { Text(verbatim: $0.displayName) }
                     ?? effectiveStyle.systemFont.map(SubtitleSystemFonts.displayName) ?? Text(verbatim: ""),

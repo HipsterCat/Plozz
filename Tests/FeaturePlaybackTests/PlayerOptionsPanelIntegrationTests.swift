@@ -31,7 +31,7 @@ final class PlayerOptionsPanelIntegrationTests: XCTestCase {
         XCTAssertFalse(Screen.sync.isStyleFamily)
         XCTAssertEqual(
             String(localized: PlayerOptionsPanel.headerTitle(for: .subtitles, subtitleScreen: .styleSystemFont)),
-            String(localized: LocalizedStringResource("System"))
+            String(localized: LocalizedStringResource("System Fonts"))
         )
         XCTAssertEqual(
             String(localized: PlayerOptionsPanel.headerTitle(for: .subtitles, subtitleScreen: .styleFileFormatting)),

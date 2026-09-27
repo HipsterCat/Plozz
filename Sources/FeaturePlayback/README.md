@@ -111,7 +111,7 @@ starts with one fine step; held clicks repeat after a short delay and accelerate
 stopping on release, cancellation, focus loss, dismissal, or app deactivation.
 The scope also declares horizontal input ownership so window-level sidebar
 observers cannot mistake an adjustment's unchanged focus for a page boundary.
-Right opens submenu rows, including the nested System font list, once per
+Right opens submenu rows, including the nested System Fonts list, once per
 click/swipe; Select remains available and holding Right does not repeat navigation.
 All subtitle-style screens retain the same native input scope so changing screens
 does not tear down the focus binding before the selected font receives focus.
@@ -134,10 +134,10 @@ exposed as a long list of switches. The separate **Subtitle file formatting**
 page offers only supported controls: authored positions, colors, and bold/italic
 emphasis. The primary appearance page contains the viewer's own style controls.
 
-`Font > System` puts all eight Apple subtitle families first, separated from the
+`Font > System Fonts` puts all eight Apple subtitle families first, separated from the
 device's installed font families by a divider on TV and native sections on mobile.
 Installed families come from UIKit rather than a fixed OS-specific list.
-The main list retains Plozz's curated fonts; its System submenu uses normal menu
+The main list retains Plozz's curated fonts; its System Fonts submenu uses normal menu
 typography and a separate divider/section rather than another font preview.
 Selecting a system font alone
 does not enable system appearance or overwrite other style controls. Its choice

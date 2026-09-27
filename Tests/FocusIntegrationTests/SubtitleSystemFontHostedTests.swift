@@ -30,7 +30,7 @@ final class SubtitleSystemFontHostedTests: XCTestCase {
         XCTAssertEqual(PlayerControls.SubtitleScreen.styleSystemFont.parent, .styleFont)
         XCTAssertTrue(PlayerControls.SubtitleScreen.styleSystemFont.isStyleFamily)
         var previousInputScope: UIViewController?
-        for (screen, title) in [(PlayerControls.SubtitleScreen.styleFont, "System"),
+        for (screen, title) in [(PlayerControls.SubtitleScreen.styleFont, "System Fonts"),
                                 (.styleSystemFont, "Small Capitals")] {
             state.screen = screen
             try await waitUntil {

@@ -146,7 +146,7 @@ final class SubtitleStyleInputTests: XCTestCase {
             format: "label CONTAINS %@", "OpenDyslexic"
         )).firstMatch.waitForExistence(timeout: 5))
         let system = app.buttons.matching(NSPredicate(
-            format: "label == %@ OR label BEGINSWITH %@", "System", "System,"
+            format: "label == %@ OR label BEGINSWITH %@", "System Fonts", "System Fonts,"
         )).firstMatch
         for _ in 0..<32 where !system.hasFocus { XCUIRemote.shared.press(.down) }
         XCTAssertTrue(system.hasFocus)

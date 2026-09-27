@@ -470,7 +470,7 @@ struct PlayerOptionsPanel: View {
         )
         case .style: return "Subtitle Style"
         case .styleFont: return "Font"
-        case .styleSystemFont: return "System"
+        case .styleSystemFont: return "System Fonts"
         case .styleOutline: return "Shadow & Outline"
         case .styleBackground: return "Background"
         case .styleDual: return "Dual Subtitles"
