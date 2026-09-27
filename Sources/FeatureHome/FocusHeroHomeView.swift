@@ -38,10 +38,8 @@ enum FocusHeroLayout {
     static var screenHeight: CGFloat { HomeHeroLayout.screenHeight }
     static var screenWidth: CGFloat { HomeHeroLayout.screenWidth }
     /// What shows of the next row under the pinned one: its title and the top
-    /// edge of its cards. The focus engine only moves to something on screen, so
-    /// this sliver is also what lets Down reach it. A row's cards start about 62pt
-    /// below its top (title, spacing and lift room), so this leaves roughly 30pt
-    /// of card on screen; much less and Down only works some of the time.
+    /// edge of its cards. Keep real artwork visible below the heading and its
+    /// spacing so the native focus engine can reach it with Down.
     static let nextRowPeek: CGFloat = 96
     /// Keeps the hero column usable if a row ever measures unexpectedly tall.
     static let lowestSlotTop: CGFloat = 360
@@ -54,9 +52,9 @@ enum FocusHeroLayout {
     /// The gap between rows. Tighter than the classic Home's: rows here are
     /// read one at a time, and every point saved lets the rows sit lower and
     /// leaves the art more room.
-    static let rowSpacing: CGFloat = 0
+    static let rowSpacing: CGFloat = 16
     static let rowBottomTightening: CGFloat = 12
-    static let activeTitleLift: CGFloat = 28
+    static let activeTitleLift: CGFloat = 20
     /// How much of the screen's width the art takes.
     static let artWidthFraction: CGFloat = 2.0 / 3.0
     /// The outgoing row fades through a broad band; its own mask removes any
@@ -72,7 +70,7 @@ enum FocusHeroLayout {
     /// the extra size.
     static let logoBox = CGSize(width: 440, height: 124)
     /// How much closer a row's title sits to its cards than on the classic Home.
-    static let rowTitleTightening: CGFloat = 30
+    static let rowTitleTightening: CGFloat = 22
     /// With the top tab bar the column starts below it: nothing scrolls here, so
     /// the bar never tucks away the way it does over the carousel.
     static let columnTopUnderTabBar: CGFloat = 150

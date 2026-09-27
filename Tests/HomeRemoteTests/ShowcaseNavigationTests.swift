@@ -178,6 +178,14 @@ final class ShowcaseNavigationTests: XCTestCase {
             .min { $0.frame.minX < $1.frame.minX }
         let next = try XCTUnwrap(preview)
         let inactiveGap = next.frame.minY - inactiveTitle.frame.maxY
+        let gapAboveHeading = inactiveTitle.frame.minY - first.frame.maxY
+        // Native button frames include 20pt vertical focus margins at rest.
+        XCTAssertEqual(gapAboveHeading, focusStyle == "system" ? 30 : 44, accuracy: 0.5)
+        XCTAssertEqual(inactiveGap, focusStyle == "system" ? -10 : 10, accuracy: 0.5)
+        let previewScreenshot = XCTAttachment(screenshot: app.screenshot())
+        previewScreenshot.name = "showcase-preview-spacing-\(focusStyle)"
+        previewScreenshot.lifetime = .keepAlways
+        add(previewScreenshot)
         XCTAssertGreaterThan(app.frame.maxY - next.frame.minY, 20, "Down needs real visible card area.")
         XCUIRemote.shared.press(.down)
         let poster = focusedCard(in: app)
@@ -188,7 +196,13 @@ final class ShowcaseNavigationTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(poster.frame.height, 390)
         XCTAssertEqual(poster.label, "Fixture movie 24", "Hidden captions must retain the media title.")
         XCTAssertGreaterThan(activeGap, 8, "Focus growth must leave clear space beneath the row label.")
+        XCTAssertEqual(activeGap, focusStyle == "system" ? 10 : 30, accuracy: 0.5,
+                       "More resting space must preserve the existing focused heading clearance.")
         XCTAssertGreaterThan(activeGap, inactiveGap, "The active heading makes room for focus; previews stay compact.")
+        let spacing = XCTAttachment(string: "above=\(gapAboveHeading)\nbelow=\(inactiveGap)\nactive=\(activeGap)")
+        spacing.name = "showcase-heading-spacing-\(focusStyle)"
+        spacing.lifetime = .keepAlways
+        add(spacing)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "showcase-poster-\(focusStyle)"
         screenshot.lifetime = .keepAlways

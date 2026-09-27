@@ -30,8 +30,9 @@ fallback when the user's server has no attached trailer.
 
 `FocusHeroHomeView` keeps focus-driven movement and hero updates outside the
 row-building view. Posters use the profile's full normal poster dimensions.
-Preview headings sit close to their cards; only the active heading lifts for
-focus clearance. That movement is a title-only drawing offset, not a rail
+Preview headings have a 16pt inter-row spacer above them and more room below
+before their cards. Only the active heading lifts, preserving its focus
+clearance. That movement is a title-only drawing offset, not a rail
 relayout. Native card/shadow drawing bounds remain intact.
 The 200ms row transition exposes the next native focus target before rapid
 remote repeats. The schedule badge sits 16pt above the logo slot; Showcase
