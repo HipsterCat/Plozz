@@ -113,6 +113,8 @@ The scope also declares horizontal input ownership so window-level sidebar
 observers cannot mistake an adjustment's unchanged focus for a page boundary.
 Right opens submenu rows, including the nested System font list, once per
 click/swipe; Select remains available and holding Right does not repeat navigation.
+All subtitle-style screens retain the same native input scope so changing screens
+does not tear down the focus binding before the selected font receives focus.
 The matching option names the device directly, without a focus-dependent helper
 paragraph changing the rows' positions.
 Explicit system font, text-color and opacity overrides take precedence over

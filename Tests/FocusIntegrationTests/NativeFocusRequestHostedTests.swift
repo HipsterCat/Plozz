@@ -9,6 +9,15 @@ import CoreModels
 
 @MainActor
 final class NativeFocusRequestHostedTests: XCTestCase {
+    func testFractionalPosterHeightCannotRoundDownIntoItsCaption() {
+        let poster = NativeTVPoster<EmptyView>.Poster(image: nil)
+        let size = CGSize(width: 388, height: 218.25)
+        poster.contentSize = size
+        let container = NativeTVPoster<EmptyView>.Container(poster: poster)
+        XCTAssertEqual(container.intrinsicContentSize, CGSize(width: 388, height: 219))
+        XCTAssertEqual(poster.contentSize, size, "Rounding the layout slot must not enlarge the image.")
+    }
+
     func testNativePosterLayoutSlotDoesNotChangeWhenFocusMarginsSettle() async throws {
         let fixture = try await makeFixture()
         defer { fixture.close() }

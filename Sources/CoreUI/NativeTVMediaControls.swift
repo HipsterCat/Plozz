@@ -423,7 +423,8 @@ struct NativeTVPoster<Overlay: View>: UIViewRepresentable {
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
         override var intrinsicContentSize: CGSize {
-            poster.contentSize
+            // SwiftUI must not round a fractional artwork height down into its caption.
+            CGSize(width: poster.contentSize.width, height: ceil(poster.contentSize.height))
         }
 
         override var preferredFocusEnvironments: [any UIFocusEnvironment] { [poster] }

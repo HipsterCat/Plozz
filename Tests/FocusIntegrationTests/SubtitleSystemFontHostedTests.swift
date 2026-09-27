@@ -29,6 +29,7 @@ final class SubtitleSystemFontHostedTests: XCTestCase {
         }
         XCTAssertEqual(PlayerControls.SubtitleScreen.styleSystemFont.parent, .styleFont)
         XCTAssertTrue(PlayerControls.SubtitleScreen.styleSystemFont.isStyleFamily)
+        var previousInputScope: UIViewController?
         for (screen, title) in [(PlayerControls.SubtitleScreen.styleFont, "System"),
                                 (.styleSystemFont, "Small Capitals")] {
             state.screen = screen
@@ -37,6 +38,11 @@ final class SubtitleSystemFontHostedTests: XCTestCase {
                 return state.focusedRow == state.requestedRow && frame.width > 500
                     && window.bounds.contains(frame)
             }
+            let inputScope = try XCTUnwrap(self.inputScope(in: try XCTUnwrap(window.rootViewController)))
+            if let previousInputScope {
+                XCTAssertTrue(inputScope === previousInputScope, "Changing font screens must preserve the native input scope.")
+            }
+            previousInputScope = inputScope
             let image = DetailTransitionSnapshot.image(of: window)
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
@@ -57,6 +63,11 @@ final class SubtitleSystemFontHostedTests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
         }
+    }
+
+    private func inputScope(in controller: UIViewController) -> UIViewController? {
+        if controller is any HorizontalNavigationInputOwning { return controller }
+        return controller.children.lazy.compactMap { self.inputScope(in: $0) }.first
     }
 
     private func focusFrame(in window: UIWindow) -> CGRect? {

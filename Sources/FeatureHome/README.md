@@ -54,7 +54,8 @@ is ignored when reading older settings without resetting the remaining choices.
 Showcase's optional titles under cards remain in Customize Home > Home Layout;
 they do not control title visibility elsewhere in the app.
 
-Native poster layout slots use artwork size on both axes. TVUIKit's focus
+Native poster layout slots use artwork size on both axes, rounding fractional
+heights up so SwiftUI cannot round artwork down into its caption. TVUIKit's focus
 margins settle after realization and draw outside that slot; feeding their
 changing height into a lazy row shifts both the pinned row and hero during deep
 horizontal scrolling. Hosted native-poster coverage checks this before and

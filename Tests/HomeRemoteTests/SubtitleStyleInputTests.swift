@@ -171,6 +171,19 @@ final class SubtitleStyleInputTests: XCTestCase {
         image.name = "Apple subtitle fonts and installed-font divider"
         image.lifetime = .keepAlways
         add(image)
+        XCUIRemote.shared.press(.up)
+        XCTAssertTrue(button(startingWith: "Small Capitals", in: app).hasFocus)
+        XCUIRemote.shared.press(.select)
+        let font = button(startingWith: "Font", in: app)
+        XCTAssertTrue(font.waitForExistence(timeout: 5))
+        for _ in 0..<3 where !font.hasFocus { XCUIRemote.shared.press(.down) }
+        XCTAssertTrue(font.hasFocus)
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(system.waitForExistence(timeout: 5))
+        XCTAssertTrue(system.hasFocus)
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(button(startingWith: "Small Capitals", in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(button(startingWith: "Small Capitals", in: app).hasFocus)
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(system.waitForExistence(timeout: 5))
         XCUIRemote.shared.press(.menu)

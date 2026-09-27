@@ -42,7 +42,7 @@ struct SubtitleStylePanel: View {
     private var effectiveStyle: SubtitleStyle { SystemCaptionStyle.shared.resolved(model.subtitleStyle) }
 
     var body: some View {
-        Group {
+        styleInputScope(styleInputRows) {
             switch screen {
             case .style:
                 // Image-based captions cannot be restyled.
@@ -67,6 +67,16 @@ struct SubtitleStylePanel: View {
         ))
     }
 
+    private var styleInputRows: [StyleRowSpec] {
+        switch screen {
+        case .style: styleMainRows.rows
+        case .styleFont: [systemFontRow]
+        case .styleOutline: styleOutlineRows
+        case .styleBackground: styleBackgroundRows
+        case .styleDual where offersDualSubtitles: styleDualRows
+        default: []
+        }
+    }
 
     struct StyleRowSpec: Identifiable {
         enum Kind {
@@ -99,9 +109,7 @@ struct SubtitleStylePanel: View {
     /// + profile persistence). Back lives in the panel header.
     @ViewBuilder
     private func styleScreen(_ rows: [StyleRowSpec], dividerBefore: Int? = nil) -> some View {
-        styleInputScope(rows) {
-            styleRows(rows, dividerBefore: dividerBefore)
-        }
+        styleRows(rows, dividerBefore: dividerBefore)
     }
 
     @ViewBuilder
@@ -362,7 +370,23 @@ struct SubtitleStylePanel: View {
     @ViewBuilder
     private var styleFontScreen: some View {
         let current = effectiveStyle.fontFamily
-        let systemRow = StyleRowSpec(
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(SubtitleFontFamily.allCases.enumerated()), id: \.offset) { idx, family in
+                fontChoiceRow(family, index: idx, isSelected: effectiveStyle.fontDescriptor == nil && effectiveStyle.systemFont == nil && family == current)
+            }
+            PlozzDivider()
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+            styleRow(systemFontRow)
+                .font(.body)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .top)
+    }
+
+    private var systemFontRow: StyleRowSpec {
+        StyleRowSpec(
             slot: SubtitleFontFamily.allCases.count, title: "System",
             kind: .submenu(
                 summary: effectiveStyle.fontDescriptor.map { Text(verbatim: $0.displayName) }
@@ -370,21 +394,6 @@ struct SubtitleStylePanel: View {
                 open: { openScreen(.styleSystemFont) }
             )
         )
-        styleInputScope([systemRow]) {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(SubtitleFontFamily.allCases.enumerated()), id: \.offset) { idx, family in
-                    fontChoiceRow(family, index: idx, isSelected: effectiveStyle.fontDescriptor == nil && effectiveStyle.systemFont == nil && family == current)
-                }
-                PlozzDivider()
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
-                styleRow(systemRow)
-                    .font(.body)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .top)
-        }
     }
 
     @ViewBuilder
