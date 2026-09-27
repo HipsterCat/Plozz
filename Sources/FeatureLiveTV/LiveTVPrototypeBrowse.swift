@@ -1,4 +1,3 @@
-#if DEBUG
 import PlozzCoreUI
 import CoreModels
 import FeatureLiveTVCore
@@ -1245,4 +1244,3 @@ private struct PrototypeSynchronizedTimeline<Content: View>: View {
         )
     }
 }
-#endif

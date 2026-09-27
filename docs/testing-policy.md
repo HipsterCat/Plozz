@@ -90,7 +90,7 @@ suites and the reason each was selected.
 
 ### 3. Fail fast — you learn a result in seconds, not minutes
 
-Tests *execute* in well under half a minute, but `xcodebuild` on this Mac
+Most tests execute quickly, but `xcodebuild` on this Mac
 routinely stalls for minutes in teardown (result bundle + simulator shutdown)
 after the tests have already finished. Two things used to turn that into a
 ~7-minute wait for an answer that existed at second six:
@@ -123,7 +123,37 @@ last bundle reports, allowing Xcode's 600-second simulator diagnostic collection
 to finish. This is a ceiling, not a fixed wait. A readable result bundle is
 always required; reaching the grace period alone never interrupts its writer.
 
+Large scale fixtures emit unbuffered checkpoints from completed work. The
+million-programme XMLTV test reports preparation phases and every 10,000 indexed
+programmes, so a slow, progressing import is not mistaken for a stalled build.
+Its million-entry workload, assertions, and the no-output watchdog remain intact.
+No timer emits artificial progress while an operation is stuck.
+
 ### Simulator readiness and authoritative results
+
+`NavigationLibrariesDetailViewTests` hosts the navigation arrangement editor
+inside a `List` without a navigation environment object. Both shells must pass
+their current profile's `NavigationStyleSettingsModel` explicitly. The test also
+checks that an unrelated ancestor model cannot redirect edits to another profile.
+On iOS, Settings can be hidden from the tab bar because page-header controls
+remain available. The default tvOS policy still keeps Settings visible.
+`NavigationStyleSettingsStoreTests` covers cross-platform persistence, the
+last-destination safeguard, and iPhone overflow labels when six tabs are enabled.
+On iPhone and compact iPad layouts, overflow uses four direct native tabs plus a
+Plozz More destination with themed shortcut rows. Overflow destinations share
+that tab's navigation stack; Settings opens its existing sheet directly.
+Returning to More stops the hidden Live TV preview, and changing the enabled
+order re-resolves the current destination. Regular-width iPad tabs remain native.
+
+The focus host and test bundle share one `AppShell` package product. Overlapping
+direct products can promote `CoreUI` into a separate framework on XCTest's
+`DYLD_FRAMEWORK_PATH`, shadowing Apple's private framework and crashing UIKit
+asset loading; different package roots can also duplicate runtime classes.
+The default hosted build directory is `focus-shared-root-derived-data`, keeping
+stale frameworks from the old graph out of the loader path without deleting them.
+Hosted runs preserve raw output, reuse an explicitly configured package checkout,
+and disable automatic system-diagnostic collection without skipping tests or
+result bundles. An unreadable result preserves the original command failure.
 
 Before starting XCTest, the runner waits for `simctl bootstatus -b` to finish,
 including BackBoard and the system app. A simulator marked Booted can still be
@@ -405,6 +435,19 @@ Pin decorations to the native overlay container with constraints; do not rewrite
 their frames during native focus layout.
 `TVCardView` hosts live content in its documented `contentView`. Neither control
 overrides `focusSizeIncrease`, adds transforms or manufactures lighting/outlines.
+Home Libraries use the shared `NativeArtworkPoster` in System focus, with 16:9
+artwork owned by `TVPosterView` and `SystemPosterCaption` outside the native
+surface. Neither library nor server text may become part of a `TVCardView`.
+The native artwork carries accessible names (including localized synthesized
+library names) and the original selection action; the caption reserves its own
+focus travel without scaling or changing the row footprint. Existing music
+callers retain the shared poster's square default.
+Custom Highlight/Outline Library cards keep their inner artwork clip so
+fill-scaled images cannot cover card padding or caption spacing.
+`NativeLibraryCardHostedTests` loads controlled loopback artwork into real Library
+cards inside lazy rails, checking aspect ratios, unchanged slot widths, caption
+separation, native activation, missing artwork, and custom card geometry across
+framed/borderless modes and standard/compact density.
 The documented `cardBackgroundColor` uses the active theme's raised surface,
 and hosted text retains that same theme rather than being forced into Light.
 TVUIKit still owns the state-dependent alpha, projection and lighting. This keeps
@@ -414,6 +457,25 @@ without borrowing the custom focus style's extra column gutter.
 Card fitting
 honors finite width proposals; unspecified-width probes must not install the
 10,000-point expanded fitting size as the card's content width.
+Sizing queries are read-only: SwiftUI can ask for a zero/minimum width after it
+has already measured the eventual placement. Changing `TVCardView.contentSize`
+inside that query shrinks live content to the probe (for example 135pt inside a
+300pt slot), cropping labels and replaying apparent reveals on later layout passes.
+Only `NativeTVCard.Container.layoutSubviews` commits the actual placed bounds.
+Hosted information-card regressions repeat those probes under animated parent
+updates, require stable pixels and dimensions, and verify real score changes still
+render. Do not suppress all child animations or discard metadata updates to mask it.
+Loading shimmer's repeat must be scoped to its gradient stripe with
+`.animation(_:value:)`, not started by a broad repeating `withAnimation` in
+`onAppear`. A device reproduction showed native Details/Playback text opacity
+and rating-label bounds cycling every 2.3 seconds with **zero** card updates,
+fitting calls, or layouts. That was a separate fault from sizing probes: the
+loading repeat had escaped into native-hosted content. Isolating the stripe
+stopped both the observed symptom and the recorded layer changes.
+Hosted tests also keep the shimmer itself animated, exercise deactivate/reactivate,
+and require sibling information pixels to remain stable. The existing Reduce Motion
+branch remains a static dim without an animated stripe.
+Simulator refresh tests alone did not reproduce that device-only leakage.
 Unspecified-height queries use compressed Auto Layout fitting, not an expanded
 height: flexible rating labels otherwise become 10,000 points tall and inflate
 the About column's text measurements. A non-focusable container reports the visible
@@ -434,6 +496,8 @@ bounded, stable card dimensions. `NativeFocusRequestHostedTests` compares the
 actual resting `contentView` bounds against its SwiftUI layout container.
 Native card measurement also supports unspecified-width proposals from horizontal
 music rails, using the content's intrinsic size rather than a zero-sized container.
+Poster containers remeasure when TVUIKit settles its intrinsic focus clearance
+during native layout, preserving artwork height as well as width.
 Fixed-width information cards retain their constrained measurement path.
 System-focus music artwork uses the same native poster and separate caption
 components as video cards, without a generic card platter behind the captions.
@@ -556,19 +620,206 @@ fresh-account resolution and stale-credential rejection. On a Jellyfin server
 with legacy authorization disabled, a selected Music track must start and advance
 past 0:00 rather than fail with `NSURLErrorDomain -1013`.
 
-## Guards that run before the compile
+## Shared custom-dialog appearance
+
+App-owned tvOS guidance, expanded-overview, title-overview, and startup-release-note
+dialogs use `PlozzDialogBackdrop` and the shared `.overlay` surface. Dark and Black
+dim the underlying page by 85%; Light retains 40%. Startup release notes retain
+their 72% minimum in Light and follow the stronger shared dimming in Dark/Black.
+Border, fill, and shadow come from `ThemePalette.overlay`, including the subtle
+Black-appearance hairline (13% opacity), rather than individual dialog implementations.
+Native alerts/sheets retain system-managed dimming; anchored playback menus are
+not blocking dialogs and do not gain a screen-wide dimmer.
+
+`DialogSurfaceTests` verifies rendered backdrop pixel values, preserves the
+stronger minimum, and checks that the Black border is visible but subtle without
+changing layout. Remote guidance tests keep focus, scrolling, and dismissal covered.
+
+## Common Sense Media guidance
+
+The Ratings section keeps Common Sense Media age recommendations separate from
+certification labels such as PG-13. Basic `CommonSenseMedia` data comes from the
+Plex item-detail response; the full review is requested only when its tile opens,
+through the fixed Discover host and global Plex GUID. It is not fetched for
+every poster or copied into the external critic-score list.
+
+The tile emphasizes age using the app's standard non-rounded typography, with no
+adjacent quality fraction. The supplied Common
+Sense mark retains its original colors, with a dark backing on light surfaces.
+The disclosure chevron sits inline at the trailing edge of the Common Sense row,
+vertically centered with its label, rather than floating in the tile's corner.
+The tvOS dialog pins its age/title/summary above separate topic and reading
+viewports. Its two-column grid places age beside title/branding, then aligns the
+recommended-age caption with the synopsis's first baseline. Wrapped and missing
+synopses must preserve that structure without overlapping the reader; touch
+layouts retain their vertical stack. Only the selected topic's explanation is
+visible. Review scores have
+their own page and star treatment; content levels use ticks and retain real zero
+versus missing values. On tvOS a clear full-screen presentation hosts one themed
+panel over a dim backdrop; do not nest that panel inside a second glass sheet.
+Use the shared overlay surface, including its subtle Black-appearance border,
+and the theme-aware panel-header button style for Done's focused contrast. Common Sense
+branding lives in the header, not a duplicate footer. iOS navigates from the
+overview into individual sections.
+
+Hero/header previews default to the Common Sense age plus two available review
+scores. The age never consumes a review slot or replaces the official
+certification. Home and detail preferences persist independently per profile,
+including age visibility and review count; saved source order/selections survive
+upgrades, and global hiding/spoiler rules still apply. Full title information
+retains all ratings. Existing hero detail enrichment carries basic guidance
+without fetching cloud reviews. Episode Home slides use their represented
+show's guidance, while the episode play target remains unchanged.
+
+`PlexCommonSenseMediaTests` covers movie/show summaries, absent and episode data,
+full category mapping, zero versus missing scores, invalid values, global-ID
+validation, and restricted versus unavailable versus failed requests.
+`FamilyGuidanceServiceTests` verifies Plex Home uses the active person's cloud
+credential, never the owner's fallback, and discards responses after profile,
+credential, or source-access changes. Full reviews are sheet-local rather than
+shared or persisted across profiles.
+
+`FamilyGuidanceRemoteTests` exercises the real Ratings section with native tvOS
+focus: Select opens the review, Menu restores the tile, failed requests can be
+retried, and restricted access never renders invented category scores. Opening
+long content must keep the large age and summary visible. Both pane viewports
+are focus sections; while reading, only the selected menu row remains eligible
+for Left return, and the rest reopen when menu focus returns. Arrow presses
+scroll the native text reader, alongside its standard swipe handling; regressions
+measure paragraph movement in both directions, not just focus retention. Up scrolls
+while the reader is below its top edge; once at the top (including short text),
+Up can move natively to Done. Down remains in the reader, while Left and Menu retain
+their normal exit behavior. The full-width header is also a focus section so Up
+from Overview reaches Done. Menu content stays inside its viewport, and the reader
+extends into the space freed by removing the footer. Black, Dark, and Light
+fixtures cover the sheet edge and readable viewport.
+The native text reader must have a rectangular clipped viewport: tvOS gives
+`UITextView` a 20pt corner radius by default, which cuts glyphs beneath the heading
+when text uses the card's existing padding. `FamilyGuidanceReaderHostedTests`
+checks pixels at both top corners, focused and unfocused across scroll offsets,
+while ensuring below-viewport content remains clipped. Only the outer card keeps
+rounded corners; do not fix this by changing text padding or disabling clipping.
+Header regressions cover age-only data, quality-without-age, two-score defaults,
+per-profile persistence, hydrated hero-cache invalidation, and touch wrapping at
+large Dynamic Type sizes.
+The same tile and sheet content are used by iOS; unsupported providers simply
+have no guidance tile. New interface copy is localized through the app catalog;
+review text and category labels are provider content.
+
+## CI pipeline
 
 Validate workflow edits with `actionlint .github/workflows/ci.yml` before
 pushing. GitHub rejects invalid context references before creating a runner or
-job log. Runner-local package storage is initialized in a step via
-`RUNNER_TEMP` and `GITHUB_ENV`; the `runner` expression context is not available
-in job-level `env`.
+job log. CI configuration regressions run without simulator builds:
+`python3 -m unittest discover -s tools/tests -p 'test_ci_pipeline.py'`.
 
-CI selects a tvOS simulator matching the selected Xcode SDK and shares its
-`PLOZZ_SIM_ID` across package and app-hosted tests. It fails if that runtime is
-missing rather than silently choosing the first installed (possibly much older)
-runtime. The full matrix has a 40-minute wall-clock deadline; raw logs and
-result bundles are retained as workflow artifacts for seven days.
+### CI lanes and required check
+
+CI first runs every deterministic preflight guard and host-side regression
+suite. Successful preflight unlocks **three independent `macos-15` runners**:
+the tvOS simulator app build, the complete package test matrix, and app-hosted
+focus integration. A failed preflight stops expensive work; a failure in one
+build/test lane does not suppress either sibling. There is no change-scoped CI
+selection, cache-hit test skipping, or parallel XCTest worker cloning.
+
+The final **`Build and test tvOS app`** check keeps the existing required-check
+name. Its `always()` job requires success from preflight and all three lanes.
+Failed, cancelled, skipped, missing, or unexpected dependencies fail closed.
+Push-to-main, pull-request, manual triggers, and per-ref cancellation remain
+unchanged.
+
+Each test runner selects its own tvOS simulator matching Xcode 26.2's SDK; no
+simulator or mutable build directory crosses runners. A missing runtime fails
+instead of choosing an older installed runtime. The full matrix retains its
+40-minute wall-clock deadline, and hosted tests retain their existing
+20-minute deadline and authoritative `xcresult` checks. Each lane uploads
+uniquely named diagnostics on success or failure, retained for seven days.
+The simulator app build also retains its raw log without replacing a build
+failure's exit status with the log writer's status.
+
+Baseline CI run `35167378428` / job `105031390432` took 45m7s: approximately
+6.3m app compilation, 22m package tests, and 14.7m hosted tests. Only about 2.8m
+of the hosted stage was test execution. Parallel lanes remove the sum of those
+stages from the critical path; this is not a measured new end-to-end time.
+Separate runners cost more concurrent macOS capacity and still repeat some
+compilation on a cold cache.
+
+### CI cache ownership and compatibility
+
+`.github/actions/ci-prepare` initializes storage through `tools/ci-cache.py`,
+using `GITHUB_WORKSPACE` and `GITHUB_ENV` after checkout, not a job-level
+`runner` expression or the machine's shared developer caches:
+
+- `.build/ci/<lane>/DerivedData`: a separate app, package, or hosted build root.
+  The cache allowlist contains only `Build`, `ModuleCache.noindex`,
+  `SDKStatCaches.noindex`, and `CompilationCache.noindex`.
+- `.build/ci/<lane>/SourcePackages`: that lane's private mutable checkouts and
+  binary artifact extractions. It travels **only with that lane's compiled
+  snapshot**, preserving dependency timestamps for incremental compilation.
+- `.build/ci/<lane>/source-timestamps.json`: SHA-256, file mode, size, and
+  nanosecond timestamps for that successful build's tracked source inputs.
+  It travels with the same lane's compiled snapshot, never a separate cache.
+- `.build/ci/swiftpm-cache/{repositories,artifacts}`: compressed SwiftPM
+  repository/download caches. Every job restores its own copy. Only a
+  successful app-build job seeds the remote compressed cache.
+
+No live directory has concurrent writers across lanes; immutable Actions
+snapshots are not a shared writable filesystem. Hosted host/test products
+remain owned by the single `AppShell` umbrella product. App and package
+products must never be copied into the hosted build root: an old independent
+`CoreUI.framework` can shadow Apple's private framework and crash UIKit.
+The new cache namespace deliberately starts cold rather than importing any
+old DerivedData graph.
+
+Keys include the Xcode build, selected developer/SDK paths, SDK version/build,
+runner architecture and macOS build, workspace path, XcodeGen version,
+`Package.swift`, and canonical `Package.resolved`. Compiled compatibility
+additionally hashes `project.yml`, generated project/schemes, configuration
+files, CI actions/workflow, and build runner/generator inputs. Metadata
+enumeration and reads use no-follow workspace-relative descriptors; linked
+configuration or generated-project inputs fail key computation. Only generated
+marketing/build **version values** are normalized for the cache fingerprint;
+the actual freshly generated project is never rewritten for caching, so Xcode
+still rebuilds anything affected by those values. Each compiled snapshot has
+an exact commit key and can fall back only within the same lane and complete
+compatibility prefix. There is no broader Xcode/SDK/manifest fallback.
+Source files are freshly checked out, and every build/test command executes
+after restore. A checkout gives unchanged
+files fresh timestamps, which can otherwise defeat restored DerivedData.
+After restore, `ci-cache.py` reinstates a saved timestamp **only** when a file
+is still tracked, its bytes have the same SHA-256, and its size/mode match.
+Scope is limited to `Sources`, `Tests`, `App`, `TopShelf`, `Config`, and the
+root package/project manifests. Changed, new, deleted, untracked, or
+out-of-scope files are not assigned an old timestamp. Directory/file symlinks,
+hard links, absolute paths, and traversal are rejected; descriptor-relative
+file operations prevent following a swapped symlink outside the workspace.
+Missing or corrupt timestamp snapshots leave fresh source timestamps intact.
+Only successful trusted-main cache publication records a new snapshot.
+Xcode remains responsible for incremental dependency checking.
+
+Restoring a cache is **not proof of avoiding compilation**. Retained package
+checkout timestamps and content-verified source timestamps make unchanged
+compiled work eligible for reuse, but Xcode may invalidate it for other
+reasons. The helper reports how many tracked timestamps it restored; compare
+actual compiler tasks and lane durations on real CI runs before claiming a
+measured compile-time improvement. No build-free effectiveness claim is made.
+
+Only successful `main` push/manual jobs explicitly save snapshots. Pull
+requests and non-main manual runs are restore-only; they can read compatible
+default-branch snapshots but do not publish them. This also relies on GitHub's
+cache ref scoping: an untrusted pull-request workflow cannot write a cache
+visible to trusted main. Checkout credentials are not persisted. There are no
+secret inputs, signing identities, profiles, keychains, simulator state,
+result bundles, or broad home-directory caches in the allowlist.
+
+Cache misses and eviction must remain ordinary cold builds, never reasons to
+skip checks or relax timeouts. Lane-private checkouts/extractions trade storage
+and transfer time for reuse of compiled dependencies; three compiled snapshots
+can pressure the repository's Actions cache quota. Measure cache hit rates,
+restore/save time, and lane duration on real runs before expanding the
+allowlist. No cleanup of local/shared caches is part of CI acceleration.
+
+## Guards that run before the compile
 
 Native typography tests compare against the runtime's `UIFontMetrics` behavior:
 older tvOS versions keep those metrics fixed, while newer runtimes scale them.

@@ -39,6 +39,23 @@ public enum HeroContentPolicy {
         focused.ratings.isEmpty ? root.ratings : focused.ratings
     }
 
+    /// Common Sense guidance covers the show, not an individual focused episode.
+    public static func familyGuidanceAge(
+        focused: HeroPresentation,
+        root: HeroPresentation
+    ) -> Double? {
+        if root.kind == .series { return root.familyGuidanceAge }
+        return focused.familyGuidanceAge ?? root.familyGuidanceAge
+    }
+
+    /// The hero is a preview; the complete genre list remains in the title's details.
+    public static func compactDetailGenres(
+        focused: HeroPresentation,
+        root: HeroPresentation
+    ) -> [String] {
+        Array(genres(focused: focused, root: root).prefix(2))
+    }
+
     public static func detailFacts(
         focused: HeroPresentation
     ) -> [String] {

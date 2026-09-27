@@ -255,7 +255,6 @@ public struct RootView: View {
     private func makeLibraryChannelCompletionHandler(
         profileID: String
     ) -> @MainActor @Sendable (MediaItem, UUID) throws -> Void {
-        #if DEBUG
         let namespace = appState.profilesModel.activeNamespace
         return { [appState] item, authorizationID in
             try Task.checkCancellation()
@@ -288,9 +287,6 @@ public struct RootView: View {
                 accountID: nil, itemID: item.id, watchedPercent: 100, mutation: mutation, item: item
             )
         }
-        #else
-        return { _, _ in throw LibraryChannelError.authorizationChanged }
-        #endif
     }
 
     public var body: some View {
@@ -568,6 +564,8 @@ public struct RootView: View {
         }
         .background { AppBackground(palette: resolvedPalette) }
         .environment(\.themePalette, resolvedPalette)
+        .environment(\.familyGuidanceProvider, appState.familyGuidance)
+        .environment(\.detailHeaderSettings, appState.profileSettings.detailPageModel)
         // `dynamicTypeSize` is read here on purpose: PlozzMetrics samples its
         // typography once at construction, so this dependency is what makes the
         // whole table rebuild when the reader changes their text size. Without it

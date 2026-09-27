@@ -2,6 +2,93 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/039",
+      "version": "2026.9.18",
+      "build": 39,
+      "releasedAt": "2026-09-18",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Plex only: Common Sense Media age recommendations and family guidance for movies and shows. Age badges can appear in Home and detail headers; detailed guidance requires Plex Pass access."
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            "Updated the playback engine for more reliable seeking, playback recovery, and HDR/Dolby Vision handling.",
+            "Improved HDR10+ direct-play compatibility and format labels.",
+            {
+              "text": "Extended review-score limits to Home and tvOS detail headers.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Extended review-score limits to Home headers.",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Stronger background dimming and consistent borders for dialogs in Dark and Black appearance.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Subtler dialog borders in Black appearance.",
+              "platforms": ["iOS"]
+            }
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            {
+              "text": "Fixed focus style for library cards with system focus on.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Prevented native information cards from shrinking or clipping text during layout updates.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Stopped repeated fades and partial rating labels on movie detail pages.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "release/038",
+      "version": "2026.9.16",
+      "build": 38,
+      "releasedAt": "2026-09-16",
+      "sections": [
+        {
+          "category": "Updated",
+          "items": [
+            "Live TV content refinements",
+            {
+              "text": "Redesigned More page and clearer navigation arrangement",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Settings tab can be hidden; Settings stays available top-right",
+              "platforms": ["iOS"]
+            }
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            "Reduced freezes with Sync Live TV enabled",
+            "Live TV retries failed library connections sooner",
+            {
+              "text": "Crash when opening Appearance settings",
+              "platforms": ["iOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/037",
       "version": "2026.9.15",
       "build": 37,
@@ -10,6 +97,7 @@
         {
           "category": "New",
           "items": [
+            "Live TV",
             "Subtitle search shows a File match badge when Jellyfin or Emby confirms a match to your video file"
           ]
         },
@@ -17,18 +105,25 @@
           "category": "Updated",
           "items": [
             {
-              "text": "System is now the default focus style for posters, information cards, and Music browsing; saved Highlight or Outline choices are kept",
+              "text": "Default focus is now \"system\"",
               "platforms": ["tvOS"]
             },
             {
-              "text": "Opening movie or show details carries the selected artwork into the page, then reveals the title, information, and controls",
+              "text": "New animations when opening and closing detail pages",
               "platforms": ["tvOS"]
             },
             {
-              "text": "Moving between the Home hero and shelves is smoother",
+              "text": "Animation and performance optimizations on Home",
               "platforms": ["tvOS"]
             },
-            "Home stays responsive while matching titles across your connected libraries",
+            {
+              "text": "Navigation menu is no longer open by default on app launch",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Home stays responsive while matching titles across your connected libraries",
+              "platforms": ["iOS"]
+            },
             {
               "text": "Hide or reorder destinations in every navigation style, including library shortcuts in the sidebars; Settings stays available",
               "platforms": ["tvOS"]
@@ -48,56 +143,15 @@
           "category": "Fixed",
           "items": [
             {
-              "text": "Switching pages in the Native Sidebar no longer briefly focuses the previous page",
-              "platforms": ["tvOS"]
-            },
-            {
-              "text": "The Pinned Sidebar opens each selected page at its first visible control",
-              "platforms": ["tvOS"]
-            },
-            {
-              "text": "The Pinned Sidebar stops at its first and last items when you hold Up or Down",
-              "platforms": ["tvOS"]
-            },
-            {
-              "text": "Fresh launches start on Home when it is visible, rather than restoring the previous destination",
-              "platforms": ["tvOS"]
-            },
-            {
-              "text": "Returning from movie or show details restores the selected card and scroll position without another focus jump",
-              "platforms": ["tvOS"]
-            },
-            {
-              "text": "Rapid Down presses while a show opens no longer skip or scroll past the episode browser",
-              "platforms": ["tvOS"]
-            },
-            {
               "text": "Subtitle downloads remain available when a video has no installed subtitle tracks",
               "platforms": ["tvOS"]
             },
             "Jellyfin streaming works when the server has legacy API-key authentication disabled",
             "Completed titles stay out of Continue Watching while Plozz retries clearing their saved playback position",
             {
-              "text": "If Picture in Picture gets stuck starting, it resets so you can try again",
-              "platforms": ["iOS"]
-            },
-            {
-              "text": "Returning from Picture in Picture waits for video to be visible in the app",
-              "platforms": ["iOS"]
-            },
-            {
-              "text": "Season selectors no longer clip the focused season at the edge of the row",
-              "platforms": ["tvOS"]
-            },
-            {
-              "text": "Movie detail artwork reaches the top edge when using Top Bar navigation",
-              "platforms": ["tvOS"]
-            },
-            {
               "text": "Theme music no longer starts over regular music playback",
               "platforms": ["tvOS"]
-            },
-            "Returning to the app or switching video sources no longer lets outdated errors or end-of-video signals interrupt the current video"
+            }
           ]
         }
       ]

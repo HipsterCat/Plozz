@@ -33,6 +33,8 @@ enum HDRDisplayMode: Equatable {
         switch range {
         case .sdr: self = .sdr
         case .hlg: self = .hlg
+        // Both use PQ/BT.2020 display criteria. HDR10+ additionally requires
+        // the video's per-frame metadata, not a different static display mode.
         case .hdr10, .hdr10Plus: self = .hdr10
         case .dolbyVision: self = .dolbyVision
         }
@@ -42,15 +44,16 @@ enum HDRDisplayMode: Equatable {
 }
 
 #if os(tvOS)
-/// Builds the `AVDisplayCriteria` that asks tvOS to switch the connected display
-/// into the dynamic range that matches `mode`. Returns `nil` for SDR (the caller
-/// clears any prior preference instead of forcing SDR).
+/// Bootstrap criteria for the native player while the asset's actual preferred
+/// criteria load. HLS may need an initial HDR request before loading its tracks.
+/// Returns nil for SDR; never substitutes for the asset-derived criteria.
 ///
 /// The criteria is constructed from a synthetic `CMVideoFormatDescription` whose
 /// codec FourCC selects Dolby Vision (`dvh1`) vs HDR/SDR HEVC (`hvc1`) and whose
 /// colour extensions advertise BT.2020 primaries/matrix with the PQ or HLG
-/// transfer function — the same signalling AVKit derives from a real DoVi/HDR
-/// sample entry.
+/// transfer function. These source hints cannot preserve the full stream format
+/// description, so NativeDisplayCriteriaController replaces them with AVFoundation's
+/// preferred criteria instead of treating generic PQ as the final HDR10+ request.
 func makeDisplayCriteria(mode: HDRDisplayMode, metadata: MediaSourceMetadata?) -> AVDisplayCriteria? {
     guard mode != .sdr else { return nil }
 

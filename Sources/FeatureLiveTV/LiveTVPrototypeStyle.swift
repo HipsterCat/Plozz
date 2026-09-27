@@ -1,4 +1,3 @@
-#if DEBUG
 import PlozzCoreUI
 import CoreModels
 import FeatureLiveTVCore
@@ -312,4 +311,3 @@ enum PrototypeSheet: Identifiable {
         }
     }
 }
-#endif

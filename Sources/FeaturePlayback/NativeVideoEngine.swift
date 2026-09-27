@@ -134,14 +134,7 @@ public final class NativeVideoEngine: VideoEngine {
     @ObservationIgnored private var videoOutputView: PlayerLayerView?
     #endif
     #if os(tvOS)
-    /// The dynamic-range display switch tvOS should request for the current
-    /// source (Dolby Vision / HDR10 / HLG). `nil` for SDR or before a load.
-    /// Retained so it can be (re)applied once the output view is in a window.
-    @ObservationIgnored private var pendingDisplayCriteria: AVDisplayCriteria?
-    /// The window whose `AVDisplayManager` we last drove, so teardown can clear
-    /// the preference even after the view has left its window — otherwise the TV
-    /// can be stranded in a forced HDR/DoVi mode.
-    @ObservationIgnored private weak var displayCriteriaWindow: UIWindow?
+    @ObservationIgnored private let displayCriteria = NativeDisplayCriteriaController()
     #endif
 
     public init(
@@ -200,6 +193,9 @@ public final class NativeVideoEngine: VideoEngine {
         // Tear down any previous player (e.g. a failed direct-play attempt being
         // retried under a transcode) without reporting a stop.
         teardownPlayer()
+        #if os(tvOS)
+        displayCriteria.invalidatePendingLoad()
+        #endif
 
         self.request = request
         let streamURL: URL?
@@ -343,36 +339,31 @@ public final class NativeVideoEngine: VideoEngine {
 
     /// Classifies the source's dynamic range and, on tvOS, requests the matching
     /// display mode so the Apple TV negotiates true Dolby Vision / HDR10 / HLG
-    /// (or returns to SDR) with the panel. `appliesPerFrameHDRDisplayMetadata`
-    /// is enabled for HDR/DoVi so per-frame RPU/HDR metadata is forwarded to the
-    /// display. All best-effort and crash-safe: failures never block playback.
+    /// (or returns to SDR) with the panel. Per-frame metadata stays enabled even
+    /// when the provider omitted or misclassified HDR; AVFoundation applies only
+    /// metadata actually present in the stream.
     private func configureDynamicRange(for request: PlaybackRequest, item: AVPlayerItem) {
         let mode = HDRDisplayMode(request.sourceMetadata)
-        item.appliesPerFrameHDRDisplayMetadata = mode.isHDR
+        item.appliesPerFrameHDRDisplayMetadata = true
         #if os(tvOS)
-        pendingDisplayCriteria = makeDisplayCriteria(mode: mode, metadata: request.sourceMetadata)
-        applyDisplayCriteria()
+        displayCriteria.configure(
+            asset: item.asset,
+            fallback: makeDisplayCriteria(mode: mode, metadata: request.sourceMetadata))
         #endif
     }
 
     #if os(tvOS)
-    /// Pushes `pendingDisplayCriteria` onto the output view's window manager. Safe
-    /// to call before the view is in a window — it re-runs from the view's
-    /// `onWindowChange` hook once a window is available.
+    /// The bound surface identifies the display. A detached or not-yet-loaded
+    /// native surface must not clear another engine's display request.
     private func applyDisplayCriteria() {
-        guard let window = videoOutputView?.window, Self.windowHasDisplayManager(window) else { return }
-        displayCriteriaWindow = window
-        window.avDisplayManager.preferredDisplayCriteria = pendingDisplayCriteria
+        let window = videoOutputView?.window
+        displayCriteria.attach(to: window.flatMap { Self.windowHasDisplayManager($0) ? $0 : nil })
     }
 
     /// Clears any forced display mode so the TV isn't stranded in HDR/DoVi after
     /// playback stops.
     private func clearDisplayCriteria() {
-        pendingDisplayCriteria = nil
-        if let window = displayCriteriaWindow, Self.windowHasDisplayManager(window) {
-            window.avDisplayManager.preferredDisplayCriteria = nil
-        }
-        displayCriteriaWindow = nil
+        displayCriteria.stop()
     }
 
     /// Safety net: the `avDisplayManager` accessor comes from AVKit's

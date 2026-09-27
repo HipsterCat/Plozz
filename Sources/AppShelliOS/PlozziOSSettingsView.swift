@@ -187,9 +187,7 @@ private enum PlozziOSSettingsDestination: Hashable {
     case trackers
     case appearance
     case home
-    #if DEBUG
     case liveTV
-    #endif
     case detailPage
     case playback
     case downloads
@@ -340,9 +338,7 @@ private struct PlozziOSSettingsSplitView: View {
                         settingsRow(.trackers, title: "Trackers", systemImage: "link")
                         settingsRow(.appearance, title: "Appearance", systemImage: "paintpalette")
                         settingsRow(.home, title: "Customize Home", systemImage: "house")
-                        #if DEBUG
                         settingsRow(.liveTV, title: "Live TV", systemImage: "antenna.radiowaves.left.and.right")
-                        #endif
                         settingsRow(.detailPage, title: "Detail Page", systemImage: "rectangle.portrait.on.rectangle.portrait")
                         settingsRow(.playback, title: "Playback", systemImage: "play.rectangle")
                         settingsRow(.subtitles, title: "Subtitles", systemImage: "captions.bubble")
@@ -643,7 +639,6 @@ private struct PlozziOSSettingsSplitView: View {
                 accounts: appModel.accountsProviders.resolvedActiveAccounts,
                 seerConfigured: appModel.seerService.isConfigured
             )
-        #if DEBUG
         case .liveTV:
             LiveTVSettingsView(
                 store: LiveTVViewSettingsStore(
@@ -668,7 +663,6 @@ private struct PlozziOSSettingsSplitView: View {
                 }
             )
             .id(appModel.profiles.activeProfile.id)
-        #endif
         case .detailPage:
             PlozziOSDetailPageSettingsView(
                 heroBackground: appModel.settings.heroBackground,
@@ -944,7 +938,6 @@ private struct PlozziOSSettingsCompactMenu: View {
                 } label: {
                     Label("Customize Home", systemImage: "house")
                 }
-                #if DEBUG
                 NavigationLink {
                     LiveTVSettingsView(
                         store: LiveTVViewSettingsStore(
@@ -971,7 +964,6 @@ private struct PlozziOSSettingsCompactMenu: View {
                 } label: {
                     Label("Live TV", systemImage: "antenna.radiowaves.left.and.right")
                 }
-                #endif
                 NavigationLink {
                     PlozziOSDetailPageSettingsView(
                         heroBackground: appModel.settings.heroBackground,
@@ -1777,6 +1769,7 @@ private struct PlozziOSAppearanceSettingsView: View {
             SettingsSectionGroup("Hide or Reorder Navigation") {
                 NavigationLibrariesDetailView(
                     scope: navigationLibrariesScope,
+                    navigation: navigation,
                     includesIndividualLibraries: false,
                     excludedKeys: [
                         NavigationLibraryLayout.musicKey,
@@ -1897,6 +1890,9 @@ private struct PlozziOSHomeSettingsView: View {
                 if hero.settings.isEnabled {
                     Toggle("Hide watched titles", isOn: $hero.settings.hideWatched)
                     Toggle("Show ratings", isOn: $hero.settings.showsRatings)
+                    if hero.settings.showsRatings {
+                        HeaderRatingPreviewControls(settings: $hero.settings.ratingPreferences)
+                    }
                     Toggle("Auto-advance", isOn: $hero.settings.autoAdvance)
                     Toggle(
                         "Play trailer behind the hero",
@@ -2124,10 +2120,8 @@ private struct PlozziOSDetailPageSettingsView: View {
         List {
             SettingsSectionGroup("Header ratings") {
                 Toggle("Show ratings in header", isOn: $detailPage.settings.showsHeaderRatings)
-                Picker("Maximum ratings shown", selection: $detailPage.settings.maxHeaderRatings) {
-                    ForEach(Array(DetailPageSettings.headerRatingCountRange), id: \.self) { count in
-                        Text(count, format: .number).tag(count)
-                    }
+                if detailPage.settings.showsHeaderRatings {
+                    HeaderRatingPreviewControls(settings: $detailPage.settings)
                 }
                 NavigationLink {
                     PlozziOSDetailRatingPriorityView(model: detailPage)
@@ -2135,7 +2129,7 @@ private struct PlozziOSDetailPageSettingsView: View {
                     Text("Rating sources & order")
                 }
             } footer: {
-                Text("This limits how many scores appear in the header, not how many sources you can enable. Missing scores are skipped in your source order. More than two scores can wrap onto extra lines. Spoiler settings still apply.")
+                Text("The Common Sense age appears separately from review scores. Missing scores are skipped in your source order, and extra badges can wrap. Full ratings remain in title information. Spoiler settings still apply.")
             }
             SettingsSectionGroup("Behind the hero") {
                 Picker(

@@ -1,4 +1,3 @@
-#if DEBUG
 import CoreModels
 import PlozzCoreUI
 import FeatureLiveTVCore
@@ -170,4 +169,3 @@ private struct LiveTVFavoriteRecoveryPicker: View {
         }
     }
 }
-#endif

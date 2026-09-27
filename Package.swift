@@ -87,7 +87,7 @@ let package = Package(
         // Powers the native HLS-fMP4 remux path for MKV → DoVi + Atmos + seek.
         // See AGENTS.local.md › "Playback engine (AetherEngine / Plozzigen)".
         //
-        // Pinned to the UPSTREAM release tag 6.66.0 -> 1eebae01f7d94c012a8a158179d5f0924b8449ad.
+        // Pinned to the UPSTREAM release tag 7.7.1 -> fa67d5862730e820eb1718d16c24f4db18251237.
         //
         // Plozz no longer carries an AetherEngine fork. Everything the old
         // `plozz-pin-*` stack existed for is upstream as of 5.23.2:
@@ -174,9 +174,21 @@ let package = Package(
         // startup, and fixed-HDR panel detection. New reload, software-path,
         // audio-delivery, and lip-sync APIs remain opt-in.
         //
+        // 7.1.1 raises the engine floor to iOS/tvOS 18 (already Plozz's minimum)
+        // without removing public APIs. The 6.66.0 -> 7.1.1 range fixes source
+        // reload transport/seek preservation, remounted playback surfaces,
+        // software first-frame pause handling, and HDR/DoVi output classification.
+        // FFmpegBuild advances to 3.3.x with matching archive dSYMs. New optional
+        // transport and Dolby Vision policies retain their upstream defaults.
+        //
+        // 7.7.1 preserves HDR routing across audio changes and background reloads,
+        // keeps the native Now Playing host across screensaver recovery, and
+        // avoids dispatch-pool starvation in loopback I/O. FFmpegBuild 3.4.x adds
+        // AV1 Dolby Vision sample-entry support; deployment targets are unchanged.
+        //
         // SMB enters AetherEngine only through Plozz's protocol-neutral custom-source
         // bridge; the engine's legacy SMB URL product is not linked.
-        .package(url: "https://github.com/superuser404notfound/AetherEngine", revision: "1eebae01f7d94c012a8a158179d5f0924b8449ad"),
+        .package(url: "https://github.com/superuser404notfound/AetherEngine", revision: "fa67d5862730e820eb1718d16c24f4db18251237"),
         // NOTE: FFmpegBuild (FFmpeg n8.1.x decode-only) and LibDovi (Dolby Vision
         // RPU parser) are pulled in TRANSITIVELY by AetherEngine — its own manifest
         // declares and consumes them. Plozz used to declare them directly only for

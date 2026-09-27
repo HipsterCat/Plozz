@@ -1577,6 +1577,7 @@ private struct PlozziOSStableHomeHeroMetadata: View {
     let presentation: HeroPresentation
     let style: HeroArtworkStyle
     let hidesRatings: Bool
+    let ratingPreferences: DetailPageSettings
     let scheduleLine: LocalizedStringResource?
     let logoFallback: (@Sendable () async -> URL?)?
     @State private var descriptionText: String?
@@ -1585,12 +1586,14 @@ private struct PlozziOSStableHomeHeroMetadata: View {
         presentation: HeroPresentation,
         style: HeroArtworkStyle,
         hidesRatings: Bool,
+        ratingPreferences: DetailPageSettings,
         scheduleLine: LocalizedStringResource?,
         logoFallback: (@Sendable () async -> URL?)?
     ) {
         self.presentation = presentation
         self.style = style
         self.hidesRatings = hidesRatings
+        self.ratingPreferences = ratingPreferences
         self.scheduleLine = scheduleLine
         self.logoFallback = logoFallback
         _descriptionText = State(
@@ -1606,7 +1609,8 @@ private struct PlozziOSStableHomeHeroMetadata: View {
             hidesRatings: hidesRatings,
             scheduleLine: scheduleLine,
             logoFallback: logoFallback,
-            descriptionOverride: .init(text: descriptionText)
+            descriptionOverride: .init(text: descriptionText),
+            detailPageSettings: ratingPreferences
         )
     }
 }
@@ -1640,6 +1644,7 @@ struct PlozziOSHomeHeroForeground: View {
                     for: item,
                     spoilerSettings: appModel.settings.spoilers.settings
                 ),
+                ratingPreferences: appModel.settings.hero.settings.ratingPreferences,
                 scheduleLine: scheduleLine,
                 logoFallback: PlozziOSHeroMetadata.tmdbLogoFallback(for: item)
             )
@@ -2600,9 +2605,10 @@ private struct PlozziOSHeroMetadata: View {
                     }
                 }
 
-                if mode == .home, !effectiveRatings.isEmpty {
+                if mode == .home, !effectiveRatings.isEmpty || effectiveFamilyGuidanceAge != nil {
                     RatingsBadgeRow(
-                        ratings: effectiveRatings
+                        ratings: effectiveRatings,
+                        familyGuidanceAge: effectiveFamilyGuidanceAge
                     )
                     .frame(
                         maxWidth: .infinity,
@@ -2611,16 +2617,22 @@ private struct PlozziOSHeroMetadata: View {
                             : .leading
                     )
                 } else if mode == .detail, usesCompactDetailLayout {
-                    DetailHeaderMetadataRow(ratings: effectiveRatings, badges: effectiveTechnicalBadges)
+                    DetailHeaderMetadataRow(
+                        ratings: effectiveRatings,
+                        badges: effectiveTechnicalBadges,
+                        familyGuidanceAge: effectiveFamilyGuidanceAge
+                    )
                 } else if mode == .detail,
                     !factComponents.isEmpty
                         || !effectiveRatings.isEmpty
+                        || effectiveFamilyGuidanceAge != nil
                         || !effectiveTechnicalBadges.isEmpty
                 {
                     AdaptiveMediaMetadataRow(
                         facts: factComponents,
                         ratings: effectiveRatings,
                         badges: effectiveTechnicalBadges,
+                        familyGuidanceAge: effectiveFamilyGuidanceAge,
                         centered: style == .compactPortrait
                     )
                 }
@@ -2689,23 +2701,20 @@ private struct PlozziOSHeroMetadata: View {
     }
 
     private var effectiveRatings: [ExternalRating] {
-        guard !hidesRatings else { return [] }
-        switch mode {
-        case .home:
-            return rootPresentation.ratings
-        case .detail:
-            if usesCompactDetailLayout {
-                return detailPageSettings.headerRatings(
-                    from: HeroContentPolicy.ratings(focused: presentation, root: rootPresentation),
-                    isAnime: rootPresentation.isAnime,
-                    hidesRatings: hidesRatings
-                )
-            }
-            return HeroContentPolicy.ratings(
-                focused: presentation,
-                root: rootPresentation
-            )
-        }
+        detailPageSettings.headerRatings(
+            from: mode == .home ? rootPresentation.ratings
+                : HeroContentPolicy.ratings(focused: presentation, root: rootPresentation),
+            isAnime: rootPresentation.isAnime,
+            hidesRatings: hidesRatings
+        )
+    }
+
+    private var effectiveFamilyGuidanceAge: Double? {
+        detailPageSettings.headerFamilyGuidanceAge(
+            from: mode == .home ? rootPresentation.familyGuidanceAge
+                : HeroContentPolicy.familyGuidanceAge(focused: presentation, root: rootPresentation),
+            hidesRatings: hidesRatings
+        )
     }
 
     private var effectiveTechnicalBadges: [MediaBadge] {

@@ -4,6 +4,91 @@ Plozz uses two playback engines, automatically selected per-item based on
 container, codecs, and subtitle requirements. The goal is maximum format coverage
 with the best possible quality (Dolby Vision, Atmos, full-timeline seek).
 
+## Dependency version
+
+Plozz pins upstream AetherEngine **7.7.1** to commit
+`fa67d5862730e820eb1718d16c24f4db18251237`. Its iOS/tvOS 18 minimum matches
+Plozz's existing deployment targets. The engine owns the FFmpegBuild 3.4.x and
+LibDovi 2.1.x dependencies; Plozz does not link a second FFmpeg build.
+
+This dependency update retains Plozz's playback routing and optional-feature
+settings. It does not connect container chapters to Up Next; marker-less content
+continues using the configured lead-time fallback.
+
+The 7.1.1 to 7.7.1 update preserves HDR routing during audio changes and
+background recovery, retains the native Now Playing host across screensaver
+recovery, and avoids dispatch-pool starvation in loopback connections and source
+size probes. FFmpegBuild 3.4.x adds AV1 Dolby Vision sample-entry support.
+
+## HDR10+ source preservation
+
+An HDR10-capable playback path accepts HDR10+ source files without requesting a
+server video transcode. HDR10+ has an HDR10-compatible base layer: supported
+Apple TV/display combinations can use its dynamic metadata, while an HDR10-only
+output retains the base picture. Accepting the source does not force an HDR10+
+HDMI mode or claim that the connected display supports it.
+
+Jellyfin/Emby HEVC capability profiles include `HDR10Plus` alongside `HDR10`.
+Plex's range gate also recognizes the `smpte2094-40` metadata signal and retains
+the SDR-only fallback. Source badges keep HDR10+ distinct from HDR10; Emby's
+`ExtendedVideoType: Hdr10Plus` is normalized without inventing it when absent.
+
+Native AVPlayer items leave per-frame HDR display metadata enabled even when
+server metadata is missing or says SDR. AVFoundation applies only metadata the
+stream actually carries. On tvOS the native engine loads the played asset's
+`preferredDisplayCriteria` asynchronously, as prescribed for custom player
+interfaces by [Apple](https://developer.apple.com/documentation/avfoundation/avdisplaycriteria).
+Synthetic source-hint criteria are only a bootstrap for HDR HLS startup, not
+the final substitute for the asset's format. Stopped/replaced loads cannot
+apply late criteria, and native teardown does not clear a differing request
+that another player has since installed on the same window.
+
+Aether remains the display-criteria writer for Plozzigen. Plozz does not supply
+an already-HDR panel assertion from EDR headroom: that reading is unreliable
+as proof of the current tvOS output mode. The pinned engine already attempts
+an HDR master for an eligible but unproven display during on-demand playback,
+with a media-playlist fallback if AVPlayer rejects it. Live playback retains
+Aether's separate policy. No Dolby Vision or HDR10+ display support is invented.
+
+The diagnostic HDR label describes the **source**, not measured HDMI output.
+On original-source playback, a current engine source probe overrides incomplete
+provider range hints, including Emby reporting HDR10 for an HDR10+ file. Server
+transcodes retain the original-source metadata rather than treating the
+re-encoded asset as evidence about the original file.
+
+These are candidate corrections for issue #58, not a hardware-verified fix.
+
+### Supplemental Emby HDR10+ detection
+
+Emby's `ExtendedVideoType` can identify HDR10+, but a missing declaration is
+not proof that the file lacks dynamic metadata. The delayed detail-page probe
+can confirm HDR10+ on an original HEVC source independently of its audio codec,
+including titles whose Atmos badge is already known. It is not a library-wide
+scan and playback never waits for it.
+
+The HDR probe examines bounded video packets, not filenames or arbitrary byte
+matches in a container. Only positively identified HDR10+ metadata upgrades the
+source badge. An exhausted budget, inaccessible stream or ordinary HDR10 result
+does not downgrade a server declaration. Dolby Vision keeps its primary
+classification. The existing Atmos decode probe is requested only when its own
+confirmation is missing.
+
+HDR inspection is capped at 8 MiB of reserved HTTP ranges, 128 packets and five
+seconds, with two-second request deadlines. Ignored or invalid Range responses
+are rejected before buffering a full body; redirects may not cross origins.
+The engine's existing FFmpeg libraries demux the bounded data, and the probe
+validates HEVC SEI/T.35 HDR10+ payloads without opening a video decoder.
+
+Probe coverage and positive results are cached independently for audio and
+video, scoped to the original media-source revision. A replaced file invalidates
+both, and cancelled or stale responses cannot restore an old revision. Confirmed
+facts are reused in the detail snapshot and fresh playback request, rather than
+being lost when the server repeats its incomplete metadata.
+
+HDMI acceptance must be confirmed on an HDR10+-capable TV. A successful build,
+an HDR10+ source badge, or correct fallback on an HDR10-only TV is not proof of
+HDR10+ output.
+
 ## Engine Overview
 
 | Engine | Internal name | Underlying tech | Primary use case |

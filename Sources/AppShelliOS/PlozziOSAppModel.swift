@@ -32,11 +32,7 @@ final class PlozziOSAppModel {
     private let appAdmission: AppAdmissionModel
 
     static var isStandalonePlaybackAvailable: Bool {
-        #if DEBUG
         true
-        #else
-        false
-        #endif
     }
 
     var admissionContext: AppAdmissionContext {
@@ -106,6 +102,10 @@ final class PlozziOSAppModel {
 
     let accountsProviders: AccountsProvidersModel
     let profiles: ProfilesModel
+    @ObservationIgnored
+    private(set) lazy var familyGuidance = FamilyGuidanceService(
+        accounts: accountsProviders, profiles: profiles, plexHome: plexHomeUsers
+    )
     /// Generic durable title identity for Plozz-owned profile state.
     let mediaAliasLedger: MediaAliasLedgerModel
     let transientStatusPresenter = TransientStatusPresenter()
@@ -124,13 +124,11 @@ final class PlozziOSAppModel {
     @ObservationIgnored
     private(set) lazy var cloudSync: CloudConfigSyncService? = Self.makeCloudSync(for: self)
 
-    #if DEBUG
     @ObservationIgnored
     private(set) lazy var liveTVPortableSync: LiveTVPortableSyncBridge? =
         Self.makeLiveTVPortableSync(profiles: profiles)
     @ObservationIgnored
     var liveTVPortableSyncLifecycle: LiveTVPortableSyncLifecycle?
-    #endif
 
     /// Debounces bursts of local config edits into a single cloud publish.
     @ObservationIgnored
@@ -1069,9 +1067,7 @@ final class PlozziOSAppModel {
         accountsProviders.reloadAccounts()
         plexHomeUsers.resetAllForDebug()
         profiles.resetToPristineDefaultForDebugging()
-        #if DEBUG
         resetLiveTVPortableSync()
-        #endif
         if accountsProviders.accounts.isEmpty { appAdmission.resetForDebugging() }
         pendingLibrarySelection = nil
         pendingFirstRunStep = nil
@@ -1727,7 +1723,6 @@ final class PlozziOSAppModel {
 
     /// Broadcast completion never owns an ordinary playback/resume session.
     func completeLibraryChannelPlayback(for item: MediaItem, authorizationID: UUID) throws {
-        #if DEBUG
         try Task.checkCancellation()
         let profileID = profiles.activeProfileID
         let namespace = profiles.activeNamespace
@@ -1753,9 +1748,6 @@ final class PlozziOSAppModel {
         }
         publishPlaybackMutation(mutation, item: item, watchedPercent: 100)
         applyWatchMutation(mutation)
-        #else
-        throw LibraryChannelError.authorizationChanged
-        #endif
     }
 
     private func publishPlaybackMutation(
