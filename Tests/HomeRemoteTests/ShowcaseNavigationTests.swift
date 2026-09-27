@@ -37,6 +37,85 @@ final class ShowcaseNavigationTests: XCTestCase {
         try checkGeometry(focusStyle: "highlight")
     }
 
+    func testDelayedHomeLoadFinishesAfterBackgrounding() throws {
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = [
+            "--production-home-fixture", "--pinned-home", "--immersive-home", "--slow-home-load",
+        ]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        XCTAssertEqual(app.scrollViews["showcase-rows"].label, "Loading")
+        XCUIRemote.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 5))
+        app.activate()
+        XCTAssertTrue(app.staticTexts["Continue Watching"].waitForExistence(timeout: 20))
+        try enterMediaRow(in: app)
+        XCTAssertTrue(focusedCard(in: app).label.contains("Fixture movie"))
+        XCTAssertLessThan(app.staticTexts["Continue Watching"].frame.maxY, focusedCard(in: app).frame.minY)
+    }
+
+    func testNativeVerticalReversalsKeepAnchorsAndHorizontalFocus() throws {
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = [
+            "--production-home-fixture", "--pinned-home", "--immersive-home",
+        ]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        try enterMediaRow(in: app)
+        let viewport = app.scrollViews["showcase-rows"]
+        XCTAssertTrue(viewport.exists, "Rows move inside a native scroll viewport, not a translated stack.")
+        XCTAssertEqual(viewport.frame.maxY, app.frame.maxY, accuracy: 0.5)
+        XCTAssertTrue(viewport.staticTexts.matching(identifier: "media-row-title").count >= 2)
+        for _ in 0..<8 { XCUIRemote.shared.press(.right) }
+        let first = focusedCard(in: app)
+        let firstLabel = first.label
+        let firstFrame = first.frame
+        let firstHeading = app.staticTexts["Continue Watching"].frame
+        let description = app.staticTexts["A locally supplied movie for measuring the production Home view."].firstMatch
+        let firstHeroY = description.frame.minY
+        XCUIRemote.shared.press(.down)
+        for _ in 0..<3 { XCUIRemote.shared.press(.right) }
+        let second = focusedCard(in: app)
+        let secondLabel = second.label
+        let secondFrame = second.frame
+        let secondHeading = app.staticTexts["Recently Added"].frame
+        let secondHeroY = description.frame.minY
+        XCTAssertNotEqual(firstLabel, secondLabel)
+        for _ in 0..<3 {
+            XCUIRemote.shared.press(.down)
+            XCTAssertEqual(focusedCard(in: app).label, secondLabel, "The last row must retain focus without drift.")
+        }
+        for _ in 0..<8 {
+            XCUIRemote.shared.press(.up)
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertEqual(focusedCard(in: app).label, secondLabel)
+        XCTAssertEqual(focusedCard(in: app).frame.minX, secondFrame.minX, accuracy: 0.5)
+        XCTAssertEqual(focusedCard(in: app).frame.minY, secondFrame.minY, accuracy: 0.5)
+        XCTAssertEqual(app.staticTexts["Recently Added"].frame.minY, secondHeading.minY, accuracy: 0.5)
+        XCTAssertEqual(description.frame.minY, secondHeroY, accuracy: 0.5)
+        XCUIRemote.shared.press(.up)
+        XCTAssertEqual(focusedCard(in: app).label, firstLabel)
+        XCTAssertEqual(focusedCard(in: app).frame.minX, firstFrame.minX, accuracy: 0.5)
+        XCTAssertEqual(focusedCard(in: app).frame.minY, firstFrame.minY, accuracy: 0.5)
+        XCTAssertEqual(app.staticTexts["Continue Watching"].frame.minY, firstHeading.minY, accuracy: 0.5)
+        XCTAssertEqual(description.frame.minY, firstHeroY, accuracy: 0.5)
+
+        XCUIRemote.shared.press(.down)
+        let detailLabel = focusedCard(in: app).label
+        XCTAssertNotEqual(detailLabel, firstLabel)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.staticTexts["Detail fixture \(detailLabel)"].waitForExistence(timeout: 10))
+        XCUIRemote.shared.press(.menu)
+        let returned = NSPredicate { [self] _, _ in focusedCard(in: app).label == detailLabel }
+        XCTAssertEqual(XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: returned, object: nil)], timeout: 10
+        ), .completed, "Returning from detail preserves the same card and horizontal window.")
+        XCTAssertEqual(app.staticTexts["Recently Added"].frame.minY, secondHeading.minY, accuracy: 0.5)
+    }
+
     func testHorizontalNavigationHitches() throws {
         try measureNavigation(vertical: false)
     }

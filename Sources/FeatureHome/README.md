@@ -34,8 +34,16 @@ Preview headings have a 16pt inter-row spacer above them and more room below
 before their cards. Only the active heading lifts, preserving its focus
 clearance. That movement is a title-only drawing offset, not a rail
 relayout. Native card/shadow drawing bounds remain intact.
-The 200ms row transition exposes the next native focus target before rapid
-remote repeats. The schedule badge sits 16pt above the logo slot; Showcase
+Vertical movement uses a real `ScrollView` and UIKit's content-offset animation,
+not a SwiftUI animation of the entire stack. Focus still chooses the row and its
+measured bottom edge determines the exact destination, preserving the hero,
+heading positions and next-row peek. Only the outer viewport's automatic
+scrolling is disabled to avoid a second competing focus-reveal animation;
+horizontal rows stay native and retain their focus and scroll state. The rows
+remain in the original SwiftUI hierarchy, including navigation and accessibility.
+Repeated updates to an unchanged destination never cancel an in-flight scroll,
+and Reduce Motion moves directly to the same anchor.
+The schedule badge sits 16pt above the logo slot; Showcase
 constrains even tall logos to that slot rather than letting artwork grow into
 the badge. The outgoing row fades over 64pt, with its bottom edge trimmed so no
 strip remains above the next row. Earlier rows retain native Up eligibility;

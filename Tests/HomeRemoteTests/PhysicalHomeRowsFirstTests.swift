@@ -1033,13 +1033,18 @@ final class PhysicalHomeRowsFirstTests: XCTestCase {
         func containsFocus(_ node: XCUIElementSnapshot) -> Bool {
             node.hasFocus || node.children.contains(where: containsFocus)
         }
-        func sectionHeadings(_ node: XCUIElementSnapshot) -> [XCUIElementSnapshot] {
-            guard ![.button, .cell, .scrollView, .collectionView].contains(node.elementType) else { return [] }
-            if node.elementType == .staticText, !node.label.isEmpty { return [node] }
-            return node.children.flatMap(sectionHeadings)
+        let headings = descendants(root).filter {
+            $0.elementType == .staticText && $0.identifier == "media-row-title" && !$0.label.isEmpty
         }
-        let headings = sectionHeadings(root).filter { $0.identifier == "media-row-title" }
         guard !headings.isEmpty else {
+            let tree = XCTAttachment(string: app.debugDescription)
+            tree.name = "home-missing-headings"
+            tree.lifetime = .keepAlways
+            add(tree)
+            let screenshot = XCTAttachment(screenshot: app.screenshot())
+            screenshot.name = "home-missing-headings"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
             try fail(.notReady, "No identified Home row headings; refusing to infer a row from hero text.")
         }
         func mediaButtons(_ node: XCUIElementSnapshot) -> [Card] {

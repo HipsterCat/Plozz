@@ -1,5 +1,6 @@
 #if os(tvOS)
 import XCTest
+import UIKit
 import CoreModels
 @testable import FeatureHome
 
@@ -70,6 +71,54 @@ final class FocusHeroModelTests: XCTestCase {
         model.record(height: 540, for: "watchlist")
         model.record(height: 540.3, for: "watchlist")
         XCTAssertEqual(model.rowHeights["watchlist"], 540)
+    }
+
+    func testNativeScrollOwnsRowMovementWithoutRestartingAnUnchangedDestination() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080))
+        let controller = UIViewController()
+        window.rootViewController = controller
+        let viewport = ScrollRecorder(frame: window.bounds)
+        viewport.contentSize = CGSize(width: 1920, height: 3000)
+        controller.view.addSubview(viewport)
+        let horizontal = UIScrollView()
+        viewport.addSubview(horizontal)
+        let position = FocusHeroNativeScrollPosition.PositionView()
+        viewport.addSubview(position)
+        window.isHidden = false
+        defer {
+            position.stop()
+            window.isHidden = true
+        }
+
+        position.move(to: 340, rowID: "continue")
+        XCTAssertEqual(viewport.contentOffset.y, 340)
+        XCTAssertEqual(viewport.requests.last?.animated, false)
+        XCTAssertFalse(viewport.isScrollEnabled)
+        XCTAssertTrue(horizontal.isScrollEnabled, "Pinning must not disable native horizontal navigation.")
+
+        position.move(to: 840, rowID: "posters")
+        XCTAssertEqual(viewport.requests.last?.point.y, 840)
+        XCTAssertEqual(viewport.requests.last?.animated, !UIAccessibility.isReduceMotionEnabled)
+        let count = viewport.requests.count
+        position.move(to: 840, rowID: "posters")
+        XCTAssertEqual(viewport.requests.count, count, "Environment updates must not cancel an in-flight scroll.")
+
+        position.move(to: 340, rowID: "continue")
+        XCTAssertEqual(viewport.requests.last?.point.y, 340, "Reversals retarget the same native viewport.")
+        position.move(to: 356, rowID: "continue")
+        XCTAssertEqual(viewport.contentOffset.y, 356)
+        XCTAssertEqual(viewport.requests.last?.animated, false, "New measurements preserve the settled anchor.")
+        position.stop()
+        XCTAssertTrue(viewport.isScrollEnabled, "Teardown restores the viewport's original policy.")
+    }
+
+    private final class ScrollRecorder: UIScrollView {
+        var requests: [(point: CGPoint, animated: Bool)] = []
+
+        override func setContentOffset(_ contentOffset: CGPoint, animated: Bool) {
+            requests.append((contentOffset, animated))
+            super.setContentOffset(contentOffset, animated: animated)
+        }
     }
 
     func testFocusedSubjectTakesFreshRowStateWithoutAnotherFocusMove() {

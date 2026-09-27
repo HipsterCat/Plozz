@@ -1,5 +1,6 @@
 #if os(tvOS)
 import SwiftUI
+import UIKit
 import CoreModels
 import CoreNetworking
 import CoreUI
@@ -75,7 +76,7 @@ enum FocusHeroLayout {
     /// the bar never tucks away the way it does over the carousel.
     static let columnTopUnderTabBar: CGFloat = 150
     static let columnWidth: CGFloat = 900
-    /// Retains momentum and reveals the next target before the remote's next repeat.
+    /// The heading, mask and hero settle independently of the native scroll animation.
     static let rowAnimation = Animation.smooth(duration: 0.2)
     /// Quick enough to read as immediate as focus moves card to card, but not a cut.
     static let foregroundAnimation = Animation.easeOut(duration: 0.15)
@@ -113,7 +114,7 @@ enum FocusHeroSubject: Equatable {
 /// Which row is pinned and what the hero shows.
 ///
 /// Kept out of the view that builds the rows, so moving from row to row
-/// re-renders only what moves — the rows' offset, their mask, the hero column
+/// re-renders only what moves — the scroll destination, mask, hero column
 /// and the backdrop — and never the rows themselves. Rebuilding every row on
 /// each press is what made quick presses stutter.
 @Observable
@@ -279,11 +280,7 @@ struct FocusHeroHomeView<RowContent: View>: View {
                 spoilerSettings: spoilerSettings,
                 navigationStyle: navigationStyle
             )
-            Color.clear
-                .overlay(alignment: .topLeading) {
-                    FocusHeroRowStack(rows: rows, model: model, rowContent: rowContent)
-                        .modifier(FocusHeroRowOffset(model: model, rows: rows))
-                }
+            FocusHeroScrollingRows(rows: rows, model: model, rowContent: rowContent)
                 .modifier(FocusHeroRowMask(model: model, rows: rows))
                 .environment(\.plozzCardCaptionsHidden, !settings.showsCardCaptions)
                 .environment(\.plozzRowTitleTightening, FocusHeroLayout.rowTitleTightening)
@@ -491,17 +488,117 @@ private struct FocusHeroPreviousRowMask: ViewModifier {
     }
 }
 
-/// Moves the stack so the pinned row's cards end on the shared line.
-private struct FocusHeroRowOffset: ViewModifier {
+private struct FocusHeroScrollingRows<RowContent: View>: View {
+    let rows: [FocusHeroRow]
+    let model: FocusHeroModel
+    let rowContent: (FocusHeroRow, FocusHeroRowReporter) -> RowContent
+    var body: some View {
+        let bottom = FocusHeroLayout.rowsBottom(rowSpacing: FocusHeroLayout.rowSpacing)
+        ScrollView(.vertical) {
+            VStack(spacing: 0) {
+                Color.clear.frame(height: bottom)
+                FocusHeroRowStack(rows: rows, model: model, rowContent: rowContent)
+                Color.clear.frame(height: FocusHeroLayout.screenHeight - bottom)
+            }
+            .background(FocusHeroScrollPosition(model: model, rows: rows))
+        }
+        .scrollIndicators(.hidden)
+        .scrollClipDisabled()
+        .accessibilityIdentifier("showcase-rows")
+    }
+}
+
+/// Only the destination changes in SwiftUI; UIScrollView owns intermediate frames.
+private struct FocusHeroScrollPosition: View {
     let model: FocusHeroModel
     let rows: [FocusHeroRow]
 
-    func body(content: Content) -> some View {
+    var body: some View {
         let spacing = FocusHeroLayout.rowSpacing
         let index = model.activeIndex(in: rows)
-        let bottom = FocusHeroLayout.rowsBottom(rowSpacing: spacing)
-        let y = bottom - model.top(ofRowAt: index, in: rows, rowSpacing: spacing) - model.activeHeight(in: rows)
-        content.offset(y: y)
+        FocusHeroNativeScrollPosition(
+            rowID: model.resolvedActiveRowID(in: rows),
+            y: model.top(ofRowAt: index, in: rows, rowSpacing: spacing) + model.activeHeight(in: rows)
+        )
+    }
+}
+
+struct FocusHeroNativeScrollPosition: UIViewRepresentable {
+    let rowID: String?
+    let y: CGFloat
+
+    func makeUIView(context: Context) -> PositionView {
+        let view = PositionView()
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ view: PositionView, context: Context) {
+        view.move(to: y, rowID: rowID)
+    }
+
+    static func dismantleUIView(_ view: PositionView, coordinator: ()) {
+        view.stop()
+    }
+
+    final class PositionView: UIView {
+        private weak var scroller: UIScrollView?
+        private var wasScrollEnabled = true
+        private var rowID: String?
+        private var y: CGFloat = 0
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            bindScrollView()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            bindScrollView()
+        }
+
+        func move(to y: CGFloat, rowID: String?) {
+            let changed = self.y != y || self.rowID != rowID
+            let animated = self.rowID != nil && self.rowID != rowID
+            self.rowID = rowID
+            self.y = y
+            bindScrollView()
+            guard changed else { return }
+            scroller?.setContentOffset(
+                CGPoint(x: 0, y: y),
+                animated: animated && !UIAccessibility.isReduceMotionEnabled
+            )
+        }
+
+        func stop() {
+            scroller?.isScrollEnabled = wasScrollEnabled
+            scroller = nil
+        }
+
+        private func bindScrollView() {
+            guard window != nil else {
+                stop()
+                return
+            }
+            var ancestor = superview
+            while let view = ancestor {
+                if let scrollView = view as? UIScrollView {
+                    if scroller !== scrollView {
+                        stop()
+                        scroller = scrollView
+                        wasScrollEnabled = scrollView.isScrollEnabled
+                        // The row owns its exact resting destination, while UIKit
+                        // owns scrolling. Do not disable the nested horizontal rails.
+                        scrollView.isScrollEnabled = false
+                        scrollView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+                    } else {
+                        scrollView.isScrollEnabled = false
+                    }
+                    return
+                }
+                ancestor = view.superview
+            }
+        }
     }
 }
 
