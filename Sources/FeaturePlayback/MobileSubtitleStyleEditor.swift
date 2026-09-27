@@ -211,31 +211,39 @@ private struct MobileSubtitleFontView: View {
                     }
                 }
             }
-            NavigationLink("System") {
-                List {
-                    ForEach(SubtitleSystemFonts.all) { entry in
-                        Button {
-                            viewModel.editSubtitleStyle {
-                                $0.systemFont = entry.id
-                                $0.fontDescriptor = nil
-                            }
-                        } label: {
-                            HStack {
-                                entry.name.font(entry.preview)
-                                Spacer()
-                                if viewModel.effectiveStyle.systemFont == entry.id {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
+            Section {
+                NavigationLink("System") {
+                    List {
+                        Section { systemFontRows(SubtitleSystemFonts.captionFonts) }
+                        Section { systemFontRows(SubtitleSystemFonts.installedFonts) }
                     }
+                    .navigationTitle("System")
+                    .navigationBarTitleDisplayMode(.inline)
                 }
-                .navigationTitle("System")
-                .navigationBarTitleDisplayMode(.inline)
+                .font(.body)
             }
         }
         .navigationTitle("Font")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func systemFontRows(_ entries: [SubtitleSystemFonts.Entry]) -> some View {
+        ForEach(entries) { entry in
+            Button {
+                viewModel.editSubtitleStyle {
+                    $0.systemFont = entry.id
+                    $0.fontDescriptor = nil
+                }
+            } label: {
+                HStack {
+                    entry.name.font(entry.preview)
+                    Spacer()
+                    if viewModel.effectiveStyle.systemFont == entry.id {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+        }
     }
 }
 

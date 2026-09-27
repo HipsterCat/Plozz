@@ -1,4 +1,5 @@
 import CoreUI
+@testable import AppShell
 @testable import FeaturePlayback
 import Observation
 import SwiftUI
@@ -9,6 +10,15 @@ import XCTest
 final class SubtitleStyleRepeatHostedTests: XCTestCase {
     private typealias Scope = SubtitleStyleFocusScope<EmptyView>
     private typealias Controller = Scope.Controller
+
+    func testInlineSubtitleEditorOwnsInputEvenWithoutAPresentation() async throws {
+        try await withHeldRow { controller, window, _ in
+            let focused = try XCTUnwrap(UIFocusSystem.focusSystem(for: window)?.focusedItem)
+            XCTAssertNil(window.rootViewController?.presentedViewController)
+            XCTAssertTrue(controller.ownsHorizontalNavigationInput)
+            XCTAssertFalse(NavigationRailEdgeCatcher.permitsNavigationFallback(from: focused))
+        }
+    }
 
     func testReleaseStopsRepeatingAndFreshPressStartsFine() async throws {
         try await withHeldRow { controller, _, moves in
@@ -21,6 +31,23 @@ final class SubtitleStyleRepeatHostedTests: XCTestCase {
             XCTAssertEqual(moves.values.last?.0, .right)
             XCTAssertEqual(moves.values.last?.1, false)
             controller.stopRepeating()
+        }
+    }
+
+    func testSubmenuRightOpensOnceAndLeftDoesNotActivateIt() async throws {
+        try await withHeldRow { controller, _, moves in
+            controller.stopRepeating()
+            controller.adjustableRow = { nil }
+            controller.submenuRow = { 3 }
+            moves.values.removeAll()
+            controller.beginPress(.left)
+            XCTAssertTrue(moves.values.isEmpty)
+            controller.beginPress(.right)
+            XCTAssertEqual(moves.values.count, 1)
+            XCTAssertEqual(moves.values.first?.0, .right)
+            XCTAssertEqual(moves.values.first?.1, false)
+            try await Task.sleep(for: .milliseconds(800))
+            XCTAssertEqual(moves.values.count, 1, "Holding Right must not open further screens.")
         }
     }
 

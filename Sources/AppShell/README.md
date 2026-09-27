@@ -76,6 +76,11 @@ swipes. Left at an unresolved content edge opens the sidebar; Right at an
 unresolved sidebar edge returns to the page. Both paths wait for native focus to
 settle and do nothing if it moved or the sidebar's focus state changed. The Home
 hero disables this fallback and requests entry at its own logical leading edge.
+Unchanged focus is not sufficient evidence of unused input. Focus environments
+conforming to `HorizontalNavigationInputOwning` keep horizontal adjustments,
+and presented screens keep input away from the background rail. The native
+Search controller remains eligible for its keyboard-edge handoff. Press, swipe,
+and deferred Search callbacks recheck ownership before requesting navigation.
 
 On tvOS, indirect touch-down and subsequent movement can use different coordinate
 frames inside wide scrolling rows. `SwipeTravel` anchors at the first movement

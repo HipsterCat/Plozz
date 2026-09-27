@@ -9,6 +9,7 @@ struct SubtitleStyleFocusScope<Content: View>: UIViewControllerRepresentable {
     let content: Content
     let screen: PlayerControls.SubtitleScreen
     let adjustableRow: () -> Int?
+    let submenuRow: () -> Int?
     let onMove: (PlozzMoveCommandDirection, Bool) -> Void
 
     func makeUIViewController(context: Context) -> Controller {
@@ -17,6 +18,7 @@ struct SubtitleStyleFocusScope<Content: View>: UIViewControllerRepresentable {
         controller.safeAreaRegions = []
         controller.screen = screen
         controller.adjustableRow = adjustableRow
+        controller.submenuRow = submenuRow
         controller.onMove = onMove
         return controller
     }
@@ -25,6 +27,7 @@ struct SubtitleStyleFocusScope<Content: View>: UIViewControllerRepresentable {
         controller.screen = screen
         controller.rootView = AnyView(content.environment(\.self, context.environment))
         controller.adjustableRow = adjustableRow
+        controller.submenuRow = submenuRow
         controller.onMove = onMove
         controller.cancelRepeatIfFocusChanged()
     }
@@ -40,8 +43,9 @@ struct SubtitleStyleFocusScope<Content: View>: UIViewControllerRepresentable {
         ))
     }
 
-    final class Controller: UIHostingController<AnyView>, UIGestureRecognizerDelegate {
+    final class Controller: UIHostingController<AnyView>, UIGestureRecognizerDelegate, HorizontalNavigationInputOwning {
         var adjustableRow: (() -> Int?)?
+        var submenuRow: (() -> Int?)?
         var onMove: ((PlozzMoveCommandDirection, Bool) -> Void)?
         var screen: PlayerControls.SubtitleScreen? {
             didSet {
@@ -53,6 +57,7 @@ struct SubtitleStyleFocusScope<Content: View>: UIViewControllerRepresentable {
         private var heldDirection: PlozzMoveCommandDirection?
         private var repeatWork: DispatchWorkItem?
         private var repeatGeneration: UInt64 = 0
+        var ownsHorizontalNavigationInput: Bool { focusedAdjustableRow != nil }
 
         override func viewDidLoad() {
             super.viewDidLoad()
@@ -79,9 +84,10 @@ struct SubtitleStyleFocusScope<Content: View>: UIViewControllerRepresentable {
         }
 
         override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
-            if owns(context.previouslyFocusedItem), adjustableRow?() != nil,
-               !context.focusHeading.intersection([.left, .right]).isEmpty {
-                return false
+            if owns(context.previouslyFocusedItem) {
+                if adjustableRow?() != nil,
+                   !context.focusHeading.intersection([.left, .right]).isEmpty { return false }
+                if submenuRow?() != nil, context.focusHeading.contains(.right) { return false }
             }
             return super.shouldUpdateFocus(in: context)
         }
@@ -97,6 +103,16 @@ struct SubtitleStyleFocusScope<Content: View>: UIViewControllerRepresentable {
             return adjustableRow?()
         }
 
+        private var focusedSubmenuRow: Int? {
+            guard let window = view.window,
+                  owns(UIFocusSystem.focusSystem(for: window)?.focusedItem) else { return nil }
+            return submenuRow?()
+        }
+
+        private func accepts(_ direction: PlozzMoveCommandDirection) -> Bool {
+            focusedAdjustableRow != nil || (direction == .right && focusedSubmenuRow != nil)
+        }
+
         private func owns(_ item: (any UIFocusItem)?) -> Bool {
             guard let item else { return false }
             if let focusedView = item as? UIView, focusedView.isDescendant(of: view) {
@@ -106,27 +122,38 @@ struct SubtitleStyleFocusScope<Content: View>: UIViewControllerRepresentable {
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive press: UIPress) -> Bool {
-            focusedAdjustableRow != nil
+            switch press.type {
+            case .leftArrow: accepts(.left)
+            case .rightArrow: accepts(.right)
+            default: false
+            }
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            focusedAdjustableRow != nil && heldRow == nil
+            (focusedAdjustableRow != nil || focusedSubmenuRow != nil) && heldRow == nil
         }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard focusedAdjustableRow != nil else { return false }
-            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else {
+                return focusedAdjustableRow != nil || focusedSubmenuRow != nil
+            }
             let velocity = pan.velocity(in: view)
             return heldRow == nil && abs(velocity.x) > abs(velocity.y)
+                && accepts(velocity.x < 0 ? .left : .right)
         }
 
         @objc private func swiped(_ recognizer: UIPanGestureRecognizer) {
-            guard recognizer.state == .began, focusedAdjustableRow != nil, heldRow == nil else { return }
-            onMove?(recognizer.velocity(in: view).x < 0 ? .left : .right, false)
+            let direction: PlozzMoveCommandDirection = recognizer.velocity(in: view).x < 0 ? .left : .right
+            guard recognizer.state == .began, heldRow == nil, accepts(direction) else { return }
+            onMove?(direction, false)
         }
 
         func beginPress(_ direction: PlozzMoveCommandDirection) {
             stopRepeating()
+            if direction == .right, focusedSubmenuRow != nil {
+                onMove?(direction, false)
+                return
+            }
             guard let row = focusedAdjustableRow else { return }
             heldRow = row
             heldItem = UIFocusSystem.focusSystem(for: view)?.focusedItem

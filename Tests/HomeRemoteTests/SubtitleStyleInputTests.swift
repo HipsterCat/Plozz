@@ -21,6 +21,8 @@ final class SubtitleStyleInputTests: XCTestCase {
         XCUIRemote.shared.press(.left)
         XCTAssertTrue(row.hasFocus)
         XCTAssertEqual(Int(value.label), initial - 1)
+        XCTAssertEqual(app.staticTexts["subtitle-navigation-open-attempts"].label, "0",
+                       "Adjusting a subtitle must not trigger the window's sidebar fallback.")
         XCUIRemote.shared.press(.right)
         XCTAssertTrue(row.hasFocus)
         XCTAssertEqual(Int(value.label), initial)
@@ -130,6 +132,73 @@ final class SubtitleStyleInputTests: XCTestCase {
         )).firstMatch.hasFocus)
         XCUIRemote.shared.press(.down)
         XCTAssertTrue(font.hasFocus)
+    }
+
+    func testRightOpensFontAndNestedSystemWithoutRepeating() throws {
+        let app = launchFixture()
+        defer { app.terminate() }
+        _ = try focusTextSize(in: app)
+        XCUIRemote.shared.press(.up)
+        XCUIRemote.shared.press(.up)
+        XCTAssertTrue(button(startingWith: "Font", in: app).hasFocus)
+        XCUIRemote.shared.press(.right, forDuration: 1)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@", "OpenDyslexic"
+        )).firstMatch.waitForExistence(timeout: 5))
+        let system = app.buttons.matching(NSPredicate(
+            format: "label == %@ OR label BEGINSWITH %@", "System", "System,"
+        )).firstMatch
+        for _ in 0..<32 where !system.hasFocus { XCUIRemote.shared.press(.down) }
+        XCTAssertTrue(system.hasFocus)
+        let submenuImage = XCTAttachment(screenshot: app.screenshot())
+        submenuImage.name = "System submenu separated from font previews"
+        submenuImage.lifetime = .keepAlways
+        add(submenuImage)
+        XCUIRemote.shared.press(.right, forDuration: 1)
+        let families = [
+            "Default", "Monospaced Serif", "Proportional Serif", "Monospaced Sans Serif",
+            "Proportional Sans Serif", "Casual", "Cursive", "Small Capitals"
+        ]
+        for (index, title) in families.enumerated() {
+            let row = button(startingWith: title, in: app)
+            XCTAssertTrue(row.waitForExistence(timeout: 5))
+            XCTAssertTrue(row.hasFocus, "Apple subtitle families must remain first and keep their row indices.")
+            if index < families.count - 1 { XCUIRemote.shared.press(.down) }
+        }
+        XCUIRemote.shared.press(.down)
+        XCTAssertFalse(button(startingWith: "Small Capitals", in: app).hasFocus)
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Apple subtitle fonts and installed-font divider"
+        image.lifetime = .keepAlways
+        add(image)
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(system.waitForExistence(timeout: 5))
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(button(startingWith: "Font", in: app).waitForExistence(timeout: 5))
+    }
+
+    func testRightOpensEveryOtherSubtitleSubmenu() throws {
+        let app = launchFixture()
+        defer { app.terminate() }
+        _ = try focusTextSize(in: app)
+        for (title, child) in [
+            ("Shadow & Outline", "Text Edge"),
+            ("Background", "Show Window"),
+            ("Dual Subtitles", "Second Track"),
+            ("Subtitle file formatting", "Use File Positions")
+        ] {
+            let row = button(startingWith: title, in: app)
+            for _ in 0..<24 where !row.hasFocus { XCUIRemote.shared.press(.down) }
+            XCTAssertTrue(row.hasFocus)
+            XCUIRemote.shared.press(.right)
+            XCTAssertTrue(button(startingWith: child, in: app).waitForExistence(timeout: 5))
+            XCUIRemote.shared.press(.menu)
+            XCTAssertTrue(button(startingWith: "Font", in: app).waitForExistence(timeout: 5))
+        }
+    }
+
+    private func button(startingWith title: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
     }
 
     private func launchFixture(extra: [String] = []) -> XCUIApplication {

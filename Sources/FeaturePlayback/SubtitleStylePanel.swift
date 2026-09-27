@@ -77,7 +77,7 @@ struct SubtitleStylePanel: View {
             case choice(value: Text, prev: () -> Void, next: () -> Void)
             /// On/off: Select flips.
             case toggle(isOn: Bool, flip: () -> Void)
-            /// Opens a detail sub-screen: Select opens; shows a `›` chevron.
+            /// Opens a detail sub-screen: Select or Right opens; shows a `›` chevron.
             case submenu(summary: Text, open: () -> Void)
             /// One-shot: Select runs it.
             case action(run: () -> Void)
@@ -99,9 +99,18 @@ struct SubtitleStylePanel: View {
     /// + profile persistence). Back lives in the panel header.
     @ViewBuilder
     private func styleScreen(_ rows: [StyleRowSpec], dividerBefore: Int? = nil) -> some View {
+        styleInputScope(rows) {
+            styleRows(rows, dividerBefore: dividerBefore)
+        }
+    }
+
+    @ViewBuilder
+    private func styleInputScope<Content: View>(
+        _ rows: [StyleRowSpec], @ViewBuilder content: () -> Content
+    ) -> some View {
         #if os(tvOS)
         SubtitleStyleFocusScope(
-            content: styleRows(rows, dividerBefore: dividerBefore),
+            content: content(),
             screen: screen,
             adjustableRow: {
                 guard case let .row(slot)? = focus,
@@ -111,6 +120,12 @@ struct SubtitleStylePanel: View {
                 default: return nil
                 }
             },
+            submenuRow: {
+                guard case let .row(slot)? = focus,
+                      let row = rows.first(where: { $0.slot == slot }),
+                      case .submenu = row.kind else { return nil }
+                return slot
+            },
             onMove: { direction, isRepeat in
                 if !isRepeat {
                     styleAccelerator = SubtitleStyleAccelerator()
@@ -119,7 +134,7 @@ struct SubtitleStylePanel: View {
             }
         )
         #else
-        styleRows(rows, dividerBefore: dividerBefore)
+        content()
         #endif
     }
 
@@ -244,6 +259,8 @@ struct SubtitleStylePanel: View {
             prev()
         case let (.right, .choice(_, _, next)):
             next()
+        case let (.right, .submenu(_, open)):
+            open()
         default:
             break
         }
@@ -345,22 +362,29 @@ struct SubtitleStylePanel: View {
     @ViewBuilder
     private var styleFontScreen: some View {
         let current = effectiveStyle.fontFamily
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(SubtitleFontFamily.allCases.enumerated()), id: \.offset) { idx, family in
-                fontChoiceRow(family, index: idx, isSelected: effectiveStyle.fontDescriptor == nil && effectiveStyle.systemFont == nil && family == current)
+        let systemRow = StyleRowSpec(
+            slot: SubtitleFontFamily.allCases.count, title: "System",
+            kind: .submenu(
+                summary: effectiveStyle.fontDescriptor.map { Text(verbatim: $0.displayName) }
+                    ?? effectiveStyle.systemFont.map(SubtitleSystemFonts.displayName) ?? Text(verbatim: ""),
+                open: { openScreen(.styleSystemFont) }
+            )
+        )
+        styleInputScope([systemRow]) {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(SubtitleFontFamily.allCases.enumerated()), id: \.offset) { idx, family in
+                    fontChoiceRow(family, index: idx, isSelected: effectiveStyle.fontDescriptor == nil && effectiveStyle.systemFont == nil && family == current)
+                }
+                PlozzDivider()
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+                styleRow(systemRow)
+                    .font(.body)
             }
-            styleRow(StyleRowSpec(
-                slot: SubtitleFontFamily.allCases.count, title: "System",
-                kind: .submenu(
-                    summary: effectiveStyle.fontDescriptor.map { Text(verbatim: $0.displayName) }
-                        ?? effectiveStyle.systemFont.map(SubtitleSystemFonts.displayName) ?? Text(verbatim: ""),
-                    open: { openScreen(.styleSystemFont) }
-                )
-            ))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .top)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .top)
     }
 
     @ViewBuilder
@@ -391,6 +415,11 @@ struct SubtitleStylePanel: View {
     private var systemFontScreen: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(SubtitleSystemFonts.all.enumerated()), id: \.element.id) { index, entry in
+                if index == SubtitleSystemFonts.captionFonts.count {
+                    PlozzDivider()
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                }
                 Button {
                     updateStyle { $0.systemFont = entry.id; $0.fontDescriptor = nil }
                     openScreen(.style)

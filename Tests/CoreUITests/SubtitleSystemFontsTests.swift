@@ -107,6 +107,15 @@ final class SubtitleSystemFontsTests: XCTestCase {
         XCTAssertEqual(Set(SubtitleSystemFonts.all.map(\.id)).count, SubtitleSystemFonts.all.count)
     }
 
+    func testAppleSubtitleFamiliesPrecedeAllOtherSystemFonts() {
+        let families = SubtitleSystemFont.CaptionFamily.allCases
+        XCTAssertEqual(SubtitleSystemFonts.all.prefix(families.count).map(\.id), families.map { .caption($0) })
+        XCTAssertEqual(
+            SubtitleSystemFonts.all.dropFirst(families.count).map(\.id),
+            SubtitleSystemFonts.installedFonts.map(\.id)
+        )
+    }
+
     func testChoosingSystemFontDoesNotEnableSystemAppearance() throws {
         var style = SubtitleStyle.default
         style.textColor = .yellow

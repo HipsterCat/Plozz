@@ -2,12 +2,15 @@ import CoreModels
 import CoreUI
 import SwiftUI
 import UIKit
+@testable import AppShell
 @testable import FeaturePlayback
 
 struct SubtitleStyleInputFixture: View {
     @State private var model = PlayerControlsModel()
     @State private var engine = SubtitleInputFixtureEngine()
     @State private var subtitles = LiveSubtitleModel()
+    @State private var playerPresented = false
+    @State private var navigationOpenAttempts = 0
 
     init() {
         let model = PlayerControlsModel()
@@ -28,6 +31,26 @@ struct SubtitleStyleInputFixture: View {
     }
 
     var body: some View {
+        Group {
+            if ProcessInfo.processInfo.arguments.contains("--production-player-input") {
+                Color.black
+                    .fullScreenCover(isPresented: $playerPresented) { playerContent }
+                    .task { playerPresented = true }
+            } else {
+                playerContent
+            }
+        }
+        .background {
+            NavigationRailEdgeCatcher(
+                onOpenNavigation: { navigationOpenAttempts += 1 },
+                onLeaveNavigation: {},
+                railHasFocus: false, isEnabled: true
+            )
+            .frame(width: 0, height: 0)
+        }
+    }
+
+    private var playerContent: some View {
         Group {
             if ProcessInfo.processInfo.arguments.contains("--production-player-input") {
                 CustomPlayerContainer(
@@ -60,9 +83,13 @@ struct SubtitleStyleInputFixture: View {
         }
 
         .overlay(alignment: .topLeading) {
-            Text(verbatim: String(Int((model.subtitleStyle.fontScale * 100).rounded())))
-                .accessibilityIdentifier("subtitle-text-size-value")
-                .allowsHitTesting(false)
+            VStack {
+                Text(verbatim: String(Int((model.subtitleStyle.fontScale * 100).rounded())))
+                    .accessibilityIdentifier("subtitle-text-size-value")
+                Text(verbatim: String(navigationOpenAttempts))
+                    .accessibilityIdentifier("subtitle-navigation-open-attempts")
+            }
+            .allowsHitTesting(false)
         }
     }
 }

@@ -1,6 +1,7 @@
 #if os(tvOS)
 import XCTest
 import UIKit
+import CoreUI
 @testable import AppShell
 
 @MainActor
@@ -121,6 +122,19 @@ final class NavigationRailEdgeCatcherTests: XCTestCase {
     func testOrdinaryFocusTargetsAllowEdgeNavigation() {
         XCTAssertTrue(NavigationRailEdgeCatcher.permitsNavigationFallback(from: UIButton()))
         XCTAssertFalse(NavigationRailEdgeCatcher.permitsNavigationFallback(from: nil))
+    }
+
+    func testAdjustableAncestorOwnsHorizontalInputWithoutMovingFocus() {
+        let owner = AdjustableView()
+        let button = UIButton()
+        owner.addSubview(button)
+        XCTAssertFalse(NavigationRailEdgeCatcher.permitsNavigationFallback(from: button))
+        owner.ownsHorizontalNavigationInput = false
+        XCTAssertTrue(NavigationRailEdgeCatcher.permitsNavigationFallback(from: button))
+    }
+
+    private final class AdjustableView: UIView, HorizontalNavigationInputOwning {
+        var ownsHorizontalNavigationInput = true
     }
 }
 #endif
