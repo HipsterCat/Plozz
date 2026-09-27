@@ -2,6 +2,46 @@ import XCTest
 
 @MainActor
 final class SubtitleStyleInputTests: XCTestCase {
+    func testClicksAndHeldDirectionsThroughProductionPlayerInput() throws {
+        let app = launchFixture(extra: ["--production-player-input"])
+        defer { app.terminate() }
+        let subtitles = app.buttons["Subtitles"]
+        XCTAssertTrue(subtitles.waitForExistence(timeout: 10))
+        XCUIRemote.shared.press(.up)
+        XCTAssertTrue(subtitles.hasFocus)
+        XCUIRemote.shared.press(.select)
+        let style = app.buttons["Style"]
+        XCTAssertTrue(style.waitForExistence(timeout: 5))
+        for _ in 0..<4 where !style.hasFocus { XCUIRemote.shared.press(.up) }
+        XCTAssertTrue(style.hasFocus, app.debugDescription)
+        XCUIRemote.shared.press(.select)
+        let row = try focusTextSize(in: app)
+        let value = app.staticTexts["subtitle-text-size-value"]
+        let initial = try XCTUnwrap(Int(value.label))
+        XCUIRemote.shared.press(.left)
+        XCTAssertTrue(row.hasFocus)
+        XCTAssertEqual(Int(value.label), initial - 1)
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(row.hasFocus)
+        XCTAssertEqual(Int(value.label), initial)
+        XCUIRemote.shared.press(.right, forDuration: 1)
+        let afterRight = try XCTUnwrap(Int(value.label))
+        XCTAssertGreaterThan(afterRight, initial + 2)
+        XCTAssertTrue(row.hasFocus)
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(Int(value.label), afterRight)
+        XCUIRemote.shared.press(.left, forDuration: 1)
+        let afterLeft = try XCTUnwrap(Int(value.label))
+        XCTAssertLessThan(afterLeft, afterRight - 2)
+        XCTAssertTrue(row.hasFocus)
+        XCUIRemote.shared.press(.up)
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(Int(value.label), afterLeft)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Weight")).firstMatch.hasFocus)
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(style.waitForExistence(timeout: 5))
+    }
+
     func testHorizontalPressesAdjustTextSizeWithoutFocusingBack() throws {
         let app = launchFixture(extra: ["--nearby-back"])
         defer { app.terminate() }
@@ -9,13 +49,11 @@ final class SubtitleStyleInputTests: XCTestCase {
         let value = app.staticTexts["subtitle-text-size-value"]
         let initial = try XCTUnwrap(Int(value.label))
         for index in 1...8 {
-            Thread.sleep(forTimeInterval: 0.4)
             XCUIRemote.shared.press(.left)
             XCTAssertTrue(row.hasFocus, "Left must adjust Text Size, never select the header's Back button.")
             XCTAssertEqual(Int(value.label), initial - index)
         }
         for index in 1...8 {
-            Thread.sleep(forTimeInterval: 0.4)
             XCUIRemote.shared.press(.right)
             XCTAssertTrue(row.hasFocus)
             XCTAssertEqual(Int(value.label), initial - 8 + index)
@@ -61,8 +99,11 @@ final class SubtitleStyleInputTests: XCTestCase {
         }
         XCUIRemote.shared.press(.left, forDuration: 1.5)
         XCTAssertTrue(row.hasFocus)
-        XCTAssertLessThan(try XCTUnwrap(Int(value.label)), maximum)
+        XCTAssertLessThan(try XCTUnwrap(Int(value.label)), maximum - 2,
+                          "A held click must keep stepping, not act as one tap.")
         let afterHold = try XCTUnwrap(Int(value.label))
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(Int(value.label), afterHold, "Releasing the click must stop repeating.")
         for _ in 0..<8 {
             XCUIRemote.shared.press(.left)
             XCTAssertTrue(row.hasFocus)

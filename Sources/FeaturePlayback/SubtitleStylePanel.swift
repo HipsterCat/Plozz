@@ -93,8 +93,8 @@ struct SubtitleStylePanel: View {
     /// a single full-width Button (one focus target spanning the width, so vertical
     /// focus lands predictably), value right-aligned. Steppers reveal −/+ glyphs
     /// only while focused (press ←/→ on the remote to adjust). A native focus
-    /// scope reserves horizontal input for adjustable rows; its rejected moves
-    /// reach the container's move handler while Up/Down stay native.
+    /// scope consumes horizontal clicks/swipes and repeats held clicks while
+    /// Up/Down stay native.
     /// Edits funnel through `updateStyle` → `actions.setSubtitleStyle` (live overlay
     /// + profile persistence). Back lives in the panel header.
     @ViewBuilder
@@ -102,13 +102,20 @@ struct SubtitleStylePanel: View {
         #if os(tvOS)
         SubtitleStyleFocusScope(
             content: styleRows(rows, dividerBefore: dividerBefore),
-            canAdjust: {
+            screen: screen,
+            adjustableRow: {
                 guard case let .row(slot)? = focus,
-                      let row = rows.first(where: { $0.slot == slot }) else { return false }
+                      let row = rows.first(where: { $0.slot == slot }) else { return nil }
                 switch row.kind {
-                case .number, .choice: return true
-                default: return false
+                case .number, .choice: return slot
+                default: return nil
                 }
+            },
+            onMove: { direction, isRepeat in
+                if !isRepeat {
+                    styleAccelerator = SubtitleStyleAccelerator()
+                }
+                handleStyleMove(direction, rows: rows)
             }
         )
         #else
@@ -142,9 +149,6 @@ struct SubtitleStylePanel: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .top)
-        .plozzMoveCommand { direction in
-            handleStyleMove(direction, rows: rows)
-        }
     }
 
     /// One rendered row, laid out to match the track/audio rows exactly: a full-width

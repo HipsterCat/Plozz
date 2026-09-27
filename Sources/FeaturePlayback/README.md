@@ -105,7 +105,10 @@ Cancel leaves the style untouched. Disabling matching and the first custom edit
 remain immediate.
 On tvOS, numeric and choice rows reserve Left/Right for adjustment, including
 at numeric bounds. The native focus scope prevents diagonal escapes to Back
-without changing Up/Down navigation; the move handler alone applies each step.
+without changing Up/Down navigation. It consumes horizontal clicks and swipes
+directly instead of relying on SwiftUI's fallback move command. Each click/swipe
+starts with one fine step; held clicks repeat after a short delay and accelerate,
+stopping on release, cancellation, focus loss, dismissal, or app deactivation.
 The matching option names the device directly, without a focus-dependent helper
 paragraph changing the rows' positions.
 Explicit system font, text-color and opacity overrides take precedence over
