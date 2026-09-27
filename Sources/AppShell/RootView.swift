@@ -241,14 +241,32 @@ public struct RootView: View {
     private var featureIntroductionStartupReady: Bool {
         startupPresentationReady
             && pendingFeatureIntroduction == nil
-            && featureIntroductionStore.needsPresentation(.navigationStyles)
+            && !isDismissingFeatureIntroduction
+            && nextFeatureIntroduction != nil
+    }
+
+    private var nextFeatureIntroduction: FeatureIntroduction? {
+        [.navigationStyles, .homeLayout].first {
+            featureIntroductionStore.needsPresentation($0)
+        }
     }
 
     private var releaseNotesStartupReady: Bool {
         startupPresentationReady
             && pendingFeatureIntroduction == nil
             && !isDismissingFeatureIntroduction
-            && !featureIntroductionStore.needsPresentation(.navigationStyles)
+            && nextFeatureIntroduction == nil
+    }
+
+    private func completeAppearanceIntroductions() {
+        featureIntroductionStore.markCompleted(.navigationStyles)
+        featureIntroductionStore.markCompleted(.homeLayout)
+    }
+
+    private func dismissFeatureIntroduction(_ introduction: FeatureIntroduction) {
+        featureIntroductionStore.markCompleted(introduction)
+        isDismissingFeatureIntroduction = true
+        pendingFeatureIntroduction = nil
     }
 
     private func makeLibraryChannelCompletionHandler(
@@ -319,9 +337,7 @@ public struct RootView: View {
                     profile: setupProfile,
                     librariesStore: setupLibraries,
                     deviceColorScheme: systemColorScheme,
-                    onNavigationSelected: {
-                        featureIntroductionStore.markCompleted(.navigationStyles)
-                    }
+                    onAppearanceSelected: completeAppearanceIntroductions
                 )
             } else {
                 switch appState.state {
@@ -335,9 +351,7 @@ public struct RootView: View {
                     canReturnToApp: canReturnToApp,
                     deviceColorScheme: systemColorScheme,
                     onSetUpFromAnotherDevice: canReturnToApp ? nil : { showSyncReceive = true },
-                    onNavigationSelected: {
-                        featureIntroductionStore.markCompleted(.navigationStyles)
-                    }
+                    onAppearanceSelected: completeAppearanceIntroductions
                 )
                 .fullScreenCover(isPresented: $showSyncReceive) {
                     SyncSetupReceiveView(appState: appState) { showSyncReceive = false }
@@ -688,7 +702,7 @@ public struct RootView: View {
         }
         .task(id: featureIntroductionStartupReady) {
             if featureIntroductionStartupReady {
-                pendingFeatureIntroduction = .navigationStyles
+                pendingFeatureIntroduction = nextFeatureIntroduction
             }
         }
         .fullScreenCover(
@@ -700,9 +714,14 @@ public struct RootView: View {
                 SelectNavigationStyleView(
                     appState: appState,
                     onContinue: {
-                        featureIntroductionStore.markCompleted(introduction)
-                        isDismissingFeatureIntroduction = true
-                        pendingFeatureIntroduction = nil
+                        dismissFeatureIntroduction(introduction)
+                    }
+                )
+            case .homeLayout:
+                SelectHomeLayoutView(
+                    hero: appState.profileSettings.heroSettingsModel,
+                    onContinue: {
+                        dismissFeatureIntroduction(introduction)
                     }
                 )
             default:
@@ -728,7 +747,7 @@ public struct RootView: View {
             ReleaseNotesStartupView(model: releaseNotes)
         }
         // One-time appearance flow for a profile just created in-app. The app has
-        // already switched profiles, so both choices write to its namespace.
+        // already switched profiles, so all choices write to its namespace.
         .fullScreenCover(
             isPresented: Binding(
                 get: { appState.profileFlow.isPickingAppearanceForNewProfile },
@@ -742,7 +761,7 @@ public struct RootView: View {
                 appState: appState,
                 deviceColorScheme: systemColorScheme,
                 onComplete: {
-                    featureIntroductionStore.markCompleted(.navigationStyles)
+                    completeAppearanceIntroductions()
                     appState.finishNewProfileAppearanceSelection()
                 }
             )
@@ -897,6 +916,7 @@ private enum OnboardingPage: Equatable {
     case selectSeerr
     case selectTheme
     case selectNavigation
+    case selectHomeLayout
 
     init(
         step: OnboardingStep,
@@ -920,6 +940,8 @@ private enum OnboardingPage: Equatable {
             self = .selectTheme
         case .selectNavigation:
             self = .selectNavigation
+        case .selectHomeLayout:
+            self = .selectHomeLayout
         }
     }
 
@@ -933,6 +955,7 @@ private enum OnboardingPage: Equatable {
         case .selectSeerr: 5
         case .selectTheme: 6
         case .selectNavigation: 7
+        case .selectHomeLayout: 8
         }
     }
 
@@ -954,6 +977,8 @@ private enum OnboardingPage: Equatable {
             "selectTheme"
         case .selectNavigation:
             "selectNavigation"
+        case .selectHomeLayout:
+            "selectHomeLayout"
         }
     }
 }
@@ -964,7 +989,7 @@ private struct OnboardingFlowView: View {
     let canReturnToApp: Bool
     let deviceColorScheme: ColorScheme
     var onSetUpFromAnotherDevice: (() -> Void)?
-    var onNavigationSelected: (() -> Void)?
+    var onAppearanceSelected: (() -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var displayedPage: OnboardingPage
@@ -978,14 +1003,14 @@ private struct OnboardingFlowView: View {
         canReturnToApp: Bool,
         deviceColorScheme: ColorScheme,
         onSetUpFromAnotherDevice: (() -> Void)? = nil,
-        onNavigationSelected: (() -> Void)? = nil
+        onAppearanceSelected: (() -> Void)? = nil
     ) {
         self.appState = appState
         self.step = step
         self.canReturnToApp = canReturnToApp
         self.deviceColorScheme = deviceColorScheme
         self.onSetUpFromAnotherDevice = onSetUpFromAnotherDevice
-        self.onNavigationSelected = onNavigationSelected
+        self.onAppearanceSelected = onAppearanceSelected
         _displayedPage = State(initialValue: OnboardingPage(
             step: step,
             canReturnToApp: canReturnToApp,
@@ -1000,7 +1025,7 @@ private struct OnboardingFlowView: View {
                 appState: appState,
                 deviceColorScheme: deviceColorScheme,
                 onSetUpFromAnotherDevice: onSetUpFromAnotherDevice,
-                onNavigationSelected: onNavigationSelected
+                onAppearanceSelected: onAppearanceSelected
             )
             .id(displayedPage.transitionID)
             .geometryGroup()
@@ -1073,7 +1098,7 @@ private struct OnboardingPageContent: View {
     let appState: AppState
     let deviceColorScheme: ColorScheme
     var onSetUpFromAnotherDevice: (() -> Void)?
-    var onNavigationSelected: (() -> Void)?
+    var onAppearanceSelected: (() -> Void)?
 
     @ViewBuilder
     var body: some View {
@@ -1200,9 +1225,14 @@ private struct OnboardingPageContent: View {
         case .selectNavigation:
             SelectNavigationStyleView(
                 appState: appState,
+                onContinue: { appState.finishNavigationSelection() }
+            )
+        case .selectHomeLayout:
+            SelectHomeLayoutView(
+                hero: appState.profileSettings.heroSettingsModel,
                 onContinue: {
-                    onNavigationSelected?()
-                    appState.finishNavigationSelection()
+                    onAppearanceSelected?()
+                    appState.finishHomeLayoutSelection()
                 }
             )
         }
@@ -1221,7 +1251,7 @@ private struct ProfileSetupFlowView: View {
     let profile: Profile
     let librariesStore: ProfileSetupLibrariesLoader
     let deviceColorScheme: ColorScheme
-    let onNavigationSelected: () -> Void
+    let onAppearanceSelected: () -> Void
     @State private var stage: ProfileSetupStage = .libraries
     @StateObject private var librariesNavigation = ProfileSetupNavigationState()
 
@@ -1312,9 +1342,14 @@ private struct ProfileSetupFlowView: View {
         case .navigation:
             SelectNavigationStyleView(
                 appState: appState,
+                onContinue: { stage = .homeLayout }
+            )
+        case .homeLayout:
+            SelectHomeLayoutView(
+                hero: appState.profileSettings.heroSettingsModel,
                 onContinue: {
                     appState.completeProfileAppearanceSetup(for: profile.id)
-                    onNavigationSelected()
+                    onAppearanceSelected()
                     stage = .lock
                 }
             )
@@ -1343,6 +1378,7 @@ private enum ProfileSetupStage {
     case seerr
     case theme
     case navigation
+    case homeLayout
     case lock
 }
 

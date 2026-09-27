@@ -2,6 +2,36 @@
 import Observation
 import SwiftUI
 
+enum SystemCaptionStyleCopy {
+    static var optionTitle: LocalizedStringResource {
+        #if os(tvOS)
+        LocalizedStringResource(
+            "Match Apple TV Subtitle Style",
+            comment: "Toggle: use this Apple TV's system subtitle appearance instead of a custom Plozz appearance."
+        )
+        #else
+        LocalizedStringResource(
+            "Match Device Subtitle Style",
+            comment: "Toggle: use this iPhone or iPad's system subtitle appearance instead of a custom Plozz appearance."
+        )
+        #endif
+    }
+
+    static var confirmationTitle: LocalizedStringResource {
+        #if os(tvOS)
+        LocalizedStringResource(
+            "Match Apple TV Subtitle Style?",
+            comment: "Confirmation title before replacing the custom subtitle appearance with this Apple TV's system appearance."
+        )
+        #else
+        LocalizedStringResource(
+            "Match Device Subtitle Style?",
+            comment: "Confirmation title before replacing the custom subtitle appearance with this iPhone or iPad's system appearance."
+        )
+        #endif
+    }
+}
+
 @MainActor
 @Observable
 final class SystemCaptionStyleConfirmation {
@@ -35,9 +65,11 @@ struct SystemCaptionStyleConfirmationDialog: ViewModifier {
     let apply: (Bool) -> Void
 
     func body(content: Content) -> some View {
-        content.alert("Use System Subtitle Style?", isPresented: $confirmation.isPresented) {
+        content.alert(Text(SystemCaptionStyleCopy.confirmationTitle), isPresented: $confirmation.isPresented) {
             Button("Cancel", role: .cancel) { confirmation.cancel() }
-            Button("Use System Style", role: .destructive) { confirmation.confirm(apply: apply) }
+            Button(role: .destructive) { confirmation.confirm(apply: apply) } label: {
+                Text("Match Style", comment: "Confirm replacing the custom subtitle appearance with this device's system subtitle appearance.")
+            }
         } message: {
             Text("This will replace your custom subtitle style with your device's system subtitle style.")
         }

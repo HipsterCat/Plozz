@@ -7,7 +7,6 @@ import CoreUI
 /// Watching pickers: a drawn preview of each layout with the active one ringed.
 struct HomeLayoutPicker: View {
     @Binding var layout: HeroStyle
-    @Environment(\.themePalette) private var palette
     @State private var width: CGFloat = 0
 
     private static let spacing: CGFloat = 16
@@ -23,16 +22,12 @@ struct HomeLayoutPicker: View {
     var body: some View {
         HStack(alignment: .top, spacing: Self.spacing) {
             ForEach(HeroStyle.allCases, id: \.self) { option in
-                PreviewCard(
-                    title: option.layoutTitle,
+                HomeLayoutOptionCard(
+                    style: option,
                     isSelected: layout == option,
-                    accent: palette.accent,
-                    compact: true,
                     swatchHeight: swatchHeight,
                     action: { layout = option }
-                ) {
-                    HomeLayoutSwatch(style: option, cornerRadius: PlozzTheme.Metrics.Radius.content)
-                }
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -40,43 +35,4 @@ struct HomeLayoutPicker: View {
     }
 }
 
-extension HeroStyle {
-    /// The layout's name: the full-screen hero with its buttons, or the
-    /// row-at-a-time Showcase whose top follows the focused card.
-    var layoutTitle: LocalizedStringResource {
-        switch self {
-        case .carousel:
-            LocalizedStringResource(
-                "homeLayout.fullscreenHero",
-                defaultValue: "Fullscreen Hero",
-                comment: "Apple TV Home layout option: a full-screen featured title with Play and other buttons above the rows."
-            )
-        case .followsFocus:
-            LocalizedStringResource(
-                "homeLayout.showcase",
-                defaultValue: "Showcase",
-                comment: "Apple TV Home layout option: one row at a time, with the top of the screen showing whichever title is focused."
-            )
-        }
-    }
-}
-
-extension HeroBackdropTransition {
-    var settingsTitle: LocalizedStringResource {
-        switch self {
-        case .crossfade:
-            LocalizedStringResource(
-                "homeLayout.transition.crossfade",
-                defaultValue: "Crossfade",
-                comment: "Option for how the Home background changes between titles: the old picture fades into the new one."
-            )
-        case .slide:
-            LocalizedStringResource(
-                "homeLayout.transition.slide",
-                defaultValue: "Slide",
-                comment: "Option for how the Home background changes between titles: the new picture slides in."
-            )
-        }
-    }
-}
 #endif

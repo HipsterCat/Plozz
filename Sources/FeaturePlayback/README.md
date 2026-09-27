@@ -82,7 +82,8 @@ path. None of these diagnostics change the audio selection policy.
 
 ## Subtitle appearance
 
-`Use System Subtitle Style` reads this device's subtitle appearance through
+`Match Apple TV Subtitle Style` (`Match Device Subtitle Style` on mobile)
+reads this device's subtitle appearance through
 MediaAccessibility and applies it to Plozz's text overlay, including Plozzigen
 playback. The actual system typeface is retained even when it is not in Plozz's
 font picker, including descriptor features such as small capitals. Text-line
@@ -102,6 +103,11 @@ matching off; it is intentionally different from the new-profile default.
 Enabling matching over a custom style requires confirmation in both editors;
 Cancel leaves the style untouched. Disabling matching and the first custom edit
 remain immediate.
+On tvOS, numeric and choice rows reserve Left/Right for adjustment, including
+at numeric bounds. The native focus scope prevents diagonal escapes to Back
+without changing Up/Down navigation; the move handler alone applies each step.
+The matching option names the device directly, without a focus-dependent helper
+paragraph changing the rows' positions.
 Explicit system font, text-color and opacity overrides take precedence over
 the corresponding source formatting. Image-based subtitles retain their authored
 pixels. This maps Apple's public appearance settings, not its private layout

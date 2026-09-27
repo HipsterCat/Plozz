@@ -267,7 +267,6 @@ struct FocusHeroHomeView<RowContent: View>: View {
         ZStack(alignment: .topLeading) {
             FocusHeroBackdropLayer(
                 model: model,
-                transition: settings.backdropTransition,
                 navigationStyle: navigationStyle,
                 isFrontmost: isFrontmost
             )
@@ -637,7 +636,6 @@ private struct FocusHeroRowMask: ViewModifier {
 
 private struct FocusHeroBackdropLayer: View {
     let model: FocusHeroModel
-    let transition: HeroBackdropTransition
     let navigationStyle: NavigationStyle
     let isFrontmost: Bool
     @Environment(\.colorScheme) private var colorScheme
@@ -658,7 +656,7 @@ private struct FocusHeroBackdropLayer: View {
                 height: height,
                 scrimTone: colorScheme == .dark ? .black : .white,
                 scrimOpacity: isFrontmost ? 1 : 0,
-                transition: transition == .slide ? .wipe : .crossfade,
+                transition: .crossfade,
                 scrimStyle: .browse
             )
             .allowsHitTesting(false)

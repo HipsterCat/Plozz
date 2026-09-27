@@ -23,6 +23,27 @@ final class FeatureIntroductionStoreTests: XCTestCase {
         XCTAssertFalse(store.needsPresentation(.navigationStyles))
     }
 
+    func testHomeLayoutIsOfferedOnceEvenWhenNavigationWasAlreadyCompleted() {
+        let defaults = makeDefaults()
+        let store = FeatureIntroductionStore(defaults: defaults)
+        store.markCompleted(.navigationStyles)
+
+        XCTAssertTrue(store.needsPresentation(.homeLayout))
+        store.markCompleted(.homeLayout)
+
+        let restored = FeatureIntroductionStore(defaults: defaults)
+        XCTAssertFalse(restored.needsPresentation(.homeLayout))
+        XCTAssertFalse(restored.needsPresentation(.navigationStyles))
+    }
+
+    func testCompletingHomeLayoutDoesNotCompleteNavigation() {
+        let store = FeatureIntroductionStore(defaults: makeDefaults())
+        store.markCompleted(.homeLayout)
+
+        XCTAssertFalse(store.needsPresentation(.homeLayout))
+        XCTAssertTrue(store.needsPresentation(.navigationStyles))
+    }
+
     func testHigherVersionPresentsAgain() {
         let store = FeatureIntroductionStore(defaults: makeDefaults())
         let first = FeatureIntroduction(id: "example", version: 1)

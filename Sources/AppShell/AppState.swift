@@ -1786,11 +1786,14 @@ public final class AppState {
         apply(.themeSelected)
     }
 
-    /// Completes first-run appearance setup and enters the app. Applying any Plex
-    /// Home-user binding (which can raise a PIN prompt) is deferred until here so
-    /// it never stacks over either appearance picker.
+    /// Advances first-run navigation selection to Home layout.
     public func finishNavigationSelection() {
         apply(.navigationSelected)
+    }
+
+    /// Defers Plex PIN presentation until all appearance choices are complete.
+    public func finishHomeLayoutSelection() {
+        apply(.homeLayoutSelected)
         plexHomeUsers.ensurePlexIdentityForActiveProfile()
     }
 

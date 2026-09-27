@@ -88,18 +88,6 @@ struct CustomizeHomeDetailView: View {
             HomeLayoutPicker(layout: $hero.settings.style)
 
             if hero.settings.style == .followsFocus {
-                SettingsDetailGroup(title: LocalizedStringResource(
-                    "homeLayout.backgroundTransition",
-                    defaultValue: "Background transition",
-                    comment: "Settings section: how the Home background changes as focus moves between titles."
-                )) {
-                    SettingsOptionList(
-                        options: HeroBackdropTransition.allCases,
-                        selection: $hero.settings.backdropTransition,
-                        bordered: false,
-                        title: { Text($0.settingsTitle) }
-                    )
-                }
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle(isOn: $hero.settings.showsCardCaptions) {
                         Text(LocalizedStringResource(

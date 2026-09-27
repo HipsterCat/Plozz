@@ -49,6 +49,10 @@ the badge. The outgoing row fades over 64pt, with its bottom edge trimmed so no
 strip remains above the next row. Earlier rows retain native Up eligibility;
 making their entire mask transparent would break that navigation. Showcase's
 backdrop uses wider leading and bottom gradients without lengthening its crossfade.
+Crossfade is the only Showcase backdrop transition. The retired slide preference
+is ignored when reading older settings without resetting the remaining choices.
+Showcase's optional titles under cards remain in Customize Home > Home Layout;
+they do not control title visibility elsewhere in the app.
 
 Native poster layout slots use artwork size on both axes. TVUIKit's focus
 margins settle after realization and draw outside that slot; feeding their

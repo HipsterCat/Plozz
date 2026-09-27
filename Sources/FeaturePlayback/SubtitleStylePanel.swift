@@ -92,13 +92,31 @@ struct SubtitleStylePanel: View {
     /// tweak previews instantly on the real subtitles behind the panel. Each row is
     /// a single full-width Button (one focus target spanning the width, so vertical
     /// focus lands predictably), value right-aligned. Steppers reveal −/+ glyphs
-    /// only while focused (press ←/→ on the remote to adjust); the container's
-    /// `.onMoveCommand` — attached to the non-focusable VStack so children keep
-    /// native up/down nav — dispatches those left/right steps to the focused row.
+    /// only while focused (press ←/→ on the remote to adjust). A native focus
+    /// scope reserves horizontal input for adjustable rows; its rejected moves
+    /// reach the container's move handler while Up/Down stay native.
     /// Edits funnel through `updateStyle` → `actions.setSubtitleStyle` (live overlay
     /// + profile persistence). Back lives in the panel header.
     @ViewBuilder
     private func styleScreen(_ rows: [StyleRowSpec], dividerBefore: Int? = nil) -> some View {
+        #if os(tvOS)
+        SubtitleStyleFocusScope(
+            content: styleRows(rows, dividerBefore: dividerBefore),
+            canAdjust: {
+                guard case let .row(slot)? = focus,
+                      let row = rows.first(where: { $0.slot == slot }) else { return false }
+                switch row.kind {
+                case .number, .choice: return true
+                default: return false
+                }
+            }
+        )
+        #else
+        styleRows(rows, dividerBefore: dividerBefore)
+        #endif
+    }
+
+    private func styleRows(_ rows: [StyleRowSpec], dividerBefore: Int?) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(rows) { row in
                 if let d = dividerBefore, row.slot == d {
@@ -108,14 +126,6 @@ struct SubtitleStylePanel: View {
                 }
                 styleRow(row)
                 if screen == .style, row.slot == 0 {
-                    if focus == .row(0) {
-                        Text("Matches the subtitle style set on this Apple TV.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                    }
                     PlozzDivider()
                         .padding(.horizontal, 16)
                         .padding(.vertical, 6)
@@ -158,7 +168,10 @@ struct SubtitleStylePanel: View {
             // checkmark uses. Title and trailing element therefore carry equal edge
             // gutters (no extra leading slot pushing the title in).
             HStack(spacing: 10) {
-                Text(row.title).font(.body).lineLimit(1)
+                Text(row.title)
+                    .font(.body)
+                    .lineLimit(screen == .style && row.slot == 0 ? 2 : 1)
+                    .multilineTextAlignment(.leading)
                 Spacer(minLength: 8)
                 styleRowTrailing(row, isFocused: isFocused)
             }
@@ -215,9 +228,6 @@ struct SubtitleStylePanel: View {
         }
     }
 
-    /// Container-level ←/→ handler: looks up the focused slot's row and steps it.
-    /// Up/down are left to the native focus engine (single column → left/right
-    /// find no sibling, so focus stays put and this handler fires instead).
     private func handleStyleMove(_ direction: PlozzMoveCommandDirection, rows: [StyleRowSpec]) {
         guard case let .row(slot)? = focus,
               let row = rows.first(where: { $0.slot == slot }) else { return }
@@ -247,7 +257,7 @@ struct SubtitleStylePanel: View {
         var rows: [StyleRowSpec] = []
         var slot = 0
 
-        rows.append(StyleRowSpec(slot: slot, title: "Use System Subtitle Style", kind: .toggle(
+        rows.append(StyleRowSpec(slot: slot, title: SystemCaptionStyleCopy.optionTitle, kind: .toggle(
             isOn: s.followsSystemStyle,
             flip: {
                 systemStyleConfirmation.request(!s.followsSystemStyle, currentlyMatching: s.followsSystemStyle) { enabled in

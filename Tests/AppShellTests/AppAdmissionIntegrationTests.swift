@@ -121,6 +121,8 @@ final class AppAdmissionIntegrationTests: XCTestCase {
         harness.state.finishThemeSelection()
         XCTAssertEqual(harness.state.state, .onboarding(.selectNavigation, canReturnToApp: true))
         harness.state.finishNavigationSelection()
+        XCTAssertEqual(harness.state.state, .onboarding(.selectHomeLayout, canReturnToApp: true))
+        harness.state.finishHomeLayoutSelection()
         XCTAssertEqual(harness.state.state, .ready)
         XCTAssertTrue(harness.state.pendingStandaloneLiveTVEntry)
         XCTAssertTrue(harness.state.consumeStandaloneLiveTVEntryIntent())

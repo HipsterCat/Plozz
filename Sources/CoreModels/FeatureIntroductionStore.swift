@@ -20,6 +20,11 @@ public struct FeatureIntroduction: Hashable, Identifiable, Sendable {
         id: "navigation-styles",
         version: 1
     )
+
+    public static let homeLayout = FeatureIntroduction(
+        id: "home-layout",
+        version: 1
+    )
 }
 
 public protocol FeatureIntroductionStoring: Sendable {
@@ -66,7 +71,7 @@ public protocol ProfileAppearanceSetupStoring: Sendable {
     func markCompleted(profileID: String)
 }
 
-/// Durable resume marker for a new profile's Theme + Navigation flow.
+/// Durable resume marker for a new profile's Theme + Navigation + Home layout flow.
 ///
 /// This is separate from the app-wide feature introduction: old inactive
 /// profiles must not be prompted on switch, while a newly-created profile must

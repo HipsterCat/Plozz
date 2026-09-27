@@ -14,7 +14,6 @@ public struct MobileSubtitleStyleEditor: View {
         Form {
             Section {
                 Toggle(
-                    "Use System Subtitle Style",
                     isOn: Binding(
                         get: { viewModel.controls.subtitleStyle.followsSystemStyle },
                         set: { enabled in
@@ -23,9 +22,9 @@ public struct MobileSubtitleStyleEditor: View {
                             ) { value in viewModel.editSubtitleStyle { $0.followsSystemStyle = value } }
                         }
                     )
-                )
-            } footer: {
-                Text("Matches the subtitle style set on this device.")
+                ) {
+                    Text(SystemCaptionStyleCopy.optionTitle)
+                }
             }
 
             Section("Text") {

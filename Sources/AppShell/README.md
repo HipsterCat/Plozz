@@ -52,6 +52,23 @@ registry.
   rebuilt on profile change (`rebuildSettingsModels`) so settings,
   Trakt, and watched-state stay isolated.
 
+## Appearance onboarding
+
+Apple TV first-run and new-profile setup share Theme, Navigation, and Home Layout
+choices in that order. Each selection writes to the active profile's existing
+settings model. Continue or Menu accepts the current selection; profile setup
+is not complete until Home Layout is accepted.
+
+Existing installations receive a device-local, one-time Home Layout chooser
+after any pending navigation introduction and before release notes. The current
+layout is preselected; dismissing does not reset it or change other profiles.
+Finishing setup also completes these introductions, preventing a duplicate
+prompt on first entry. iPhone and iPad retain their existing carousel layout.
+
+`CoreUI.HomeLayoutOptionCard` supplies the same names and previews to onboarding
+and Settings. Its illustrations omit navigation chrome, since Home layout and
+navigation style are independent choices.
+
 ## Pinned sidebar remote navigation
 
 `NavigationRailEdgeCatcher` passively observes arrow presses and indirect-touch
