@@ -117,6 +117,9 @@ public struct MediaRowView: View {
     /// spans the full width — which is what lets cards scroll *under* the rail and
     /// fade out there instead of being cut off at a narrowed viewport edge.
     @Environment(\.plozzNavigationContentInset) private var navigationContentInset
+    @Environment(\.plozzCardCaptionsHidden) private var captionsHidden
+    @Environment(\.plozzCardStyle) private var cardStyle
+    @Environment(\.plozzRowTitleTightening) private var titleTightening
     /// Keeps branch-specific masking completely out of native navigation styles.
     @Environment(\.plozzPinnedSidebarActive) private var pinnedSidebarActive
 
@@ -138,6 +141,10 @@ public struct MediaRowView: View {
     /// `onFocusChange`, this is not settle-debounced and is intended for lightweight
     /// cosmetic state such as the series hero recede.
     private let onFocusEntered: (() -> Void)?
+    /// Fires synchronously every time focus lands on a card, with no settle
+    /// debounce and no once-per-entry gate. For layout that has to follow focus
+    /// immediately, such as a Home that pins the focused row.
+    private let onCardFocused: ((MediaItem) -> Void)?
     /// Optional localized cue drawn on selected card kinds (e.g. a Related row
     /// marks sequels/spin-offs as "Continues"). The row owns card construction,
     /// so callers need this seam rather than rebuilding the whole rail.
@@ -212,6 +219,7 @@ public struct MediaRowView: View {
         leadingInset: CGFloat = PlozzTheme.Metrics.screenPadding,
         onFocusEntered: (() -> Void)? = nil,
         onFocusChange: ((MediaItem?) -> Void)? = nil,
+        onCardFocused: ((MediaItem) -> Void)? = nil,
         statusCue: ((MediaItem) -> LocalizedStringResource?)? = nil,
         pendingRemovalIDs: Set<String> = [],
         loadingPlaceholderCount: Int = 0,
@@ -235,6 +243,7 @@ public struct MediaRowView: View {
             leadingInset: leadingInset,
             onFocusEntered: onFocusEntered,
             onFocusChange: onFocusChange,
+            onCardFocused: onCardFocused,
             statusCue: statusCue,
             pendingRemovalIDs: pendingRemovalIDs,
             loadingPlaceholderCount: loadingPlaceholderCount,
@@ -260,6 +269,7 @@ public struct MediaRowView: View {
         leadingInset: CGFloat = PlozzTheme.Metrics.screenPadding,
         onFocusEntered: (() -> Void)? = nil,
         onFocusChange: ((MediaItem?) -> Void)? = nil,
+        onCardFocused: ((MediaItem) -> Void)? = nil,
         statusCue: ((MediaItem) -> LocalizedStringResource?)? = nil,
         pendingRemovalIDs: Set<String> = [],
         loadingPlaceholderCount: Int = 0,
@@ -294,6 +304,7 @@ public struct MediaRowView: View {
         self.leadingInset = leadingInset
         self.onFocusEntered = onFocusEntered
         self.onFocusChange = onFocusChange
+        self.onCardFocused = onCardFocused
         self.statusCue = statusCue
         self.pendingRemovalIDs = pendingRemovalIDs
         self.playsOnSelect = playsOnSelect
@@ -447,18 +458,34 @@ public struct MediaRowView: View {
     private struct MediaRowHeader: View {
         let title: Text
         @Environment(\.plozzMetrics) private var metrics
+        @Environment(\.redactionReasons) private var redactionReasons
+        @Environment(\.themePalette) private var palette
 
         var body: some View {
-            title
+            let header = title
                 .font(PlozzRailTitle.font(
                     sectionHeaderFontSize: metrics.sectionHeaderFontSize
                 ))
+            if redactionReasons.contains(.placeholder) {
+                // A loading row keeps the title's exact height and draws Home's
+                // skeleton title pill in place of the words.
+                header
+                    .hidden()
+                    .overlay(alignment: .leading) {
+                        Capsule(style: .continuous)
+                            .fill(palette.fill)
+                            .frame(width: 220, height: 26)
+                    }
+                    .shimmering()
+            } else {
+                header
+            }
         }
     }
 
     public var body: some View {
         if !items.isEmpty || loadingPlaceholderCount > 0 || episodeEntry != nil {
-            VStack(alignment: .leading, spacing: layoutMetrics.sectionTitleSpacing) {
+            VStack(alignment: .leading, spacing: layoutMetrics.sectionTitleSpacing - titleTightening) {
                 if let title {
                     MediaRowHeader(title: title)
                         .padding(.leading, leadingInset + navigationContentInset)
@@ -467,7 +494,8 @@ public struct MediaRowView: View {
                 PinnedSidebarLeadingFade(
                     isActive: pinnedSidebarActive,
                     inset: navigationContentInset,
-                    verticalOverhang: layoutMetrics.railShadowClearance
+                    verticalOverhang: layoutMetrics.railShadowClearance,
+                    cardPitch: presentation == .episodeColumn ? nil : cardSlotWidth + layoutMetrics.cardSpacing
                 ) {
                     ScrollViewReader { proxy in
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -489,8 +517,9 @@ public struct MediaRowView: View {
                             }
                         }
                         // The row's ordinary page gutter, unchanged from before the
-                        // navigation rail existed.
-                        .padding(.leading, leadingInset)
+                        // navigation rail existed, with the first card's visible
+                        // edge under the title.
+                        .padding(.leading, cardsLeadingInset)
                         .padding(.trailing, PlozzTheme.Metrics.screenPadding)
                         // Reserve generous vertical room *inside* the clip so a
                         // focused card's lift + drop shadow are never cut. The
@@ -792,8 +821,16 @@ public struct MediaRowView: View {
         }
     }
 
+    /// Where the first card's slot starts, so its visible edge lines up with the
+    /// row's title.
+    private var cardsLeadingInset: CGFloat {
+        guard presentation != .episodeColumn else { return leadingInset }
+        return layoutMetrics.cardRowLeadingPadding(leadingInset, cardStyle: cardStyle)
+    }
+
     /// The layout width reserved for one card in the rail — its full glass-surface
     /// width, so `cardSpacing` lands as a true visible gap between cards.
+
     private var cardSlotWidth: CGFloat {
         switch presentation {
         case .poster:
@@ -811,11 +848,17 @@ public struct MediaRowView: View {
 
     @ViewBuilder
     private var loadingPlaceholder: some View {
+        // The same shape and caption the real cards will have, so nothing in
+        // the row moves when they arrive.
         switch presentation {
         case .poster:
-            SkeletonCardView(style: .poster)
+            SkeletonCardView(style: .poster, showsCaption: !captionsHidden)
         case .landscape:
-            SkeletonCardView(style: .landscape)
+            SkeletonCardView(
+                style: .landscape,
+                showsCaption: !captionsHidden && !showsSeriesArtwork,
+                showsSeriesArtwork: showsSeriesArtwork
+            )
         case .episodeColumn:
             EpisodeRowEntryPlaceholder()
         }
@@ -1113,6 +1156,7 @@ public struct MediaRowView: View {
         // (focus actually left the row, up to the season bar).
         guard let newValue else { return }
         hasBrowsedSinceTargetChange = true
+        if let onCardFocused, let item = itemByID[newValue] { onCardFocused(item) }
         if !focusEngaged { onFocusEntered?() }
         lastFocusedID = newValue
         if !focusEngaged,

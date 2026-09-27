@@ -58,7 +58,95 @@ struct CustomizeHomeDetailView: View {
     }
 
     private var rows: [SettingsSplitRow] {
-        homeRowsRows + continueWatchingRows + heroRows
+        layoutRows + homeRowsRows + continueWatchingRows
+            + (hero.settings.style == .carousel ? heroRows : [])
+    }
+
+    // MARK: - Layout
+
+    /// How Home is arranged, first because it decides what the rest applies to:
+    /// the Hero pane belongs to Fullscreen Hero alone, and Showcase's few options sit
+    /// under the picker here.
+    private var layoutRows: [SettingsSplitRow] {
+        [
+            SettingsSplitRow(
+                id: "home-layout",
+                title: LocalizedStringResource(
+                    "homeLayout.title",
+                    defaultValue: "Home Layout",
+                    comment: "Settings row that chooses how the Apple TV Home screen is laid out."
+                )
+            ) {
+                layoutForm
+            }
+        ]
+    }
+
+    @ViewBuilder private var layoutForm: some View {
+        @Bindable var hero = hero
+        VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
+            HomeLayoutPicker(layout: $hero.settings.style)
+
+            if hero.settings.style == .followsFocus {
+                SettingsDetailGroup(title: LocalizedStringResource(
+                    "homeLayout.backgroundTransition",
+                    defaultValue: "Background transition",
+                    comment: "Settings section: how the Home background changes as focus moves between titles."
+                )) {
+                    SettingsOptionList(
+                        options: HeroBackdropTransition.allCases,
+                        selection: $hero.settings.backdropTransition,
+                        bordered: false,
+                        title: { Text($0.settingsTitle) }
+                    )
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle(isOn: $hero.settings.showsCardCaptions) {
+                        Text(LocalizedStringResource(
+                            "homeLayout.showCardTitles",
+                            defaultValue: "Show titles under cards",
+                            comment: "Switch in the Showcase Home layout: show each title's name beneath its artwork card."
+                        ))
+                    }
+                        .toggleStyle(SettingsSwitchToggleStyle())
+                    Text(LocalizedStringResource(
+                        "homeLayout.showCardTitles.detail",
+                        defaultValue: "The title you're on is already shown at the top of the screen.",
+                        comment: "Explains why card titles are off by default in the Showcase Home layout: the focused title is named at the top."
+                    ))
+                        .settingsHelperText()
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Toggle("Show ratings", isOn: $hero.settings.showsRatings)
+                    .toggleStyle(SettingsSwitchToggleStyle())
+                if hero.settings.showsRatings {
+                    Toggle("Show Common Sense age", isOn: $hero.settings.ratingPreferences.showsHeaderFamilyGuidance)
+                    HeaderReviewScoreCountPicker(settings: $hero.settings.ratingPreferences)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle(isOn: $hero.settings.showsDiscoverRow) {
+                        Text(LocalizedStringResource(
+                            "homeLayout.showDiscoverRow",
+                            defaultValue: "Show a Discover row",
+                            comment: "Switch in the Showcase Home layout: add a row of recommended titles named Discover."
+                        ))
+                    }
+                        .toggleStyle(SettingsSwitchToggleStyle())
+                    Text(LocalizedStringResource(
+                        "homeLayout.showDiscoverRow.detail",
+                        defaultValue: "Picks from outside your libraries, after Continue Watching.",
+                        comment: "Describes the Discover row: recommended titles not in the user's libraries, placed after the Continue Watching row."
+                    ))
+                        .settingsHelperText()
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if hero.settings.showsDiscoverRow {
+                    FeaturedDiscoverySettings(sources: $hero.settings.discoverySources)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(.easeInOut(duration: 0.22), value: hero.settings.style)
     }
 
     // MARK: - Rows on Home (one entry, grouped detail — leads with the Combine switch)
@@ -263,82 +351,90 @@ struct CustomizeHomeDetailView: View {
                     Toggle("Show Common Sense age", isOn: $hero.settings.ratingPreferences.showsHeaderFamilyGuidance)
                     HeaderReviewScoreCountPicker(settings: $hero.settings.ratingPreferences)
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    Toggle("Show discovery sources", isOn: $hero.settings.showsDiscoverySources)
-                        .toggleStyle(SettingsSwitchToggleStyle())
-                    Text("Show the catalogs behind each title.")
-                        .settingsHelperText()
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Toggle(
-                    "Hide watched movies, shows, and episodes",
-                    isOn: $hero.settings.hideWatched
-                )
-                .toggleStyle(SettingsSwitchToggleStyle())
-
-                SettingsDetailGroup(title: "Sources") {
-                    SettingsCheckList(
-                        options: orderedHeroSources,
-                        title: { Text($0.displayName) },
-                        isChecked: { hero.settings.sources.contains($0) },
-                        onToggle: { toggleSource($0) }
-                    )
-                }
-
-                if hero.settings.isEnabled(.featured) {
-                    FeaturedDiscoverySettings(sources: $hero.settings.discoverySources)
-                }
-
-                if hero.settings.isEnabled(.randomFromLibrary) {
-                    SettingsDetailGroup(
-                        title: "Random Libraries",
-                        description: "Leave all selected to use every library on Home."
-                    ) {
-                        randomLibrariesContent
-                    }
-                }
-
-                if hero.settings.isEnabled(.watchlist) {
-                    SettingsDetailGroup(
-                        title: "Watchlist picks",
-                        description: "Prefer titles you haven't seen in the hero recently. Turn off to keep your watchlist order."
-                    ) {
-                        Toggle(
-                            "Discovery rotation",
-                            isOn: $hero.settings.watchlistDiscoveryEnabled
-                        )
-                        .toggleStyle(SettingsSwitchToggleStyle())
-                    }
-                }
-
-                SettingsDetailGroup(title: "Rotation") {
-                    VStack(alignment: .leading, spacing: 24) {
-                        LabeledSettingRow("Items in rotation") {
-                            SettingsStepper(
-                                options: Array(HeroSettings.maxItemsRange),
-                                selection: $hero.settings.maxItems,
-                                title: { "\($0)" }
-                            )
-                        }
-                        Toggle("Rotate automatically", isOn: $hero.settings.autoAdvance)
-                            .toggleStyle(SettingsSwitchToggleStyle())
-                        if hero.settings.autoAdvance {
-                            LabeledSettingRow("Seconds per title") {
-                                SettingsStepper(
-                                    options: Array(HeroSettings.autoAdvanceRange),
-                                    selection: $hero.settings.autoAdvanceSeconds,
-                                    verbatimTitle: { Duration.seconds($0).formatted(.units(allowed: [.seconds], width: .narrow)) }
-                                )
-                            }
-                        }
-                    }
-                }
-
-                heroTrailerGroup
+                spotlightForm
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .animation(.easeInOut(duration: 0.22), value: hero.settings.isEnabled)
+    }
+
+    /// Where the Fullscreen Hero's picks come from and how it rotates.
+    @ViewBuilder private var spotlightForm: some View {
+        @Bindable var hero = hero
+        VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Show discovery sources", isOn: $hero.settings.showsDiscoverySources)
+                    .toggleStyle(SettingsSwitchToggleStyle())
+                Text("Show the catalogs behind each title.")
+                    .settingsHelperText()
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Toggle(
+                "Hide watched movies, shows, and episodes",
+                isOn: $hero.settings.hideWatched
+            )
+            .toggleStyle(SettingsSwitchToggleStyle())
+
+            SettingsDetailGroup(title: "Sources") {
+                SettingsCheckList(
+                    options: orderedHeroSources,
+                    title: { Text($0.displayName) },
+                    isChecked: { hero.settings.sources.contains($0) },
+                    onToggle: { toggleSource($0) }
+                )
+            }
+
+            if hero.settings.isEnabled(.featured) {
+                FeaturedDiscoverySettings(sources: $hero.settings.discoverySources)
+            }
+
+            if hero.settings.isEnabled(.randomFromLibrary) {
+                SettingsDetailGroup(
+                    title: "Random Libraries",
+                    description: "Leave all selected to use every library on Home."
+                ) {
+                    randomLibrariesContent
+                }
+            }
+
+            if hero.settings.isEnabled(.watchlist) {
+                SettingsDetailGroup(
+                    title: "Watchlist picks",
+                    description: "Prefer titles you haven't seen in the hero recently. Turn off to keep your watchlist order."
+                ) {
+                    Toggle(
+                        "Discovery rotation",
+                        isOn: $hero.settings.watchlistDiscoveryEnabled
+                    )
+                    .toggleStyle(SettingsSwitchToggleStyle())
+                }
+            }
+
+            SettingsDetailGroup(title: "Rotation") {
+                VStack(alignment: .leading, spacing: 24) {
+                    LabeledSettingRow("Items in rotation") {
+                        SettingsStepper(
+                            options: Array(HeroSettings.maxItemsRange),
+                            selection: $hero.settings.maxItems,
+                            title: { "\($0)" }
+                        )
+                    }
+                    Toggle("Rotate automatically", isOn: $hero.settings.autoAdvance)
+                        .toggleStyle(SettingsSwitchToggleStyle())
+                    if hero.settings.autoAdvance {
+                        LabeledSettingRow("Seconds per title") {
+                            SettingsStepper(
+                                options: Array(HeroSettings.autoAdvanceRange),
+                                selection: $hero.settings.autoAdvanceSeconds,
+                                verbatimTitle: { Duration.seconds($0).formatted(.units(allowed: [.seconds], width: .narrow)) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            heroTrailerGroup
+        }
     }
 
     @ViewBuilder private var heroTrailerGroup: some View {

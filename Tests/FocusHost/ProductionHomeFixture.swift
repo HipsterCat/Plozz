@@ -16,6 +16,12 @@ struct ProductionHomeFixture: View {
     @State private var nativeSidebarFocus = NavigationDestinationFocusHandoff()
 
     private var isPinned: Bool { ProcessInfo.processInfo.arguments.contains("--pinned-home") }
+    /// `--focus-style=<name>` picks a card focus style; native system focus otherwise.
+    private static var focusStyle: CardFocusStyle {
+        ProcessInfo.processInfo.arguments
+            .first { $0.hasPrefix("--focus-style=") }
+            .flatMap { CardFocusStyle(rawValue: String($0.dropFirst("--focus-style=".count))) } ?? .system
+    }
     private var isNativeSidebar: Bool {
         ProcessInfo.processInfo.arguments.contains("--native-sidebar-home")
     }
@@ -99,8 +105,8 @@ struct ProductionHomeFixture: View {
                 ProgressView("Preparing local Home data")
             }
         }
-        .environment(\.plozzCardFocusStyle, .system)
-        .environment(\.plozzCardStyle, .borderless)
+        .environment(\.plozzCardFocusStyle, Self.focusStyle)
+        .environment(\.plozzCardStyle, ProcessInfo.processInfo.arguments.contains("--framed-cards") ? .framed : .borderless)
         .task {
             guard fixture == nil else { return }
             fixture = await ProductionHomeState.load()
@@ -212,6 +218,8 @@ private final class ProductionHomeState {
         settings.sources = [.continueWatching, .recentlyAdded]
         settings.autoAdvance = false
         settings.trailersEnabled = false
+        // Settings persist between launches, so every launch picks its layout.
+        settings.style = ProcessInfo.processInfo.arguments.contains("--immersive-home") ? .followsFocus : .carousel
         heroSettings.settings = settings
         background.settings.homeTrailerEnabled = false
     }
@@ -232,7 +240,12 @@ private final class ProductionHomeState {
         let backdrop = await artwork(name: "backdrop", size: CGSize(width: 960, height: 540), color: .systemBlue)
         let logo = await artwork(name: "logo", size: CGSize(width: 320, height: 100), color: .white)
         let state = ProductionHomeState(poster: poster, backdrop: backdrop, logo: logo)
-        await state.model.load()
+        if ProcessInfo.processInfo.arguments.contains("--slow-home-load") {
+            // Show Home at once and let its rows arrive late, over the skeleton.
+            Task { await state.model.load() }
+        } else {
+            await state.model.load()
+        }
         return state
     }
 
@@ -323,8 +336,19 @@ private struct ProductionHomeProvider: MediaProvider {
     }
 
     func libraries() async throws -> [MediaLibrary] { [] }
-    func continueWatching(limit: Int) async throws -> [MediaItem] { Array((0..<rowCount).prefix(limit).map(movie)) }
-    func latest(limit: Int) async throws -> [MediaItem] { Array((rowCount..<(rowCount * 2)).prefix(limit).map(movie)) }
+    func continueWatching(limit: Int) async throws -> [MediaItem] {
+        try await holdForSlowLoad()
+        return Array((0..<rowCount).prefix(limit).map(movie))
+    }
+    func latest(limit: Int) async throws -> [MediaItem] {
+        try await holdForSlowLoad()
+        return Array((rowCount..<(rowCount * 2)).prefix(limit).map(movie))
+    }
+    /// Keeps Home on its loading skeleton for a while so it can be captured.
+    private func holdForSlowLoad() async throws {
+        guard ProcessInfo.processInfo.arguments.contains("--slow-home-load") else { return }
+        try await Task.sleep(for: .seconds(6))
+    }
     func item(id: String) async throws -> MediaItem {
         guard let index = Int(id.split(separator: "-").last ?? ""), (0..<(rowCount * 2)).contains(index) else {
             throw AppError.notFound

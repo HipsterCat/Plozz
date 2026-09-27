@@ -140,6 +140,34 @@ public struct HomeView: View {
     /// Per-profile hero configuration. `nil` (or an inactive config) leaves Home
     /// rendering its classic rows unchanged.
     private var heroSettings: HeroSettingsModel?
+
+    /// The carousel's settings, or `nil` when Home isn't showing the carousel.
+    /// That includes a hero that follows focus: its titles are the rows, so none
+    /// of the carousel's curation, caching or refresh has anything to do.
+    private var carouselSettings: HeroSettings? {
+        guard let settings = heroSettings?.settings else { return nil }
+        #if os(tvOS)
+        if settings.followsFocus { return nil }
+        #endif
+        return settings
+    }
+
+    /// What the curator runs on. The carousel's settings, or — for the Showcase
+    /// layout's Discover row — the same settings narrowed to the Featured source,
+    /// so the row holds exactly the discovery picks the Fullscreen Hero would. `nil`
+    /// when nothing on screen needs curating.
+    private var curationSettings: HeroSettings? {
+        #if os(tvOS)
+        if let settings = heroSettings?.settings, settings.followsFocus {
+            guard settings.showsDiscoverRow else { return nil }
+            var discover = settings
+            discover.isEnabled = true
+            discover.sources = [.featured]
+            return discover
+        }
+        #endif
+        return carouselSettings
+    }
     private var heroBackground: HeroBackgroundSettingsModel
     private let heroTrailerController: HeroTrailerController
     /// Lets Home give the media shares a chance to notice new files while the
@@ -333,7 +361,16 @@ public struct HomeView: View {
             state: viewModel.state,
             emptyMessage: "Your libraries are empty. Add media on your media server to see it here.",
             onRetry: { Task { await viewModel.load() } },
-            loadingContent: { HomeSkeletonView(layout: viewModel.skeletonLayout, heroActive: heroSettings?.settings.isActive ?? false, continueWatchingShowsSeriesArtwork: visibility.continueWatchingShowsSeriesArtwork) }
+            loadingContent: {
+                if focusHeroSettings != nil {
+                    focusHeroSkeleton(
+                        continueWatchingCount: viewModel.skeletonLayout
+                            .first { $0.kind == .continueWatching }?.count ?? 0
+                    )
+                } else {
+                    HomeSkeletonView(layout: viewModel.skeletonLayout, heroActive: carouselSettings?.isActive ?? false, continueWatchingShowsSeriesArtwork: visibility.continueWatchingShowsSeriesArtwork)
+                }
+            }
         ) { content in
             // The screen is a data-driven list of rows. Both this loaded view and
             // the skeleton render from the same ordered `HomeRow`/`HomeRowKind`
@@ -369,12 +406,12 @@ public struct HomeView: View {
             let layout = rows.map { HomeRowLayout(kind: $0.kind, count: $0.cardCount) }
             let randomLibraries = HeroRandomLibrarySelection.resolve(
                 content.libraries,
-                settings: heroSettings?.settings,
+                settings: curationSettings,
                 isVisible: { visibility.isVisible($0) }
             )
             let heroRecomputeKey = HeroRecomputeKey(
                 content: heroContent,
-                settings: heroSettings?.settings,
+                settings: curationSettings,
                 randomLibraries: randomLibraries,
                 externalRefreshRevision: heroRuntime.externalRefreshRevision,
                 freshnessRevision: heroRuntime.freshnessRefresh.revision,
@@ -397,7 +434,7 @@ public struct HomeView: View {
             let displayHeroItems = HomeHeroDisplayResolver.resolve(
                 runtime: heroRuntime,
                 key: heroRecomputeKey,
-                settings: heroSettings?.settings,
+                settings: carouselSettings,
                 continueWatching: heroContent.continueWatching,
                 watchlist: heroContent.watchlist,
                 recentlyAdded: heroContent.latest,
@@ -405,7 +442,7 @@ public struct HomeView: View {
                 sourceEligibility: displayEligibility
             )
             let heroSlotState = HomeHeroSlotState.resolve(
-                isConfigured: heroSettings?.settings.isActive ?? false,
+                isConfigured: carouselSettings?.isActive ?? false,
                 hasItems: !displayHeroItems.isEmpty,
                 recomputeComplete: heroRuntime.completedKey == heroRecomputeKey
             )
@@ -432,220 +469,237 @@ public struct HomeView: View {
             // page would stay stuck mid-recede. So on focus RETURNING to the hero
             // we programmatically scroll `heroTopID` back to the top (see
             // `onFocusGained`); nothing competes on the way up, so it sticks.
-            ScrollViewReader { heroScrollProxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        // Kill the Siri Remote **touch-surface pan** so a light touch
-                        // (or a resting thumb) can't free-scroll the page out from
-                        // under a pinned hero — the "view drifts down even though
-                        // focus never moved" bug. tvOS has no `DragGesture` to absorb,
-                        // and `.scrollDisabled` would also disable the focus-driven
-                        // auto-scroll that reveals lower rows. Instead we reach the
-                        // enclosing `UIScrollView` and disable its pan gesture
-                        // recognizers: touch-swipe scrolling is driven by the pan,
-                        // while focus auto-scroll and `ScrollViewReader.scrollTo` use
-                        // `setContentOffset` directly, so navigation and our hero
-                        // expand/recede animations keep working. The probe is a real
-                        // child of this VStack (not a `.background`) so it is
-                        // unambiguously inside the scroll content and its superview
-                        // walk reaches the UIScrollView. Gated to the hero layout.
-                        #if canImport(UIKit)
-                        if heroLayoutActive {
-                            ScrollPanDisabler()
-                                .frame(width: 1, height: 0)
-                                .allowsHitTesting(false)
-                                .accessibilityHidden(true)
-                        }
-                        #endif
-                        if heroActive, let heroSettings {
-                            HomeHeroView(
-                                items: displayHeroItems,
-                                settings: heroSettings.settings,
-                                backgroundSettings: heroBackground.settings,
-                                trailerController: heroTrailerController,
-                                trailerResolver: heroTrailerResolver,
-                                isFrontmost: heroIsFrontmost,
-                                spoilerSettings: spoilerSettings,
-                                navigationStyle: navigationStyle,
-                                watchlistedKeys: watchlistedKeys,
-                                focusScope: heroFocusScope,
-                                onSelect: onSelectItem,
-                                onPlay: onPlayItem,
-                                seerConnected: heroSeerConnected,
-                                canRequestDiscoveryItem: heroRequestIdentity,
-                                onRequest: onRequestItem,
-                                requestAvailability: onRequestAvailability,
-                                onRequestSeasons: onRequestSeasonsItem,
-                                // When focus returns to the hero from a row below,
-                                // un-recede: the content expands back to full-screen
-                                // and the backdrop settles back down. A SINGLE flag
-                                // drives both; the backdrop's slower timing is a
-                                // scoped `.animation` override inside HomeHeroView, so
-                                // there's no second `withAnimation` whose state change
-                                // could get dropped (the bug where the content
-                                // receded but the artwork stayed full-screen).
-                                // Recede is driven by the page scroll (see
-                                // `.onScrollGeometryChange` below). Focus returning
-                                // to the hero must scroll the page back to the top —
-                                // the focus engine won't, because the action row is
-                                // still visible mid-recede. We clear `heroReceded`
-                                // HERE, in the same animation as the scroll-to-top,
-                                // so the content un-recedes in PARALLEL with the
-                                // return scroll. (If we waited for the scroll to drop
-                                // back under the threshold — letting the Bool observer
-                                // clear it — the un-recede would only START partway up,
-                                // stacking scroll-time + un-recede-time and making the
-                                // way UP feel much slower than the way down. The
-                                // observer still clears it as a backstop.)
-                                onFocusGained: {
-                                    #if os(tvOS)
-                                    guard !DetailTransitionNavigation.isRestoringSourcePage else { return }
-                                    #endif
-                                    HomePerfDiagnostics.emitLine("HOME-TRANSITION hero-focus UP")
-                                    if heroRecedeModel.isReceded {
-                                        HomePerfDiagnostics.recordNavigationAnimation(receding: false)
-                                    }
-                                    withAnimation(.smooth(duration: Self.recedeAnimationDuration)) {
-                                        heroRecedeModel.isReceded = false
-                                        heroScrollProxy.scrollTo(Self.heroTopID, anchor: .top)
-                                    }
-                                },
-                                onPinnedItemsChanged: { heroRuntime.pinnedItemIDs = $0 },
-                                onItemExposed: { viewModel.recordHeroExposure($0) },
-                                exposureScopeID: ObjectIdentifier(viewModel),
-                                recedeModel: heroRecedeModel
-                            )
-                            .id(Self.heroTopID)
-                            // (touch-pan disabler lives as a sibling below so it is
-                            //  unambiguously inside the scroll content — see note.)
-                        } else if heroSlotState == .placeholder {
-                            // Cached Home rows can paint before Random/Featured hero
-                            // curation. Reserve the exact final hero geometry now so
-                            // rows never appear "finished" and then jump down seconds
-                            // later when the hero arrives.
-                            HomeHeroSkeletonView()
-                                .id(Self.heroTopID)
-                                .contentShape(Rectangle())
-                                .focusable(true)
-                                .prefersDefaultFocus(true, in: heroFocusScope)
-                                .focusEffectDisabled()
-                                .accessibilityLabel("Loading featured content")
-                        }
-                        LazyVStack(alignment: .leading, spacing: metrics.rowSpacing) {
-                            // Shown ABOVE the rows, not instead of them. A
-                            // watchlist is durable and deliberately
-                            // server-independent, so titles saved earlier keep
-                            // appearing after every server is switched off — which
-                            // makes the silence around them more confusing, not
-                            // less. The notice names the setting responsible.
-                            //
-                            // It is also focusable, which is what keeps the screen
-                            // escapable: with everything hidden Home can otherwise
-                            // have nothing to focus at all, and on tvOS that
-                            // strands the viewer — focus has nowhere to land, the
-                            // remote stops responding, and the tab bar back to
-                            // Settings can't be reached.
-                            if let notice = contentNotice {
-                                HomeContentNoticeView(
-                                    notice: notice,
-                                    onReload: { Task { await viewModel.load() } }
-                                )
-                            }
-                            if isAwaitingLiveContinueWatching {
-                                HomeSkeletonRowView(row: cachedContinueWatchingLayout)
-                            }
-                            if content.mergeLibraries {
-                                // Merged: the classic ordered rows (Continue Watching,
-                                // Watchlist, Recently Added, Libraries tiles).
-                                ForEach(rows.filter {
-                                    !isAwaitingLiveContinueWatching
-                                        || $0.kind != .continueWatching
-                                }) { row in
-                                    rowView(row)
-                                }
-                            } else {
-                                // Unmerged: global media rows first, then each library's
-                                // opted-in rows, then the Libraries tiles (boxes) last as
-                                // the browse entry points — so per-library rows sit with
-                                // the global rows and the grid of tiles anchors the foot.
-                                ForEach(rows.filter {
-                                    $0.kind != .libraries
-                                        && (!isAwaitingLiveContinueWatching
-                                            || $0.kind != .continueWatching)
-                                }) { row in
-                                    rowView(row)
-                                }
-                                ForEach(content.librarySections) { group in
-                                    libraryGroupView(group)
-                                }
-                                if let librariesRow = rows.first(where: { $0.kind == .libraries }) {
-                                    rowView(librariesRow)
-                                }
-                            }
-                        }
-                        // When the hero is present, pull the rows up so the first row
-                        // (Continue Watching) overlaps the hero's lower edge — the
-                        // Apple TV look. Otherwise keep the classic top padding. This
-                        // padding is STATIC (never animated) — the recede lift is a
-                        // separate `.offset` below so it never changes row geometry.
-                        // The vertical stack is lazy, so off-screen glass rows stay
-                        // unmounted instead of joining every focus-scroll update.
-                        .padding(.top, heroLayoutActive
-                            ? -Self.heroRowOverlap
-                            : PlozzTheme.Metrics.screenVerticalPadding)
-                        .padding(.bottom, PlozzTheme.Metrics.screenVerticalPadding)
-                        // tvOS focus scrolling already moves Continue Watching into
-                        // view; this finishing lift centers it under the receded hero.
-                        .modifier(
-                            HomeRowsRecedeModifier(
-                                active: heroActive,
-                                model: heroRecedeModel,
-                                lift: Self.recedeRowLift
-                            )
+            Group {
+                if let focusHeroSettings {
+                    if isAwaitingLiveContinueWatching {
+                        // Cached rows would take focus and then have Continue
+                        // Watching arrive above them; wait and arrive once.
+                        focusHeroSkeleton(continueWatchingCount: cachedContinueWatchingLayout.count)
+                    } else {
+                        focusHeroHome(
+                            rows: rows,
+                            content: content,
+                            settings: focusHeroSettings,
+                            isAwaitingLiveContinueWatching: isAwaitingLiveContinueWatching
                         )
                     }
-                    // Span the hero and rows in one focus scope so the hero's
-                    // Play button can be the scope's preferred default — tvOS
-                    // then lands initial focus on the hero instead of a Continue
-                    // Watching card, with no visible focus steal-back.
-                    .focusScope(heroFocusScope)
-                }
-                // Never clip a focused card's lift, shadow or border.
-                .scrollClipDisabled()
-                // Drive the recede off the SCROLL, observed as a BOOL so this fires
-                // ONLY when the threshold is crossed — never on every scroll frame.
-                // (The old per-frame CGFloat capture wrote @State each frame, forcing
-                // a full HomeView re-evaluation — and thus broad row updates —
-                // dozens of times a second: a major cause of the recede
-                // stutter.) When focus moves DOWN to a lower row the tvOS focus
-                // engine instantly scrolls the page past this threshold in one frame;
-                // moving UP to the tab bar or LEFT to the sidebar never scrolls the
-                // page down, so the hero only recedes on a genuine downward move —
-                // robust where `.onMoveCommand` was not (a Down that relocates focus
-                // is consumed by the engine and never delivered to the hero).
-                .onScrollGeometryChange(for: Bool.self) { geometry in
-                    heroActive && geometry.contentOffset.y > Self.recedeScrollThreshold
-                } action: { _, shouldRecede in
-                    #if os(tvOS)
-                    guard !DetailTransitionNavigation.isRestoringSourcePage else { return }
-                    #endif
-                    HomePerfDiagnostics.emitLine("HOME-TRANSITION receded=\(shouldRecede)")
-                    if shouldRecede {
-                        HomePerfDiagnostics.recordNavigationAnimation(receding: true)
+                } else {
+                    ScrollViewReader { heroScrollProxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 0) {
+                                // Kill the Siri Remote **touch-surface pan** so a light touch
+                                // (or a resting thumb) can't free-scroll the page out from
+                                // under a pinned hero — the "view drifts down even though
+                                // focus never moved" bug. tvOS has no `DragGesture` to absorb,
+                                // and `.scrollDisabled` would also disable the focus-driven
+                                // auto-scroll that reveals lower rows. Instead we reach the
+                                // enclosing `UIScrollView` and disable its pan gesture
+                                // recognizers: touch-swipe scrolling is driven by the pan,
+                                // while focus auto-scroll and `ScrollViewReader.scrollTo` use
+                                // `setContentOffset` directly, so navigation and our hero
+                                // expand/recede animations keep working. The probe is a real
+                                // child of this VStack (not a `.background`) so it is
+                                // unambiguously inside the scroll content and its superview
+                                // walk reaches the UIScrollView. Gated to the hero layout.
+                                #if canImport(UIKit)
+                                if heroLayoutActive {
+                                    ScrollPanDisabler()
+                                        .frame(width: 1, height: 0)
+                                        .allowsHitTesting(false)
+                                        .accessibilityHidden(true)
+                                }
+                                #endif
+                                if heroActive, let heroSettings {
+                                    HomeHeroView(
+                                        items: displayHeroItems,
+                                        settings: heroSettings.settings,
+                                        backgroundSettings: heroBackground.settings,
+                                        trailerController: heroTrailerController,
+                                        trailerResolver: heroTrailerResolver,
+                                        isFrontmost: heroIsFrontmost,
+                                        spoilerSettings: spoilerSettings,
+                                        navigationStyle: navigationStyle,
+                                        watchlistedKeys: watchlistedKeys,
+                                        focusScope: heroFocusScope,
+                                        onSelect: onSelectItem,
+                                        onPlay: onPlayItem,
+                                        seerConnected: heroSeerConnected,
+                                        canRequestDiscoveryItem: heroRequestIdentity,
+                                        onRequest: onRequestItem,
+                                        requestAvailability: onRequestAvailability,
+                                        onRequestSeasons: onRequestSeasonsItem,
+                                        // When focus returns to the hero from a row below,
+                                        // un-recede: the content expands back to full-screen
+                                        // and the backdrop settles back down. A SINGLE flag
+                                        // drives both; the backdrop's slower timing is a
+                                        // scoped `.animation` override inside HomeHeroView, so
+                                        // there's no second `withAnimation` whose state change
+                                        // could get dropped (the bug where the content
+                                        // receded but the artwork stayed full-screen).
+                                        // Recede is driven by the page scroll (see
+                                        // `.onScrollGeometryChange` below). Focus returning
+                                        // to the hero must scroll the page back to the top —
+                                        // the focus engine won't, because the action row is
+                                        // still visible mid-recede. We clear `heroReceded`
+                                        // HERE, in the same animation as the scroll-to-top,
+                                        // so the content un-recedes in PARALLEL with the
+                                        // return scroll. (If we waited for the scroll to drop
+                                        // back under the threshold — letting the Bool observer
+                                        // clear it — the un-recede would only START partway up,
+                                        // stacking scroll-time + un-recede-time and making the
+                                        // way UP feel much slower than the way down. The
+                                        // observer still clears it as a backstop.)
+                                        onFocusGained: {
+                                            #if os(tvOS)
+                                            guard !DetailTransitionNavigation.isRestoringSourcePage else { return }
+                                            #endif
+                                            HomePerfDiagnostics.emitLine("HOME-TRANSITION hero-focus UP")
+                                            if heroRecedeModel.isReceded {
+                                                HomePerfDiagnostics.recordNavigationAnimation(receding: false)
+                                            }
+                                            withAnimation(.smooth(duration: Self.recedeAnimationDuration)) {
+                                                heroRecedeModel.isReceded = false
+                                                heroScrollProxy.scrollTo(Self.heroTopID, anchor: .top)
+                                            }
+                                        },
+                                        onPinnedItemsChanged: { heroRuntime.pinnedItemIDs = $0 },
+                                        onItemExposed: { viewModel.recordHeroExposure($0) },
+                                        exposureScopeID: ObjectIdentifier(viewModel),
+                                        recedeModel: heroRecedeModel
+                                    )
+                                    .id(Self.heroTopID)
+                                    // (touch-pan disabler lives as a sibling below so it is
+                                    //  unambiguously inside the scroll content — see note.)
+                                } else if heroSlotState == .placeholder {
+                                    // Cached Home rows can paint before Random/Featured hero
+                                    // curation. Reserve the exact final hero geometry now so
+                                    // rows never appear "finished" and then jump down seconds
+                                    // later when the hero arrives.
+                                    HomeHeroSkeletonView()
+                                        .id(Self.heroTopID)
+                                        .contentShape(Rectangle())
+                                        .focusable(true)
+                                        .prefersDefaultFocus(true, in: heroFocusScope)
+                                        .focusEffectDisabled()
+                                        .accessibilityLabel("Loading featured content")
+                                }
+                                LazyVStack(alignment: .leading, spacing: metrics.rowSpacing) {
+                                    // Shown ABOVE the rows, not instead of them. A
+                                    // watchlist is durable and deliberately
+                                    // server-independent, so titles saved earlier keep
+                                    // appearing after every server is switched off — which
+                                    // makes the silence around them more confusing, not
+                                    // less. The notice names the setting responsible.
+                                    //
+                                    // It is also focusable, which is what keeps the screen
+                                    // escapable: with everything hidden Home can otherwise
+                                    // have nothing to focus at all, and on tvOS that
+                                    // strands the viewer — focus has nowhere to land, the
+                                    // remote stops responding, and the tab bar back to
+                                    // Settings can't be reached.
+                                    if let notice = contentNotice {
+                                        HomeContentNoticeView(
+                                            notice: notice,
+                                            onReload: { Task { await viewModel.load() } }
+                                        )
+                                    }
+                                    if isAwaitingLiveContinueWatching {
+                                        HomeSkeletonRowView(row: cachedContinueWatchingLayout)
+                                    }
+                                    if content.mergeLibraries {
+                                        // Merged: the classic ordered rows (Continue Watching,
+                                        // Watchlist, Recently Added, Libraries tiles).
+                                        ForEach(rows.filter {
+                                            !isAwaitingLiveContinueWatching
+                                                || $0.kind != .continueWatching
+                                        }) { row in
+                                            rowView(row)
+                                        }
+                                    } else {
+                                        // Unmerged: global media rows first, then each library's
+                                        // opted-in rows, then the Libraries tiles (boxes) last as
+                                        // the browse entry points — so per-library rows sit with
+                                        // the global rows and the grid of tiles anchors the foot.
+                                        ForEach(rows.filter {
+                                            $0.kind != .libraries
+                                                && (!isAwaitingLiveContinueWatching
+                                                    || $0.kind != .continueWatching)
+                                        }) { row in
+                                            rowView(row)
+                                        }
+                                        ForEach(content.librarySections) { group in
+                                            libraryGroupView(group)
+                                        }
+                                        if let librariesRow = rows.first(where: { $0.kind == .libraries }) {
+                                            rowView(librariesRow)
+                                        }
+                                    }
+                                }
+                                // When the hero is present, pull the rows up so the first row
+                                // (Continue Watching) overlaps the hero's lower edge — the
+                                // Apple TV look. Otherwise keep the classic top padding. This
+                                // padding is STATIC (never animated) — the recede lift is a
+                                // separate `.offset` below so it never changes row geometry.
+                                // The vertical stack is lazy, so off-screen glass rows stay
+                                // unmounted instead of joining every focus-scroll update.
+                                .padding(.top, heroLayoutActive
+                                    ? -Self.heroRowOverlap
+                                    : PlozzTheme.Metrics.screenVerticalPadding)
+                                .padding(.bottom, PlozzTheme.Metrics.screenVerticalPadding)
+                                // tvOS focus scrolling already moves Continue Watching into
+                                // view; this finishing lift centers it under the receded hero.
+                                .modifier(
+                                    HomeRowsRecedeModifier(
+                                        active: heroActive,
+                                        model: heroRecedeModel,
+                                        lift: Self.recedeRowLift
+                                    )
+                                )
+                            }
+                            // Span the hero and rows in one focus scope so the hero's
+                            // Play button can be the scope's preferred default — tvOS
+                            // then lands initial focus on the hero instead of a Continue
+                            // Watching card, with no visible focus steal-back.
+                            .focusScope(heroFocusScope)
+                        }
+                        // Never clip a focused card's lift, shadow or border.
+                        .scrollClipDisabled()
+                        // Drive the recede off the SCROLL, observed as a BOOL so this fires
+                        // ONLY when the threshold is crossed — never on every scroll frame.
+                        // (The old per-frame CGFloat capture wrote @State each frame, forcing
+                        // a full HomeView re-evaluation — and thus broad row updates —
+                        // dozens of times a second: a major cause of the recede
+                        // stutter.) When focus moves DOWN to a lower row the tvOS focus
+                        // engine instantly scrolls the page past this threshold in one frame;
+                        // moving UP to the tab bar or LEFT to the sidebar never scrolls the
+                        // page down, so the hero only recedes on a genuine downward move —
+                        // robust where `.onMoveCommand` was not (a Down that relocates focus
+                        // is consumed by the engine and never delivered to the hero).
+                        .onScrollGeometryChange(for: Bool.self) { geometry in
+                            heroActive && geometry.contentOffset.y > Self.recedeScrollThreshold
+                        } action: { _, shouldRecede in
+                            #if os(tvOS)
+                            guard !DetailTransitionNavigation.isRestoringSourcePage else { return }
+                            #endif
+                            HomePerfDiagnostics.emitLine("HOME-TRANSITION receded=\(shouldRecede)")
+                            if shouldRecede {
+                                HomePerfDiagnostics.recordNavigationAnimation(receding: true)
+                            }
+                            withAnimation(.smooth(duration: Self.recedeAnimationDuration)) {
+                                heroRecedeModel.isReceded = shouldRecede
+                            }
+                        }
+                        // When the hero is active, let it bleed into the top overscan
+                        // inset instead of the ScrollView reserving it as a blank bar
+                        // above the backdrop (the gap that made the hero sit too low).
+                        // An empty edge set is a no-op, so the classic rows layout keeps
+                        // its normal top inset under the tab bar.
+                        // The custom rail alone needs `.trailing`: its content inset
+                        // otherwise leaves each row short of the physical edge. Native
+                        // top/sidebar styles retain their original safe-area behavior.
+                        .ignoresSafeArea(.container, edges: ignoredScrollEdges)
                     }
-                    withAnimation(.smooth(duration: Self.recedeAnimationDuration)) {
-                        heroRecedeModel.isReceded = shouldRecede
-                    }
                 }
-                // When the hero is active, let it bleed into the top overscan
-                // inset instead of the ScrollView reserving it as a blank bar
-                // above the backdrop (the gap that made the hero sit too low).
-                // An empty edge set is a no-op, so the classic rows layout keeps
-                // its normal top inset under the tab bar.
-                // The custom rail alone needs `.trailing`: its content inset
-                // otherwise leaves each row short of the physical edge. Native
-                // top/sidebar styles retain their original safe-area behavior.
-                .ignoresSafeArea(.container, edges: ignoredScrollEdges)
             }
             // Remember the structure we actually rendered (post-visibility), keyed
             // on kinds *and* counts so a changed card count re-persists too. Only in
@@ -676,17 +730,17 @@ public struct HomeView: View {
             }
         }
         .task(id: heroRuntime.freshnessRefresh.activityID(
-            isActive: heroIsFrontmost && scenePhase == .active && (heroSettings?.settings.isActive ?? false)
+            isActive: heroIsFrontmost && scenePhase == .active && (curationSettings?.isActive ?? false)
         )) {
             guard heroIsFrontmost, scenePhase == .active,
-                  heroSettings?.settings.isActive == true else { return }
+                  curationSettings?.isActive == true else { return }
             await heroRuntime.freshnessRefresh.runWhileVisible()
         }
         .onChange(of: visibility.visibility.disabledKeys) { _, disabled in
             heroRuntime.resetForSourceScopeChange()
             heroRuntime.hasHydratedCache = true
             heroRuntime.cachedDisabledLibraryKeys = disabled
-            if let settings = heroSettings?.settings,
+            if let settings = curationSettings,
                let cached = viewModel.cachedHeroItems(for: settings) {
                 heroRuntime.cachedItems = cached
                 heroRuntime.cachedKey = HeroConfigurationKey(settings: settings)
@@ -823,7 +877,7 @@ public struct HomeView: View {
     }
 
     private var shouldRefreshAsyncWatchHistory: Bool {
-        heroSettings?.settings.requiresExternalWatchHistory ?? false
+        curationSettings?.requiresExternalWatchHistory ?? false
     }
 
     /// How far the rows are pulled up so the first row (Continue Watching) peeks
@@ -846,7 +900,7 @@ public struct HomeView: View {
     private func refreshHeroSourceEligibility() {
         guard let content = viewModel.state.value else { return }
         let libraries = HeroRandomLibrarySelection.resolve(
-            content.libraries, settings: heroSettings?.settings,
+            content.libraries, settings: curationSettings,
             isVisible: { visibility.isVisible($0) }
         )
         heroRuntime.sourceEligibility = heroSourceEligibility(
@@ -868,7 +922,7 @@ public struct HomeView: View {
         let membershipIsReady = handler?.isDurableWatchlistPresentationReady() == true
             && handler?.durableWatchlistLoadingTargetCount() == nil
         return HeroSourceEligibility.capture(
-            settings: heroSettings?.settings,
+            settings: curationSettings,
             candidates: candidates,
             continueWatching: content.continueWatching,
             recentlyAdded: content.latest,
@@ -901,7 +955,7 @@ public struct HomeView: View {
             return
         }
         let started = Date()
-        guard let settings = heroSettings?.settings, settings.isActive else {
+        guard let settings = curationSettings, settings.isActive else {
             heroRuntime.items = []
             heroRuntime.completedKey = key
             return
@@ -1175,7 +1229,7 @@ public struct HomeView: View {
             requestableItems: heroRuntime.items.filter {
                 $0.availability != nil && heroRequestIdentity($0)
             },
-            settings: heroSettings?.settings,
+            settings: curationSettings,
             isConfigured: heroSeerConnected,
             contextID: String(heroRuntime.scopeRevision),
             scopeID: ObjectIdentifier(heroRuntime)
@@ -1223,6 +1277,265 @@ public struct HomeView: View {
             MediaRowView(title: Text(row.title), items: row.items, style: posterStyle(row.style), spoilerSettings: spoilerSettings, onSelect: onSelectItem)
         case .libraries:
             librariesRow(row.libraries)
+        }
+    }
+
+    // MARK: - Hero that follows focus
+
+    /// The hero settings when Apple TV's Home follows focus, otherwise `nil`.
+    private var focusHeroSettings: HeroSettings? {
+        #if os(tvOS)
+        guard let settings = heroSettings?.settings, settings.followsFocus else { return nil }
+        return settings
+        #else
+        return nil
+        #endif
+    }
+
+    private enum FocusHomeRowSource {
+        case home(HomeRow)
+        case section(LibrarySection)
+        case discover([MediaItem])
+        case notice(HomeContentNotice)
+    }
+
+    /// Home's rows in the order the classic layout shows them, merged or per
+    /// library, each paired with what the hero needs to know about it.
+    private func focusHomeRows(
+        rows: [HomeRow],
+        content: HomeViewModel.Content,
+        isAwaitingLiveContinueWatching: Bool
+    ) -> [(row: FocusHeroRow, source: FocusHomeRowSource)] {
+        let seriesArtwork = visibility.continueWatchingShowsSeriesArtwork
+        func entry(_ row: HomeRow) -> (row: FocusHeroRow, source: FocusHomeRowSource) {
+            (
+                FocusHeroRow(
+                    id: "home-\(row.kind)",
+                    itemIDs: row.items.map(\.id),
+                    leadItem: row.items.first,
+                    items: row.items,
+                    cardArtwork: row.style == .landscape
+                        ? { PosterCardView.leadingLandscapeArtwork(for: $0, showsSeriesArtwork: seriesArtwork) }
+                        : nil
+                ),
+                .home(row)
+            )
+        }
+        let visible = rows.filter { !isAwaitingLiveContinueWatching || $0.kind != .continueWatching }
+        var result: [(row: FocusHeroRow, source: FocusHomeRowSource)]
+        if content.mergeLibraries {
+            result = visible.map(entry)
+        } else {
+            result = visible.filter { $0.kind != .libraries }.map(entry)
+            appendLibrarySections(content: content, to: &result, libraries: visible.first { $0.kind == .libraries }, entry: entry)
+        }
+        // First, as in the classic layout: it names the setting hiding everything
+        // else, and is what keeps a Home with nothing else to focus escapable.
+        if let notice = contentNotice {
+            result.insert((FocusHeroRow(id: "home-notice", itemIDs: [], leadItem: nil), .notice(notice)), at: 0)
+        }
+        // After Continue Watching, or first when there is none.
+        if focusHeroSettings?.showsDiscoverRow == true, !heroRuntime.items.isEmpty {
+            let discover = heroRuntime.items
+            let continueWatching = result.firstIndex { $0.row.id == "home-\(HomeRowKind.continueWatching)" }
+            let index = continueWatching.map { $0 + 1 } ?? result.firstIndex { $0.row.id != "home-notice" } ?? result.count
+            result.insert((
+                FocusHeroRow(id: "home-discover", itemIDs: discover.map(\.id), leadItem: discover.first, items: discover),
+                .discover(discover)
+            ), at: index)
+        }
+        return result
+    }
+
+    private func appendLibrarySections(
+        content: HomeViewModel.Content,
+        to result: inout [(row: FocusHeroRow, source: FocusHomeRowSource)],
+        libraries: HomeRow?,
+        entry: (HomeRow) -> (row: FocusHeroRow, source: FocusHomeRowSource)
+    ) {
+        for group in content.librarySections {
+            for section in group.sections {
+                result.append((
+                    FocusHeroRow(
+                        id: "section-\(group.id)-\(section.id)",
+                        itemIDs: section.items.map(\.id),
+                        leadItem: section.items.first,
+                        items: section.items,
+                        cardArtwork: section.style == .landscape
+                            ? { PosterCardView.leadingLandscapeArtwork(for: $0, showsSeriesArtwork: false) }
+                            : nil
+                    ),
+                    .section(section)
+                ))
+            }
+        }
+        if let libraries {
+            result.append(entry(libraries))
+        }
+    }
+
+    /// The Showcase layout while Continue Watching is loading: the real view,
+    /// with the rows' own loading placeholders in them, so they sit exactly
+    /// where the loaded rows will. Nothing in it is focusable, and the hero stays
+    /// empty until a real title arrives.
+    @ViewBuilder
+    private func focusHeroSkeleton(continueWatchingCount: Int) -> some View {
+        #if os(tvOS)
+        if let settings = focusHeroSettings {
+            let continueWatching = FocusHeroRow(id: "placeholder-continue", itemIDs: [], leadItem: nil)
+            let next = FocusHeroRow(id: "placeholder-next", itemIDs: [], leadItem: nil)
+            FocusHeroHomeView(
+                rows: [continueWatching, next],
+                settings: settings,
+                spoilerSettings: spoilerSettings,
+                navigationStyle: navigationStyle,
+                isFrontmost: heroIsFrontmost
+            ) { row, _ in
+                // Redacted rows draw their names as skeleton pills at a real
+                // title's exact height.
+                if row.id == continueWatching.id {
+                    MediaRowView(
+                        title: Text(verbatim: "Continue Watching"),
+                        items: [],
+                        style: .landscape,
+                        showsSeriesArtwork: visibility.continueWatchingShowsSeriesArtwork,
+                        loadingPlaceholderCount: continueWatchingCount > 0 ? continueWatchingCount : 8,
+                        onSelect: { _ in }
+                    )
+                    .redacted(reason: .placeholder)
+                } else {
+                    MediaRowView(
+                        title: Text(verbatim: "Recently Added"),
+                        items: [],
+                        style: .poster,
+                        loadingPlaceholderCount: 8,
+                        onSelect: { _ in }
+                    )
+                    .redacted(reason: .placeholder)
+                }
+            }
+            .accessibilityLabel("Loading")
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private func focusHeroHome(
+        rows: [HomeRow],
+        content: HomeViewModel.Content,
+        settings: HeroSettings,
+        isAwaitingLiveContinueWatching: Bool
+    ) -> some View {
+        #if os(tvOS)
+        let entries = focusHomeRows(
+            rows: rows,
+            content: content,
+            isAwaitingLiveContinueWatching: isAwaitingLiveContinueWatching
+        )
+        let sources = Dictionary(
+            entries.map { ($0.row.id, $0.source) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        FocusHeroHomeView(
+            rows: entries.map(\.row),
+            settings: settings,
+            spoilerSettings: spoilerSettings,
+            navigationStyle: navigationStyle,
+            isFrontmost: heroIsFrontmost,
+            enrich: heroMetadataEnricher
+        ) { row, reporter in
+            if let source = sources[row.id] {
+                focusHomeRowView(source, reporter: reporter)
+            }
+        }
+        #endif
+    }
+
+    /// The same rows as ``rowView(_:)``, reporting focus to the hero.
+    @ViewBuilder
+    private func focusHomeRowView(_ source: FocusHomeRowSource, reporter: FocusHeroRowReporter) -> some View {
+        let onFocusChange: (MediaItem?) -> Void = { item in
+            if let item { reporter.focusedItem(item) }
+        }
+        switch source {
+        case .home(let row):
+            switch row.kind {
+            case .continueWatching:
+                MediaRowView(
+                    title: Text(row.title),
+                    items: row.items,
+                    style: posterStyle(row.style),
+                    spoilerSettings: spoilerSettings,
+                    showsSeriesArtwork: visibility.continueWatchingShowsSeriesArtwork,
+                    onFocusEntered: reporter.entered,
+                    onFocusChange: onFocusChange,
+                    onCardFocused: { _ in reporter.entered() },
+                    playsOnSelect: true,
+                    onSelect: onPlayItem
+                )
+            case .watchlist:
+                MediaRowView(
+                    title: Text(row.title),
+                    items: row.items,
+                    style: posterStyle(row.style),
+                    spoilerSettings: spoilerSettings,
+                    onFocusEntered: reporter.entered,
+                    onFocusChange: onFocusChange,
+                    onCardFocused: { _ in reporter.entered() },
+                    pendingRemovalIDs: pendingWatchlistRemovalIDs(
+                        for: row.items,
+                        revision: watchlistIntentRevision
+                    ),
+                    loadingPlaceholderCount:
+                        viewModel.watchlistLoadingPlaceholderCount,
+                    onSelect: onSelectItem
+                )
+            case .recentlyAdded:
+                MediaRowView(
+                    title: Text(row.title),
+                    items: row.items,
+                    style: posterStyle(row.style),
+                    spoilerSettings: spoilerSettings,
+                    onFocusEntered: reporter.entered,
+                    onFocusChange: onFocusChange,
+                    onCardFocused: { _ in reporter.entered() },
+                    onSelect: onSelectItem
+                )
+            case .libraries:
+                librariesRow(row.libraries, onFocused: reporter.focusedLibrary)
+            }
+        case .notice(let notice):
+            HomeContentNoticeView(
+                notice: notice,
+                onReload: { Task { await viewModel.load() } }
+            )
+        case .discover(let items):
+            MediaRowView(
+                title: Text(LocalizedStringResource(
+                    "home.row.discover",
+                    defaultValue: "Discover",
+                    comment: "Name of a Home row of recommended titles from outside the user's libraries."
+                )),
+                items: items,
+                style: .poster,
+                spoilerSettings: spoilerSettings,
+                onFocusEntered: reporter.entered,
+                onFocusChange: onFocusChange,
+                onCardFocused: { _ in reporter.entered() },
+                onSelect: onSelectItem
+            )
+        case .section(let section):
+            MediaRowView(
+                title: Text(verbatim: section.title),
+                items: section.items,
+                style: cardStyle(section.style),
+                spoilerSettings: spoilerSettings,
+                onFocusEntered: reporter.entered,
+                onFocusChange: onFocusChange,
+                onCardFocused: { _ in reporter.entered() },
+                playsOnSelect: section.style == .landscape,
+                onSelect: section.style == .landscape ? onPlayItem : onSelectItem
+            )
         }
     }
 
@@ -1278,36 +1591,11 @@ public struct HomeView: View {
         }
     }
 
-    private func librariesRow(_ libraries: [AggregatedLibrary]) -> some View {
-        VStack(alignment: .leading, spacing: metrics.sectionTitleSpacing) {
-            Text("Libraries")
-                .font(.system(size: metrics.sectionHeaderFontSize, weight: .bold))
-                .padding(.leading, PlozzTheme.Metrics.screenPadding + navigationContentInset)
-            PinnedSidebarLeadingFade(
-                isActive: pinnedSidebarActive,
-                inset: navigationContentInset,
-                verticalOverhang: metrics.railShadowClearance
-            ) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: metrics.cardSpacing) {
-                        ForEach(libraries) { aggregated in
-                            LibraryCardView(
-                                aggregated: aggregated,
-                                subtitle: Self.librarySubtitle(for: aggregated, in: libraries),
-                                action: { onSelectLibrary(aggregated.library) }
-                            )
-                        }
-                    }
-                    .padding(.horizontal, PlozzTheme.Metrics.screenPadding)
-                    // Reserve room *inside* the clip for the focused tile's lift +
-                    // shadow. The negative outer padding cancels that room in layout, so
-                    // the row's height and spacing are unchanged — only the clip grows.
-                    .padding(.vertical, metrics.railShadowClearance)
-                }
-                .padding(.top, metrics.railTopClearanceOffset)
-                .padding(.bottom, metrics.railBottomClearanceOffset)
-            }
-        }
+    private func librariesRow(
+        _ libraries: [AggregatedLibrary],
+        onFocused: ((AggregatedLibrary) -> Void)? = nil
+    ) -> some View {
+        HomeLibrariesRow(libraries: libraries, onSelectLibrary: onSelectLibrary, onFocused: onFocused)
     }
 
     /// The tile's secondary line. Library TILES are never merged across servers,
@@ -1730,6 +2018,57 @@ private struct HomeShareScanRefreshObserver: View {
     }
 }
 
+/// Home's Libraries row: tiles beside a pinned sidebar park where the first
+/// tile opened, and focus is reported for a Home that follows it.
+private struct HomeLibrariesRow: View {
+    let libraries: [AggregatedLibrary]
+    let onSelectLibrary: (MediaLibrary) -> Void
+    var onFocused: ((AggregatedLibrary) -> Void)?
+
+    @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.plozzCardStyle) private var cardStyle
+    @Environment(\.plozzRowTitleTightening) private var titleTightening
+    @Environment(\.plozzNavigationContentInset) private var navigationContentInset
+    @Environment(\.plozzPinnedSidebarActive) private var pinnedSidebarActive
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: metrics.sectionTitleSpacing - titleTightening) {
+            Text("Libraries")
+                .font(.system(size: metrics.sectionHeaderFontSize, weight: .bold))
+                .padding(.leading, PlozzTheme.Metrics.screenPadding + navigationContentInset)
+            PinnedSidebarLeadingFade(
+                isActive: pinnedSidebarActive,
+                inset: navigationContentInset,
+                verticalOverhang: metrics.railShadowClearance,
+                cardPitch: metrics.landscapeCardSlotWidth + metrics.cardSpacing
+            ) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: metrics.cardSpacing) {
+                        ForEach(libraries) { aggregated in
+                            LibraryCardView(
+                                aggregated: aggregated,
+                                subtitle: HomeView.librarySubtitle(for: aggregated, in: libraries),
+                                action: { onSelectLibrary(aggregated.library) },
+                                onFocusChange: { focused in
+                                    if focused { onFocused?(aggregated) }
+                                }
+                            )
+                        }
+                    }
+                    .padding(.leading, metrics.cardRowLeadingPadding(PlozzTheme.Metrics.screenPadding, cardStyle: cardStyle))
+                    .padding(.trailing, PlozzTheme.Metrics.screenPadding)
+                    // Reserve room *inside* the clip for the focused tile's lift +
+                    // shadow. The negative outer padding cancels that room in layout, so
+                    // the row's height and spacing are unchanged — only the clip grows.
+                    .padding(.vertical, metrics.railShadowClearance)
+                }
+                .padding(.top, metrics.railTopClearanceOffset)
+                .padding(.bottom, metrics.railBottomClearanceOffset)
+            }
+        }
+    }
+}
+
 struct LibraryCardView: View {
     let aggregated: AggregatedLibrary
     let subtitle: String   // l10n:content — library card subtitle from the server
@@ -1738,6 +2077,8 @@ struct LibraryCardView: View {
     /// artwork are still filling in. Purely decorative (non-focusable).
     var isUpdating: Bool = false
     let action: () -> Void
+    /// Fired when the tile gains or loses focus.
+    var onFocusChange: ((Bool) -> Void)? = nil
 
     @PlozzCardFocus private var isFocused: Bool
     @Environment(\.locale) private var locale
@@ -1770,6 +2111,13 @@ struct LibraryCardView: View {
     }
 
     var body: some View {
+        card.onChange(of: isFocused) { _, focused in
+            onFocusChange?(focused)
+        }
+    }
+
+    @ViewBuilder
+    private var card: some View {
         #if os(tvOS)
         if focusStyle.usesSystemEffect {
             NativeArtworkPoster(
