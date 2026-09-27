@@ -1511,7 +1511,11 @@ public struct HomeView: View {
             )
         case .discover(let items):
             MediaRowView(
-                title: Text("Discover"),
+                title: Text(LocalizedStringResource(
+                    "home.row.discover",
+                    defaultValue: "Discover",
+                    comment: "Name of a Home row of recommended titles from outside the user's libraries."
+                )),
                 items: items,
                 style: .poster,
                 spoilerSettings: spoilerSettings,

@@ -45,8 +45,18 @@ extension HeroStyle {
     /// row-at-a-time Showcase whose top follows the focused card.
     var layoutTitle: LocalizedStringResource {
         switch self {
-        case .carousel: "Fullscreen Hero"
-        case .followsFocus: "Showcase"
+        case .carousel:
+            LocalizedStringResource(
+                "homeLayout.fullscreenHero",
+                defaultValue: "Fullscreen Hero",
+                comment: "Apple TV Home layout option: a full-screen featured title with Play and other buttons above the rows."
+            )
+        case .followsFocus:
+            LocalizedStringResource(
+                "homeLayout.showcase",
+                defaultValue: "Showcase",
+                comment: "Apple TV Home layout option: one row at a time, with the top of the screen showing whichever title is focused."
+            )
         }
     }
 }
@@ -54,8 +64,18 @@ extension HeroStyle {
 extension HeroBackdropTransition {
     var settingsTitle: LocalizedStringResource {
         switch self {
-        case .crossfade: "Crossfade"
-        case .slide: "Slide"
+        case .crossfade:
+            LocalizedStringResource(
+                "homeLayout.transition.crossfade",
+                defaultValue: "Crossfade",
+                comment: "Option for how the Home background changes between titles: the old picture fades into the new one."
+            )
+        case .slide:
+            LocalizedStringResource(
+                "homeLayout.transition.slide",
+                defaultValue: "Slide",
+                comment: "Option for how the Home background changes between titles: the new picture slides in."
+            )
         }
     }
 }

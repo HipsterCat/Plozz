@@ -71,7 +71,11 @@ struct CustomizeHomeDetailView: View {
         [
             SettingsSplitRow(
                 id: "home-layout",
-                title: "Home Layout"
+                title: LocalizedStringResource(
+                    "homeLayout.title",
+                    defaultValue: "Home Layout",
+                    comment: "Settings row that chooses how the Apple TV Home screen is laid out."
+                )
             ) {
                 layoutForm
             }
@@ -84,7 +88,11 @@ struct CustomizeHomeDetailView: View {
             HomeLayoutPicker(layout: $hero.settings.style)
 
             if hero.settings.style == .followsFocus {
-                SettingsDetailGroup(title: "Background transition") {
+                SettingsDetailGroup(title: LocalizedStringResource(
+                    "homeLayout.backgroundTransition",
+                    defaultValue: "Background transition",
+                    comment: "Settings section: how the Home background changes as focus moves between titles."
+                )) {
                     SettingsOptionList(
                         options: HeroBackdropTransition.allCases,
                         selection: $hero.settings.backdropTransition,
@@ -93,9 +101,19 @@ struct CustomizeHomeDetailView: View {
                     )
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Toggle("Show titles under cards", isOn: $hero.settings.showsCardCaptions)
+                    Toggle(isOn: $hero.settings.showsCardCaptions) {
+                        Text(LocalizedStringResource(
+                            "homeLayout.showCardTitles",
+                            defaultValue: "Show titles under cards",
+                            comment: "Switch in the Showcase Home layout: show each title's name beneath its artwork card."
+                        ))
+                    }
                         .toggleStyle(SettingsSwitchToggleStyle())
-                    Text("The title you're on is already shown at the top of the screen.")
+                    Text(LocalizedStringResource(
+                        "homeLayout.showCardTitles.detail",
+                        defaultValue: "The title you're on is already shown at the top of the screen.",
+                        comment: "Explains why card titles are off by default in the Showcase Home layout: the focused title is named at the top."
+                    ))
                         .settingsHelperText()
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -106,9 +124,19 @@ struct CustomizeHomeDetailView: View {
                     HeaderReviewScoreCountPicker(settings: $hero.settings.ratingPreferences)
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Toggle("Show a Discover row", isOn: $hero.settings.showsDiscoverRow)
+                    Toggle(isOn: $hero.settings.showsDiscoverRow) {
+                        Text(LocalizedStringResource(
+                            "homeLayout.showDiscoverRow",
+                            defaultValue: "Show a Discover row",
+                            comment: "Switch in the Showcase Home layout: add a row of recommended titles named Discover."
+                        ))
+                    }
                         .toggleStyle(SettingsSwitchToggleStyle())
-                    Text("Picks from outside your libraries, after Continue Watching.")
+                    Text(LocalizedStringResource(
+                        "homeLayout.showDiscoverRow.detail",
+                        defaultValue: "Picks from outside your libraries, after Continue Watching.",
+                        comment: "Describes the Discover row: recommended titles not in the user's libraries, placed after the Continue Watching row."
+                    ))
                         .settingsHelperText()
                         .fixedSize(horizontal: false, vertical: true)
                 }
