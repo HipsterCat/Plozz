@@ -16,8 +16,15 @@ public extension MediaLibrary {
     /// so anywhere that reached for `title` directly would silently be wrong for
     /// share users.
     var displayName: Text {
-        guard let synthesizedName else { return Text(verbatim: title) }
-        return Text(synthesizedName.title)
+        guard let localizedTitle else { return Text(verbatim: title) }
+        return Text(localizedTitle)
+    }
+
+    /// Resolves the same name for UIKit and accessibility using the view's locale.
+    func displayName(in locale: Locale) -> String {
+        guard var resource = synthesizedName?.title else { return title }
+        resource.locale = locale
+        return String(localized: resource) // l10n:content — UIKit boundary for an existing localized library name
     }
 }
 #endif

@@ -7,16 +7,19 @@ import SwiftUI
 import PlozzCoreUI
 
 private enum PlozziOSPlayerSheet: String, Identifiable {
-    case info
     case speed
     case subtitles
     case sync
+    case quality
 
     var id: Self { self }
 }
 
 struct PlozziOSPlayerControlsOverlay: View {
     let viewModel: PlayerViewModel
+    let hasVersions: Bool
+    let versionsPresented: Bool
+    let onShowVersions: () -> Void
     let onClose: () -> Void
 
     @State private var controlsVisible = true
@@ -24,6 +27,7 @@ struct PlozziOSPlayerControlsOverlay: View {
     @State private var isScrubbing = false
     @State private var scrubPreviewCoordinator: ScrubPreviewCoordinator?
     @State private var presentedSheet: PlozziOSPlayerSheet?
+    @State private var optionsMenuPresented = false
     /// Whether the Info / Cast card is expanded. Owned here rather than inside
     /// the strip because dismissing it is this view's job: the tap that closes
     /// it lands on the video, above the card, which the strip does not cover.
@@ -164,10 +168,6 @@ struct PlozziOSPlayerControlsOverlay: View {
                     onSkipForward: {
                         seek(by: viewModel.controls.skipGesture.forwardInterval.seconds)
                     },
-                    onShowInfo: {
-                        presentedSheet = .info
-                        cancelAutoHide()
-                    },
                     onShowSpeed: {
                         presentedSheet = .speed
                         cancelAutoHide()
@@ -179,6 +179,19 @@ struct PlozziOSPlayerControlsOverlay: View {
                     onShowSync: {
                         presentedSheet = .sync
                         cancelAutoHide()
+                    },
+                    onShowQuality: {
+                        presentedSheet = .quality
+                        cancelAutoHide()
+                    },
+                    hasVersions: hasVersions,
+                    onShowVersions: {
+                        cancelAutoHide()
+                        onShowVersions()
+                    },
+                    onOptionsMenuPresentationChange: { presented in
+                        optionsMenuPresented = presented
+                        if presented { cancelAutoHide() } else { scheduleAutoHide() }
                     },
                     isCardOpen: $isCardOpen,
                     onInteraction: noteInteraction
@@ -243,16 +256,22 @@ struct PlozziOSPlayerControlsOverlay: View {
                 scheduleAutoHide()
             }
         }
+        .onChange(of: viewModel.controls.diagnosticsEnabled) { _, enabled in
+            if enabled { cancelAutoHide() } else { scheduleAutoHide() }
+        }
+        .onChange(of: versionsPresented) { _, presented in
+            if presented { cancelAutoHide() } else { scheduleAutoHide() }
+        }
         .sheet(item: $presentedSheet, onDismiss: scheduleAutoHide) { sheet in
             switch sheet {
-            case .info:
-                PlozziOSPlaybackInfoSheet(viewModel: viewModel)
             case .speed:
                 PlozziOSPlaybackSpeedSheet(viewModel: viewModel)
             case .subtitles:
                 PlozziOSSubtitleOptionsSheet(viewModel: viewModel)
             case .sync:
                 PlozziOSPlaybackSyncSheet(viewModel: viewModel)
+            case .quality:
+                PlozziOSStreamingQualitySheet(viewModel: viewModel)
             }
         }
     }
@@ -267,6 +286,7 @@ struct PlozziOSPlayerControlsOverlay: View {
     }
 
     private func toggleControls() {
+        guard !optionsMenuPresented else { return }
         controlsVisible.toggle()
         if controlsVisible {
             scheduleAutoHide()
@@ -314,6 +334,9 @@ struct PlozziOSPlayerControlsOverlay: View {
         // took the card away mid-read. It resumes when the card closes.
         guard !viewModel.controls.intendsPause,
               presentedSheet == nil,
+              !versionsPresented,
+              !optionsMenuPresented,
+              !viewModel.controls.diagnosticsEnabled,
               !isScrubbing,
               !isCardOpen
         else {
@@ -490,97 +513,74 @@ private extension View {
     }
 }
 
-/// The transport's "..." menu, driven by values rather than by the view model.
-///
-/// Split out so the playback clock cannot reach it: `PlayerControlsModel` is
-/// @Observable, and a `Menu` whose content closure reads it re-evaluates on
-/// every one of the roughly ten position updates a second, which makes an open
-/// menu's rows visibly flash. Holding plain values instead means SwiftUI only
-/// rebuilds the menu when a track list, a capability, or the Dialog Enhance
-/// state actually changes.
-private struct PlozziOSPlaybackOptionsMenu: View, Equatable {
+private struct PlozziOSPlaybackOptionsMenu: View {
+    @Environment(\.locale) private var locale
     let audioOptions: [PlayerTrackOption]
-    let subtitleOptions: [PlayerTrackOption]
-    let canSearchRemoteSubtitles: Bool
+    let hasAudioControls: Bool
     let supportsPlaybackSpeed: Bool
     let supportsSync: Bool
     let supportsDialogEnhance: Bool
     let dialogEnhanceEnabled: Bool
+    let supportsQuality: Bool
+    let supportsVersions: Bool
     let onSelectAudio: (PlayerTrackOption.ID) -> Void
     let onSetDialogEnhance: (Bool) -> Void
-    let onShowSubtitles: () -> Void
     let onShowSpeed: () -> Void
     let onShowSync: () -> Void
-
-    /// Compares the VALUES only. The transport's body re-evaluates on every
-    /// playback-clock tick (roughly ten a second), which rebuilds this struct with
-    /// freshly allocated closures; closures never compare equal, so without an
-    /// explicit `==` SwiftUI has to assume the view changed and re-runs the `Menu`
-    /// content closure. UIKit then rebuilds every row and submenu of the open
-    /// menu, which is the repeated flashing. Splitting the view out is not enough
-    /// on its own, the equality is what actually stops the work.
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.audioOptions == rhs.audioOptions
-            && lhs.subtitleOptions == rhs.subtitleOptions
-            && lhs.canSearchRemoteSubtitles == rhs.canSearchRemoteSubtitles
-            && lhs.supportsPlaybackSpeed == rhs.supportsPlaybackSpeed
-            && lhs.supportsSync == rhs.supportsSync
-            && lhs.supportsDialogEnhance == rhs.supportsDialogEnhance
-            && lhs.dialogEnhanceEnabled == rhs.dialogEnhanceEnabled
-    }
+    let onShowQuality: () -> Void
+    let onShowVersions: () -> Void
+    let onPresentationChange: (Bool) -> Void
 
     var body: some View {
-        Menu {
-            if !audioOptions.isEmpty || supportsDialogEnhance {
-                Menu("Audio") {
-                    ForEach(audioOptions) { option in
-                        Button {
-                            onSelectAudio(option.id)
-                        } label: {
-                            if option.isSelected {
-                                Label { option.title } icon: { Image(systemName: "checkmark") }
-                            } else {
-                                option.title
-                            }
-                        }
-                    }
-                    if !audioOptions.isEmpty, supportsDialogEnhance {
-                        Divider()
-                    }
-                    if supportsDialogEnhance {
-                        Toggle(
-                            "Dialog Enhance",
-                            isOn: Binding(
-                                get: { dialogEnhanceEnabled },
-                                set: { onSetDialogEnhance($0) }
-                            )
-                        )
-                    }
-                }
-            }
+        PlayerOptionsMenuButton(makeMenu: makeMenu, onPresentationChange: onPresentationChange)
+            .frame(width: 44, height: 44)
+            .background { PlayerGlassCircleSurface() }
+            .clipShape(Circle())
+    }
 
-            if !subtitleOptions.isEmpty || canSearchRemoteSubtitles {
-                Button("Subtitles", systemImage: "captions.bubble") {
-                    onShowSubtitles()
-                }
-            }
-
-            if supportsPlaybackSpeed {
-                Button("Playback Speed", systemImage: "speedometer") {
-                    onShowSpeed()
-                }
-            }
-
-            if supportsSync {
-                Button("Playback Sync", systemImage: "slider.horizontal.3") {
-                    onShowSync()
-                }
-            }
-        } label: {
-            Image(systemName: "ellipsis.circle")
-                .playerTransportGlyph()
+    private func makeMenu() -> UIMenu {
+        var items: [UIMenuElement] = []
+        if supportsVersions {
+            items.append(action("Version", icon: "rectangle.stack", perform: onShowVersions))
         }
-        .accessibilityLabel("Audio, subtitles, and speed")
+        if supportsQuality {
+            items.append(action("Quality", icon: "slider.horizontal.3", perform: onShowQuality))
+        }
+        if hasAudioControls {
+            var audio: [UIMenuElement] = audioOptions.map { option in
+                UIAction(title: option.nativeTitle, state: option.isSelected ? .on : .off) { _ in
+                    onSelectAudio(option.id)
+                }
+            }
+            if supportsDialogEnhance {
+                let enhance = action("Dialog Enhance", icon: "waveform") {
+                    onSetDialogEnhance(!dialogEnhanceEnabled)
+                }
+                enhance.state = dialogEnhanceEnabled ? .on : .off
+                audio.append(UIMenu(options: .displayInline, children: [enhance]))
+            }
+            items.append(UIMenu(title: localized("Audio"), image: UIImage(systemName: "speaker.wave.2"),
+                                children: audio))
+        }
+        if supportsPlaybackSpeed {
+            items.append(action("Playback Speed", icon: "speedometer", perform: onShowSpeed))
+        }
+        if supportsSync {
+            items.append(action("Playback Sync", icon: "slider.horizontal.3", perform: onShowSync))
+        }
+        return UIMenu(children: items)
+    }
+
+    private func action(
+        _ title: LocalizedStringResource, icon: String, perform: @escaping () -> Void
+    ) -> UIAction {
+        UIAction(title: localized(title), image: UIImage(systemName: icon)) { _ in perform() }
+    }
+
+    private func localized(_ resource: LocalizedStringResource) -> String {
+        var resource = resource
+        resource.locale = locale
+        return String(localized: resource) // l10n:content - UIKit menu boundary; resolved with the current locale on each opening.
     }
 }
 
@@ -597,10 +597,13 @@ private struct PlozziOSPlayerTransport: View {
     let onSkipBackward: () -> Void
     let onPlayPause: () -> Void
     let onSkipForward: () -> Void
-    let onShowInfo: () -> Void
     let onShowSpeed: () -> Void
     let onShowSubtitles: () -> Void
     let onShowSync: () -> Void
+    let onShowQuality: () -> Void
+    let hasVersions: Bool
+    let onShowVersions: () -> Void
+    let onOptionsMenuPresentationChange: (Bool) -> Void
     @Binding var isCardOpen: Bool
     let onInteraction: () -> Void
     /// The player's own bounds, which decide the card's layout — see the
@@ -652,10 +655,7 @@ private struct PlozziOSPlayerTransport: View {
 
                 Spacer(minLength: 12)
 
-                // Speed, audio and subtitles as three peers at the trailing
-                // edge, level with the title. They were one "..." menu in the
-                // bottom-right corner, which hid three routine choices behind a
-                // generic glyph and put them nowhere near what they affect.
+                // Keep captions one tap away; secondary choices share one menu.
                 trackControls
             }
             .foregroundStyle(.white)
@@ -692,7 +692,7 @@ private struct PlozziOSPlayerTransport: View {
                 model: viewModel.controls,
                 availableSize: availableSize,
                 isCardOpen: $isCardOpen,
-                onRestart: { viewModel.requestSeek(to: 0) },
+                onRestart: { viewModel.requestSeek(to: 0, origin: "restart") },
                 onNextEpisode: { viewModel.playNextEpisode() },
                 onPreviousEpisode: {
                     if let previous = viewModel.previousEpisode {
@@ -723,83 +723,30 @@ private struct PlozziOSPlayerTransport: View {
         }
     }
 
-    /// Speed · Audio · Subtitles, as three peers.
-    ///
-    /// Each opens the thing it names rather than a menu of menus. Audio is a
-    /// `Menu` because its choice is a short list that can be made in place;
-    /// speed and subtitles open sheets because theirs are not.
+    /// Two stable controls leave the title room in portrait.
     @ViewBuilder
     private var trackControls: some View {
         HStack(spacing: 12) {
-            if viewModel.controls.engineCapabilities.contains(.playbackSpeed) {
-                Button(action: onShowSpeed) {
-                    Image(systemName: "speedometer")
-                        .font(.title3)
-                }
-                .buttonStyle(PlayerGlassCircleButtonStyle(diameter: 44))
-                .accessibilityLabel(Text(
-                    "Playback speed",
-                    comment: "VoiceOver label for the speedometer button beneath the player's scrub bar; opens the playback-speed picker."
-                ))
-            }
-
-            if !viewModel.controls.audioOptions.isEmpty {
-                Menu {
-                    ForEach(viewModel.controls.audioOptions) { option in
-                        Button {
-                            viewModel.selectAudioOption(id: option.id)
-                            onInteraction()
-                        } label: {
-                            if option.isSelected {
-                                Label { option.title } icon: { Image(systemName: "checkmark") }
-                            } else {
-                                option.title
-                            }
-                        }
-                    }
-                } label: {
-                    // A Menu, not a Button, so the shared style cannot apply —
-                    // its surface is used directly instead, which is the point of
-                    // `PlayerGlassCircleSurface` being separate from the style.
-                    Image(systemName: "waveform")
-                        .font(.title3)
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                        .background { PlayerGlassCircleSurface() }
-                        .clipShape(Circle())
-                        .contentShape(Circle())
-                }
-                .accessibilityLabel(Text(
-                    "Audio track",
-                    comment: "VoiceOver label for the waveform button beneath the player's scrub bar; opens the audio-track menu."
-                ))
-            }
-
             Button(action: onShowSubtitles) {
                 Image(systemName: "captions.bubble")
                     .font(.title3)
             }
             .buttonStyle(PlayerGlassCircleButtonStyle(diameter: 44))
             .accessibilityLabel("Subtitles")
+            playbackOptions
         }
     }
 
     private var playbackOptions: some View {
-        // Passes plain values, not the view model. `PlayerControlsModel` is
-        // @Observable and the playback clock writes `currentSeconds` about ten
-        // times a second, so a menu whose content closure touches
-        // `viewModel.controls` is invalidated on every tick. UIKit then rebuilds
-        // the open menu's rows underneath the user, which reads as the text
-        // flashing. Snapshotting the inputs here means the menu only redraws when
-        // something it actually shows has changed.
         PlozziOSPlaybackOptionsMenu(
-            audioOptions: viewModel.controls.audioOptions,
-            subtitleOptions: viewModel.controls.subtitleOptions,
-            canSearchRemoteSubtitles: viewModel.controls.subtitleDownload.canSearch,
+            audioOptions: viewModel.controls.hasSelectableAudio ? viewModel.controls.audioOptions : [],
+            hasAudioControls: viewModel.controls.hasAudioControls,
             supportsPlaybackSpeed: viewModel.controls.engineCapabilities.contains(.playbackSpeed),
             supportsSync: supportsSync,
             supportsDialogEnhance: supportsDialogEnhance,
             dialogEnhanceEnabled: viewModel.controls.dialogEnhanceEnabled,
+            supportsQuality: viewModel.streamingQualityAvailable,
+            supportsVersions: hasVersions,
             onSelectAudio: { id in
                 viewModel.selectAudioOption(id: id)
                 onInteraction()
@@ -808,11 +755,12 @@ private struct PlozziOSPlayerTransport: View {
                 viewModel.setDialogEnhanceEnabled(enabled)
                 onInteraction()
             },
-            onShowSubtitles: onShowSubtitles,
             onShowSpeed: onShowSpeed,
-            onShowSync: onShowSync
+            onShowSync: onShowSync,
+            onShowQuality: onShowQuality,
+            onShowVersions: onShowVersions,
+            onPresentationChange: onOptionsMenuPresentationChange
         )
-        .equatable()
     }
 
     private var supportsSync: Bool {
@@ -1012,12 +960,13 @@ private struct PlozziOSSubtitleOptionsSheet: View {
                 .plozzForeground(.secondary)
             } else {
                 NavigationLink {
-                    PlozziOSSubtitleAppearanceView(viewModel: viewModel)
+                    MobileSubtitleStyleEditor(viewModel: .init(player: viewModel))
                 } label: {
-                    LabeledContent(
-                        "Style",
-                        value: viewModel.controls.subtitleStyle.fontFamily.displayName
-                    )
+                    LabeledContent {
+                        viewModel.controls.subtitleStyle.fontDisplayName
+                    } label: {
+                        Text("Style")
+                    }
                 }
             }
         }
@@ -1069,6 +1018,9 @@ private struct PlozziOSSubtitleOptionsSheet: View {
                     Text("Subtitle search failed.")
                         .foregroundStyle(.red)
                     searchButton
+                case .unavailable(let message):
+                    Text(message).foregroundStyle(.red)
+                    searchButton
                 }
             }
         }
@@ -1104,555 +1056,6 @@ private struct PlozziOSSubtitleOptionsSheet: View {
         ]
         .compactMap { $0 }
         .joined(separator: " • ")
-    }
-}
-
-private struct PlozziOSSubtitleAppearanceView: View {
-    let viewModel: PlayerViewModel
-    @Environment(\.locale) private var locale
-
-    var body: some View {
-        Form {
-            Section("Text") {
-                NavigationLink {
-                    PlozziOSSubtitleFontView(viewModel: viewModel)
-                } label: {
-                    LabeledContent(
-                        "Font",
-                        value: viewModel.controls.subtitleStyle.fontFamily.displayName
-                    )
-                }
-
-                Picker(
-                    "Weight",
-                    selection: subtitleStyleBinding(viewModel, \.fontWeight)
-                ) {
-                    ForEach(
-                        viewModel.controls.subtitleStyle.fontFamily.availableWeights,
-                        id: \.self
-                    ) {
-                        Text($0.displayName).tag($0)
-                    }
-                }
-
-                PlozziOSSubtitleSliderRow(
-                    title: "Text Size",
-                    value: subtitleStyleBinding(viewModel, \.fontScale),
-                    range: 0.6...2.5,
-                    step: 0.05,
-                    formattedValue: {
-                        "\((100 * $0).rounded().formatted())%"
-                    }
-                )
-                PlozziOSSubtitleSliderRow(
-                    title: "Position",
-                    value: subtitleStyleBinding(viewModel, \.verticalPosition),
-                    range: SubtitleStyle.verticalPositionRange,
-                    step: SubtitleStyle.verticalPositionStep,
-                    formattedValue: {
-                        $0.formatted(.percent.precision(.fractionLength(0...1)).locale(locale))
-                    }
-                )
-                Picker(selection: subtitleStyleBinding(viewModel, \.verticalAnchor)) {
-                    ForEach(SubtitleStyle.VerticalAnchor.allCases, id: \.self) { anchor in
-                        Text(anchor.displayName).tag(anchor)
-                    }
-                } label: {
-                    Text(
-                        "Extra Line Position",
-                        comment: "Subtitle setting for where additional wrapped lines appear: Above, Center, or Below. Not the placement of a second-language subtitle track."
-                    )
-                }
-                PlozziOSSubtitleSliderRow(
-                    title: "Horizontal Offset",
-                    value: subtitleStyleBinding(viewModel, \.horizontalOffset),
-                    range: -1...1,
-                    step: 0.05,
-                    formattedValue: {
-                        let percent = Int(($0 * 100).rounded())
-                        return percent == 0
-                            ? "Center"
-                            : "\(percent > 0 ? "+" : "")\(percent)%"
-                    }
-                )
-                subtitleColorPicker(
-                    "Text Color",
-                    viewModel: viewModel,
-                    keyPath: \.textColor,
-                    options: SubtitleColor.presets
-                )
-                PlozziOSSubtitleSliderRow(
-                    title: "Opacity",
-                    value: subtitleStyleBinding(viewModel, \.opacity),
-                    range: 0.2...1,
-                    step: 0.05,
-                    formattedValue: {
-                        "\((100 * $0).rounded().formatted())%"
-                    }
-                )
-                if viewModel.controls.subtitlesRenderHDR {
-                    PlozziOSSubtitleSliderRow(
-                        title: "HDR Brightness",
-                        value: subtitleStyleBinding(
-                            viewModel,
-                            \.hdrLuminanceScale
-                        ),
-                        range: 0.2...1,
-                        step: 0.05,
-                        formattedValue: {
-                            "\((100 * $0).rounded().formatted())%"
-                        }
-                    )
-                }
-            }
-
-            Section("Details") {
-                NavigationLink("Shadow & Outline") {
-                    PlozziOSSubtitleShadowOutlineView(viewModel: viewModel)
-                }
-                NavigationLink {
-                    PlozziOSSubtitleBackgroundView(viewModel: viewModel)
-                } label: {
-                    LabeledContent(
-                        "Background",
-                        value: viewModel.controls.subtitleStyle.background.isEnabled
-                            ? "On"
-                            : "Off"
-                    )
-                }
-                NavigationLink {
-                    PlozziOSSubtitleDualView(viewModel: viewModel)
-                } label: {
-                    LabeledContent(
-                        "Dual Subtitles",
-                        value: selectedSecondaryTrack(in: viewModel) == nil
-                            ? "Off"
-                            : "On"
-                    )
-                }
-            }
-
-            Section {
-                Button("Reset to Default", role: .destructive) {
-                    viewModel.applySubtitleStyle(.default)
-                }
-            }
-        }
-        .navigationTitle("Appearance")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-private struct PlozziOSSubtitleFontView: View {
-    let viewModel: PlayerViewModel
-
-    var body: some View {
-        List {
-            ForEach(SubtitleFontFamily.allCases, id: \.self) { family in
-                Button {
-                    var style = viewModel.controls.subtitleStyle
-                    style.fontFamily = family
-                    style.fontWeight = style.fontWeight.snapped(
-                        to: family.availableWeights
-                    )
-                    viewModel.applySubtitleStyle(style)
-                } label: {
-                    HStack {
-                        Text(family.displayName)
-                            .font(subtitlePreviewFont(for: family))
-                        Spacer()
-                        if family ==
-                            viewModel.controls.subtitleStyle.fontFamily {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                }
-            }
-        }
-        .navigationTitle("Font")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-private struct PlozziOSSubtitleShadowOutlineView: View {
-    let viewModel: PlayerViewModel
-    private let shadowStyles: [SubtitleEdgeStyle] = [
-        .none, .dropShadow, .raised, .depressed
-    ]
-
-    var body: some View {
-        Form {
-            Section("Shadow") {
-                Picker(
-                    "Style",
-                    selection: subtitleStyleBinding(viewModel, \.edge.style)
-                ) {
-                    ForEach(shadowStyles, id: \.self) {
-                        Text($0.displayName).tag($0)
-                    }
-                }
-                if viewModel.controls.subtitleStyle.edge.style != .none {
-                    subtitleColorPicker(
-                        "Color",
-                        viewModel: viewModel,
-                        keyPath: \.edge.color,
-                        options: SubtitleColor.presets
-                    )
-                    PlozziOSSubtitleSliderRow(
-                        title: "Thickness",
-                        value: subtitleStyleBinding(
-                            viewModel,
-                            \.edge.thickness
-                        ),
-                        range: 0...10,
-                        step: 1,
-                        formattedValue: { $0.rounded().formatted() }
-                    )
-                }
-            }
-
-            Section("Outline") {
-                Toggle(
-                    "Show Outline",
-                    isOn: subtitleStyleBinding(
-                        viewModel,
-                        \.border.isEnabled
-                    )
-                )
-                if viewModel.controls.subtitleStyle.border.isEnabled {
-                    subtitleColorPicker(
-                        "Color",
-                        viewModel: viewModel,
-                        keyPath: \.border.color,
-                        options: SubtitleColor.presets
-                    )
-                    PlozziOSSubtitleSliderRow(
-                        title: "Width",
-                        value: subtitleStyleBinding(
-                            viewModel,
-                            \.border.width
-                        ),
-                        range: 0...10,
-                        step: 0.5,
-                        formattedValue: {
-                            $0.formatted(
-                                .number.precision(.fractionLength(0...1))
-                            )
-                        }
-                    )
-                }
-            }
-        }
-        .navigationTitle("Shadow & Outline")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-private struct PlozziOSSubtitleBackgroundView: View {
-    let viewModel: PlayerViewModel
-    private let backgroundColors: [(name: String, color: SubtitleColor)] = [
-        ("Black", .black),
-        (
-            "Dark Gray",
-            SubtitleColor(red: 0.15, green: 0.15, blue: 0.15)
-        ),
-        ("White", .white)
-    ]
-
-    var body: some View {
-        Form {
-            Section {
-                Toggle(
-                    "Show Box",
-                    isOn: subtitleStyleBinding(
-                        viewModel,
-                        \.background.isEnabled
-                    )
-                )
-            }
-
-            if viewModel.controls.subtitleStyle.background.isEnabled {
-                Section("Box") {
-                    subtitleColorPicker(
-                        "Color",
-                        viewModel: viewModel,
-                        keyPath: \.background.color,
-                        options: backgroundColors
-                    )
-                    PlozziOSSubtitleSliderRow(
-                        title: "Opacity",
-                        value: subtitleColorAlphaBinding(
-                            viewModel,
-                            \.background.color
-                        ),
-                        range: 0.05...1,
-                        step: 0.05,
-                        formattedValue: {
-                            "\((100 * $0).rounded().formatted())%"
-                        }
-                    )
-                    PlozziOSSubtitleSliderRow(
-                        title: "Corner Radius",
-                        value: subtitleStyleBinding(
-                            viewModel,
-                            \.background.cornerRadius
-                        ),
-                        range: 0...50,
-                        step: 2,
-                        formattedValue: {
-                            "\($0.rounded().formatted()) pt"
-                        }
-                    )
-                    PlozziOSSubtitleSliderRow(
-                        title: "Horizontal Padding",
-                        value: subtitleStyleBinding(
-                            viewModel,
-                            \.background.horizontalPadding
-                        ),
-                        range: 0...40,
-                        step: 2,
-                        formattedValue: {
-                            "\($0.rounded().formatted()) pt"
-                        }
-                    )
-                    PlozziOSSubtitleSliderRow(
-                        title: "Vertical Padding",
-                        value: subtitleStyleBinding(
-                            viewModel,
-                            \.background.verticalPadding
-                        ),
-                        range: 0...40,
-                        step: 2,
-                        formattedValue: {
-                            "\($0.rounded().formatted()) pt"
-                        }
-                    )
-                }
-            }
-        }
-        .navigationTitle("Background")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-private struct PlozziOSSubtitleDualView: View {
-    let viewModel: PlayerViewModel
-
-    var body: some View {
-        Form {
-            Section("Second Track") {
-                if let format =
-                    viewModel.controls.secondarySubtitleImagePrimaryFormat {
-                    Text("Unavailable with \(format) image subtitles.")
-                        .plozzForeground(.secondary)
-                } else if viewModel.controls.secondarySubtitleOptions.isEmpty {
-                    Text("No additional text tracks are available.")
-                        .plozzForeground(.secondary)
-                } else {
-                    ForEach(
-                        viewModel.controls.secondarySubtitleOptions
-                    ) { option in
-                        Button {
-                            viewModel.selectSecondarySubtitleOption(id: option.id)
-                        } label: {
-                            HStack {
-                                option.title
-                                Spacer()
-                                if option.isSelected {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if selectedSecondaryTrack(in: viewModel) != nil,
-               viewModel.controls.subtitleStyle.secondary != nil {
-                Section("Layout") {
-                    Picker(
-                        "Placement",
-                        selection: subtitleStyleBinding(
-                            viewModel,
-                            \.secondary!.placement
-                        )
-                    ) {
-                        Text("Above").tag(
-                            SubtitleStyle.Secondary.Placement.above
-                        )
-                        Text("Below").tag(
-                            SubtitleStyle.Secondary.Placement.below
-                        )
-                    }
-                    Toggle(
-                        "Distinct Style",
-                        isOn: subtitleStyleBinding(
-                            viewModel,
-                            \.secondary!.differentiate
-                        )
-                    )
-                    if viewModel.controls.subtitleStyle.secondary?
-                        .differentiate == true {
-                        PlozziOSSubtitleSliderRow(
-                            title: "Size",
-                            value: subtitleStyleBinding(
-                                viewModel,
-                                \.secondary!.relativeScale
-                            ),
-                            range: 0.5...1,
-                            step: 0.05,
-                            formattedValue: {
-                                "\((100 * $0).rounded().formatted())%"
-                            }
-                        )
-                        subtitleColorPicker(
-                            "Color",
-                            viewModel: viewModel,
-                            keyPath: \.secondary!.textColor,
-                            options: SubtitleColor.presets
-                        )
-                    }
-                    PlozziOSSubtitleSliderRow(
-                        title: "Gap",
-                        value: subtitleStyleBinding(
-                            viewModel,
-                            \.secondary!.gap
-                        ),
-                        range: 0...24,
-                        step: 2,
-                        formattedValue: {
-                            "\($0.rounded().formatted()) pt"
-                        }
-                    )
-                }
-            }
-        }
-        .navigationTitle("Dual Subtitles")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-private struct PlozziOSSubtitleSliderRow: View {
-    let title: LocalizedStringKey
-    @Binding var value: Double
-    let range: ClosedRange<Double>
-    let step: Double
-    let formattedValue: (Double) -> String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(title)
-                Spacer()
-                Text(formattedValue(value))
-                    .plozzForeground(.secondary)
-                    .monospacedDigit()
-            }
-            Slider(value: $value, in: range, step: step)
-        }
-    }
-}
-
-@MainActor
-private func subtitleStyleBinding<Value>(
-    _ viewModel: PlayerViewModel,
-    _ keyPath: WritableKeyPath<SubtitleStyle, Value>
-) -> Binding<Value> {
-    Binding(
-        get: {
-            viewModel.controls.subtitleStyle[keyPath: keyPath]
-        },
-        set: { value in
-            var style = viewModel.controls.subtitleStyle
-            style[keyPath: keyPath] = value
-            viewModel.applySubtitleStyle(style)
-        }
-    )
-}
-
-@MainActor
-private func subtitleColorAlphaBinding(
-    _ viewModel: PlayerViewModel,
-    _ keyPath: WritableKeyPath<SubtitleStyle, SubtitleColor>
-) -> Binding<Double> {
-    Binding(
-        get: {
-            viewModel.controls.subtitleStyle[keyPath: keyPath].alpha
-        },
-        set: { alpha in
-            var style = viewModel.controls.subtitleStyle
-            style[keyPath: keyPath].alpha = alpha
-            viewModel.applySubtitleStyle(style)
-        }
-    )
-}
-
-@MainActor
-private func subtitleColorPicker(
-    _ title: LocalizedStringKey,
-    viewModel: PlayerViewModel,
-    keyPath: WritableKeyPath<SubtitleStyle, SubtitleColor>,
-    options: [(name: String, color: SubtitleColor)]
-) -> some View {
-    Picker(
-        title,
-        selection: Binding(
-            get: {
-                let current =
-                    viewModel.controls.subtitleStyle[keyPath: keyPath]
-                return options.first {
-                    $0.color.red == current.red
-                        && $0.color.green == current.green
-                        && $0.color.blue == current.blue
-                }?.color ?? current
-            },
-            set: { selected in
-                var style = viewModel.controls.subtitleStyle
-                let alpha = style[keyPath: keyPath].alpha
-                var color = selected
-                color.alpha = alpha
-                style[keyPath: keyPath] = color
-                viewModel.applySubtitleStyle(style)
-            }
-        )
-    ) {
-        ForEach(options, id: \.name) { option in
-            Label {
-                Text(option.name)
-            } icon: {
-                Circle()
-                    .fill(
-                        Color(
-                            red: option.color.red,
-                            green: option.color.green,
-                            blue: option.color.blue
-                        )
-                    )
-            }
-            .tag(option.color)
-        }
-    }
-}
-
-private func subtitlePreviewFont(
-    for family: SubtitleFontFamily
-) -> Font {
-    let size: CGFloat = family == .openDyslexic ? 17 : 22
-    if family.usesRoundedDesign {
-        return .system(size: size, design: .rounded)
-    }
-    if let name = family.postScriptNameCandidates().first {
-        return .custom(name, size: size)
-    }
-    return .system(size: size)
-}
-
-@MainActor
-private func selectedSecondaryTrack(
-    in viewModel: PlayerViewModel
-) -> PlayerTrackOption? {
-    viewModel.controls.secondarySubtitleOptions.first {
-        $0.isSelected && $0.id != PlayerTrackOption.offID
     }
 }
 
@@ -1707,62 +1110,6 @@ private struct PlozziOSPlaybackSpeedSheet: View {
             }
         }
         .presentationDetents([.medium])
-    }
-}
-
-private struct PlozziOSPlaybackInfoSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    let viewModel: PlayerViewModel
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    Text(viewModel.controls.infoCard.headline)
-                        .font(.headline)
-                    if !viewModel.controls.infoCard.overview.isEmpty {
-                        Text(verbatim: viewModel.controls.infoCard.overview.overviewPlainText)
-                            .plozzForeground(.secondary)
-                    }
-                }
-
-                Section {
-                    Button("Restart from Beginning", systemImage: "arrow.counterclockwise") {
-                        viewModel.requestSeek(to: 0)
-                        dismiss()
-                    }
-                    if viewModel.controls.infoCard.hasPreviousEpisode,
-                       let previous = viewModel.previousEpisode {
-                        Button("Previous Episode", systemImage: "backward.end.fill") {
-                            viewModel.playEpisode(previous)
-                            dismiss()
-                        }
-                    }
-                    if viewModel.controls.infoCard.hasNextEpisode {
-                        Button("Next Episode", systemImage: "forward.end.fill") {
-                            viewModel.playNextEpisode()
-                            dismiss()
-                        }
-                    }
-                }
-
-                if !viewModel.controls.infoCard.badges.isEmpty {
-                    Section("Media") {
-                        ForEach(viewModel.controls.infoCard.badges, id: \.self) { badge in
-                            Text(badge.label)
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Now Playing")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
     }
 }
 

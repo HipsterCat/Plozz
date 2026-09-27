@@ -5,10 +5,19 @@ private struct NativeFocusSurfaceKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+private struct NativeArtworkSurfaceKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     var plozzNativeFocusSurface: Bool {
         get { self[NativeFocusSurfaceKey.self] }
         set { self[NativeFocusSurfaceKey.self] = newValue }
+    }
+
+    var plozzNativeArtworkSurface: Bool {
+        get { self[NativeArtworkSurfaceKey.self] }
+        set { self[NativeArtworkSurfaceKey.self] = newValue }
     }
 }
 
@@ -24,7 +33,7 @@ public struct PlozzCardFocus: DynamicProperty {
     public var wrappedValue: Bool {
         get {
             #if os(tvOS)
-            style.usesSystemEffect ? observed : focused
+            usesNativeFocus ? observed : focused
             #else
             focused
             #endif
@@ -144,11 +153,11 @@ private struct NativeMediaButtonStyle: ViewModifier {
 
 private struct CardArtworkClip<S: Shape>: ViewModifier {
     let shape: S
-    @Environment(\.plozzNativeFocusSurface) private var nativeSurface
+    @Environment(\.plozzNativeArtworkSurface) private var nativeArtworkSurface
 
     func body(content: Content) -> some View {
         #if os(tvOS)
-        if nativeSurface {
+        if nativeArtworkSurface {
             content
         } else {
             content.clipShape(shape)
@@ -185,14 +194,18 @@ private struct RestingCardShadow: ViewModifier {
 }
 
 #if os(tvOS)
+import TVUIKit
 import UIKit
 
 /// Geometry only: retain Z until ancestor perspective is applied when capturing
 /// a native focused image for the separate detail-page transition.
 enum NativeFocusProjection {
+    @MainActor
     static func artworkFrame(of view: UIView, in window: UIWindow) -> CGRect? {
         var bounds: CGRect?
-        if let image = view as? UIImageView, image.adjustsImageWhenAncestorFocused {
+        if let media = view as? TVMediaItemContentView, media.superview?.isFocused == true {
+            bounds = media.focusedFrameGuide.layoutFrame
+        } else if let image = view as? UIImageView, image.adjustsImageWhenAncestorFocused {
             var ancestor: UIView? = image
             while let current = ancestor {
                 if current.isFocused {

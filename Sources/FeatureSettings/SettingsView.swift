@@ -103,6 +103,7 @@ public struct SettingsView: View {
     private static let contentMaxWidth: CGFloat = PlozzTheme.Metrics.settingsContentMaxWidth
 
     private let subtitleBehavior: SubtitleBehaviorModel
+    private let subtitleStyle: SubtitleStyleModel
     private let spoilers: SpoilerSettingsModel
     private let playback: PlaybackSettingsModel
     private let subtitlePolicy: SubtitlePolicyModel
@@ -129,6 +130,7 @@ public struct SettingsView: View {
     private let activeProfile: Profile
     private let liveTVPreferencesNamespace: String?
     @Environment(LiveTVSettingsSources.self) private var liveTVSources: LiveTVSettingsSources?
+    @Environment(SubtitleStyleSettingsDestination.self) private var subtitleStyleDestination: SubtitleStyleSettingsDestination?
     private let askProfileOnStartup: Bool
     private let appVersion: String
     private let appBuild: String
@@ -194,7 +196,7 @@ public struct SettingsView: View {
     /// Synced servers this device isn't signed into yet, plus ignore + set-up actions.
     private let pendingSyncedServers: [SyncedAccountDescriptor]
     private let onIgnorePendingServer: (String) -> Void
-    private let onSetUpFromAnotherDevice: (() -> Void)?
+    private let onSetUpPendingServer: ((SyncedAccountDescriptor) -> Void)?
     private let plexHomeUsersFetcher: (String) async -> [PlexHomeUser]
     private let onSelectPlexHomeUser: (String, PlexHomeUser?) -> Void
     private let onSetProfileLock: (String, ProfileLock?) -> Void
@@ -210,6 +212,7 @@ public struct SettingsView: View {
 
     public init(
         subtitleBehavior: SubtitleBehaviorModel,
+        subtitleStyle: SubtitleStyleModel,
         spoilers: SpoilerSettingsModel,
         playback: PlaybackSettingsModel,
         subtitlePolicy: SubtitlePolicyModel,
@@ -273,11 +276,12 @@ public struct SettingsView: View {
         syncRepair: SyncRepairActions? = nil,
         pendingSyncedServers: [SyncedAccountDescriptor] = [],
         onIgnorePendingServer: @escaping (String) -> Void = { _ in },
-        onSetUpFromAnotherDevice: (() -> Void)? = nil,
+        onSetUpPendingServer: ((SyncedAccountDescriptor) -> Void)? = nil,
         metadataSettings: MetadataSettingsDependencies? = nil,
         navigation: SettingsNavigationModel
     ) {
         self.subtitleBehavior = subtitleBehavior
+        self.subtitleStyle = subtitleStyle
         self.spoilers = spoilers
         self.playback = playback
         self.subtitlePolicy = subtitlePolicy
@@ -340,7 +344,7 @@ public struct SettingsView: View {
         self.syncRepair = syncRepair
         self.pendingSyncedServers = pendingSyncedServers
         self.onIgnorePendingServer = onIgnorePendingServer
-        self.onSetUpFromAnotherDevice = onSetUpFromAnotherDevice
+        self.onSetUpPendingServer = onSetUpPendingServer
         self.metadataSettings = metadataSettings
         self.navigation = navigation
     }
@@ -365,6 +369,7 @@ public struct SettingsView: View {
             discoveredLibraries: librariesStore.state,
             refreshingLibraryAccountIDs: librariesStore.refreshingAccountIDs,
             unreachableLibraryAccountIDs: librariesStore.unreachableAccountIDs,
+            libraryFailures: librariesStore.failures,
             reloadLibraries: reloadLibraries,
             accounts: accounts,
             activeAccountID: activeAccountID,
@@ -1055,10 +1060,27 @@ public struct SettingsView: View {
             PlaybackDetailView(
                 playback: playback,
                 subtitleBehavior: subtitleBehavior,
+                subtitleStyle: subtitleStyle,
                 subtitlePolicy: subtitlePolicy,
                 audioPolicy: audioPolicy,
                 canDownloadSubtitles: activeProfileCanDownloadSubtitles
             )
+        case .subtitleStyle(let liveTV):
+            if let subtitleStyleDestination {
+                subtitleStyleDestination.content(
+                    style: Binding(
+                        get: { liveTV ? subtitleStyle.resolvedLiveTVStyle : subtitleStyle.style },
+                        set: {
+                            if liveTV { subtitleStyle.resolvedLiveTVStyle = $0 }
+                            else { subtitleStyle.style = $0 }
+                        }
+                    ),
+                    isLiveTV: liveTV
+                )
+                .id(activeProfile.id)
+            } else {
+                Text("The subtitle style editor is unavailable.")
+            }
         case .spoilers:
             SpoilersDetailView(spoilers: spoilers)
         case .integrations:
@@ -1295,7 +1317,10 @@ public struct SettingsView: View {
 
     private func pendingServerRow(_ server: SyncedAccountDescriptor) -> some View {
         HStack(alignment: .center, spacing: 16) {
-            rowIcon("externaldrive.badge.person.crop")
+            ProviderBrandMark(
+                provider: server.provider, size: 44,
+                mediaShareTransport: server.mediaShareTransportKind
+            )
             VStack(alignment: .leading, spacing: 4) {
                 Text(server.serverName)
                     .font(.callout.weight(.medium))
@@ -1304,8 +1329,8 @@ public struct SettingsView: View {
                     .settingsRowSecondary()
             }
             Spacer()
-            if let onSetUpFromAnotherDevice {
-                Button("Set Up", action: onSetUpFromAnotherDevice)
+            if let onSetUpPendingServer {
+                Button("Set Up") { onSetUpPendingServer(server) }
                     .buttonStyle(PlozzSeasonTabStyle(isSelected: false))
             }
             Button("Ignore") { onIgnorePendingServer(server.id) }

@@ -55,3 +55,7 @@ trace-output/
 # Python bytecode from the tools/ scripts and their tests.
 __pycache__/
 DerivedDataTests/
+
+# Translation/review batch inputs are working files, not sources (a stray one
+# was committed at the root once).
+/.review-input-*.json

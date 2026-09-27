@@ -261,6 +261,9 @@ struct MainTabView: View {
     let syncServices: SyncServices
     private var subtitleBehaviorModel: SubtitleBehaviorModel { profileSettings.subtitleBehaviorModel }
     private var subtitleStyleModel: SubtitleStyleModel { profileSettings.subtitleStyleModel }
+    private static let subtitleStyleDestination = SubtitleStyleSettingsDestination { style, isLiveTV in
+        AnyView(SubtitleStyleSettingsView(style: style, isLiveTV: isLiveTV))
+    }
     private var spoilerModel: SpoilerSettingsModel { profileSettings.spoilerModel }
     private var playbackModel: PlaybackSettingsModel { profileSettings.playbackModel }
     /// Per-profile per-content-type subtitle policy overrides, threaded into the
@@ -435,7 +438,7 @@ struct MainTabView: View {
     /// Pending (needs-sign-in) synced servers + their actions.
     var pendingSyncedServers: [SyncedAccountDescriptor] = []
     var onIgnorePendingServer: (String) -> Void = { _ in }
-    var onSetUpFromAnotherDevice: (() -> Void)?
+    var onSetUpPendingServer: ((SyncedAccountDescriptor) -> Void)?
     var admissionContext = AppAdmissionContext(hasMediaAccounts: true)
     var pendingStandaloneLiveTVEntry = false
     var onConsumeStandaloneLiveTVEntry: (() -> Void)?
@@ -565,10 +568,19 @@ struct MainTabView: View {
 
     /// Destination currently visible under native sidebar or custom rail.
     private var activeLibraryNavigationDestination: NavigationRailDestination {
-        let current = libraryNavigationEntryOverride ?? resolvedRailSelection
+        activeLibraryNavigationDestination(in: activeNavigationDestinations)
+    }
+
+    private func activeLibraryNavigationDestination(
+        in destinations: [NavigationRailDestination]
+    ) -> NavigationRailDestination {
+        let current = libraryNavigationEntryOverride ?? NavigationRailPlan.resolvedSelection(
+            storedRailSelection,
+            destinations: destinations
+        )
         return standaloneStartupDestination(
             current: current,
-            destinations: activeNavigationDestinations
+            destinations: destinations
         ) ?? current
     }
 
@@ -658,8 +670,11 @@ struct MainTabView: View {
     /// raw value, and `railShell` persists the resolved one when they diverge —
     /// otherwise a library returning later could silently yank the viewer away.
     private var libraryNavigationSelection: Binding<NavigationRailDestination> {
-        Binding(
-            get: { activeLibraryNavigationDestination },
+        // Every rail item reads this binding repeatedly during focus updates.
+        // Resolve its library layout once, while retaining live selection reads.
+        let destinations = activeNavigationDestinations
+        return Binding(
+            get: { activeLibraryNavigationDestination(in: destinations) },
             set: { destination in
                 recordedProcessLaunch = Self.processLaunch
                 releaseExplicitLiveTVEntry(ifLeavingFor: destination)
@@ -671,8 +686,9 @@ struct MainTabView: View {
     }
 
     private var nativeSidebarSelection: Binding<NativeSidebarDestination> {
-        Binding(
-            get: { .content(activeLibraryNavigationDestination) },
+        let destinations = activeNavigationDestinations
+        return Binding(
+            get: { .content(activeLibraryNavigationDestination(in: destinations)) },
             set: { destination in
                 switch destination {
                 case .profile:
@@ -699,6 +715,18 @@ struct MainTabView: View {
         case .music: return .music
         case .settings: return .settings
         }
+    }
+
+    /// The remote's Guide button: bring Live TV forward, then let the player —
+    /// if one is fullscreen — raise its guide over the picture.
+    private func openLiveTVGuide() {
+        guard activeNavigationDestinations.contains(.liveTV) else { return }
+        if navigationStyle == .tabBar {
+            selectedTab.wrappedValue = .liveTV
+        } else {
+            libraryNavigationSelection.wrappedValue = .liveTV
+        }
+        NotificationCenter.default.post(name: LiveTVGuideButton.pressed, object: nil)
     }
 
     private func destination(for tab: MainTab) -> NavigationRailDestination {
@@ -946,6 +974,7 @@ struct MainTabView: View {
     private var settingsViewContent: some View {
             SettingsView(
                 subtitleBehavior: subtitleBehaviorModel,
+                subtitleStyle: subtitleStyleModel,
                 spoilers: spoilerModel,
                 playback: playbackModel,
                 subtitlePolicy: subtitlePolicyModel,
@@ -1013,11 +1042,12 @@ struct MainTabView: View {
                 syncRepair: syncRepair,
                 pendingSyncedServers: pendingSyncedServers,
                 onIgnorePendingServer: onIgnorePendingServer,
-                onSetUpFromAnotherDevice: onSetUpFromAnotherDevice,
+                onSetUpPendingServer: onSetUpPendingServer,
                 metadataSettings: metadataSettings,
                 navigation: settingsNavigation
             )
             .background { SettingsPageBackground() }
+            .environment(Self.subtitleStyleDestination)
     }
 
 
@@ -1376,7 +1406,7 @@ struct MainTabView: View {
         .environment(navigationChrome)
     }
 
-    /// Keeps the Live TV destination mounted while another custom-rail
+    /// Keeps Live TV mounted after its first visit while another custom-rail
     /// route is selected. Native TabView already retains visited tabs; matching that
     /// lifetime here preserves in-memory source, Favorites, and filter choices while
     /// `isActive = false` still tears down playback and pending tune work.
@@ -1390,19 +1420,22 @@ struct MainTabView: View {
                 .allowsHitTesting(!showsLiveTV)
                 .accessibilityHidden(showsLiveTV)
 
-            LiveTVShellDestination(
-                isActive: showsLiveTV,
-                profileID: activeProfile.id,
-                preferencesNamespace: liveTVPreferencesNamespace,
-                accountsProviders: accountsProviders,
-                authenticatedHTTPResolver: authenticatedHTTPResolver,
-                connectServer: onAddAccount,
-                didConfigurePlaylist: onConfiguredIPTVPlaylist,
-                completeLibraryChannelPlayback: completeLibraryChannelPlayback,
-                isProfileAuthorized: isLiveTVProfileAuthorized,
-                onExpandedChange: updateLiveTVChrome,
-                onOpenTitle: openTitleFromLiveTV
-            )
+            RetainedLiveTVDestination(isActive: showsLiveTV) {
+                LiveTVShellDestination(
+                    isActive: showsLiveTV,
+                    profileID: activeProfile.id,
+                    preferencesNamespace: liveTVPreferencesNamespace,
+                    accountsProviders: accountsProviders,
+                    authenticatedHTTPResolver: authenticatedHTTPResolver,
+                    connectServer: onAddAccount,
+                    didConfigurePlaylist: onConfiguredIPTVPlaylist,
+                    completeLibraryChannelPlayback: completeLibraryChannelPlayback,
+                    isProfileAuthorized: isLiveTVProfileAuthorized,
+                    onExpandedChange: updateLiveTVChrome,
+                    onOpenTitle: openTitleFromLiveTV
+                )
+            }
+            .id(activeProfile.id)
             .opacity(showsLiveTV ? 1 : 0)
             .disabled(!showsLiveTV)
             .allowsHitTesting(showsLiveTV)
@@ -1517,6 +1550,9 @@ struct MainTabView: View {
             settleFreshLaunch()
             settleStandaloneStartup()
         }
+        #if os(tvOS)
+        .onContinueUserActivity(LiveTVGuideButton.activityType) { _ in openLiveTVGuide() }
+        #endif
         .background {
             // Switching tabs is `MainTabView`'s job, so the capture rig's tab
             // requests are consumed here rather than in either shell. A leaf
@@ -1656,6 +1692,7 @@ struct MainTabView: View {
             subtitlePolicy: subtitlePolicyModel.resolvedPolicy(behavior: subtitleBehaviorModel.settings),
             audioPolicy: audioPolicyModel.resolvedPolicy(settings: playbackModel.settings),
             seriesTrackStore: seriesTrackStore,
+            versionPreferences: VersionPreferenceStore(namespace: liveTVPreferencesNamespace),
             scrobbler: RealtimePlaybackScrobbler(trakt: trakt.scrobbler, simkl: simkl.scrobbler),
             watchBridge: watchBridge,
             identitySources: identitySources,
@@ -1778,7 +1815,8 @@ struct MainTabView: View {
         guard revision == libraryReloadRevision else { return }
         librariesStore.finishRefresh(
             with: discovered.libraries,
-            unreachableAccountIDs: discovered.unreachableAccountIDs
+            unreachableAccountIDs: discovered.unreachableAccountIDs,
+            failures: discovered.failures
         )
     }
 
@@ -1793,7 +1831,8 @@ struct MainTabView: View {
             guard revision == libraryReloadRevision else { return }
             librariesStore.finishRefresh(
                 with: discovered.libraries,
-                unreachableAccountIDs: discovered.unreachableAccountIDs
+                unreachableAccountIDs: discovered.unreachableAccountIDs,
+                failures: discovered.failures
             )
         }
     }

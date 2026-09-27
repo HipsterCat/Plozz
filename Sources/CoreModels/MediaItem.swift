@@ -128,10 +128,25 @@ public struct MediaPerson: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+/// Physical provider identity, never a global catalogue id or a title string.
+public struct MediaItemSourceIdentity: Hashable, Sendable {
+    public var accountID: String
+    public var itemID: String
+
+    public init(accountID: String, itemID: String) {
+        self.accountID = accountID
+        self.itemID = itemID
+    }
+
+    public func matches(_ item: MediaItem) -> Bool {
+        item.sourceAccountID == accountID && item.id == itemID
+    }
+}
+
 /// A provider-agnostic media item.
 ///
-/// Providers map their native item shapes (Jellyfin `BaseItemDto`, later Plex
-/// `Metadata`) onto this type so feature code never imports a provider module.
+/// Providers map their native item shapes onto this type so feature code never
+/// imports a provider module.
 public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     /// Stable Plozz identity used only for durable Watchlist presentation/focus.
@@ -259,6 +274,9 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// External database identifiers (e.g. `["Imdb": "tt0111161", "Tmdb": "278"]`),
     /// used by enrichment services to look up additional ratings/metadata.
     public var providerIDs: [String: String]
+    /// Discovery-feed attribution, independent of playable server ownership.
+    public var discoverySources: [HeroDiscoverySource]
+    public var discoveryURLs: [String: URL]
     /// Whether metadata services may identify this item by a fuzzy title search.
     ///
     /// Exact provider-id lookups remain allowed. Direct-share folders and
@@ -377,6 +395,18 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
     /// decodes.
     public var versions: [MediaVersion]
 
+    /// Explicit provider edition/cut. Unlike file versions this survives a
+    /// single-file list response (Plex editions are separate ratingKeys).
+    public var edition: String?
+
+    /// Presentation provenance, not source count: an aggregated title card is
+    /// generic even when only one server's representative has loaded so far.
+    public var isMergedTitle: Bool
+
+    /// The independently listed edition the viewer opened. Per-open intent,
+    /// excluded from caches like the explicit playback selections below.
+    public var editionOpeningSource: MediaItemSourceIdentity?
+
     /// Whether the user has favourited / watchlisted this item on its server
     /// (Jellyfin `UserData.IsFavorite`). Drives the add-vs-remove choice for the
     /// Watchlist action and the Home Watchlist row. Back-compatible default
@@ -463,6 +493,8 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         logoURL: URL? = nil,
         ratings: [ExternalRating] = [],
         providerIDs: [String: String] = [:],
+        discoverySources: [HeroDiscoverySource] = [],
+        discoveryURLs: [String: URL] = [:],
         allowsTitleBasedMetadataMatching: Bool = true,
         metadataProvenance: MetadataProvenance = MetadataProvenance(),
         artworkSelections: [ArtworkSelection] = [],
@@ -475,6 +507,8 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         artworkSourceAccountIDsByURL: [String: String] = [:],
         additionalSourceAccountIDs: [String] = [],
         libraryID: String? = nil,
+        edition: String? = nil,
+        isMergedTitle: Bool = false,
         versions: [MediaVersion] = [],
         isFavorite: Bool = false,
         selectedVersionID: String? = nil,
@@ -524,6 +558,8 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.logoURL = logoURL
         self.ratings = ratings
         self.providerIDs = providerIDs
+        self.discoverySources = HeroDiscoverySource.normalized(discoverySources)
+        self.discoveryURLs = HeroDiscoverySource.validatedURLs(discoveryURLs)
         self.allowsTitleBasedMetadataMatching = allowsTitleBasedMetadataMatching
         self.metadataProvenance = metadataProvenance
         self.artworkSelections = artworkSelections
@@ -535,6 +571,9 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         self.artworkSourceAccountIDsByURL = artworkSourceAccountIDsByURL
         self.additionalSourceAccountIDs = additionalSourceAccountIDs
         self.libraryID = libraryID
+        self.edition = edition
+        self.isMergedTitle = isMergedTitle
+        self.editionOpeningSource = nil
         self.versions = versions
         self.isFavorite = isFavorite
         self.selectedVersionID = selectedVersionID
@@ -568,12 +607,14 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         case seriesID, seasonID, runtime, resumePosition, playedPercentage, isPlayed, hasBeenPlayed
         case posterURL, seriesPosterURL, backdropURL, heroBackdropURL
         case fallbackArtworkURL, logoURL, ratings, providerIDs, metadataProvenance
+        case discoverySources
+        case discoveryURLs
         case allowsTitleBasedMetadataMatching
         case artworkSelections, mediaInfo
         case availability, locallyValidatedPlayableSource
         case downloadProgress
         case sourceAccountID, artworkSourceAccountIDsByURL
-        case additionalSourceAccountIDs, versions, isFavorite
+        case additionalSourceAccountIDs, versions, edition, isMergedTitle, isFavorite
         case sources, lastPlayedAt, libraryID
         case scheduledAirDate, scheduledAirDateHasTime, showsScheduledReleaseTime
     }
@@ -624,6 +665,13 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         logoURL = try container.decodeIfPresent(URL.self, forKey: .logoURL)
         ratings = try container.decodeIfPresent([ExternalRating].self, forKey: .ratings) ?? []
         providerIDs = try container.decodeIfPresent([String: String].self, forKey: .providerIDs) ?? [:]
+        discoverySources = HeroDiscoverySource.normalized(
+            (try container.decodeIfPresent([String].self, forKey: .discoverySources) ?? [])
+                .compactMap(HeroDiscoverySource.init(rawValue:))
+        )
+        discoveryURLs = HeroDiscoverySource.validatedURLs(
+            try container.decodeIfPresent([String: URL].self, forKey: .discoveryURLs) ?? [:]
+        )
         allowsTitleBasedMetadataMatching = try container.decodeIfPresent(
             Bool.self,
             forKey: .allowsTitleBasedMetadataMatching
@@ -692,6 +740,10 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         versions = try container.decodeIfPresent([MediaVersion].self, forKey: .versions) ?? []
         isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
         sources = try container.decodeIfPresent([MediaSourceRef].self, forKey: .sources) ?? []
+        edition = try container.decodeIfPresent(String.self, forKey: .edition)
+        isMergedTitle = try container.decodeIfPresent(Bool.self, forKey: .isMergedTitle)
+            ?? (sources.count > 1)
+        editionOpeningSource = nil
         lastPlayedAt = try container.decodeIfPresent(Date.self, forKey: .lastPlayedAt)
         selectedVersionID = nil
         selectedSourceAccountID = nil
@@ -974,13 +1026,23 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         copy.selectedSourceAccountID = source.accountID
         copy.locallyValidatedPlayableSource = true
         copy.explicitSourceSelection = explicit
+        if copy.editionOpeningSource?.matches(copy) != true {
+            copy.editionOpeningSource = nil
+        }
+        copy.edition = source.edition
+            ?? source.versions.compactMap(\.edition).first
+            ?? ((id == source.itemID && sourceAccountID == source.accountID) ? edition : nil)
         // Keep the current versions when the target source ref carries none:
         // Home / Search source refs are membership-only (versions are populated
         // live by a detail fetch, never on those refs), so overwriting with an
         // empty list here would strip a title's known versions — losing a
         // remembered per-title version preference the next time detail opens.
         if !source.versions.isEmpty {
-            copy.versions = source.versions
+            copy.versions = source.versions.map { version in
+                var providerVersion = version
+                if let id = version.playbackMediaSourceID { providerVersion.id = id }
+                return providerVersion
+            }
         }
         copy.resumePosition = source.resumePosition
         copy.playedPercentage = source.playedPercentage
@@ -988,10 +1050,21 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         copy.hasBeenPlayed = source.hasBeenPlayed
         copy.isFavorite = source.isFavorite
         copy.lastPlayedAt = source.lastPlayedAt
-        if let versionID, source.versions.contains(where: { $0.id == versionID }) {
-            copy.selectedVersionID = versionID
+        if let versionID,
+           let selected = source.selectableVersions.first(where: {
+               $0.id == versionID || $0.playbackMediaSourceID == versionID
+           }) {
+            copy.selectedVersionID = selected.playbackMediaSourceID
+            if let metadata = selected.sourceMetadata { copy.mediaInfo = metadata }
         } else {
             copy.selectedVersionID = nil
+        }
+        // Keep proof of an explicit target through the later live-source router,
+        // even when the identity index has not learned this physical edition yet.
+        if explicit, !copy.sources.contains(where: { $0.id == source.id }) {
+            var selected = source
+            selected.kind = kind
+            copy.sources.append(selected)
         }
         return copy
     }
@@ -1033,28 +1106,89 @@ public struct MediaItem: Codable, Hashable, Identifiable, Sendable {
         versionID: String?,
         explicit: Bool
     ) -> MediaItem {
-        let version = versionID.flatMap { id in
-            sources.flatMap(\.versions).first(where: { $0.id == id })
+        let compatible = MediaSourceRef.retainingKindCompatible(
+            sources,
+            itemKind: item.kind,
+            selfIDs: Set([item.sourceAccountID.map { "\($0):\(item.id)" }].compactMap { $0 })
+        )
+        // Legacy untyped refs remain usable for an explicit version choice, but
+        // a positively mismatched kind can never contribute a playable version.
+        let candidates = sources.filter {
+            ($0.kind == nil || $0.kind == item.kind)
+                && (activeAccountID == nil || $0.accountID == activeAccountID)
+        }.flatMap { source -> [MediaVersion] in
+            if source.versions.isEmpty,
+               source.itemID == item.id, source.accountID == item.sourceAccountID {
+                return item.versions.map {
+                    $0.qualified(accountID: source.accountID, itemID: source.itemID, edition: item.edition)
+                }
+            }
+            return source.selectableVersions
+        }.filter {
+            activeAccountID == nil || $0.sourceAccountID == activeAccountID
+        }
+        let version = versionID.flatMap { id -> MediaVersion? in
+            if let exact = candidates.first(where: { $0.id == id }) { return exact }
+            let legacy = candidates.filter {
+                $0.playbackMediaSourceID == id
+                    || ($0.playbackMediaSourceID == nil && $0.sourceItemID.map { "synth:\($0)" } == id)
+            }
+            // A raw id from an older snapshot must not choose an arbitrary owner.
+            guard Set(legacy.map(\.id)).count == 1 else { return nil }
+            return legacy.first
         }
         if let version,
            let backingID = version.sourceItemID,
            let backingAccountID = version.sourceAccountID {
-            if let backingSource = sources.first(where: { $0.accountID == backingAccountID && $0.itemID == backingID }) {
-                return item.selectingSource(backingSource, versionID: nil, explicit: explicit)
+            let isExplicit = explicit || item.editionOpeningSource == MediaItemSourceIdentity(
+                accountID: backingAccountID, itemID: backingID
+            )
+            if var backingSource = sources.first(where: {
+                $0.accountID == backingAccountID && $0.itemID == backingID
+            }) {
+                // A known mismatched owner must not be revived by the stale-ref fallback.
+                guard backingSource.kind == nil || backingSource.kind == item.kind else { return item }
+                if !backingSource.selectableVersions.contains(where: { $0.id == version.id }) {
+                    backingSource.versions.append(version)
+                }
+                return item.selectingSource(backingSource, versionID: version.id, explicit: isExplicit)
             }
             let fallback = MediaSourceRef(
                 accountID: backingAccountID,
                 itemID: backingID,
                 kind: item.kind,
-                versions: [version]
+                versions: [version],
+                edition: version.edition
             )
-            return item.selectingSource(fallback, versionID: nil, explicit: explicit)
+            return item.selectingSource(fallback, versionID: version.id, explicit: isExplicit)
         }
         if let activeAccountID,
-           let primary = sources.first(where: { $0.accountID == activeAccountID }) {
-            return item.selectingSource(primary, versionID: versionID, explicit: explicit)
+           let primary = compatible.first(where: {
+               $0.accountID == activeAccountID && $0.itemID == item.id
+           }) ?? compatible.first(where: { $0.accountID == activeAccountID })
+                ?? sources.first(where: { $0.accountID == activeAccountID && $0.kind == nil }) {
+            return item.selectingSource(
+                primary, versionID: nil,
+                explicit: explicit || item.editionOpeningSource == MediaItemSourceIdentity(
+                    accountID: primary.accountID, itemID: primary.itemID
+                )
+            )
         }
-        return item.selectingVersion(versionID)
+        let copy = item.selectingVersion(
+            versionID.flatMap { id in item.versions.first(where: { $0.id == id })?.playbackMediaSourceID }
+        )
+        if explicit || item.editionOpeningSource?.matches(item) == true,
+           let account = copy.sourceAccountID {
+            let own = MediaSourceRef(
+                accountID: account, itemID: copy.id, libraryID: copy.libraryID,
+                kind: copy.kind, versions: copy.versions, edition: copy.edition,
+                resumePosition: copy.resumePosition, playedPercentage: copy.playedPercentage,
+                isPlayed: copy.isPlayed, hasBeenPlayed: copy.hasBeenPlayed,
+                isFavorite: copy.isFavorite, lastPlayedAt: copy.lastPlayedAt
+            )
+            return copy.selectingSource(own, versionID: copy.selectedVersionID, explicit: true)
+        }
+        return copy
     }
 
     /// Returns a copy whose `resumePosition` is the cross-server furthest-progress
@@ -1212,7 +1346,7 @@ public struct MediaLibrary: Codable, Hashable, Identifiable, Sendable {
     /// something to persist. The enum stores which library it is; the wording
     /// stays in the catalog and is resolved at render time.
     public enum SynthesizedName: String, Codable, Hashable, Sendable {
-        case movies, tvShows, anime, browseFiles, generic
+        case movies, tvShows, anime, browseFiles, collections, generic
 
         public var title: LocalizedStringResource {
             switch self {
@@ -1220,6 +1354,7 @@ public struct MediaLibrary: Codable, Hashable, Identifiable, Sendable {
             case .tvShows: return "TV Shows"
             case .anime:   return "Anime"
             case .browseFiles: return "Browse Files"
+            case .collections: return "Collections"
             case .generic: return "Library"
             }
         }
@@ -1232,6 +1367,15 @@ public struct MediaLibrary: Codable, Hashable, Identifiable, Sendable {
     public var title: String  // l10n:content — library name from the server; see synthesizedName
     /// Set when `title` is Plozz's wording rather than the server's.
     public var synthesizedName: SynthesizedName?
+    /// Server library name qualifying a derived collection-list library.
+    public var collectionSourceTitle: String?
+
+    public var localizedTitle: LocalizedStringResource? {
+        if synthesizedName == .collections, let collectionSourceTitle {
+            return "Collections in \(collectionSourceTitle)"
+        }
+        return synthesizedName?.title
+    }
     public var kind: MediaItemKind
     public var imageURL: URL?
 
@@ -1264,6 +1408,7 @@ public struct MediaLibrary: Codable, Hashable, Identifiable, Sendable {
         title: String,  // l10n:content — library name from the server; see synthesizedName
         kind: MediaItemKind,
         synthesizedName: SynthesizedName? = nil,
+        collectionSourceTitle: String? = nil,
         imageURL: URL? = nil,
         isMusic: Bool = false,
         sourceAccountID: String? = nil,
@@ -1273,6 +1418,7 @@ public struct MediaLibrary: Codable, Hashable, Identifiable, Sendable {
         self.id = id
         self.title = title
         self.synthesizedName = synthesizedName
+        self.collectionSourceTitle = collectionSourceTitle
         self.kind = kind
         self.imageURL = imageURL
         self.isMusic = isMusic
@@ -1319,7 +1465,7 @@ public struct MediaLibrary: Codable, Hashable, Identifiable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, title, kind, imageURL, isMusic, sourceAccountID
         case additionalSourceAccountIDs, sourceContainerIDByAccount
-        case synthesizedName
+        case synthesizedName, collectionSourceTitle
     }
 
     /// Custom decoding so the cross-server fields (added after libraries were
@@ -1330,6 +1476,7 @@ public struct MediaLibrary: Codable, Hashable, Identifiable, Sendable {
         title = try container.decode(String.self, forKey: .title)
         // Absent in anything persisted before synthesized names existed.
         synthesizedName = try container.decodeIfPresent(SynthesizedName.self, forKey: .synthesizedName)
+        collectionSourceTitle = try container.decodeIfPresent(String.self, forKey: .collectionSourceTitle)
         kind = try container.decode(MediaItemKind.self, forKey: .kind)
         imageURL = try container.decodeIfPresent(URL.self, forKey: .imageURL)
         isMusic = try container.decodeIfPresent(Bool.self, forKey: .isMusic) ?? false

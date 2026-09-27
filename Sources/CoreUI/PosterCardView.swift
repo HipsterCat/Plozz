@@ -14,6 +14,7 @@ public struct PosterCardView: View {
 
     private let item: MediaItem
     private let style: Style
+    private let artworkPolicy: CardArtworkPolicy
     private let spoilerSettings: SpoilerSettings
     /// Identify the card by its **show** — the show's wide artwork with its logo
     /// laid over it — instead of by the item's own thumbnail. Used by Continue
@@ -47,25 +48,20 @@ public struct PosterCardView: View {
     private let showsActionsMenu: Bool
     /// Keeps a Watchlist card visibly in flight while its durable row catches up.
     private let isPendingRemoval: Bool
+    private let focusRequest: UUID?
+    private let onFocusRequestHandled: (() -> Void)?
     private let action: () -> Void
 
     @PlozzCardFocus private var isFocused: Bool
     #if os(tvOS)
     @State private var detailTransitionSource = DetailTransitionSourceReference()
-    @State private var nativePosterArtwork = ArtworkResolutionState()
     #endif
-    /// This card's resolved logo tone, and the tone of the artwork it sits on.
-    /// Together they decide how far the artwork is dimmed behind it — see
-    /// ``ContinueWatchingCardShape/artworkDim(logo:background:)``. Either being
-    /// `nil` (still resolving, or a card with no logo) simply means the base dim.
     /// Whether the artwork this card ended up with already has the show's name
     /// printed on it, in which case the card must not print it again.
     @State private var artworkAlreadyCarriesTitle = false
     /// Bumped once this show's artwork source is settled (or the wait for it ran
     /// out), which is what lets the body re-read the synchronous store.
     @State private var textlessAnswerRevision = 0
-    @State private var logoTone: ResolvedLogoTone?
-    @State private var artworkTone: HeroBackgroundSample?
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
     @Environment(\.plozzMetrics) private var metrics
     /// Per-profile card presentation (framed glass card vs borderless artwork).
@@ -78,6 +74,7 @@ public struct PosterCardView: View {
     public init(
         item: MediaItem,
         style: Style = .poster,
+        artworkPolicy: CardArtworkPolicy = .standard,
         spoilerSettings: SpoilerSettings = .default,
         showsSeriesArtwork: Bool = false,
         enablesAsyncArtworkFallback: Bool = true,
@@ -88,13 +85,16 @@ public struct PosterCardView: View {
         downloadState: MediaDownloadBadgeState? = nil,
         showsActionsMenu: Bool = false,
         isPendingRemoval: Bool = false,
+        focusRequest: UUID? = nil,
+        onFocusRequestHandled: (() -> Void)? = nil,
         action: @escaping () -> Void
     ) {
         self.item = item
         self.style = style
+        self.artworkPolicy = artworkPolicy
         self.spoilerSettings = spoilerSettings
         self.showsSeriesArtwork = showsSeriesArtwork
-        self.enablesAsyncArtworkFallback = enablesAsyncArtworkFallback
+        self.enablesAsyncArtworkFallback = enablesAsyncArtworkFallback && artworkPolicy.allowsOnlineFallback
         self.reservesSubtitleSpace = reservesSubtitleSpace
         self.statusCueText = statusCue
         self.playsOnSelect = playsOnSelect
@@ -102,6 +102,8 @@ public struct PosterCardView: View {
         self.downloadState = downloadState
         self.showsActionsMenu = showsActionsMenu
         self.isPendingRemoval = isPendingRemoval
+        self.focusRequest = focusRequest
+        self.onFocusRequestHandled = onFocusRequestHandled
         self.action = action
     }
 
@@ -178,6 +180,14 @@ public struct PosterCardView: View {
             .plozzChromeFocused(isFocused)
             .mediaItemContextMenu(for: item)
             .preloadDetailBackdropOnFocus(for: item, isFocused: isFocused)
+            .onChange(of: focusRequest, initial: true) { _, request in
+                guard request != nil else { return }
+                $isFocused.requestFocus(animated: false)
+                if isFocused { onFocusRequestHandled?() }
+            }
+            .onChange(of: isFocused) { _, focused in
+                if focused, focusRequest != nil { onFocusRequestHandled?() }
+            }
             #if os(tvOS)
             .coordinateSpace(name: detailTransitionSource.coordinateSpace)
             .background {
@@ -222,11 +232,7 @@ public struct PosterCardView: View {
 
     #if os(tvOS)
     private var nativePosterTitle: NativePosterText {
-        if item.kind == .episode, let series = item.parentTitle, !series.isEmpty {
-            return .content(series)
-        }
-        if hideText { return .localized(spoilerSettings.maskedTitle(for: item)) }
-        return .content(item.title)
+        item.posterCaptionTitle(spoilerSettings: spoilerSettings)
     }
 
     private var nativeUsesProtectedArtwork: Bool {
@@ -250,30 +256,6 @@ public struct PosterCardView: View {
 
     private var nativePosterCard: some View {
         VStack(spacing: metrics.nativePosterCaptionSpacing) {
-            NativeTVPoster(
-                image: nativePosterArtwork.image,
-                treatment: nativePosterTreatment,
-                aspectRatio: borderlessAspectRatio,
-                fallbackWidth: size.width,
-                title: showsSeriesArtwork ? nil : nativePosterTitle,
-                subtitle: showsSeriesArtwork ? nil : subtitleText,
-                overlay: nativePosterOverlay,
-                focus: $isFocused,
-                source: detailTransitionSource,
-                action: selectCard
-            )
-            .focused($isFocused.focusState)
-            .frame(maxWidth: .infinity)
-            if !showsSeriesArtwork {
-                SystemPosterCaption(
-                    title: nativePosterTitle, subtitle: subtitleText,
-                    reservesSubtitleSpace: reservesSubtitleSpace, isFocused: isFocused
-                )
-                .accessibilityHidden(true)
-            }
-        }
-        .padding(.horizontal, metrics.borderlessCardSideMargin)
-        .background {
             FallbackAsyncImage(
                 references: nativePosterReferences,
                 maxAspectRatio: posterAspectGuard,
@@ -283,19 +265,40 @@ public struct PosterCardView: View {
                 onResolveReference: { reference in
                     artworkAlreadyCarriesTitle = reference.map(titleBearingArtwork.contains) ?? false
                 },
-                pinIdentity: item.stablePresentationID,
+                pinIdentity: artworkPolicy.pinIdentity(for: item),
                 content: { _ in Color.clear },
                 placeholder: { Color.clear }
             )
-            .environment(\.artworkResolutionState, nativePosterArtwork)
-            .frame(width: 0, height: 0)
-            .accessibilityHidden(true)
+            .resolvedBitmap { image in
+                NativeTVPoster(
+                    image: image,
+                    treatment: nativePosterTreatment,
+                    aspectRatio: borderlessAspectRatio,
+                    fallbackWidth: size.width,
+                    title: nativePosterTitle,
+                    subtitle: showsSeriesArtwork ? nil : subtitleText,
+                    overlay: nativePosterOverlay(hasArtwork: image != nil),
+                    focus: $isFocused,
+                    source: detailTransitionSource,
+                    action: selectCard
+                )
+                .focused($isFocused.focusState)
+                .frame(maxWidth: .infinity)
+            }
+            if showsCaption {
+                SystemPosterCaption(
+                    title: nativePosterTitle, subtitle: subtitleText,
+                    reservesSubtitleSpace: reservesSubtitleSpace, isFocused: isFocused
+                )
+                .accessibilityHidden(true)
+            }
         }
+        .padding(.horizontal, metrics.borderlessCardSideMargin)
     }
 
-    private var nativePosterOverlay: some View {
+    private func nativePosterOverlay(hasArtwork: Bool) -> some View {
         ZStack {
-            if nativePosterArtwork.image == nil { neutralPlaceholder }
+            if !hasArtwork { neutralPlaceholder }
             if showsSeriesArtwork && !suppressesSeriesLogo { seriesLogo }
             MediaCardPlaybackIndicators(
                 item: item,
@@ -346,9 +349,11 @@ public struct PosterCardView: View {
                 .recordDetailTransitionArtwork(detailTransitionSource)
                 #endif
 
-            captionBlock(inset: metrics.posterCaptionInset, spacing: 2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.bottom, metrics.posterCaptionInset)
+            if !captionsHidden {
+                captionBlock(inset: metrics.posterCaptionInset, spacing: 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, metrics.posterCaptionInset)
+            }
         }
         .plozzFramedMediaCard(
             innerCornerRadius: PlozzTheme.Metrics.posterArtCornerRadius,
@@ -405,7 +410,7 @@ public struct PosterCardView: View {
             // caption under them at all. A card that is purely its art is the
             // point of the treatment; a reserved-but-empty caption slot would just
             // read as a rendering bug.
-            if !showsSeriesArtwork {
+            if showsCaption {
                 captionBlock(inset: metrics.landscapeCaptionInset, spacing: 4)
                     .padding(.bottom, metrics.landscapeCaptionInset)
                     .frame(width: size.width, alignment: .leading)
@@ -442,7 +447,7 @@ public struct PosterCardView: View {
             borderlessArtwork
             // See `landscapeCard`: a series-artwork card carries its text on the
             // artwork, so it has no caption.
-            if !showsSeriesArtwork {
+            if showsCaption {
                 BorderlessCardCaption(
                     title: primaryText,
                     subtitle: subtitleText,
@@ -697,26 +702,8 @@ public struct PosterCardView: View {
     /// Secondary line — subtitle facts plus card runtime/remaining when available.
     /// The runtime/"… left" is dropped when the resume chip is shown, since the
     /// chip already carries the time on the artwork (no need to repeat it here).
-    private var subtitleText: String? {  // l10n:content — composes CoreModels content (subtitle/runtime) with a "left" qualifier word; joined plain-String pipeline (see comment below), not a Text-rendered LSR
-        var parts: [String] = []
-        // Skipped in series-artwork mode: `subtitle` has been promoted to the
-        // primary line there (see `primaryText`), and printing it in both places
-        // would read as a stutter.
-        if !showsSeriesArtwork,
-           let subtitle = item.subtitle?.trimmingCharacters(in: .whitespacesAndNewlines), !subtitle.isEmpty {
-            parts.append(subtitle)
-        }
-        if !showsResumeChip,
-           let runtime = item.cardRuntimeText?.trimmingCharacters(in: .whitespacesAndNewlines), !runtime.isEmpty {
-            // `cardRuntimeText` is bare ("20m"); `subtitleText` is a plain String
-            // joined with `·` and passed through `BorderlessCardCaption.subtitle`
-            // (already `// l10n:content`, not a translated `Text`), so the "left"
-            // suffix is composed here as plain interpolation rather than via
-            // `String(localized:)`, which the guard flags as eager resolution.
-            parts.append(item.cardRuntimeIsRemaining ? "\(runtime) left" : runtime)
-        }
-        guard !parts.isEmpty else { return nil }
-        return parts.joined(separator: " · ")
+    private var subtitleText: String? {  // l10n:content — provider subtitle and preformatted runtime
+        item.posterCaptionSubtitle(showsSubtitle: !showsSeriesArtwork, showsRuntime: !showsResumeChip)
     }
 
     // MARK: Resume chip
@@ -730,6 +717,15 @@ public struct PosterCardView: View {
     /// badge on a poster. They show the shared full-width progress bar instead
     /// (see ``MediaCardPlaybackIndicators``), which needs no runtime metadata — so
     /// every in-progress card looks the same whether or not its runtime is known.
+    @Environment(\.plozzCardCaptionsHidden) private var captionsHidden
+
+    /// Series-artwork cards carry their text on the art, and a surface can hide
+    /// captions outright when it names the title elsewhere.
+    private var showsCaption: Bool { !showsSeriesArtwork && !captionsHidden }
+
+    /// Whether the resume chip names the episode, because no caption will.
+    private var chipCarriesEpisode: Bool { showsSeriesArtwork || captionsHidden }
+
     private var showsResumeChip: Bool {
         (playsOnSelect || showsResumeChipOverride)
             && !hideThumbnail
@@ -753,7 +749,7 @@ public struct PosterCardView: View {
                 // where it is the only thing naming the episode. `ResumeChipOverlay`
                 // already draws exactly this case (see its `hasBottomChrome`); this
                 // outer gate simply never let it through.
-                || (showsSeriesArtwork && item.seasonEpisodeLabel != nil))
+                || (chipCarriesEpisode && item.seasonEpisodeLabel != nil))
     }
 
     /// The shared resume affordance — identical to the episode card's overlay.
@@ -767,7 +763,7 @@ public struct PosterCardView: View {
                 // Series-artwork cards carry the episode designation *in* the chip
                 // rather than in a caption under the card, so one glance covers
                 // which show (the logo), which episode, and how much is left.
-                detailText: showsSeriesArtwork ? item.seasonEpisodeLabel : nil,
+                detailText: chipCarriesEpisode ? item.seasonEpisodeLabel : nil,
                 showsPlayGlyphWhenIdle: showsSeriesArtwork,
                 // A Continue Watching card darkens over a much longer run,
                 // starting up in the picture and finishing lighter: it is not
@@ -781,24 +777,7 @@ public struct PosterCardView: View {
 
     // MARK: Artwork
     private var artworkReferences: [ArtworkReference] {
-        switch style {
-        case .poster:
-            return item.artworkReferences(for: item.kind == .episode ? .seriesPoster : .poster)
-        case .landscape:
-            if item.kind == .episode {
-                return item.artworkReferences(for: .episodeThumbnail)
-            }
-            // Local landscape/detail selections are explicit presentation candidates.
-            // The remote rail order remains the long-standing backdrop → poster →
-            // fallback sequence; a full-resolution hero must never jump the rail.
-            let explicit = item.artworkSelections
-                .first(where: { $0.placement == .detailBackdrop })?
-                .references ?? []
-            let legacy = [item.backdropURL, item.posterURL, item.fallbackArtworkURL]
-                .compactMap { $0.map(ArtworkReference.remote) }
-            var seen = Set<ArtworkReference>()
-            return (explicit + legacy).filter { seen.insert($0).inserted }
-        }
+        artworkPolicy.references(for: item, style: style)
     }
 
     @ViewBuilder
@@ -877,7 +856,7 @@ public struct PosterCardView: View {
         cardStyle == .borderless ? borderlessBadgeInset : 8
     }
 
-    private var realArtwork: some View {
+    var realArtwork: some View {
         FallbackAsyncImage(
             references: artworkReferences,
             maxAspectRatio: posterAspectGuard,
@@ -889,7 +868,7 @@ public struct PosterCardView: View {
             // is title-specific, so its task/memo identity has to be too.
             // Otherwise every posterless card shares one empty-reference key and
             // inherits whichever fallback image resolved first.
-            pinIdentity: item.stablePresentationID
+            pinIdentity: artworkPolicy.pinIdentity(for: item)
         ) {
             neutralPlaceholder
         }
@@ -907,7 +886,7 @@ public struct PosterCardView: View {
     /// a landscape *episode* card it first tries the real per-episode still (a
     /// genuine thumbnail), then falls back to the show's backdrop — anime via
     /// Shoko/AniDB usually ship no per-episode image, so TMDb supplies it.
-    private var asyncArtworkFallback: (@Sendable () async -> URL?)? {
+    var asyncArtworkFallback: (@Sendable () async -> URL?)? {
         guard enablesAsyncArtworkFallback else { return nil }
         // The inner resolver (the actual network lookup) for this card's style.
         let inner: (@Sendable () async -> URL?)?
@@ -1034,7 +1013,7 @@ public struct PosterCardView: View {
             maxAspectRatio: posterAspectGuard,
             variant: artworkVariant,
             asyncFallbackURL: placeholderArtworkFallback,
-            pinIdentity: item.stablePresentationID
+            pinIdentity: artworkPolicy.pinIdentity(for: item)
         ) {
             neutralPlaceholder
         }
@@ -1217,109 +1196,14 @@ public struct PosterCardView: View {
         item.kind == .episode ? placeholderArtworkFallback : asyncArtworkFallback
     }
 
-    /// The show's logo, centred so it clears the resume chip along the bottom and
-    /// the watch-state badge in the top corners.
-    ///
-    /// `HeroLogoArtwork` always renders *something* — it shows the styled title
-    /// while the logo resolves and keeps it when none is ever found — so the card
-    /// carries the show's identity whether or not a logo exists. That matters
-    /// here: logos come from the provider or from TMDb/Wikidata, and TMDb is off
-    /// unless the user supplies a token, so a good share of libraries will have
-    /// none. The text path is the design, not an error state.
     private var seriesLogo: some View {
-        GeometryReader { geo in
-            let width = geo.size.width
-            let height = geo.size.height
-            // The picture's own band. Sizing the logo against it — rather than
-            // against the card — keeps the chrome band underneath as its own
-            // space, so growing the logo can never crowd the progress bar and
-            // "S1, E12 · 17m".
-            let stage = height * ContinueWatchingCardShape.mirrorLine
-            let box = ContinueWatchingCardShape.logoBox(cardWidth: width, stage: stage, edgeInset: metrics.resumeChipInset)
-            ZStack(alignment: .top) {
-                // An even dim over the whole card, deepened when the resolved
-                // logo turns out to be the kind that vanishes into artwork — see
-                // ``ContinueWatchingCardShape/artworkDim(forLogoLuminance:)``.
-                // Animated because the logo arrives asynchronously, and a backdrop
-                // that steps darker the moment it lands would read as a flicker.
-                Color.black.opacity(
-                    ContinueWatchingCardShape.artworkDim(logo: logoTone, background: artworkTone)
-                )
-                .animation(.easeOut(duration: 0.25), value: logoTone)
-                .animation(.easeOut(duration: 0.25), value: artworkTone)
-                HeroLogoArtwork(
-                    references: item.artworkReferences(for: .logo),
-                    asyncFallbackURL: seriesLogoFallback,
-                    maxWidth: box.width,
-                    maxHeight: box.height,
-                    alignment: .center,
-                    // No background sample is taken per card (that would be an
-                    // image analysis per card while scrolling), so the halo is
-                    // always drawn — and an adaptive one put a white glow behind
-                    // every mid-to-dark logo. Down, always: it reads as depth
-                    // rather than as an effect, and the scrim above already
-                    // darkens the artwork under the logo.
-                    haloStyle: .gentle,
-                    // Lets a logo that is losing against its own picture lift
-                    // itself, which is what dimming the backdrop cannot do once
-                    // the backdrop is already dark — see ``LogoToneLift``.
-                    logoNeedsHelp: seriesLogoNeedsHelp,
-                    onResolve: { logoTone = $0 }
-                ) {
-                    seriesLogoTextFallback(width: width)
-                }
-                .frame(width: width, height: box.height)
-                // Sits between the picture's centre and the card's — see
-                // ``ContinueWatchingCardShape/logoCenter``.
-                .offset(y: height * ContinueWatchingCardShape.logoCenter - box.height / 2)
-            }
-            .frame(width: width, height: height)
-        }
-        .allowsHitTesting(false)
-        .task(id: seriesArtworkSampleKey) {
-            // Samples the SAME decoded image the card is displaying (the
-            // `.landscapeCard` variant), so this reads pixels that are already
-            // resident rather than commissioning a bigger decode. Results are
-            // memoized by reference + region and concurrent requests coalesced
-            // (see ``HeroBackgroundSampler``), so a rail that scrolls back and
-            // forth pays for each card once.
-            artworkTone = await HeroBackgroundSampler.sample(
-                references: seriesArtworkReferences,
-                region: ContinueWatchingCardShape.logoSampleRegion,
-                variant: artworkVariant
-            )
-        }
-    }
-
-    /// How badly this card's logo is losing against its own artwork, once both
-    /// have been measured. Shared with the backdrop dim so the two remedies always
-    /// agree about whether there is a problem.
-    private var seriesLogoNeedsHelp: Double? {
-        guard let logoTone, let artworkTone else { return nil }
-        return 1 - ContinueWatchingCardShape.separation(logo: logoTone, background: artworkTone)
-    }
-
-    /// Re-samples only when the artwork this card shows actually changes.
-    private var seriesArtworkSampleKey: String {
-        seriesArtworkReferences.map(\.privacySafeIdentity).joined(separator: "|")
-    }
-
-    /// The readable stand-in shown while the logo resolves, and kept when there
-    /// isn't one. Sized off the card so it holds up at any display density.
-    ///
-    /// The factor stands in for a *logo*, not for body text, so it tracks the
-    /// logo's own budget rather than the card: it was raised when the card shrank
-    /// so a show without artwork reads at the size it always did, exactly as a
-    /// show with artwork does.
-    private func seriesLogoTextFallback(width: CGFloat) -> some View {
-        seriesDisplayTitle
-            .font(.system(size: max(17, width * 0.092), weight: .bold, design: .rounded))
-            .foregroundStyle(.white)
-            .multilineTextAlignment(.center)
-            .lineLimit(2)
-            .minimumScaleFactor(0.6)
-            .shadow(color: .black.opacity(0.65), radius: 6, y: 2)
-            .padding(.horizontal, width * 0.08)
+        ContinueWatchingSeriesLogo(
+            title: seriesDisplayTitle,
+            logoReferences: item.artworkReferences(for: .logo),
+            artworkReferences: seriesArtworkReferences,
+            artworkVariant: artworkVariant,
+            asyncFallbackURL: seriesLogoFallback
+        )
     }
 
     /// The show's name: an episode's owning series, otherwise the item's own.
@@ -1374,6 +1258,72 @@ public struct PosterCardView: View {
         }
     }
 
+}
+
+/// Logo and backdrop analysis must invalidate only the overlay, not its native poster host.
+struct ContinueWatchingSeriesLogo: View {
+    let title: Text
+    let logoReferences: [ArtworkReference]
+    let artworkReferences: [ArtworkReference]
+    let artworkVariant: ArtworkImageVariant
+    let asyncFallbackURL: (@Sendable () async -> URL?)?
+
+    @Environment(\.plozzMetrics) private var metrics
+    @State private var logoTone: ResolvedLogoTone?
+    @State private var artworkTone: HeroBackgroundSample?
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let height = geometry.size.height
+            let stage = height * ContinueWatchingCardShape.mirrorLine
+            let box = ContinueWatchingCardShape.logoBox(
+                cardWidth: width, stage: stage, edgeInset: metrics.resumeChipInset
+            )
+            ZStack(alignment: .top) {
+                Color.black.opacity(
+                    ContinueWatchingCardShape.artworkDim(logo: logoTone, background: artworkTone)
+                )
+                .animation(.easeOut(duration: 0.25), value: logoTone)
+                .animation(.easeOut(duration: 0.25), value: artworkTone)
+                HeroLogoArtwork(
+                    references: logoReferences,
+                    asyncFallbackURL: asyncFallbackURL,
+                    maxWidth: box.width,
+                    maxHeight: box.height,
+                    alignment: .center,
+                    haloStyle: .gentle,
+                    logoNeedsHelp: logoNeedsHelp,
+                    onResolve: { logoTone = $0 }
+                ) {
+                    title
+                        .font(.system(size: max(17, width * 0.092), weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.6)
+                        .shadow(color: .black.opacity(0.65), radius: 6, y: 2)
+                        .padding(.horizontal, width * 0.08)
+                }
+                .frame(width: width, height: box.height)
+                .offset(y: height * ContinueWatchingCardShape.logoCenter - box.height / 2)
+            }
+            .frame(width: width, height: height)
+        }
+        .allowsHitTesting(false)
+        .task(id: artworkReferences.map(\.privacySafeIdentity).joined(separator: "|")) {
+            artworkTone = await HeroBackgroundSampler.sample(
+                references: artworkReferences,
+                region: ContinueWatchingCardShape.logoSampleRegion,
+                variant: artworkVariant
+            )
+        }
+    }
+
+    private var logoNeedsHelp: Double? {
+        guard let logoTone, let artworkTone else { return nil }
+        return 1 - ContinueWatchingCardShape.separation(logo: logoTone, background: artworkTone)
+    }
 }
 
 /// Pure presentation policy so folder treatment stays testable without rendering
@@ -1483,7 +1433,7 @@ enum PosterCardPresentation {
 
 /// Dedicated folder artwork: a generic symbol only. The item's real title stays
 /// in the normal caption below the card, so it is never duplicated in the poster.
-private struct FolderPlaceholderArtwork: View {
+struct FolderPlaceholderArtwork: View {
     let foreground: Color
     let background: Color
     let isFocused: Bool
@@ -1507,7 +1457,7 @@ private struct FolderPlaceholderArtwork: View {
 /// Small navigation cue over recognized folder artwork. Its geometry mirrors the
 /// existing watched badge, but keeps a neutral scrim so it cannot be mistaken for
 /// playback state.
-private struct FolderNavigationBadge: View {
+struct FolderNavigationBadge: View {
     let size: CGFloat
 
     var body: some View {
@@ -1552,12 +1502,16 @@ public extension View {
         cornerRadius: CGFloat,
         isEnabled: Bool = true,
         nativeFocusInContent: Bool = false,
+        accessibilityLabel: String? = nil,
+        accessibilityValue: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         #if os(tvOS)
         modifier(CardFocusOwner(
             isFocused: isFocused, cornerRadius: cornerRadius, isEnabled: isEnabled,
-            nativeFocusInContent: nativeFocusInContent, action: action
+            nativeFocusInContent: nativeFocusInContent,
+            accessibilityLabel: accessibilityLabel, accessibilityValue: accessibilityValue,
+            action: action
         ))
         #else
         contentShape(
@@ -1573,6 +1527,8 @@ private struct CardFocusOwner: ViewModifier {
     let cornerRadius: CGFloat
     let isEnabled: Bool
     let nativeFocusInContent: Bool
+    let accessibilityLabel: String?
+    let accessibilityValue: String?
     let action: () -> Void
     @Environment(\.plozzCardFocusStyle) private var style
     @Environment(\.isEnabled) private var parentEnabled
@@ -1584,7 +1540,8 @@ private struct CardFocusOwner: ViewModifier {
             } else {
                 NativeTVCard(
                     content: content, focus: isFocused,
-                    isEnabled: isEnabled && parentEnabled, action: action
+                    isEnabled: isEnabled && parentEnabled, action: action,
+                    accessibilityLabel: accessibilityLabel, accessibilityValue: accessibilityValue
                 )
                     .focused(isFocused.focusState)
             }
@@ -1597,17 +1554,57 @@ private struct CardFocusOwner: ViewModifier {
                 .onTapGesture(perform: action)
                 .disabled(!isEnabled)
                 .accessibilityAddTraits(.isButton)
+                .modifier(CardAccessibilityMetadata(
+                    label: accessibilityLabel.map { Text(verbatim: $0) },
+                    value: accessibilityValue.map { Text(verbatim: $0) }
+                ))
+        }
+    }
+}
+
+private struct CardAccessibilityMetadata: ViewModifier {
+    let label: Text?
+    let value: Text?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let label {
+            content.accessibilityLabel(label)
+                .accessibilityValue(value ?? Text(verbatim: ""))
+        } else {
+            content
         }
     }
 }
 #endif
 
 public extension MediaItem {
+    /// Shared provider metadata for SwiftUI cards and native library cells.
+    func posterCaptionSubtitle(showsSubtitle: Bool = true, showsRuntime: Bool = true) -> String? { // l10n:content
+        var parts: [String] = []
+        if showsSubtitle, let subtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines), !subtitle.isEmpty {
+            parts.append(subtitle)
+        }
+        if showsRuntime, let runtime = cardRuntimeText?.trimmingCharacters(in: .whitespacesAndNewlines), !runtime.isEmpty {
+            parts.append(cardRuntimeIsRemaining ? "\(runtime) left" : runtime)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     /// Ordered real-image candidates a `PosterCardView` of `style` will try before
     /// any async (TMDb) fallback. Rails use this to prefetch each card's artwork
     /// into `ArtworkImageCache` ahead of scroll, so a card already has its decoded
-    /// thumbnail the moment it appears. Mirrors `PosterCardView.artworkCandidates`.
-    func artworkCandidates(for style: PosterCardView.Style) -> [URL] {
+    /// thumbnail the moment it appears.
+    func artworkCandidates(
+        for style: PosterCardView.Style,
+        artworkPolicy: CardArtworkPolicy = .standard
+    ) -> [URL] {
+        if artworkPolicy == .extra {
+            return artworkPolicy.references(for: self, style: style).compactMap {
+                if case .remote(let url) = $0 { return url }
+                return nil
+            }
+        }
         switch style {
         case .poster:
             // A poster grid always wants the vertical show/movie poster. For an
@@ -1630,7 +1627,25 @@ public extension MediaItem {
     }
 }
 
-// STEAL compare with rivulet, seems like identical, but this one artwork with the title
+public extension PosterCardView {
+    /// The wide pictures a landscape card for `item` leads with, best first: what
+    /// it will most likely show. A surface drawing the same title's backdrop
+    /// beside the card uses this to avoid showing the one picture twice.
+    static func leadingLandscapeArtwork(
+        for item: MediaItem,
+        showsSeriesArtwork: Bool,
+        policy: CardArtworkPolicy = .standard
+    ) -> [ArtworkReference] {
+        guard showsSeriesArtwork else { return policy.references(for: item, style: .landscape) }
+        let ladder = item.kind == .episode
+            ? item.seriesArtworkReferences(prefersPortrait: false)
+            : policy.references(for: item, style: .landscape)
+        return PosterCardPresentation.preferringTextless(
+            TextlessBackdropStore.shared.backdrop(for: item),
+            over: ladder
+        )
+    }
+}
 
 #if DEBUG
 #Preview("Unwatched") {
@@ -1698,5 +1713,4 @@ public extension MediaItem {
     .background(.black)
 }
 #endif
-
 #endif

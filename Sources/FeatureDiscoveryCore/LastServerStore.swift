@@ -32,12 +32,25 @@ public enum ServerIdentity {
     public static func isSame(_ a: MediaServer, _ b: MediaServer) -> Bool {
         guard a.provider == b.provider else { return false }
         if !a.id.isEmpty, !b.id.isEmpty, a.id == b.id { return true }
+        if a.provider == .silo {
+            guard let first = siloIdentityURL(a.baseURL), let second = siloIdentityURL(b.baseURL) else { return false }
+            return MediaProviderURLIdentity.relativeResourcePath(of: first, under: second) == "/"
+                && MediaProviderURLIdentity.relativeResourcePath(of: second, under: first) == "/"
+        }
         return a.baseURL.host == b.baseURL.host && a.baseURL.port == b.baseURL.port
     }
 
     /// A stable dictionary key for a server (id when present, else host:port).
     public static func key(for server: MediaServer) -> String {
         "\(server.provider.rawValue):\(server.identityKey)"
+    }
+
+    private static func siloIdentityURL(_ url: URL) -> URL? {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.user == nil, components.password == nil,
+              components.query == nil, components.fragment == nil else { return nil }
+        if components.path.isEmpty { components.path = "/" }
+        return components.url
     }
 }
 

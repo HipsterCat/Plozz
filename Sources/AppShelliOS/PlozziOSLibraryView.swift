@@ -208,42 +208,62 @@ struct PlozziOSLibraryGridView: View {
     }
 
     var body: some View {
+        let generation = viewModel.contentGeneration
         Group {
             switch viewModel.state {
             case .idle, .loading:
                 ProgressView("Loading \(title)…")
             case .empty:
-                ContentUnavailableView(
-                    "This library is empty",
-                    systemImage: "rectangle.stack"
-                )
+                ContentUnavailableView {
+                    Label {
+                        Text(viewModel.emptyMessage)
+                    } icon: {
+                        Image(systemName: "rectangle.stack")
+                    }
+                }
             case let .loaded(total):
                 if total == 0 {
-                    ContentUnavailableView(
-                        "This library is empty",
-                        systemImage: "rectangle.stack"
-                    )
-                } else {
-                    ScrollView {
-                        scanBanner
-                        LazyVGrid(
-                            columns: settings.density.density.iOSPosterGridColumns(
-                                horizontalSizeClass: horizontalSizeClass
-                            ),
-                            spacing: 18
-                        ) {
-                            ForEach(0..<total, id: \.self) { index in
-                                PlozziOSLibraryItemCell(
-                                    slot: viewModel.slot(at: index),
-                                    index: index,
-                                    provider: provider,
-                                    onAppear: { await viewModel.itemAppeared(at: index) },
-                                    onDisappear: { viewModel.itemDisappeared(at: index) }
-                                )
-                            }
+                    ContentUnavailableView {
+                        Label {
+                            Text(viewModel.emptyMessage)
+                        } icon: {
+                            Image(systemName: "rectangle.stack")
                         }
-                        .padding()
                     }
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            if viewModel.supportsCollections {
+                                PlozziOSLibraryContentModeControl(viewModel: viewModel)
+                                    .padding(.horizontal)
+                                    .padding(.vertical, 8)
+                            }
+                            scanBanner
+                            LazyVGrid(
+                                columns: settings.density.density.iOSPosterGridColumns(
+                                    horizontalSizeClass: horizontalSizeClass
+                                ),
+                                spacing: 18
+                            ) {
+                                ForEach(0..<total, id: \.self) { index in
+                                    PlozziOSLibraryItemCell(
+                                        slot: viewModel.slot(at: index),
+                                        index: index,
+                                        generation: generation,
+                                        provider: provider,
+                                        onAppear: { await viewModel.itemAppeared(at: index, generation: generation) },
+                                        onDisappear: { viewModel.itemDisappeared(at: index, generation: generation) }
+                                    )
+                                    .id(index)
+                                }
+                            }
+                            .padding()
+                        }
+                        .onChange(of: viewModel.alphabet.destination) { _, destination in
+                            if let destination { proxy.scrollTo(destination.index, anchor: .top) }
+                        }
+                    }
+                    .id(viewModel.contentMode)
                 }
             case let .failed(error):
                 ContentUnavailableView {
@@ -259,7 +279,39 @@ struct PlozziOSLibraryGridView: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if viewModel.supportsCollections,
+               viewModel.state.value == nil || viewModel.state.value == 0 {
+                PlozziOSLibraryContentModeControl(viewModel: viewModel)
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(.bar)
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let error = viewModel.pageError {
+                HStack {
+                    Text(error.userMessage)
+                        .plozzForeground(.secondary)
+                    Button("Try Again") {
+                        Task { await viewModel.retryFailedPages() }
+                    }
+                }
+                .padding()
+                .background(.regularMaterial)
+            }
+        }
         .toolbar {
+            if viewModel.alphabet.isVisible {
+                ToolbarItem(placement: .primaryAction) {
+                    LibraryAlphabetMenu(entries: viewModel.letterEntries, isLoading: viewModel.alphabet.isLoading,
+                                        isJumping: viewModel.alphabet.jumpingTo != nil,
+                                        onSelect: { letter, id in viewModel.beginLetterJump(letter, menuPresentationID: id) },
+                                        onDismiss: viewModel.alphabet.menuDidDismiss,
+                                        onCancel: viewModel.cancelLetterJump,
+                                        onRetry: viewModel.retryLetterIndex)
+                }
+            }
             if let library = viewModel.fileBrowserLibrary {
                 ToolbarItem(placement: .primaryAction) {
                     NavigationLink(
@@ -272,11 +324,17 @@ struct PlozziOSLibraryGridView: View {
                     }
                 }
             }
-            ToolbarItem(placement: .primaryAction) {
-                sortControl
+            if !viewModel.availableSortFields.isEmpty {
+                ToolbarItem(placement: .primaryAction) {
+                    sortControl
+                }
             }
         }
         .task { await viewModel.loadFirstPageIfNeeded() }
+        .background {
+            LibraryAlphabetFeedback(letter: viewModel.alphabet.jumpingTo, message: viewModel.alphabet.message)
+        }
+        .onDisappear { viewModel.cancelLetterJump() }
         .plozziOSLibraryDestination(appModel: appModel)
         .background {
             if viewModel.isMediaShare {
@@ -378,10 +436,28 @@ struct PlozziOSLibraryGridView: View {
     }
 }
 
+private struct PlozziOSLibraryContentModeControl: View {
+    let viewModel: LibraryBrowseViewModel
+
+    var body: some View {
+        Picker("Show", selection: Binding(
+            get: { viewModel.contentMode },
+            set: { mode in Task { await viewModel.setContentMode(mode) } }
+        )) {
+            ForEach(LibraryContentMode.allCases, id: \.self) { mode in
+                Text(mode.displayName).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityIdentifier("library-content-mode")
+    }
+}
+
 private struct PlozziOSLibraryItemCell: View {
     @Environment(PlozziOSAppModel.self) private var appModel
     let slot: LibrarySlot?
     let index: Int
+    let generation: Int
     let provider: any MediaProvider
     let onAppear: () async -> Void
     let onDisappear: () -> Void
@@ -389,7 +465,14 @@ private struct PlozziOSLibraryItemCell: View {
     var body: some View {
         Group {
             if let item = slot?.item {
-                if let library = MediaFolderNavigation.library(
+                if let route = CollectionBrowseRoute(
+                    item: item, fallbackAccountID: provider.session.server.id
+                ) {
+                    NavigationLink(value: PlozziOSLibraryRoute(collection: route)) {
+                        card
+                    }
+                    .buttonStyle(.plain)
+                } else if let library = MediaFolderNavigation.library(
                     for: item,
                     providerKind: provider.kind
                 ) {
@@ -419,7 +502,7 @@ private struct PlozziOSLibraryItemCell: View {
                 card
             }
         }
-        .task(id: index) { await onAppear() }
+        .task(id: generation) { await onAppear() }
         .onDisappear(perform: onDisappear)
     }
 

@@ -21,6 +21,7 @@ import MediaTransportWebDAV
 import MediaTransportSFTP
 import MediaTransportNFS
 import ProviderJellyfin
+import ProviderSilo
 import ProviderPlex
 import ProviderShare
 import EnginePlozzigen
@@ -698,6 +699,8 @@ public final class AppState {
         // Captured BEFORE markFirstRunProfileSetupComplete: guards the receiver's
         // own default-profile membership from being clobbered by the incoming one.
         let receiverWasConfigured = profilesModel.firstRunProfileSetupComplete
+        var pendingStore = PendingSyncedServersStore()
+        received.retainPendingServers(in: &pendingStore)
 
         // 1. Import profiles (merge by id; existing ids preserved).
         let incomingProfiles = received.config.profiles.map(\.profile)
@@ -733,7 +736,7 @@ public final class AppState {
         var failedAccountIDs: [String] = []
         for auth in received.application.authorizedAuthorizations {
             guard let desc = descByID[auth.id] else { continue }
-            if let secret = secretByID[auth.id] {
+            if let secret = secretByID[auth.id], secret.provider.permitsCredentialTransfer {
                 expected += 1
                 let baseURL = desc.candidateBaseURLs.first ?? URL(string: secret.trustedOrigin) ?? URL(string: "https://localhost")!
                 let server = MediaServer(id: desc.serverID, name: desc.serverName, baseURL: baseURL,
@@ -951,7 +954,8 @@ public final class AppState {
         let resolvedRegistry = registry ?? Self.makeDefaultRegistry(
             runtime: resolvedRuntime,
             authenticatedHTTPResolver: resolvedAuthenticatedHTTPResolver,
-            durableLocalStateStore: resolvedDurableLocalStateStore
+            durableLocalStateStore: resolvedDurableLocalStateStore,
+            siloCredentials: resolvedAccountStore as? any RotatingCredentialStoring
         )
         let resolvedProfilesModel = profilesModel ?? Self.makeDefaultProfilesModel()
         self.profilesModel = resolvedProfilesModel
@@ -1026,6 +1030,7 @@ public final class AppState {
                 var accts: [AccountSecret] = []
                 var shares: [ShareSecret] = []
                 for account in syncAccounts.accounts {
+                    guard account.server.provider.permitsCredentialTransfer else { continue }
                     if account.server.provider == .mediaShare {
                         if let envelope = try? syncStore.mediaShareCredential(for: account.id) {
                             if case .generatedKey = envelope.authentication {
@@ -1147,7 +1152,8 @@ public final class AppState {
                 accountID: account.id,
                 credentialRevision: self.plexHomeUsers.effectiveCredentialRevision(for: account),
                 baseURL: baseURL,
-                token: token
+                token: token,
+                resourceResolver: self.accountsProviders.provider(forAccountID: account.id) as? any ProviderHTTPResourceResolving
             )
         }
 
@@ -1259,9 +1265,14 @@ public final class AppState {
     private static func makeDefaultRegistry(
         runtime: any MediaShareRuntime,
         authenticatedHTTPResolver: any AuthenticatedHTTPResourceResolving,
-        durableLocalStateStore: DurableLocalStateStore?
+        durableLocalStateStore: DurableLocalStateStore?,
+        siloCredentials: (any RotatingCredentialStoring)?
     ) -> ProviderRegistry {
         let registry = ProviderRegistry()
+        registry.register(.silo) { context in
+            guard let siloCredentials else { throw AppError.unauthorized }
+            return try SiloProvider(context: context, credentials: siloCredentials)
+        }
         registry.register(.jellyfin) { context in
             JellyfinProvider(
                 session: context.session,
@@ -1485,7 +1496,7 @@ public final class AppState {
             profileID: profilesModel.activeProfileID
         )
         apply(.addAccountRequested)
-        if server.provider.usesMediaBrowserAPI {
+        if server.provider.usesMediaBrowserAPI || server.provider == .silo {
             apply(.serverSelected(server))
         }
     }
@@ -1531,7 +1542,7 @@ public final class AppState {
         isFirstRun: Bool
     ) {
         let completesAdditionalIdentity =
-            account.server.provider.usesMediaBrowserAPI
+            (account.server.provider.usesMediaBrowserAPI || account.server.provider == .silo)
                 && pendingAdditionalUser?.serverKey == account.server.identityKey
         // Tear down the OLD credential revision's transport sessions only when the
         // store actually moved to a new revision (a real credential change). An

@@ -11,22 +11,47 @@ public final class LiveChannelTrackPreferences {
     public var subtitleMode: SubtitleMode
     public var subtitleLanguage: String?
     public var subtitleStyle: SubtitleStyle
+    @ObservationIgnored private var styleObserver: NSObjectProtocol?
+    @ObservationIgnored private let styleStore: SubtitleStyleStoring?
 
     public init(
         audioLanguage: String? = nil,
         subtitleMode: SubtitleMode = .off,
         subtitleLanguage: String? = nil,
-        subtitleStyle: SubtitleStyle = .default
+        subtitleStyle: SubtitleStyle = .default,
+        styleStore: SubtitleStyleStoring? = nil
     ) {
         self.audioLanguage = audioLanguage
         self.subtitleMode = subtitleMode
         self.subtitleLanguage = subtitleLanguage
         self.subtitleStyle = subtitleStyle
+        self.styleStore = styleStore
+        if let styleStore {
+            styleObserver = NotificationCenter.default.addObserver(
+                forName: SubtitleStyleStore.didChangeNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.subtitleStyle = styleStore.load().resolvedLiveTV
+                }
+            }
+        }
     }
 
-    public convenience init(namespace: String?) {
-        let playback = PlaybackSettingsStore(namespace: namespace).load()
-        let subtitles = SubtitleBehaviorStore(namespace: namespace).load()
+    /// Playback and Settings edit the same profile-scoped Live TV override.
+    public func setSubtitleStyle(_ style: SubtitleStyle) {
+        subtitleStyle = style
+        guard let styleStore else { return }
+        var preferences = styleStore.load()
+        preferences.liveTV = style
+        styleStore.save(preferences)
+    }
+
+    public var engineSubtitleStyle: SubtitleStyle { subtitleStyle }
+
+    public convenience init(namespace: String?, defaults: UserDefaults = .standard) {
+        let playback = PlaybackSettingsStore(defaults: defaults, namespace: namespace).load()
+        let subtitles = SubtitleBehaviorStore(defaults: defaults, namespace: namespace).load()
+        let styleStore = SubtitleStyleStore(defaults: defaults, namespace: namespace)
         self.init(
             audioLanguage: AudioLanguagePolicy.preferredAudioLanguages(
                 remembered: nil,
@@ -36,8 +61,13 @@ public final class LiveChannelTrackPreferences {
             ).first,
             subtitleMode: subtitles.subtitleMode,
             subtitleLanguage: subtitles.preferredSubtitleLanguage ?? LanguageMatch.deviceLanguageCode,
-            subtitleStyle: SubtitleStyleStore(namespace: namespace).load().base
+            subtitleStyle: styleStore.load().resolvedLiveTV,
+            styleStore: styleStore
         )
+    }
+
+    deinit {
+        if let styleObserver { NotificationCenter.default.removeObserver(styleObserver) }
     }
 }
 #endif

@@ -585,6 +585,16 @@ public struct PlexClient: Sendable {
         ).MediaContainer.Metadata ?? []
     }
 
+    /// Both static and smart collections resolve through their children endpoint.
+    /// Omitting `sort` preserves the server's configured collection order.
+    func collectionMembers(ratingKey: String, start: Int, size: Int) async throws -> PlexMediaContainer {
+        try await decodeStreamEnriched(
+            PlexMediaContainerResponse.self,
+            path: "/library/metadata/\(ratingKey)/children",
+            query: containerQuery(start: start, size: size)
+        ).MediaContainer
+    }
+
     /// `GET /library/metadata/{ratingKey}/extras` — trailers and other extras
     /// (behind-the-scenes, deleted scenes, …) attached to an item. Each extra is
     /// a `clip` with its own ratingKey that streams through the normal playback
@@ -602,6 +612,23 @@ public struct PlexClient: Sendable {
         )
         return try await decode(PlexMediaContainerResponse.self, endpoint)
             .MediaContainer.Metadata ?? []
+    }
+
+    /// Collection discovery must not inherit the stream-element filter used by
+    /// playable-item lists. `includeElements` is a whitelist, not enrichment.
+    func sectionCollections(
+        sectionID: String,
+        start: Int,
+        size: Int,
+        sort: CoreModels.SortDescriptor
+    ) async throws -> PlexMediaContainer {
+        let endpoint = Endpoint(
+            path: "/library/sections/\(sectionID)/collections",
+            queryItems: containerQuery(start: start, size: size)
+                + [URLQueryItem(name: "sort", value: Self.sortQuery(for: sort))],
+            headers: headers
+        )
+        return try await decode(PlexMediaContainerResponse.self, endpoint).MediaContainer
     }
 
     /// `GET /library/sections/{id}/all` — one page of a library section, paged
@@ -1596,8 +1623,25 @@ public struct PlexClient: Sendable {
         sessionID: String,
         mediaIndex: Int = 0,
         partIndex: Int = 0,
-        forceTranscode: Bool = false
+        forceTranscode: Bool = false,
+        streaming: StreamingPlaybackOptions? = nil
     ) -> (url: URL, isTranscoding: Bool)? {
+        if let streaming {
+            let bitrate = media.bitrate.flatMap { value -> Int? in
+                let (bits, overflow) = value.multipliedReportingOverflow(by: 1_000)
+                return overflow ? nil : bits
+            }
+            let fits = streaming.quality.permitsOriginal(
+                bitrate: bitrate, width: media.width, height: media.height
+            )
+            if !forceTranscode, !streaming.forceTranscoding, fits,
+               canDirectPlay(media: media, part: part), let key = part.key,
+               let direct = streamURL(forPartKey: key) { return (direct, false) }
+            return transcodeURL(
+                ratingKey: ratingKey, sessionID: sessionID, mediaIndex: mediaIndex,
+                partIndex: partIndex, streaming: streaming
+            ).map { ($0, true) }
+        }
         // Forcing a transcode (player fallback after a failed direct play): skip
         // the direct-play path entirely and go straight to the universal
         // transcoder. If even that can't be built, fail rather than silently
@@ -1639,8 +1683,10 @@ public struct PlexClient: Sendable {
         ratingKey: String,
         sessionID: String,
         mediaIndex: Int = 0,
-        partIndex: Int = 0
+        partIndex: Int = 0,
+        streaming: StreamingPlaybackOptions? = nil
     ) -> URL? {
+        guard streaming?.quality.validationError == nil else { return nil }
         var query: [URLQueryItem] = [
             URLQueryItem(name: "path", value: "/library/metadata/\(ratingKey)"),
             URLQueryItem(name: "mediaIndex", value: String(mediaIndex)),
@@ -1660,7 +1706,83 @@ public struct PlexClient: Sendable {
         for (name, value) in deviceProfile.headers(token: token) where name.hasPrefix("X-Plex-") {
             query.append(URLQueryItem(name: name, value: value))
         }
+        if let streaming {
+            func set(_ name: String, _ value: String) {
+                query.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+                query.append(.init(name: name, value: value))
+            }
+            set("directStream", "0")
+            set("directStreamAudio", "0")
+            set("hasMDE", "1")
+            set("context", "streaming")
+            set("transcodeSessionId", sessionID)
+            set("X-Plex-Client-Profile-Name", "Generic")
+            set("location", SourceLocalityClassifier.classify(url: baseURL) == .local ? "lan" : "wan")
+            let codecs = streaming.codec.codecs(supportsHEVC: capabilities.allowedDirectPlayVideoCodecs.contains(.hevc))
+            let container = streaming.codec == .preferH264 ? "mpegts" : "mp4"
+            // The profile has its own query grammar inside the outer URL query.
+            let codecList = codecs.joined(separator: "%2C")
+            var profile = "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=\(container)&videoCodec=\(codecList)&audioCodec=aac)"
+            if let bitrate = streaming.quality.videoBitrate,
+               let width = streaming.quality.maximumWidth, let height = streaming.quality.maximumHeight {
+                set("maxVideoBitrate", String(bitrate / 1_000))
+                set("videoResolution", "\(width)x\(height)")
+                set("audioBitrate", String(streaming.quality.audioBitrate / 1_000))
+                set("audioChannels", "2")
+                profile += "+add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.width&value=\(width)&replace=true)"
+                profile += "+add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.height&value=\(height)&replace=true)"
+                profile += "+add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.bitrate&value=\(bitrate / 1_000)&replace=true)"
+            }
+            set("X-Plex-Client-Profile-Extra", profile)
+            if let audio = streaming.audioTrack { set("audioStreamID", String(audio.id)) }
+            if streaming.subtitlesOff {
+                set("subtitleStreamID", "-1")
+                set("subtitles", "none")
+            } else if let subtitle = streaming.subtitleTrack {
+                set("subtitleStreamID", String(subtitle.id))
+                set("subtitles", subtitle.isBitmapSubtitle ? "burn" : "auto")
+            }
+        }
         return absoluteURL(serverPath: "/video/:/transcode/universal/start.m3u8", extraQuery: query)
+    }
+
+    func validateStreamingTranscode(url: URL, options: StreamingPlaybackOptions) async throws -> DirectPlayVideoCodec {
+        try options.quality.validate()
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            throw StreamingQualityError.malformedResponse
+        }
+        let endpoint = Endpoint(
+            path: "/video/:/transcode/universal/decision",
+            queryItems: components.queryItems ?? [], headers: headers
+        )
+        let (data, response) = try await send(endpoint, preservingStatus: true)
+        HandoffDiagnostics.emit("plex STREAM_DECISION http=\(response.statusCode)")
+        switch response.statusCode {
+        case 200..<300: break
+        case 401: throw AppError.unauthorized
+        case 403: throw StreamingQualityError.permissionDenied
+        case 429: throw AppError.rateLimited(retryAfter: response.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init))
+        default: throw StreamingQualityError.serverHTTP(response.statusCode)
+        }
+        let decision: PlexStreamingDecision
+        do {
+            decision = try JSONDecoder.plozz.decode(PlexStreamingDecisionResponse.self, from: data).MediaContainer
+        } catch {
+            HandoffDiagnostics.emit("plex STREAM_DECISION decode-failed bytes=\(data.count) json=\(response.mimeType == "application/json")")
+            PlozzLog.playback.error("Unable to decode the Plex streaming decision.")
+            throw StreamingQualityError.malformedResponse
+        }
+        return try decision.validate(
+            options: options, supportsHEVC: capabilities.allowedDirectPlayVideoCodecs.contains(.hevc)
+        )
+    }
+
+    func stopStreamingTranscode(sessionID: String) async throws {
+        _ = try await send(Endpoint(
+            path: "/video/:/transcode/universal/stop",
+            queryItems: [.init(name: "session", value: sessionID)],
+            headers: headers
+        ))
     }
 
     /// Builds an absolute, token-bearing image URL for a server-relative art

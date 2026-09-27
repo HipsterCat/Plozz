@@ -176,6 +176,15 @@ Runner verdict regressions use the existing host-side unittest runner:
 
 ## App-hosted focus integration
 
+The `PlozziOSPresentationTests` scheme supplies a separate iOS app scene for
+native Form/picker and sheet rendering. Run it on an explicitly owned iOS
+simulator under the shared build lease, with a lane-private package workspace
+and retained result bundle. Its host and tests share only the `AppShelliOS`
+package product. `ServerSetupPresentationTests` checks rendered primary-button
+text in all themes, the native provider picker's logo bounds, and transparent
+WebDAV badge edges. Package-only UIKit snapshots cannot replace this gate:
+without an application scene, `drawHierarchy` returns an empty image.
+
 `tools/run-focus-tests.sh` runs the `PlozzFocusTests` scheme in a minimal,
 separate `PlozzFocusHost` app. It uses the same package code but supplies a real
 foreground window scene, which package logic tests cannot provide. The suite
@@ -620,6 +629,155 @@ fresh-account resolution and stale-credential rejection. On a Jellyfin server
 with legacy authorization disabled, a selected Music track must start and advance
 past 0:00 rather than fail with `NSURLErrorDomain -1013`.
 
+## Library held-direction navigation
+
+tvOS library grids retain lazy, paged rendering and use six columns at Default
+density; other density presets and Search's column count are unchanged. The
+existing bounded metadata-fetch budgets remain independent of this layout change.
+
+On tvOS, System-focus libraries use a `UICollectionView` with reusable
+`NativeTVLibraryCell` focus owners and `TVMediaItemContentConfiguration`.
+Recycling a focused-control-origin `TVCardView`/`TVPosterView` ended a held Down
+gesture after three or four rows even with all 500 items loaded. Reassigning
+enabled state, adding focus sections and forwarding presses did not correct it.
+Retaining every card corrected the symptom but is not acceptable for large
+libraries. The interim SwiftUI-focus/content-configuration bridge preserved the
+hold but lost visible native artwork focus on the physical TV. Real UIKit cell
+focus and UIKit-delivered configuration state are required; manually setting a
+configuration's focused flag is not equivalent.
+
+The native collection observes individual visible `LibrarySlot` objects, reuses
+decoded artwork, and cancels cell work on reuse/disappearance. Captions and the
+scrolling SwiftUI header stay outside the artwork's projection. Custom focus
+styles and iOS retain their existing grids. The shared view model still owns
+provider-neutral paging, collections, sort generations, and the A-Z index.
+
+`LibraryHeldScrollTests` drives real remote holds through the production grid,
+measures the actual scroll view's offset, checks both framed/borderless native
+presentations with preloaded and paged data, and verifies selecting a real item
+after fast scrolling. Pending metadata must not prevent the native index from
+continuing to scroll. A focused native fast-scroll index is not a lost-focus
+failure; requested focus or loaded-slot counts alone do not prove traversal.
+After leaving fast scroll, delayed metadata arrival must preserve the current
+viewport rather than restore an old offscreen focus preference. Explicit detail
+return requests remain separate from this passive preference.
+System-grid loading cards use plain gray artwork and caption bars, without
+visible loading copy or playback glyphs. They retain their real cell focus
+identity and announce Loading to accessibility; selection and context actions
+stay disabled until metadata arrives. Skeleton caption lines reserve the normal
+font metrics, so filling a card never changes its layout height.
+The remote fixture also bounds resident cells and exercises context-menu
+navigation, return focus/scroll position, switching to Collections, and a
+600-member collection. `NativeGridMediaHostedTests` compares actual painted
+poster bounds before/after real collection-cell focus, checks caption separation,
+and compares the detail-transition source rectangle with those pixels. Ordinary
+non-grid native lockup controls are unchanged. These simulator checks do not
+establish physical touchpad behavior or Apple TV frame-time performance.
+
+`NativeLibraryRefreshHostedTests` covers count corrections while scrolled,
+same-count catalog updates, cell/selection identity, and retained native focus.
+Count-only changes insert/remove tail slots without resetting the collection.
+Catalog refreshes update existing `LibrarySlot` objects in place, including the
+pages visible when the refresh commits; they must not strand cell observers on
+discarded objects.
+
+The displayed grid's `contentGeneration` is separate from the first-page/refresh
+request token. Only replacing the browsing order invalidates cell callbacks.
+Failed background refreshes leave existing callbacks and in-flight page loads
+usable, while successful refreshes cancel old page loads before publishing new
+slot contents. Mode/sort tests still require retired callbacks to be rejected.
+
+## Extras artwork
+
+Extras rails on tvOS and iOS opt into the shared `CardArtworkPolicy.extra`.
+The extra's primary artwork precedes server backdrop selections and legacy
+fan-art fallbacks, without changing its provider kind or playback identity.
+Generic movie-title artwork enrichment is disabled for extras, including when
+online artwork is preferred. Their image-resolution identity is separate from
+ordinary cards so an earlier online winner cannot leak into an extra's image.
+Rendering and remote prefetch use the same ordered, deduplicated candidates.
+Ordinary movie, episode, and spoiler-safe artwork policies remain unchanged.
+
+`ExtrasArtworkPolicyTests` covers distinct thumbnails with a shared parent
+backdrop, explicit artwork selections, missing and failed primary images,
+authenticated URL preservation, network-file artwork, both online preferences,
+and actual rendered pixels after a generic card has cached the wrong image.
+Plex, Jellyfin, and Emby provider fixtures independently verify that extras keep
+their own primary image paths before the presentation policy selects them.
+
+## Server-defined collections
+
+Movie/TV libraries expose the same horizontal Titles / Collections control for
+Plex, Jellyfin, and Emby. Both options stay visible, selection stays distinct
+from focus, and moving the remote focus alone does not switch the page.
+On tvOS the options form one connected control with a readable material backdrop
+(opaque when reduced transparency is enabled) and a selected-segment fill,
+without checkmarks or underlines. The library header scrolls with the grid rather than
+remaining pinned; mode switching stays available in loading, empty and error
+states. The iOS mode control likewise scrolls with loaded content.
+Opening a collection uses the same full vertical poster grid as library/folder
+browsing, not a detail hero with a horizontal contents rail.
+Native Jellyfin/Emby BoxSet roots remain browseable; Plozz
+does not add synthetic Collections libraries. Previously cached synthetic Plex
+shortcuts are filtered on read and future writes without clearing other Home
+or navigation data.
+
+`MediaProvider.collections(in:page:)` discovers collections belonging to a
+specific library. It is distinct from collection membership: listing collections
+must never filter a collection's contents down to other collections. Mode
+switches isolate page counts, sorts, letter offsets and pending requests; stale
+callbacks cannot change the newly selected mode. Merged-library providers keep
+separate title/collection buffers and forward each original library ID. A failed
+collection source remains a retryable error rather than an empty or partial
+success.
+
+`MediaProvider.collectionMembers` preserves server ordering. A collection-member
+browser loads its first page and fetches later pages as the grid needs them;
+it must not fetch the entire collection before displaying its first posters.
+Member scope is explicit and distinct from a native Collections library root.
+Unavailable sorting and title-letter offsets must not be offered for a
+server-ordered member list. Both shells distinguish loading, empty and failed
+states and retain retry, navigation and scroll restoration. Server/account ownership stays attached
+to every item; a collection's external catalogue ID does not make another user's
+collection an interchangeable playback source.
+
+`PlexCollectionBrowsingTests`, `MediaBrowserCollectionBrowsingTests`,
+`CollectionDetailBrowsingTests`, `CollectionIdentityTests`,
+`LibraryCollectionModeTests`, `AggregatedLibraryCollectionTests`, and
+`RetiredCollectionShortcutTests` cover discovery, static/smart membership,
+pagination, mixed member kinds, account isolation, retry/cancellation,
+mode-switch races, snapshot migration and server-defined ordering.
+
+## Edition and file selection
+
+A named movie edition selected from an individual library card retains its
+account/item identity when opening detail. A merged Home/Search representative
+is not an explicit edition choice and retains automatic source recommendations.
+Both use the same combined detail page and version menu; explicit menu choices
+can still switch to another edition or file.
+
+Before opening detail, iOS Home cards and context-menu navigation use
+`PlaybackSourceSelection.bestDetailItem`. Applying playback ranking first would
+replace the clicked edition before the shared detail policy could preserve it.
+Direct-play rows still use `bestPlayItem`; merged and unlabelled detail cards
+still receive normal recommendations. `PlaybackSourceSelectionTests` covers
+these entry-point distinctions and physical collection/folder identity.
+
+Provider edition labels survive single-file synthesis and persisted metadata.
+Picker identities qualify the account, backing item, and intrinsic media ID;
+playback receives the owning provider item and its original media ID, never a
+synthetic picker ID. Remembered choices must resolve against both qualified
+detail candidates and raw provider candidates without crossing owners.
+Transient opening intent must not be serialized as a lasting playback choice.
+Sparse refreshes preserve known edition facts only for the same source/file.
+
+`EditionPlaybackRoutingTests`, `EditionDetailSelectionTests`,
+`EditionDetailViewModelTests`, and `PlexEditionIdentityTests` cover separate
+editions with multiple encodings, colliding IDs, synthetic/stale source refs,
+explicit overrides, merged-card defaults, snapshot refresh, and exact Plex
+playback routing. Existing same-account grouping and version preference tests
+remain part of the regression selection.
+
 ## Shared custom-dialog appearance
 
 App-owned tvOS guidance, expanded-overview, title-overview, and startup-release-note
@@ -932,3 +1090,16 @@ tools/test-fast.sh --dry-run …     # print the selection, don't run
 - The old "flaky Plex network-probe" tests are deterministic (injected `HTTPClient`
   doubles, fake hosts); only the occasional host-launch timing race remains, which
   the runner's retry-once absorbs.
+## Opt-in provider playback
+
+Use [the provider playback test lane](provider-playback-tests.md) for actual
+Jellyfin, Plex, Emby, and native Silo negotiation → authenticated stream → decoded frames/audio
+→ seek/pause/resume → owned cleanup checks. It records startup timings and exact
+stream formats without treating HTTP success as playback success. It requires
+dedicated fixture items/accounts and explicit simulator ownership.
+
+Normal package runs skip the live methods. The dedicated runner requires every
+selected provider to execute and pass, with zero skips, and labels synthetic
+contract-fixture runs separately. Silo tests its supported server-selected
+conversion, not an unsupported arbitrary bitrate policy. Local shares are out
+of scope. All test players are muted before playback begins.

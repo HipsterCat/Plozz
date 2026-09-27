@@ -23,10 +23,22 @@ public enum PlayerScreenshotHook {
     public enum Panel: String, Sendable {
         /// The Subtitles panel's Style editor, over live playback.
         case subtitleStyle
+        case versions
     }
 
     /// Set by the capture rig when it starts playback; consumed by the controls.
     /// Always `nil` outside a capture run, and never written in release.
     @MainActor
     public static var pendingPanel: Panel?
+}
+
+/// The live transport's counterpart: a card tab, or the guide, for the capture
+/// rig and the Live TV fixture to open without a remote. Read once on appear.
+public enum LiveChannelScreenshotHook {
+    public enum Surface: String, Sendable {
+        case info, onNow, guide
+    }
+
+    @MainActor
+    public static var pendingSurface: Surface?
 }

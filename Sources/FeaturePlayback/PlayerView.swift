@@ -44,22 +44,36 @@ public struct PlayerView: View {
     private let showDiagnostics: Bool
     private let themePalette: ThemePalette
     private let showsSharedControls: Bool
+    private let onChangeQuality: (() -> Void)?
+    private let onChangeVersion: (() -> Void)?
+    private let onPlaySDRVersion: (() -> Void)?
 
     public init(
         viewModel: PlayerViewModel,
         showDiagnostics: Bool = false,
         themePalette: ThemePalette = .dark,
-        showsSharedControls: Bool = true
+        showsSharedControls: Bool = true,
+        onChangeQuality: (() -> Void)? = nil,
+        onChangeVersion: (() -> Void)? = nil,
+        onPlaySDRVersion: (() -> Void)? = nil
     ) {
         _viewModel = State(initialValue: viewModel)
         self.showDiagnostics = showDiagnostics
         self.themePalette = themePalette
         self.showsSharedControls = showsSharedControls
+        self.onChangeQuality = onChangeQuality
+        self.onChangeVersion = onChangeVersion
+        self.onPlaySDRVersion = onPlaySDRVersion
     }
 
 
     public var body: some View {
         configuredPlayerStack
+        #if os(iOS)
+        .modifier(MobilePlaybackDisplaySleepModifier(
+            playbackActive: viewModel.wantsForegroundDisplayAwake
+        ))
+        #endif
         .onChange(of: viewModel.shouldDismiss) { _, shouldDismiss in
             // Playback finished; close the player so it never freezes on the final
             // frame. Use the HDR-aware path so finishing a Dolby Vision/HDR title
@@ -120,7 +134,7 @@ public struct PlayerView: View {
         .task {
             viewModel.controls.diagnosticsEnabled = showDiagnostics
             await viewModel.load()
-            if viewModel.controls.diagnosticsEnabled { startSampling() }
+            if needsStreamSampling { startSampling() }
         }
         // The track controller isn't a View, so it can't read the environment.
         // Push the app's language in and keep it current: track menus name
@@ -130,9 +144,13 @@ public struct PlayerView: View {
             viewModel.appLocale = newLocale
             viewModel.refreshTrackMenusForLanguageChange()
         }
-        .onChange(of: viewModel.controls.diagnosticsEnabled) { _, enabled in
-            if enabled {
-                startSampling()
+        .onChange(of: viewModel.controls.diagnosticsEnabled) { _, _ in
+            if needsStreamSampling {
+                if diagnosticsSampler.isSampling {
+                    diagnosticsSampler.setSystemMetricsEnabled(viewModel.controls.diagnosticsEnabled)
+                } else {
+                    startSampling()
+                }
             } else {
                 diagnosticsSampler.stop()
             }
@@ -153,14 +171,39 @@ public struct PlayerView: View {
             // A request resolved (initial load, cross-engine swap, or transcode
             // retry) and the engine is committed — seed the overlay with the
             // engine + source facts now, even before/if load() reaches ready.
-            if viewModel.controls.diagnosticsEnabled { startSampling() }
+            if needsStreamSampling { startSampling() } else { diagnosticsSampler.stop() }
         }
         .onChange(of: viewModel.playerInstanceID) { _, _ in
             // The native engine created its live AVPlayer (initial load or
             // transcode fallback); restart sampling to pick up live per-tick
             // metrics now that there's a player to read.
-            if viewModel.controls.diagnosticsEnabled { startSampling() }
+            if needsStreamSampling { startSampling() } else { diagnosticsSampler.stop() }
         }
+        .onChange(of: viewModel.phase) { _, phase in
+            if case .failed = phase, !viewModel.controls.diagnosticsEnabled { diagnosticsSampler.stop() }
+        }
+        #if os(iOS)
+        .sheet(isPresented: Binding(
+            get: { viewModel.controls.diagnosticsEnabled },
+            set: { viewModel.controls.diagnosticsEnabled = $0 }
+        )) {
+            NavigationStack {
+                PlaybackDiagnosticsOverlay(
+                    diagnostics: diagnosticsSampler.latest, presentation: .mobile,
+                    streamingError: viewModel.streamingQualityError
+                )
+                    .environment(\.themePalette, themePalette)
+                    .navigationTitle("Playback Diagnostics")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { viewModel.controls.diagnosticsEnabled = false }
+                        }
+                    }
+            }
+            .presentationDetents([.large])
+        }
+        #endif
     }
 
     /// The visual layer stack (base + HDR veil + spinner + diagnostics), split
@@ -201,9 +244,19 @@ public struct PlayerView: View {
     @ViewBuilder
     private var bringUpSpinnerOverlay: some View {
         if viewModel.showBringUpSpinner {
-            LoadingMessagesView(spinnerTint: .white, messageColor: .white.opacity(0.85))
-                .ignoresSafeArea()
+            if let options = viewModel.streamingOptions, options.quality != .original {
+                StreamingPlaybackLoadingView(
+                    options: options, provider: viewModel.streamingProviderName,
+                    phase: viewModel.streamingPreparation, transcoding: viewModel.streamingIsTranscoding,
+                    h264Fallback: viewModel.streamingUsedH264Fallback,
+                    hevcFallback: viewModel.streamingUsedHEVCFallback
+                )
                 .transition(.opacity)
+            } else {
+                LoadingMessagesView(spinnerTint: .white, messageColor: .white.opacity(0.85))
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+            }
         }
     }
 
@@ -211,6 +264,7 @@ public struct PlayerView: View {
     /// identical gating (only while `.ready` and diagnostics enabled).
     @ViewBuilder
     private var diagnosticsOverlay: some View {
+        #if !os(iOS)
         // Keep diagnostics off during load/failure while Plozzigen is initializing;
         // this avoids extra SwiftUI preference/layout churn on the crash path.
         if viewModel.controls.diagnosticsEnabled, viewModel.phase == .ready {
@@ -220,6 +274,7 @@ public struct PlayerView: View {
                 .ignoresSafeArea()
                 .transition(.opacity)
         }
+        #endif
     }
 
     /// The phase-driven main content, split out of `body` so the type-checker
@@ -242,7 +297,28 @@ public struct PlayerView: View {
             readyPlayerContainer
 
         case let .failed(error):
-            PlaybackErrorView(message: error.userMessage) { dismiss() }
+            #if os(iOS)
+            MobilePlaybackFailureView(
+                message: viewModel.streamingQualityError?.userMessage ?? error.userMessage,
+                code: viewModel.streamingQualityError?.diagnosticCode,
+                retryMessage: viewModel.streamingCodecRetryMessage,
+                negotiatedCodec: viewModel.streamingNegotiatedVideoCodec,
+                onChangeQuality: viewModel.streamingQualityAvailable ? onChangeQuality : nil,
+                onChangeVersion: onChangeVersion,
+                onPlaySDRVersion: onPlaySDRVersion,
+                onPlayOriginal: viewModel.streamingHasHDRConversionError
+                    && viewModel.streamingOptions?.requiresConversionPolicy == true ? {
+                        viewModel.changeStreamingOptions(.init(quality: .original))
+                    } : nil,
+                onRetry: viewModel.streamingQualityAvailable ? {
+                    if let options = viewModel.streamingOptions { viewModel.changeStreamingOptions(options) }
+                } : nil,
+                onShowDiagnostics: { viewModel.controls.diagnosticsEnabled = true },
+                onDismiss: { dismiss() }
+            )
+            #else
+            PlaybackErrorView(message: viewModel.streamingQualityError?.userMessage ?? error.userMessage) { dismiss() }
+            #endif
         }
     }
 
@@ -270,7 +346,7 @@ public struct PlayerView: View {
                 downloadRemoteSubtitle: { viewModel.downloadAndLoadRemoteSubtitle($0) },
                 playNextEpisode: { if let next = viewModel.nextEpisode { viewModel.playEpisode(next) } },
                 playPreviousEpisode: { if let prev = viewModel.previousEpisode { viewModel.playEpisode(prev) } },
-                restart: { viewModel.requestSeek(to: 0) },
+                restart: { viewModel.requestSeek(to: 0, origin: "restart") },
                 skipSegment: { viewModel.skipActiveSegment() },
                 autoSkipSegment: { viewModel.autoSkipActiveSegment() },
                 dismissSkip: { viewModel.dismissActiveSkipSegment() },
@@ -403,7 +479,16 @@ public struct PlayerView: View {
         suspendedGlassWasHDR = false
     }
 
+    private var needsStreamSampling: Bool {
+        if viewModel.controls.diagnosticsEnabled { return true }
+        if case .failed = viewModel.phase { return false }
+        return viewModel.deliveryMode == .transcode
+    }
+
     private func startSampling() {
+        let model = viewModel
+        let token = model.diagnosticsToken
+        let playerID = model.playerInstanceID
         diagnosticsSampler.start(
             player: viewModel.player,
             mode: viewModel.deliveryMode,
@@ -415,7 +500,11 @@ public struct PlayerView: View {
             sourceFileName: viewModel.diagnosticsSourceFileName,
             streamURL: viewModel.diagnosticsStreamURL,
             engineTelemetry: { viewModel.engineLiveTelemetry },
-            probedFacts: { viewModel.engineProbedFacts }
+            probedFacts: { viewModel.engineProbedFacts },
+            includesSystemMetrics: viewModel.controls.diagnosticsEnabled,
+            onStreamDetails: { [weak model] details in
+                model?.updateCurrentStreamDetails(details, token: token, playerID: playerID)
+            }
         )
     }
 }

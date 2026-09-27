@@ -274,10 +274,15 @@ struct DetailPageDetailView: View {
         if let detailHeaderSettings {
             rows.append(SettingsSplitRow(
                 id: "detail-page-header-ratings",
-                title: "Header ratings",
-                description: "The Common Sense age appears separately from review scores. Full ratings remain in title information. Spoiler settings still apply."
+                title: "Review scores"
             ) {
                 DetailHeaderRatingsSettingsForm(model: detailHeaderSettings)
+            })
+            rows.append(SettingsSplitRow(
+                id: "detail-page-age-recommendation",
+                title: "Age recommendation"
+            ) {
+                DetailHeaderAgeSettingsForm(model: detailHeaderSettings)
             })
         }
         return rows
@@ -289,11 +294,19 @@ private struct DetailHeaderRatingsSettingsForm: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
-            Toggle("Show ratings in header", isOn: $model.settings.showsHeaderRatings)
+            Toggle("Show review scores", isOn: $model.settings.showsHeaderRatings)
             if model.settings.showsHeaderRatings {
-                HeaderRatingPreviewControls(settings: $model.settings)
+                HeaderReviewScoreCountPicker(settings: $model.settings)
             }
         }
+    }
+}
+
+private struct DetailHeaderAgeSettingsForm: View {
+    @Bindable var model: DetailPageSettingsModel
+
+    var body: some View {
+        Toggle("Show Common Sense age", isOn: $model.settings.showsHeaderFamilyGuidance)
     }
 }
 
@@ -303,6 +316,8 @@ struct PlaybackDetailView: View {
     /// The profile base subtitle mode/language now lives in `SubtitleBehavior`
     /// (behaviour half of the retired `CaptionSettings`).
     @Bindable var subtitleBehavior: SubtitleBehaviorModel
+    /// Profile appearance shared by Settings and the in-player editor.
+    @Bindable var subtitleStyle: SubtitleStyleModel
     /// Per-content-type overrides ("forced-only on movies, full subs on anime").
     @Bindable var subtitlePolicy: SubtitlePolicyModel
     /// Per-content-type audio-language overrides ("original audio for anime,
@@ -475,7 +490,6 @@ struct PlaybackDetailView: View {
                     baseMode: $subtitleBehavior.settings.subtitleMode,
                     perTypeEnabled: perContentTypeBinding,
                     categories: Self.policyCategories,
-                    categoryName: { $0.displayName },
                     categoryMode: { modeBinding(for: $0) }
                 )
             },
@@ -552,6 +566,29 @@ struct PlaybackDetailView: View {
             Toggle("Remember per series", isOn: $playback.settings.rememberSubtitleTrackPerSeries)
         })
 
+        rows.append(SettingsSplitRow(
+            id: "subtitle-style",
+            title: "Subtitle style",
+            description: "Use the full player controls to customize subtitles, with a live preview."
+        ) {
+            VStack(alignment: .leading, spacing: 24) {
+                NavigationLink("Customize subtitle style", value: SettingsRoute.subtitleStyle(liveTV: false))
+            }
+        })
+
+        rows.append(SettingsSplitRow(
+            id: "live-subtitle-style",
+            title: "Live TV subtitle style",
+            description: "Use the same subtitle appearance everywhere, or choose a separate look for Live TV."
+        ) {
+            VStack(alignment: .leading, spacing: 24) {
+                Toggle("Use a separate style for Live TV", isOn: $subtitleStyle.usesSeparateLiveTVStyle)
+                if subtitleStyle.usesSeparateLiveTVStyle {
+                    NavigationLink("Customize Live TV subtitles", value: SettingsRoute.subtitleStyle(liveTV: true))
+                }
+            }
+        })
+
         return rows
     }
 
@@ -563,18 +600,27 @@ struct PlaybackDetailView: View {
                 description: "How Plozz picks the audio language when a title offers more than one — with optional per-content-type rules and per-series memory.",
             ) {
                 VStack(alignment: .leading, spacing: 32) {
-                    LabeledSettingRow("Preferred language", trailingAlignment: .trailing) {
-                        audioLanguageMenu($playback.settings.audioLanguagePreference)
+                    // Set separately, "Everything else" takes over the one
+                    // preference, so it isn't shown twice.
+                    if !audioPerContentTypeEnabled {
+                        LabeledSettingRow("Preferred audio language", trailingAlignment: .trailing) {
+                            audioLanguageMenu($playback.settings.audioLanguagePreference)
+                        }
                     }
 
                     SettingsRevealSection(
                         isOn: audioPerContentTypeBinding,
-                        masterLabel: "Different default per type",
-                        revealedHeader: "Per Content Type"
+                        masterLabel: "Set separately for movies, TV shows & anime"
                     ) {
-                        ForEach(Self.policyCategories, id: \.self) { category in
-                            LabeledSettingRow(category.displayName, trailingAlignment: .trailing) {
-                                audioLanguageMenu(audioPreferenceBinding(for: category))
+                        ForEach(Self.policyCategories + [.other], id: \.self) { category in
+                            LabeledSettingRow(
+                                category.separateSettingTitle,
+                                subtitle: category.separateSettingHint,
+                                trailingAlignment: .trailing
+                            ) {
+                                audioLanguageMenu(category == .other
+                                    ? $playback.settings.audioLanguagePreference
+                                    : audioPreferenceBinding(for: category))
                             }
                         }
                     }
@@ -590,17 +636,38 @@ struct PlaybackDetailView: View {
         [
             SettingsSplitRow(
                 id: "skip-intros-mode",
-                title: "Skip Intros",
-                description: "Uses intro and credit markers from your server. Requires Plex Pass on Plex, or Media Segments / Intro Skipper on Jellyfin.",
+                title: "Skip intros, credits & more",
+                description: "Show a Skip button, or skip automatically, during intros, credits, recaps, previews and commercials.",
             ) {
-                DescribedSegmentedPicker(
-                    options: SkipIntrosMode.allCases,
-                    selection: $playback.settings.skipIntros,
-                    title: { $0.title },
-                    detail: { $0.detail }
+                SkipModeControl(
+                    baseMode: $playback.settings.skipIntros,
+                    perKindEnabled: perKindSkipBinding,
+                    kindMode: { skipModeBinding(for: $0) },
+                    useCommunityMarkers: $playback.settings.useCommunityMarkers
                 )
             }
         ]
+    }
+
+    /// On seeds every kind with the current mode, so turning it on changes
+    /// nothing until a kind is set; off returns every kind to the one mode.
+    private var perKindSkipBinding: Binding<Bool> {
+        Binding(
+            get: { !playback.settings.skipModeOverrides.isEmpty },
+            set: { on in
+                let base = playback.settings.skipIntros
+                playback.settings.skipModeOverrides = on
+                    ? Dictionary(uniqueKeysWithValues: MediaSegment.Kind.skippable.map { ($0, base) })
+                    : [:]
+            }
+        )
+    }
+
+    private func skipModeBinding(for kind: MediaSegment.Kind) -> Binding<SkipIntrosMode> {
+        Binding(
+            get: { playback.settings.skipMarkerModes.mode(for: kind) },
+            set: { playback.settings.skipModeOverrides[kind] = $0 }
+        )
     }
 
     private var skipIntervalRows: [SettingsSplitRow] {
@@ -770,75 +837,162 @@ private struct DescribedSegmentedPicker<Option: Hashable>: View {
     }
 }
 
-/// The unified "Show subtitles" control: a base Off / On / Forced Only tri-toggle
-/// (the default for everything), an optional "different settings per type" reveal
-/// exposing Movies / TV Shows / Anime tri-toggles, and a *single* live
-/// description that follows focus across every tri-toggle. Off / On / Forced Only
-/// mean the same thing wherever they appear, so one shared line explains the
-/// focused option instead of repeating it four times; it falls back to the base
-/// selection when focus is outside the pickers.
+/// The "Skip intros, credits & more" control: one Off / On / Auto (delay) / Auto
+/// (instant) picker for every kind of marker, with its explanation directly
+/// beneath, or, set separately, a ``SeparateSettingRow`` per kind. Community
+/// markers are one switch below.
+private struct SkipModeControl: View {
+    @Binding var baseMode: SkipIntrosMode
+    @Binding var perKindEnabled: Bool
+    let kindMode: (MediaSegment.Kind) -> Binding<SkipIntrosMode>
+    @Binding var useCommunityMarkers: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 32) {
+            if !perKindEnabled {
+                DescribedSegmentedPicker(
+                    options: SkipIntrosMode.allCases,
+                    selection: $baseMode,
+                    title: { $0.title },
+                    detail: { $0.detail }
+                )
+                .transition(.opacity)
+            }
+
+            SettingsRevealSection(isOn: $perKindEnabled, masterLabel: "Set each marker separately") {
+                ForEach(MediaSegment.Kind.skippable, id: \.self) { kind in
+                    SeparateSettingRow(
+                        title: kind.settingsTitle,
+                        hint: kind.settingsHint,
+                        // Four segments don't fit beside a name column.
+                        namePlacement: .above,
+                        options: SkipIntrosMode.allCases,
+                        selection: kindMode(kind),
+                        optionTitle: { $0.title },
+                        detail: { $0.detail }
+                    )
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("Use community markers", isOn: $useCommunityMarkers)
+                Text("When your server has no intro or credits marker, Plozz looks one up on IntroDB and TheIntroDB, sending them the title’s IMDb or TMDB ID.")
+                    .font(.callout)
+                    .plozzForeground(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .animation(.easeInOut(duration: 0.22), value: perKindEnabled)
+    }
+}
+
+/// The unified "Show subtitles" control: an Off / On / Forced Only tri-toggle
+/// with its explanation directly beneath, or, set separately, a
+/// ``SeparateSettingRow`` each for movies, TV shows, anime and "Everything else"
+/// (which takes over the one mode).
 private struct SubtitleModeControl: View {
     @Binding var baseMode: SubtitleMode
     @Binding var perTypeEnabled: Bool
     let categories: [SubtitleContentCategory]
-    let categoryName: (SubtitleContentCategory) -> LocalizedStringResource
     let categoryMode: (SubtitleContentCategory) -> Binding<SubtitleMode>
 
-    /// The option currently under focus, plus which picker owns that focus. The
-    /// owner check makes the shared line order-independent: a blur reported by
-    /// one picker never clears focus that a sibling took in the same update.
-    @State private var focusedMode: SubtitleMode?
-    @State private var focusOwner: Int?
-
-    private var describedMode: SubtitleMode { focusedMode ?? baseMode }
-
-    /// `id` 0 is the base picker; the per-type pickers are `1...`.
-    private func reportFocus(owner id: Int, mode: SubtitleMode?) {
-        if let mode {
-            focusOwner = id
-            focusedMode = mode
-        } else if focusOwner == id {
-            focusOwner = nil
-            focusedMode = nil
-        }
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            SettingsSegmentedPicker(
-                options: SubtitleMode.allCases,
-                selection: $baseMode,
-                title: { $0.displayName },
-                onFocusedOptionChange: { reportFocus(owner: 0, mode: $0) }
-            )
+        VStack(alignment: .leading, spacing: 32) {
+            if !perTypeEnabled {
+                DescribedSegmentedPicker(
+                    options: SubtitleMode.allCases,
+                    selection: $baseMode,
+                    title: { $0.displayName },
+                    detail: { $0.detail }
+                )
+                .transition(.opacity)
+            }
 
             SettingsRevealSection(
                 isOn: $perTypeEnabled,
-                masterLabel: "Different for Movies, TV & Anime"
+                masterLabel: "Set separately for movies, TV shows & anime"
             ) {
-                ForEach(Array(categories.enumerated()), id: \.element) { index, category in
-                    LabeledSettingRow(categoryName(category)) {
-                        SettingsSegmentedPicker(
-                            options: SubtitleMode.allCases,
-                            selection: categoryMode(category),
-                            title: { $0.displayName },
-                            onFocusedOptionChange: { reportFocus(owner: index + 1, mode: $0) }
-                        )
-                    }
+                ForEach(categories + [.other], id: \.self) { category in
+                    SeparateSettingRow(
+                        title: category.separateSettingTitle,
+                        hint: category.separateSettingHint,
+                        // Short names sit beside their pickers; "Everything
+                        // else" and its hint need the width above.
+                        namePlacement: category == .other ? .above : .beside,
+                        options: SubtitleMode.allCases,
+                        // "Everything else" edits the one mode, which covers
+                        // whatever the named types don't.
+                        selection: category == .other ? $baseMode : categoryMode(category),
+                        optionTitle: { $0.displayName },
+                        detail: { $0.detail }
+                    )
                 }
             }
-            // Breathing room between the base "Show subtitles" picker and the
-            // per-type override section below it.
-            .padding(.top, 40)
-
-            Text(describedMode.detail)
-                .font(.callout)
-                .plozzForeground(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .contentTransition(.opacity)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .animation(.easeInOut(duration: 0.18), value: describedMode)
         }
+        .animation(.easeInOut(duration: 0.22), value: perTypeEnabled)
+    }
+}
+
+/// One row of a "set separately" reveal: its name (and a hint, when the name
+/// alone doesn't say what it covers) beside or above its picker, and the focused
+/// option's explanation beneath the picker while it has focus.
+private struct SeparateSettingRow<Option: Hashable>: View {
+    enum NamePlacement { case beside, above }
+
+    let title: LocalizedStringResource
+    let hint: LocalizedStringResource?
+    let namePlacement: NamePlacement
+    let options: [Option]
+    @Binding var selection: Option
+    let optionTitle: (Option) -> LocalizedStringResource
+    let detail: (Option) -> LocalizedStringResource
+
+    @State private var focusedOption: Option?
+
+    /// The name column beside a picker, so pickers down the reveal line up.
+    private static var nameWidth: CGFloat { 240 }
+    private static var nameSpacing: CGFloat { 24 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            switch namePlacement {
+            case .beside:
+                LabeledSettingRow(title, subtitle: hint, labelWidth: Self.nameWidth) { picker }
+            case .above:
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(title)
+                        .font(.headline.weight(.semibold))
+                    if let hint {
+                        Text(hint)
+                            .font(.callout)
+                            .plozzForeground(.secondary)
+                    }
+                }
+                picker
+            }
+            if let focusedOption {
+                Text(detail(focusedOption))
+                    .font(.callout)
+                    .plozzForeground(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // Under the picker, not the name.
+                    .padding(.leading, namePlacement == .beside ? Self.nameWidth + Self.nameSpacing : 0)
+                    .transition(.opacity)
+            }
+        }
+        .padding(.top, namePlacement == .above ? 8 : 0)
+        .animation(.easeInOut(duration: 0.18), value: focusedOption)
+    }
+
+    private var picker: some View {
+        SettingsSegmentedPicker(
+            options: options,
+            selection: $selection,
+            title: optionTitle,
+            onFocusedOptionChange: { focusedOption = $0 }
+        )
     }
 }
 #endif

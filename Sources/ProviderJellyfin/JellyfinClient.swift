@@ -606,6 +606,23 @@ public struct JellyfinClient: Sendable {
         return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL).Items
     }
 
+    /// Direct BoxSet membership, without a type filter or a sort override.
+    func collectionMembers(userID: String, collectionID: String, page: PageRequest) async throws -> ItemsResponse {
+        let endpoint = Endpoint(
+            path: "/Users/\(userID)/Items",
+            queryItems: [
+                URLQueryItem(name: "ParentId", value: collectionID),
+                URLQueryItem(name: "Recursive", value: "false"),
+                URLQueryItem(name: "StartIndex", value: String(page.startIndex)),
+                URLQueryItem(name: "Limit", value: String(page.limit)),
+                URLQueryItem(name: "EnableTotalRecordCount", value: "true"),
+                URLQueryItem(name: "Fields", value: "Overview,MediaStreams,MediaSources,Genres,ProviderIds")
+            ],
+            headers: authHeaders
+        )
+        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
+    }
+
     /// `GET /Users/{userId}/Items/{itemId}/LocalTrailers` — the local trailer
     /// files Jellyfin detected alongside an item. Each is a fully playable
     /// `BaseItemDto` (its own item id), so it streams through the normal
@@ -694,6 +711,53 @@ public struct JellyfinClient: Sendable {
         return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
     }
 
+    /// Global BoxSets are intentional here: released Jellyfin and Emby servers
+    /// discard ParentId when IncludeItemTypes=BoxSet. Membership is scoped by
+    /// the provider using separately fetched library/member IDs.
+    func collectionCandidates(userID: String, page: PageRequest) async throws -> ItemsResponse {
+        let endpoint = Endpoint(
+            path: "/Users/\(userID)/Items",
+            queryItems: [
+                URLQueryItem(name: "IncludeItemTypes", value: "BoxSet"),
+                URLQueryItem(name: "Recursive", value: "true"),
+                URLQueryItem(name: "StartIndex", value: String(page.startIndex)),
+                URLQueryItem(name: "Limit", value: String(page.limit)),
+                URLQueryItem(name: "SortBy", value: Self.sortBy(for: page.sort.field)),
+                URLQueryItem(name: "SortOrder", value: Self.sortOrder(for: page.sort.direction)),
+                URLQueryItem(name: "Fields", value: "PrimaryImageAspectRatio,ProviderIds"),
+                URLQueryItem(name: "ImageTypeLimit", value: "1"),
+                URLQueryItem(name: "EnableTotalRecordCount", value: "true")
+            ],
+            headers: authHeaders
+        )
+        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
+    }
+
+    func collectionScopeItems(
+        userID: String, parentID: String, recursive: Bool, start: Int, limit: Int
+    ) async throws -> ItemsResponse {
+        let endpoint = Endpoint(
+            path: "/Users/\(userID)/Items",
+            queryItems: [
+                URLQueryItem(name: "ParentId", value: parentID),
+                URLQueryItem(name: "Recursive", value: recursive ? "true" : "false"),
+                URLQueryItem(name: "SortBy", value: "SortName"),
+                URLQueryItem(name: "SortOrder", value: "Ascending"),
+                URLQueryItem(name: "StartIndex", value: String(start)),
+                URLQueryItem(name: "Limit", value: String(limit)),
+                URLQueryItem(
+                    name: providerKind == .emby ? "GroupItemsIntoCollections" : "CollapseBoxSetItems",
+                    value: "false"
+                ),
+                URLQueryItem(name: "EnableImages", value: "false"),
+                URLQueryItem(name: "EnableUserData", value: "false"),
+                URLQueryItem(name: "EnableTotalRecordCount", value: "true")
+            ],
+            headers: authHeaders
+        )
+        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
+    }
+
     /// Count of items in a container, matching the same recursive/type filters
     /// `items(...)` uses, optionally restricted to those whose **sort name** is
     /// alphabetically less than `nameLessThan`. `Limit=0` fetches no rows — only
@@ -706,7 +770,8 @@ public struct JellyfinClient: Sendable {
         parentID: String,
         includeItemTypes: [String],
         recursive: Bool,
-        nameLessThan: String? = nil
+        nameLessThan: String? = nil,
+        nameStartsWith: String? = nil
     ) async throws -> Int {
         var queryItems = [
             URLQueryItem(name: "ParentId", value: parentID),
@@ -718,6 +783,9 @@ public struct JellyfinClient: Sendable {
         if let nameLessThan, !nameLessThan.isEmpty {
             queryItems.append(URLQueryItem(name: "NameLessThan", value: nameLessThan))
         }
+        if let nameStartsWith, !nameStartsWith.isEmpty {
+            queryItems.append(URLQueryItem(name: "NameStartsWith", value: nameStartsWith))
+        }
         if recursive {
             queryItems.append(URLQueryItem(name: "Recursive", value: "true"))
         }
@@ -725,7 +793,9 @@ public struct JellyfinClient: Sendable {
             queryItems.append(URLQueryItem(name: "IncludeItemTypes", value: includeItemTypes.joined(separator: ",")))
         }
         let endpoint = Endpoint(path: "/Users/\(userID)/Items", queryItems: queryItems, headers: authHeaders)
-        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL).TotalRecordCount ?? 0
+        let response = try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
+        guard let count = response.TotalRecordCount, count >= 0 else { throw AppError.invalidResponse }
+        return count
     }
 
     /// Maps a provider-agnostic `SortField` onto Jellyfin's `SortBy` key.
@@ -793,8 +863,31 @@ public struct JellyfinClient: Sendable {
         case transcode
     }
 
-    func playbackInfo(userID: String, itemID: String, mediaSourceID: String? = nil, mode: PlaybackStreamMode = .auto) async throws -> PlaybackInfoResponse {
+    var canRequestHEVC: Bool { capabilityProfile.canRequestHEVC }
+
+    func playbackInfo(
+        userID: String, itemID: String, mediaSourceID: String? = nil,
+        mode: PlaybackStreamMode = .auto, streaming: StreamingPlaybackOptions? = nil
+    ) async throws -> PlaybackInfoResponse {
+        try streaming?.quality.validate()
+        let capabilityProfile = streaming.map { self.capabilityProfile.applying($0) } ?? self.capabilityProfile
         var queryItems = [URLQueryItem(name: "UserId", value: userID)]
+        if let streaming {
+            if let track = streaming.audioTrack {
+                queryItems.append(.init(name: "AudioStreamIndex", value: String(track.id)))
+            }
+            let burnedSubtitle = streaming.subtitlesOff ? nil : streaming.subtitleTrack.flatMap { $0.isBitmapSubtitle ? $0 : nil }
+            let subtitleIndex = burnedSubtitle.map { String($0.id) } ?? "-1"
+            queryItems.append(.init(name: "SubtitleStreamIndex", value: subtitleIndex))
+            queryItems.append(.init(name: "SubtitleMethod", value: burnedSubtitle == nil ? "External" : "Encode"))
+            if providerKind == .emby {
+                queryItems.append(.init(name: "SubtitleStreamIndexes", value: subtitleIndex))
+            }
+            if let height = streaming.quality.maximumHeight, let width = streaming.quality.maximumWidth {
+                queryItems.append(.init(name: "MaxHeight", value: String(height)))
+                queryItems.append(.init(name: "MaxWidth", value: String(width)))
+            }
+        }
         let enableDirectPlay: Bool?
         let enableDirectStream: Bool?
         // Target a specific version when one was chosen; otherwise the server
@@ -840,7 +933,27 @@ public struct JellyfinClient: Sendable {
             EnableTranscoding: true,
             DeviceProfile: capabilityProfile
         ))
-        return try await http.decode(PlaybackInfoResponse.self, from: endpoint, baseURL: baseURL)
+        guard streaming != nil else {
+            return try await http.decode(PlaybackInfoResponse.self, from: endpoint, baseURL: baseURL)
+        }
+        let (data, response) = try await http.sendRaw(endpoint, baseURL: baseURL)
+        switch response.statusCode {
+        case 200..<300: break
+        case 401: throw AppError.unauthorized
+        case 403: throw StreamingQualityError.permissionDenied
+        case 429:
+            throw AppError.rateLimited(retryAfter: response.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init))
+        default:
+            PlozzLog.playback.error("Streaming negotiation failed HTTP \(response.statusCode)")
+            throw StreamingQualityError.serverHTTP(response.statusCode)
+        }
+        let info: PlaybackInfoResponse
+        do { info = try JSONDecoder.plozz.decode(PlaybackInfoResponse.self, from: data) }
+        catch {
+            PlozzLog.playback.error("Unable to decode the server streaming decision.")
+            throw StreamingQualityError.malformedResponse
+        }
+        return info
     }
 
     // MARK: Live TV
@@ -956,7 +1069,11 @@ public struct JellyfinClient: Sendable {
         ))
     }
 
-    func reportPlaybackProgress(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {
+    func reportPlaybackProgress(
+        _ progress: PlaybackProgress,
+        event: PlaybackEvent,
+        origin: String = "provider-report"
+    ) async throws {
         let path: String
         switch event {
         case .start: path = "/Sessions/Playing"
@@ -970,31 +1087,54 @@ public struct JellyfinClient: Sendable {
             PositionTicks: JellyfinTicks.ticks(fromSeconds: progress.positionSeconds),
             IsPaused: progress.isPaused
         ))
-        _ = try await http.send(endpoint, baseURL: baseURL)
+        let context = playbackLifecycleContext(
+            sessionID: progress.playSessionID,
+            origin: origin
+        ) + " item=\(HandoffDiagnostics.correlationID(progress.itemID)) event=\(event)"
+            + " position=\(String(format: "%.2f", progress.positionSeconds)) paused=\(progress.isPaused)"
+        HandoffDiagnostics.emit("session REPORT_BEGIN \(context)")
+        do {
+            _ = try await http.send(endpoint, baseURL: baseURL)
+            HandoffDiagnostics.emit("session REPORT_ACK \(context)")
+        } catch {
+            HandoffDiagnostics.emit("session REPORT_FAILED \(context) error=\(HandoffDiagnostics.errorCode((error as? AppError) ?? .unknown("")))")
+            throw error
+        }
     }
 
-    /// `POST /UserItems/{itemId}/UserData?userId={userId}` — updates **only** the
-    /// user's saved playback position, session-lessly. Unlike
+    /// Updates position and recency through the provider's session-less user-data
+    /// endpoint: Emby `/Users/{userId}/Items/{itemId}/UserData`, or Jellyfin 10.9+
+    /// `/UserItems/{itemId}/UserData?userId={userId}`. Unlike
     /// `/Sessions/Playing/Stopped`, this never opens or terminates a live
     /// now-playing session, so an out-of-band convergence write can't zero a
-    /// dashboard that is currently streaming the title. Sending only
-    /// `PlaybackPositionTicks` leaves every other user-data field (played,
+    /// dashboard that is currently streaming the title. Sending only position
+    /// and recency leaves unrelated user-data fields (played,
     /// favorite, play count) untouched — the server merges field-by-field.
     ///
-    /// Available on Jellyfin **10.9+**. Older servers (10.8) lack this endpoint
-    /// and return `404`/``AppError/notFound``; the caller handles that fallback.
+    /// Emby's PlaystateService documents the user-scoped route and nullable
+    /// UserItemDataDto fields. Never reinterpret its 404 as playback stopping.
     func updatePlaybackPosition(_ seconds: TimeInterval, userID: String, itemID: String, lastPlayedAt: Date = Date()) async throws {
+        let isEmby = providerKind == .emby
         var endpoint = Endpoint(
             method: .post,
-            path: "/UserItems/\(itemID)/UserData",
-            queryItems: [URLQueryItem(name: "userId", value: userID)],
+            path: isEmby ? "/Users/\(userID)/Items/\(itemID)/UserData" : "/UserItems/\(itemID)/UserData",
+            queryItems: isEmby ? [] : [URLQueryItem(name: "userId", value: userID)],
             headers: authHeaders
         )
         endpoint = try endpoint.jsonBody(UpdateUserItemDataBody(
             PlaybackPositionTicks: JellyfinTicks.ticks(fromSeconds: max(seconds, 0)),
             LastPlayedDate: JellyfinDate.iso8601(from: lastPlayedAt)
         ))
-        _ = try await http.send(endpoint, baseURL: baseURL)
+        let context = playbackLifecycleContext(sessionID: nil, origin: "resume-convergence")
+            + " item=\(HandoffDiagnostics.correlationID(itemID)) route=\(isEmby ? "emby-user-data" : "jellyfin-user-data")"
+        HandoffDiagnostics.emit("session RESUME_WRITE_BEGIN \(context)")
+        do {
+            _ = try await http.send(endpoint, baseURL: baseURL)
+            HandoffDiagnostics.emit("session RESUME_WRITE_ACK \(context)")
+        } catch {
+            HandoffDiagnostics.emit("session RESUME_WRITE_FAILED \(context) error=\(HandoffDiagnostics.errorCode((error as? AppError) ?? .unknown("")))")
+            throw error
+        }
     }
 
     /// `POST`/`DELETE /Users/{userId}/PlayedItems/{itemId}` — marks an item
@@ -1110,7 +1250,7 @@ public struct JellyfinClient: Sendable {
     /// play session. Harmless for direct-play sessions (no encoding exists), but
     /// essential for transcoded HLS so an ffmpeg job isn't left running on the
     /// server until it times out.
-    func stopActiveEncoding(playSessionID: String) async throws {
+    func stopActiveEncoding(playSessionID: String, origin: String = #function) async throws {
         let endpoint = Endpoint(
             method: .delete,
             path: "/Videos/ActiveEncodings",
@@ -1120,7 +1260,22 @@ public struct JellyfinClient: Sendable {
             ],
             headers: authHeaders
         )
-        _ = try await http.send(endpoint, baseURL: baseURL)
+        let context = playbackLifecycleContext(sessionID: playSessionID, origin: origin)
+        HandoffDiagnostics.emit("session ENCODING_STOP_BEGIN \(context)")
+        do {
+            _ = try await http.send(endpoint, baseURL: baseURL)
+            HandoffDiagnostics.emit("session ENCODING_STOP_ACK \(context)")
+        } catch {
+            HandoffDiagnostics.emit("session ENCODING_STOP_FAILED \(context) error=\(HandoffDiagnostics.errorCode((error as? AppError) ?? .unknown("")))")
+            throw error
+        }
+    }
+
+    private func playbackLifecycleContext(sessionID: String?, origin: String) -> String {
+        "operation=\(UUID().uuidString) provider=\(providerKind.rawValue)"
+            + " server=\(HandoffDiagnostics.correlationID(baseURL.absoluteString))"
+            + " device=\(HandoffDiagnostics.correlationID(deviceProfile.deviceID))"
+            + " session=\(HandoffDiagnostics.correlationID(sessionID)) origin=\(origin)"
     }
 
     // MARK: Remote subtitles
@@ -1359,7 +1514,7 @@ private struct PlaybackProgressBody: Encodable {
     let IsPaused: Bool
 }
 
-/// Body for `POST /UserItems/{itemId}/UserData`. Sends the position **and** a
+/// Partial user-data update for Jellyfin and Emby. Sends the position **and** a
 /// `LastPlayedDate` recency stamp so the item surfaces in Jellyfin's "Continue
 /// Watching" / Resume home row — that row is ordered/filtered by `LastPlayedDate`,
 /// so a position-only write (the previous behaviour) made the title *resumable*

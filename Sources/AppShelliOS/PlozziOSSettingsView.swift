@@ -2,6 +2,7 @@
 import AppRuntime
 import CoreModels
 import PlozzCoreUI
+import FeaturePlayback
 import FeatureSettings
 import FeatureSyncSetup
 import SwiftUI
@@ -63,7 +64,7 @@ struct PlozziOSSettingsView: View {
         .transientStatusOverlay(
             presenter: appModel.transientStatusPresenter,
             bottomPadding: 24,
-            isLightSurface: palette.isLight
+            palette: palette
         )
         .environment(\.themePalette, palette)
         .environment(\.colorScheme, palette.isLight ? .light : .dark)
@@ -636,8 +637,7 @@ private struct PlozziOSSettingsSplitView: View {
                 hero: appModel.settings.hero,
                 heroBackground: appModel.settings.heroBackground,
                 visibility: appModel.settings.homeVisibility,
-                accounts: appModel.accountsProviders.resolvedActiveAccounts,
-                seerConfigured: appModel.seerService.isConfigured
+                accounts: appModel.accountsProviders.resolvedActiveAccounts
             )
         case .liveTV:
             LiveTVSettingsView(
@@ -672,7 +672,11 @@ private struct PlozziOSSettingsSplitView: View {
         case .playback:
             PlozziOSPlaybackSettingsView(
                 model: appModel.settings.playback,
-                audioPolicy: appModel.settings.audioPolicy
+                audioPolicy: appModel.settings.audioPolicy,
+                hasStreamingServer: appModel.accountsProviders.resolvedActiveAccounts.contains {
+                    $0.provider is any StreamingQualityProviding
+                },
+                streamingSupport: appModel.streamingQualitySupport
             )
         case .downloads:
             PlozziOSDownloadSettingsView(model: appModel.downloads)
@@ -932,8 +936,7 @@ private struct PlozziOSSettingsCompactMenu: View {
                         hero: appModel.settings.hero,
                         heroBackground: appModel.settings.heroBackground,
                         visibility: appModel.settings.homeVisibility,
-                        accounts: appModel.accountsProviders.resolvedActiveAccounts,
-                        seerConfigured: appModel.seerService.isConfigured
+                        accounts: appModel.accountsProviders.resolvedActiveAccounts
                     )
                 } label: {
                     Label("Customize Home", systemImage: "house")
@@ -976,7 +979,11 @@ private struct PlozziOSSettingsCompactMenu: View {
                 NavigationLink {
                     PlozziOSPlaybackSettingsView(
                         model: appModel.settings.playback,
-                        audioPolicy: appModel.settings.audioPolicy
+                        audioPolicy: appModel.settings.audioPolicy,
+                        hasStreamingServer: appModel.accountsProviders.resolvedActiveAccounts.contains {
+                            $0.provider is any StreamingQualityProviding
+                        },
+                        streamingSupport: appModel.streamingQualitySupport
                     )
                 } label: {
                     Label("Playback", systemImage: "play.rectangle")
@@ -1790,7 +1797,6 @@ private struct PlozziOSHomeSettingsView: View {
     @Bindable var heroBackground: HeroBackgroundSettingsModel
     let visibility: HomeLibraryVisibilityModel
     let accounts: [ResolvedAccount]
-    let seerConfigured: Bool
     @State private var libraries: [HomeLibraryChoice] = []
     @State private var isLoadingLibraries = false
     @State private var selectedLibraryID: String?
@@ -1891,7 +1897,17 @@ private struct PlozziOSHomeSettingsView: View {
                     Toggle("Hide watched titles", isOn: $hero.settings.hideWatched)
                     Toggle("Show ratings", isOn: $hero.settings.showsRatings)
                     if hero.settings.showsRatings {
-                        HeaderRatingPreviewControls(settings: $hero.settings.ratingPreferences)
+                        Toggle("Show Common Sense age", isOn: $hero.settings.ratingPreferences.showsHeaderFamilyGuidance)
+                        HeaderReviewScoreCountPicker(settings: $hero.settings.ratingPreferences)
+                    }
+                    Toggle(isOn: $hero.settings.showsDiscoverySources) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Show discovery sources")
+                            Text("Show the catalogs behind each title.")
+                                .font(.footnote)
+                                .plozzForeground(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     Toggle("Auto-advance", isOn: $hero.settings.autoAdvance)
                     Toggle(
@@ -1913,16 +1929,15 @@ private struct PlozziOSHomeSettingsView: View {
                         Toggle(
                             source.displayName,
                             isOn: Binding(
-                                get: {
-                                    source == .featured && !seerConfigured
-                                        ? false
-                                        : hero.settings.sources.contains(source)
-                                },
+                                get: { hero.settings.sources.contains(source) },
                                 set: { _ in toggleSource(source) }
                             )
                         )
-                        .disabled(source == .featured && !seerConfigured)
                     }
+                }
+
+                if hero.settings.isEnabled(.featured) {
+                    PlozziOSFeaturedDiscoverySettings(sources: $hero.settings.discoverySources)
                 }
 
                 if hero.settings.isEnabled(.randomFromLibrary) {
@@ -1952,6 +1967,16 @@ private struct PlozziOSHomeSettingsView: View {
             }
 
             if hero.settings.isEnabled {
+                if hero.settings.isEnabled(.watchlist) {
+                    SettingsSectionGroup("Watchlist picks") {
+                        Toggle(
+                            "Discovery rotation",
+                            isOn: $hero.settings.watchlistDiscoveryEnabled
+                        )
+                    } footer: {
+                        Text("Prefer titles you haven't seen in the hero recently. Turn off to keep your watchlist order.")
+                    }
+                }
                 SettingsSectionGroup("Rotation") {
                     Stepper(
                         "Items: \(hero.settings.maxItems)",
@@ -1992,7 +2017,6 @@ private struct PlozziOSHomeSettingsView: View {
     }
 
     private func toggleSource(_ source: HeroSourceKind) {
-        guard source != .featured || seerConfigured else { return }
         var enabled = Set(hero.settings.sources)
         if enabled.contains(source) {
             enabled.remove(source)
@@ -2048,6 +2072,54 @@ private struct PlozziOSHomeSettingsView: View {
             }
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
         }
+    }
+}
+
+private struct PlozziOSFeaturedDiscoverySettings: View {
+    @Binding var sources: [HeroDiscoverySource]
+
+    var body: some View {
+        SettingsSectionGroup("Featured discovery") {
+            ForEach(HeroDiscoverySource.allCases) { source in
+                let isSelected = sources.contains(source)
+                Button {
+                    toggleSource(source)
+                } label: {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(verbatim: source.displayName)
+                            Text(source.detail)
+                                .font(.footnote)
+                                .plozzForeground(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 12)
+                        SettingsCheckmark(isChecked: isSelected, prominence: .secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+            }
+        } footer: {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Choose the catalogs used for Featured. Titles may not be in your libraries. Seerr is only needed to request titles.")
+                if sources.isEmpty {
+                    Text("No sources selected. Featured won't add discovery titles.")
+                }
+            }
+        }
+    }
+
+    private func toggleSource(_ source: HeroDiscoverySource) {
+        var selected = Set(sources)
+        if selected.contains(source) {
+            selected.remove(source)
+        } else {
+            selected.insert(source)
+        }
+        sources = HeroDiscoverySource.allCases.filter(selected.contains)
     }
 }
 
@@ -2118,18 +2190,19 @@ private struct PlozziOSDetailPageSettingsView: View {
 
     var body: some View {
         List {
-            SettingsSectionGroup("Header ratings") {
-                Toggle("Show ratings in header", isOn: $detailPage.settings.showsHeaderRatings)
+            SettingsSectionGroup("Review scores") {
+                Toggle("Show review scores", isOn: $detailPage.settings.showsHeaderRatings)
                 if detailPage.settings.showsHeaderRatings {
-                    HeaderRatingPreviewControls(settings: $detailPage.settings)
+                    HeaderReviewScoreCountPicker(settings: $detailPage.settings)
                 }
                 NavigationLink {
                     PlozziOSDetailRatingPriorityView(model: detailPage)
                 } label: {
                     Text("Rating sources & order")
                 }
-            } footer: {
-                Text("The Common Sense age appears separately from review scores. Missing scores are skipped in your source order, and extra badges can wrap. Full ratings remain in title information. Spoiler settings still apply.")
+            }
+            SettingsSectionGroup("Age recommendation") {
+                Toggle("Show Common Sense age", isOn: $detailPage.settings.showsHeaderFamilyGuidance)
             }
             SettingsSectionGroup("Behind the hero") {
                 Picker(
@@ -2209,6 +2282,8 @@ private struct PlozziOSPlaybackSettingsView: View {
     @Environment(\.locale) private var locale
     @Bindable var model: PlaybackSettingsModel
     @Bindable var audioPolicy: AudioPolicyModel
+    let hasStreamingServer: Bool
+    let streamingSupport: StreamingQualitySupport
 
     private static let policyCategories: [ContentCategory] = [.movie, .tvShow, .anime]
     private static let audioOptions: [AudioLanguagePreference] =
@@ -2216,14 +2291,73 @@ private struct PlozziOSPlaybackSettingsView: View {
             .language($0.code)
         }
 
+    /// On seeds every kind with the current mode, so turning it on changes
+    /// nothing until a kind is set; off returns every kind to the one mode.
+    private var perKindSkipBinding: Binding<Bool> {
+        Binding(
+            get: { !model.settings.skipModeOverrides.isEmpty },
+            set: { on in
+                let base = model.settings.skipIntros
+                model.settings.skipModeOverrides = on
+                    ? Dictionary(uniqueKeysWithValues: MediaSegment.Kind.skippable.map { ($0, base) })
+                    : [:]
+            }
+        )
+    }
+
+    private func skipModeBinding(for kind: MediaSegment.Kind) -> Binding<SkipIntrosMode> {
+        Binding(
+            get: { model.settings.skipMarkerModes.mode(for: kind) },
+            set: { model.settings.skipModeOverrides[kind] = $0 }
+        )
+    }
+
     var body: some View {
         List {
-            SettingsSectionGroup("Skipping") {
-                Picker("Intros and credits", selection: $model.settings.skipIntros) {
-                    ForEach(SkipIntrosMode.allCases, id: \.self) {
-                        Text($0.title).tag($0)
+            PlozziOSStreamingSettings(
+                settings: $model.settings.streaming, hasCompatibleServer: hasStreamingServer,
+                support: streamingSupport
+            )
+            SettingsSectionGroup("Skip intros, credits & more") {
+                if model.settings.skipModeOverrides.isEmpty {
+                    Picker("Skip", selection: $model.settings.skipIntros) {
+                        ForEach(SkipIntrosMode.allCases, id: \.self) {
+                            Text($0.title).tag($0)
+                        }
                     }
                 }
+                Toggle("Set each marker separately", isOn: perKindSkipBinding)
+                if !model.settings.skipModeOverrides.isEmpty {
+                    ForEach(MediaSegment.Kind.skippable, id: \.self) { kind in
+                        Picker(selection: skipModeBinding(for: kind)) {
+                            ForEach(SkipIntrosMode.allCases, id: \.self) {
+                                Text($0.title).tag($0)
+                            }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(kind.settingsTitle)
+                                if let hint = kind.settingsHint {
+                                    Text(hint)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+                Toggle(isOn: $model.settings.useCommunityMarkers) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Use community markers")
+                        Text("When your server has no intro or credits marker, Plozz looks one up on IntroDB and TheIntroDB, sending them the title’s IMDb or TMDB ID.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } footer: {
+                Text("Show a Skip button, or skip automatically, during intros, credits, recaps, previews and commercials.")
+            }
+
+            SettingsSectionGroup("Skipping") {
                 Picker("Skip backward", selection: $model.settings.skipBackwardInterval) {
                     ForEach(SkipInterval.allCases, id: \.self) {
                         Text(verbatim: $0.title(locale: locale)).tag($0)
@@ -2273,21 +2407,27 @@ private struct PlozziOSPlaybackSettingsView: View {
                 defaultValue: "Tracks",
                 comment: "Settings section for default audio and subtitle track selection. Media streams inside a video file, not music tracks."
             )) {
-                Picker("Preferred audio", selection: $model.settings.audioLanguagePreference) {
-                    ForEach(Self.audioOptions, id: \.self) { preference in
-                        audioName(preference).tag(preference)
+                // Set separately, "Everything else" takes over the one
+                // preference, so it isn't shown twice.
+                if audioPolicy.overrides.isEmpty {
+                    Picker("Preferred audio language", selection: $model.settings.audioLanguagePreference) {
+                        ForEach(Self.audioOptions, id: \.self) { preference in
+                            audioName(preference).tag(preference)
+                        }
                     }
                 }
-                Toggle("Different default per type", isOn: audioOverridesEnabled)
+                Toggle("Set separately for movies, TV shows & anime", isOn: audioOverridesEnabled)
                 if !audioPolicy.overrides.isEmpty {
-                    ForEach(Self.policyCategories, id: \.self) { category in
-                        Picker(
-                            category.displayName,
-                            selection: audioBinding(for: category)
+                    ForEach(Self.policyCategories + [.other], id: \.self) { category in
+                        Picker(selection: category == .other
+                            ? $model.settings.audioLanguagePreference
+                            : audioBinding(for: category)
                         ) {
                             ForEach(Self.audioOptions, id: \.self) { preference in
                                 audioName(preference).tag(preference)
                             }
+                        } label: {
+                            SeparateSettingLabel(category: category)
                         }
                     }
                 }
@@ -2356,41 +2496,44 @@ private struct PlozziOSSubtitleSettingsView: View {
     var body: some View {
         List {
             SettingsSectionGroup("Appearance") {
-                Toggle("Follow system style", isOn: $style.style.followsSystemStyle)
-                Picker("Font", selection: $style.style.fontFamily) {
-                    ForEach(SubtitleFontFamily.allCases, id: \.self) {
-                        Text($0.displayName).tag($0)
+                NavigationLink("Customize subtitle style") {
+                    SubtitleStyleSettingsView(style: $style.style)
+                }
+            }
+            SettingsSectionGroup("Live TV subtitle style") {
+                Toggle("Use a separate style for Live TV", isOn: $style.usesSeparateLiveTVStyle)
+                Text("Use the same subtitle appearance everywhere, or choose a separate look for Live TV.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if style.usesSeparateLiveTVStyle {
+                    NavigationLink("Customize Live TV subtitles") {
+                        SubtitleStyleSettingsView(style: $style.resolvedLiveTVStyle, isLiveTV: true)
                     }
                 }
-                Picker("Weight", selection: $style.style.fontWeight) {
-                    ForEach(style.style.fontFamily.availableWeights, id: \.self) {
-                        Text($0.displayName).tag($0)
-                    }
-                }
-                LabeledContent("Size") {
-                    Slider(value: $style.style.fontScale, in: 0.6...2.0)
-                        .frame(maxWidth: 360)
-                }
-                LabeledContent("Opacity") {
-                    Slider(value: $style.style.opacity, in: 0.2...1.0)
-                        .frame(maxWidth: 360)
-                }
-                Toggle("Background", isOn: $style.style.background.isEnabled)
             }
 
             SettingsSectionGroup("Behavior") {
-                Picker("Automatic subtitles", selection: $behavior.settings.subtitleMode) {
-                    ForEach(SubtitleMode.allCases, id: \.self) {
-                        Text($0.displayName).tag($0)
+                // Set separately, "Everything else" takes over the one mode,
+                // so it isn't shown twice.
+                if policy.overrides.isEmpty {
+                    Picker("Show subtitles", selection: $behavior.settings.subtitleMode) {
+                        ForEach(SubtitleMode.allCases, id: \.self) {
+                            Text($0.displayName).tag($0)
+                        }
                     }
-                    Toggle("Different default per type", isOn: subtitleOverridesEnabled)
-                    if !policy.overrides.isEmpty {
-                        ForEach(Self.policyCategories, id: \.self) { category in
-                            Picker(category.displayName, selection: modeBinding(for: category)) {
-                                ForEach(SubtitleMode.allCases, id: \.self) {
-                                    Text($0.displayName).tag($0)
-                                }
+                }
+                Toggle("Set separately for movies, TV shows & anime", isOn: subtitleOverridesEnabled)
+                if !policy.overrides.isEmpty {
+                    ForEach(Self.policyCategories + [.other], id: \.self) { category in
+                        Picker(selection: category == .other
+                            ? $behavior.settings.subtitleMode
+                            : modeBinding(for: category)
+                        ) {
+                            ForEach(SubtitleMode.allCases, id: \.self) {
+                                Text($0.displayName).tag($0)
                             }
+                        } label: {
+                            SeparateSettingLabel(category: category)
                         }
                     }
                 }
@@ -2463,6 +2606,22 @@ private struct PlozziOSSubtitleSettingsView: View {
                 policy.overrides[category] = rule
             }
         )
+    }
+}
+
+/// A per-type picker's name, with what "Everything else" covers beneath it.
+private struct SeparateSettingLabel: View {
+    let category: ContentCategory
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(category.separateSettingTitle)
+            if let hint = category.separateSettingHint {
+                Text(hint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }
 

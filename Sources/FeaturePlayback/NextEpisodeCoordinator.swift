@@ -231,6 +231,16 @@ final class NextEpisodeCoordinator {
     /// orphan a Jellyfin play/transcode session. A no-op for idempotent providers
     /// (Plex/SMB create no server-side state). Best-effort.
     private func releasePrefetchedSession(_ request: PlaybackRequest) async {
+        HandoffDiagnostics.emit(
+            "session RELEASE_INTENT origin=orphaned-prefetch"
+                + " item=\(HandoffDiagnostics.correlationID(request.item.id))"
+                + " session=\(HandoffDiagnostics.correlationID(request.playSessionID))"
+                + " encoding=\(HandoffDiagnostics.correlationID(request.streamingSessionID))"
+        )
+        if request.streamingOptions != nil, let provider = host?.upNextProvider as? any StreamingQualityProviding {
+            await provider.releaseStreamingSession(request)
+            return
+        }
         guard let host, !host.upNextProvider.kind.playbackInfoIsIdempotent else { return }
         guard let sessionID = request.playSessionID, !sessionID.isEmpty else { return }
         let progress = PlaybackProgress(
@@ -301,8 +311,11 @@ final class NextEpisodeCoordinator {
             // A true hang is handled by the existing playback watchdog, not here.
             while !Task.isCancelled {
                 guard let self, self.awaitingFirstFrame, let host = self.host else { return }
-                if host.upNextEngine.preventsDisplaySleep,
-                   host.upNextEngine.currentTime > baselineClock + Self.firstFramePresentThreshold {
+                let engine = host.upNextEngine
+                let pausedFrameReady = engine.isPaused && engine.hasPresentedVideoFrame
+                    && abs(engine.currentTime - baselineClock) <= 1.1
+                if pausedFrameReady || (engine.preventsDisplaySleep
+                    && engine.currentTime > baselineClock + Self.firstFramePresentThreshold) {
                     self.awaitingFirstFrame = false
                     if let start = host.upNextBringUpStartedAt {
                         HandoffDiagnostics.emit("first-frame PRESENTED total=\(HandoffDiagnostics.ms(start)) engine=\(host.upNextCurrentEngineKind.rawValue)")

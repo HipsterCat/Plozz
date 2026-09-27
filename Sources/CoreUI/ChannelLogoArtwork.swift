@@ -12,6 +12,8 @@ public struct ChannelLogoArtwork: View {
     private let artworkInset: CGFloat
     private let plozzChannelID: String?
     @State private var loaded: LoadedLogo?
+    /// Steers the plate: light themes default to light backing, dark to dark.
+    @Environment(\.themePalette) private var palette
 
     public init(
         name: String,
@@ -48,8 +50,10 @@ public struct ChannelLogoArtwork: View {
             } else {
                 ChannelLogoPlateContent(
                     name: name, image: current?.image,
-                    plate: current?.plate ?? ChannelLogoPlate(tone: nil),
-                    size: size, cornerRadius: cornerRadius, artworkInset: artworkInset
+                    plate: ChannelLogoPlate(tone: current?.tone, prefersLight: palette.isLight),
+                    size: size, cornerRadius: cornerRadius, artworkInset: artworkInset,
+                    rendersInkLight: ChannelLogoPlate.rendersInkLight(current?.tone, prefersLight: palette.isLight),
+                    isTile: ChannelLogoPlate.showsAsTile(current?.tone)
                 )
             }
         }
@@ -72,12 +76,12 @@ public struct ChannelLogoArtwork: View {
     private struct LoadedLogo {
         let url: URL
         let image: UIImage
-        let plate: ChannelLogoPlate
+        let tone: ResolvedLogoTone?
 
         init(url: URL, processed: ProcessedLogo) {
             self.url = url
             image = processed.image
-            plate = ChannelLogoPlate(tone: processed.tone)
+            tone = processed.tone
         }
     }
 }
@@ -87,17 +91,24 @@ struct ChannelLogoPlate: Equatable {
     let green: Double
     let blue: Double
 
-    init(tone: ResolvedLogoTone?) {
-        if let original = tone?.backgroundPlate {
+    /// - Parameter prefersLight: the theme's side.
+    ///   - Dark themes always get dark backing. A logo whose own solid
+    ///     background is light is backed dark anyway, and dark-only ink is
+    ///     drawn light over it (see `rendersInkLight`) rather than handed a
+    ///     white plate that glares out of a dark guide.
+    ///   - Light themes get light backing unless the ink is predominantly pale,
+    ///     where white would swallow it.
+    init(tone: ResolvedLogoTone?, prefersLight: Bool = false) {
+        if let original = tone?.backgroundPlate,
+           prefersLight || original.luminance < Self.lightPlateLuminance {
             red = original.red
             green = original.green
             blue = original.blue
             return
         }
 
-        // A small white wordmark still needs dark backing, regardless of the
-        // larger coloured icon. Brand tint stays secondary to that contrast.
-        let usesLightBacking = tone.map { $0.brightInk < 0.04 && $0.luminance < 0.70 } ?? false
+        // Brand tint stays secondary to contrast.
+        let usesLightBacking = Self.usesLightBacking(tone, prefersLight: prefersLight)
         let base = usesLightBacking
             ? (red: 1.0, green: 1.0, blue: 1.0)
             : (red: 0.14, green: 0.15, blue: 0.17)
@@ -115,6 +126,38 @@ struct ChannelLogoPlate: Equatable {
         blue = max(usesLightBacking ? 0 : base.blue, base.blue + (muted.blue - base.blue) * tint)
     }
 
+    static func usesLightBacking(_ tone: ResolvedLogoTone?, prefersLight: Bool) -> Bool {
+        guard prefersLight else { return false }
+        guard let tone else { return true }
+        let paleInk = tone.luminance > 0.70 || tone.brightInk > 0.25
+        return !paleInk
+    }
+
+    /// Dark ink on a dark theme's plate is redrawn light so it stays legible.
+    /// Only ink that would genuinely vanish: near-black AND colourless, with no
+    /// bright detail. Deep brand colours — navy, maroon, purple — are dark too,
+    /// but recolouring them loses the brand for no gain in legibility.
+    ///
+    /// Never a logo that still carries its own box (high coverage): recolouring
+    /// that would paint the whole box white. Such a logo keeps its own look,
+    /// as a tile on the dark plate.
+    static func rendersInkLight(_ tone: ResolvedLogoTone?, prefersLight: Bool) -> Bool {
+        guard !prefersLight, let tone else { return false }
+        if let original = tone.backgroundPlate, original.luminance < lightPlateLuminance { return false }
+        let chroma = max(tone.red, tone.green, tone.blue) - min(tone.red, tone.green, tone.blue)
+        return tone.coverage < 0.85 && tone.brightInk < 0.04
+            && tone.luminance < 0.18 && chroma < 0.08
+    }
+
+    private static let lightPlateLuminance = 0.55
+
+    /// A logo that fills its own box — square channel art, a badge on a solid
+    /// card — rather than ink on transparency. The same coverage line the logo
+    /// analysis draws between a boxed and a cut-out logo.
+    static func showsAsTile(_ tone: ResolvedLogoTone?) -> Bool {
+        (tone?.coverage ?? 0) >= 0.85
+    }
+
     var color: Color { Color(red: red, green: green, blue: blue) }
     var isLight: Bool { 0.2126 * red + 0.7152 * green + 0.0722 * blue > 0.55 }
 }
@@ -126,15 +169,44 @@ struct ChannelLogoPlateContent: View {
     let size: CGSize
     let cornerRadius: CGFloat
     let artworkInset: CGFloat
+    var rendersInkLight = false
+    /// Draw the logo as a tile: nearly the plate's full height, its corners
+    /// rounded concentric with the plate's. A boxed logo at the usual ink
+    /// inset read as a small, sharp-cornered square in the middle of the plate.
+    var isTile = false
     @Environment(\.colorSchemeContrast) private var contrast
+
+    /// A tile hugs the plate more closely than ink does.
+    private var inset: CGFloat {
+        isTile ? min(artworkInset, max(4, size.height * 8 / 128)) : artworkInset
+    }
+
+    /// Proportional to the tile itself, not concentric with the plate: a square
+    /// tile sits well inside a wide plate, so its corners don't nest in the
+    /// plate's, and the concentric remainder (a few points) barely read as round.
+    private var tileCornerRadius: CGFloat { max(4, (size.height - inset * 2) * 0.08) }
 
     var body: some View {
         ZStack {
             if let image {
-                Image(uiImage: image)
-                    .renderingMode(.original)
-                    .resizable()
-                    .scaledToFit()
+                if rendersInkLight {
+                    Image(uiImage: image)
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .foregroundStyle(.white.opacity(0.92))
+                } else if isTile {
+                    Image(uiImage: image)
+                        .renderingMode(.original)
+                        .resizable()
+                        .scaledToFit()
+                        .clipShape(RoundedRectangle(cornerRadius: tileCornerRadius, style: .continuous))
+                } else {
+                    Image(uiImage: image)
+                        .renderingMode(.original)
+                        .resizable()
+                        .scaledToFit()
+                }
             } else {
                 Text(name)
                     .font(.system(size: size.height * 0.22, weight: .semibold))
@@ -145,8 +217,8 @@ struct ChannelLogoPlateContent: View {
             }
         }
         .frame(
-            width: max(1, size.width - artworkInset * 2),
-            height: max(1, size.height - artworkInset * 2)
+            width: max(1, size.width - inset * 2),
+            height: max(1, size.height - inset * 2)
         )
         .frame(width: size.width, height: size.height)
         .background(plate.color)

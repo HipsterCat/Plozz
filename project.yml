@@ -82,6 +82,10 @@ targets:
         # MARKETING_VERSION build setting so the app and Top Shelf extension match.
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # The remote's Guide button reaches the app as this TVServices activity;
+        # without the declaration tvOS sends it to the default guide app.
+        NSUserActivityTypes:
+          - TVUserActivityTypeBrowsingChannelGuide
         # Expose Siri Remote touch position for first-generation edge clicks.
         GCSupportedGameControllers:
           - ProfileName: MicroGamepad
@@ -223,10 +227,11 @@ targets:
         # LAN, behind a reverse proxy, or over Tailscale (the 100.64.0.0/10 CGNAT
         # range, which is NOT covered by NSAllowsLocalNetworking). Since the user
         # explicitly enters their own server address, allow arbitrary HTTP loads
-        # so Tailscale IPs (http://100.x.x.x:8096) and MagicDNS names resolve.
+        # so Tailscale IPs (http://100.x.x.x:8096) and MagicDNS names resolve,
+        # as do public-IP IPTV playlists/guides. Do NOT add NSAllowsLocalNetworking
+        # here: when present, iOS/tvOS ignore NSAllowsArbitraryLoads entirely.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-          NSAllowsLocalNetworking: true
         # Deep links that launch the app straight into playback, used by the
         # Top Shelf extension's cards (e.g. plozz://item/<id>).
         CFBundleURLTypes:
@@ -392,7 +397,6 @@ targets:
         LastFmSharedSecret: "$(LASTFM_SHARED_SECRET)"
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-          NSAllowsLocalNetworking: true
         CFBundleURLTypes:
           - CFBundleURLName: com.thatcube.Plozz.deeplink
             CFBundleURLSchemes:
@@ -439,6 +443,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.FocusHost
+        # Match the bundle suffix used by XCTest hitch collection; validate with the fixture's positive control.
+        EXECUTABLE_NAME: FocusHost
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
@@ -456,6 +462,40 @@ targets:
       - package: Plozz
         product: AppShell
 
+  PlozziOSPresentationHost:
+    type: application
+    platform: iOS
+    sources:
+      - path: Tests/iOSPresentationHost
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.PresentationHost
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    dependencies:
+      - package: Plozz
+        product: AppShelliOS
+
+  PlozziOSPresentationTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/iOSPresentationTests
+      - path: Tests/AuthPresentationSupport
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.PresentationTests
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/PlozziOSPresentationHost.app/PlozziOSPresentationHost"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+    dependencies:
+      - target: PlozziOSPresentationHost
+      - package: Plozz
+        product: AppShelliOS
+
   PlozzHomeRemoteTests:
     type: bundle.ui-testing
     platform: tvOS
@@ -471,11 +511,12 @@ targets:
     platform: tvOS
     sources:
       - path: Tests/FocusIntegrationTests
+      - path: Tests/AuthPresentationSupport
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.FocusTests
         GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/PlozzFocusHost.app/PlozzFocusHost"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/PlozzFocusHost.app/FocusHost"
         BUNDLE_LOADER: "$(TEST_HOST)"
     dependencies:
       - target: PlozzFocusHost
@@ -491,6 +532,16 @@ targets:
         product: AppShell
 
 schemes:
+  PlozziOSPresentationTests:
+    build:
+      targets:
+        PlozziOSPresentationHost: all
+        PlozziOSPresentationTests: [test]
+    test:
+      config: Debug
+      targets:
+        - PlozziOSPresentationTests
+
   PlozzHomeFixtureTests:
     build:
       targets:
@@ -506,6 +557,17 @@ schemes:
         PlozzHomeRemoteTests: [test]
     test:
       config: Debug
+      targets:
+        - PlozzHomeRemoteTests
+
+  PlozzPhysicalHomeRowsTests:
+    build:
+      targets:
+        PlozzHomeRemoteTests: [test]
+    test:
+      config: Release
+      captureScreenshotsAutomatically: false
+      preferredScreenCaptureFormat: screenshots
       targets:
         - PlozzHomeRemoteTests
 

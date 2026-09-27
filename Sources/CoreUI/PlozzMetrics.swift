@@ -28,8 +28,8 @@ public struct PlozzMetrics: Equatable, Sendable {
 
     // MARK: Card artwork sizes (scaled)
 
-    public let posterWidth: CGFloat
-    public let posterHeight: CGFloat
+    public private(set) var posterWidth: CGFloat
+    public private(set) var posterHeight: CGFloat
     public let landscapeWidth: CGFloat
     public let landscapeHeight: CGFloat
     /// Artwork width for a Continue Watching card.
@@ -169,12 +169,19 @@ public struct PlozzMetrics: Equatable, Sendable {
     /// (see `PlozzTheme.Metrics.headerScaleDamping`) so headers stay anchored.
     public let sectionHeaderFontSize: CGFloat
 
-    /// The poster wall's columns, carrying the scaled gutter. Library and Search
-    /// both use this so they share an identical column count and spacing.
+    /// The general poster wall's columns, carrying the scaled gutter.
     public var posterColumns: [GridItem] {
         Array(
             repeating: GridItem(.flexible(), spacing: gridSpacing, alignment: .top),
             count: posterGridColumns
+        )
+    }
+
+    /// Library grids use a roomier default without changing the other density presets.
+    public var libraryPosterColumns: [GridItem] {
+        Array(
+            repeating: GridItem(.flexible(), spacing: gridSpacing, alignment: .top),
+            count: density == .standard ? 6 : posterGridColumns
         )
     }
 
@@ -215,6 +222,26 @@ public struct PlozzMetrics: Equatable, Sendable {
         case .borderless: borderlessCardSideMargin
         }
         return artworkWidth + sideInset * 2
+    }
+
+    /// The leading padding for a row's cards that lines the first card's visible
+    /// edge up with a title inset by `titleInset`. A borderless card's artwork
+    /// sits `borderlessCardSideMargin` inside its slot, so its slot starts that
+    /// much before the title; a framed card's surface fills its slot.
+    public func cardRowLeadingPadding(_ titleInset: CGFloat, cardStyle: CardStyle) -> CGFloat {
+        switch cardStyle {
+        case .framed: titleInset
+        case .borderless: titleInset - borderlessCardSideMargin
+        }
+    }
+
+    /// These metrics with portrait posters scaled by `factor`, for a surface
+    /// that wants more of them on screen.
+    public func scalingPosters(by factor: CGFloat) -> PlozzMetrics {
+        var metrics = self
+        metrics.posterWidth = (posterWidth * factor).rounded()
+        metrics.posterHeight = (posterHeight * factor).rounded()
+        return metrics
     }
 
     // MARK: Concentric card corner radii (derived)

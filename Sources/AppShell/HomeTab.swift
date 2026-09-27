@@ -238,17 +238,18 @@ struct HomeTab: View {
                 heroBackground: heroBackground,
                 heroTrailerController: heroTrailerController,
                 onPollShares: onPollShares,
-                heroIsFrontmost: path.isEmpty,
+                heroIsFrontmost: isActiveTab && path.isEmpty
+                    && playRequest == nil && resumePrompt == nil,
                 heroRuntime: heroRuntime,
-                heroFeaturedProvider: makeHeroFeaturedProvider(
-                    seer: seer,
+                heroDiscoveryProvider: makeHeroDiscoveryProvider(
                     accounts: accounts,
                     hideWatched: heroSettings.settings.hideWatched,
+                    visibility: homeVisibility,
                     identitySources: identitySources
                 ),
+                heroRequestIdentity: { seer.hasRequestIdentity(for: $0) },
                 heroFeaturedStatusProvider: makeHeroFeaturedStatusProvider(
-                    seer: seer,
-                    hideWatched: heroSettings.settings.hideWatched
+                    seer: seer
                 ),
                 heroRandomProvider: makeHeroRandomProvider(
                     accounts: accounts,
@@ -263,7 +264,8 @@ struct HomeTab: View {
                 heroMetadataEnricher: makeHeroMetadataEnricher(
                     accounts: accounts,
                     identitySources: identitySources,
-                    ratingsProvider: ratingsProvider
+                    ratingsProvider: ratingsProvider,
+                    seer: seer
                 ),
                 heroTrailerResolver: makeHeroTrailerResolver(),
                 homePerfOverlayEnabled: homePerfOverlayEnabled,
@@ -1067,7 +1069,23 @@ struct HomeTab: View {
     @ViewBuilder
     private func itemDetail(for item: MediaItem, libraryOrigin: String?) -> some View {
         let provider = resolveProvider(libraryOrigin ?? item.sourceAccountID, in: accounts)
-        if let library = MediaFolderNavigation.library(
+        if let route = CollectionBrowseRoute(
+            item: item,
+            fallbackAccountID: libraryOrigin ?? provider.session.server.id
+        ) {
+            LibraryBrowseView(
+                viewModel: LibraryBrowseViewModel(
+                    provider: resolveProvider(route.accountID, in: accounts),
+                    containerID: route.collectionID,
+                    containerKind: .collection,
+                    sourceAccountID: route.accountID,
+                    browseScope: .collectionMembers
+                ),
+                title: Text(verbatim: route.title),
+                spoilerSettings: spoilerSettings,
+                onSelect: { navigate($0, libraryOrigin: route.accountID) }
+            )
+        } else if let library = MediaFolderNavigation.library(
             for: item,
             providerKind: provider.kind,
             sourceAccountID: libraryOrigin ?? item.sourceAccountID ?? provider.session.server.id

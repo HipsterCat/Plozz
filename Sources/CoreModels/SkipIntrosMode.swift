@@ -1,7 +1,9 @@
 import Foundation
 
-/// How the player handles server-detected intro/credits markers, mirroring the
-/// four-way control in Infuse (Off / On / Auto (delay) / Auto (instant)).
+/// How the player handles skip markers (intros, credits, recaps, previews,
+/// commercials), mirroring the four-way control in Infuse (Off / On / Auto
+/// (delay) / Auto (instant)). One mode covers every kind unless the viewer sets
+/// kinds separately — see ``SkipMarkerModes``.
 ///
 ///  * `.off` — never skip; markers aren't even fetched.
 ///  * `.on` — show a focusable **Skip** button while inside a marker (manual).
@@ -51,32 +53,33 @@ public enum SkipIntrosMode: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    /// One-line explanation shown beneath each option in settings.
+    /// One-line explanation shown beneath the focused option in settings. Worded
+    /// for any kind of marker, since the same modes apply to each.
     public var detail: LocalizedStringResource {
         switch self {
         case .off:
             return LocalizedStringResource(
-                "skipIntros.detail.off",
-                defaultValue: "Never skip intros or credits.",
-                comment: "One-line explanation shown under the skip-intro picker."
+                "skipMarkers.detail.off",
+                defaultValue: "Never skip.",
+                comment: "Explains the Off option of a skip picker (intros, credits, recaps, previews or commercials)."
             )
         case .on:
             return LocalizedStringResource(
-                "skipIntros.detail.on",
-                defaultValue: "Show a Skip button during intros and credits.",
-                comment: "One-line explanation shown under the skip-intro picker."
+                "skipMarkers.detail.on",
+                defaultValue: "Show a Skip button while it plays.",
+                comment: "Explains the On option of a skip picker (intros, credits, recaps, previews or commercials)."
             )
         case .autoDelay:
             return LocalizedStringResource(
-                "skipIntros.detail.autoDelay",
+                "skipMarkers.detail.autoDelay",
                 defaultValue: "Show a Skip button, then skip automatically after a few seconds.",
-                comment: "One-line explanation shown under the skip-intro picker."
+                comment: "Explains the Auto (delay) option of a skip picker (intros, credits, recaps, previews or commercials)."
             )
         case .autoInstant:
             return LocalizedStringResource(
-                "skipIntros.detail.autoInstant",
-                defaultValue: "Skip intros and credits automatically, the instant they start.",
-                comment: "One-line explanation shown under the skip-intro picker."
+                "skipMarkers.detail.autoInstant",
+                defaultValue: "Skip automatically, the instant it starts.",
+                comment: "Explains the Auto (instant) option of a skip picker (intros, credits, recaps, previews or commercials)."
             )
         }
     }
@@ -86,4 +89,29 @@ public enum SkipIntrosMode: String, Codable, CaseIterable, Sendable {
 
     /// Whether the player skips without a button press (delay or instant).
     public var isAutomatic: Bool { self == .autoDelay || self == .autoInstant }
+}
+
+/// The skip mode for each marker kind, as the player acts on it: one ``base``
+/// mode for every kind, except where the viewer chose a kind's mode separately.
+public struct SkipMarkerModes: Equatable, Sendable {
+    public var base: SkipIntrosMode
+    public var overrides: [MediaSegment.Kind: SkipIntrosMode]
+
+    public init(base: SkipIntrosMode, overrides: [MediaSegment.Kind: SkipIntrosMode] = [:]) {
+        self.base = base
+        self.overrides = overrides
+    }
+
+    public static let allOff = SkipMarkerModes(base: .off)
+
+    /// The mode for segments of `kind`. Unknown segments are never offered.
+    public func mode(for kind: MediaSegment.Kind) -> SkipIntrosMode {
+        guard kind.isSkippable else { return .off }
+        return overrides[kind] ?? base
+    }
+
+    /// Whether any kind wants markers fetched.
+    public var fetchesMarkers: Bool {
+        MediaSegment.Kind.skippable.contains { mode(for: $0).fetchesMarkers }
+    }
 }

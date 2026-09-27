@@ -42,13 +42,9 @@ public struct PlozziOSRootView: View {
     /// Drives the "set up from another device" pairing flow launched from the prompt,
     /// carrying which server the user wants signed in (nil = not pairing).
     @State private var pairingServer: SyncedAccountDescriptor?
-    /// Fresh-launch "we found your setup" full-page cover. Shown once per cold launch
-    /// when there are servers that need bringing over (`pendingServersNeedingSetup`),
-    /// regardless of whether accounts/profiles already exist — so the "open a device
-    /// and finish bringing over your Apple TV's servers" case works even on the 100th
-    /// open, not just a blank first run. Mid-session detections still use the smaller
-    /// drawer (`pendingSyncedServerPrompt`), so we don't hijack active use.
+    /// Cold-launch offers exclude servers explicitly deferred to Settings.
     @State private var showDetectedCover = false
+    @State private var detectedSetupServers: [SyncedAccountDescriptor] = []
     /// Set true once we've decided about the detected cover for this launch (shown it,
     /// or the short cold-launch window elapsed), so it never re-pops mid-session.
     @State private var coldLaunchDetectionHandled = false
@@ -162,7 +158,7 @@ public struct PlozziOSRootView: View {
             try? await Task.sleep(for: .seconds(8))
             coldLaunchDetectionHandled = true
         }
-        .onChange(of: appModel.pendingServersNeedingSetup.count) { _, _ in
+        .onChange(of: appModel.pendingServersNeedingSetup.map(\.id)) { _, _ in
             considerColdLaunchDetection()
         }
         .fullScreenCover(isPresented: $showDetectedCover, onDismiss: {
@@ -173,11 +169,15 @@ public struct PlozziOSRootView: View {
         }) {
             PlozziOSDetectedSetupView(
                 appModel: appModel,
+                servers: detectedSetupServers,
                 onSetUpFromDevice: {
                     detectedFollowUpReceive = true
                     showDetectedCover = false
                 },
-                onSetUpManually: { showDetectedCover = false }
+                onSetUpLater: {
+                    appModel.deferDetectedSetup(detectedSetupServers.map(\.id))
+                    showDetectedCover = false
+                }
             )
             .preferredColorScheme(resolvedPalette.isLight ? .light : .dark)
         }
@@ -203,9 +203,9 @@ public struct PlozziOSRootView: View {
                  : "Send your servers and sign-in so it’s ready to watch.")
         }
         .sheet(item: serverPromptBinding, onDismiss: consumeServerPromptFollowUp) { descriptor in
-            PlozziOSNewServerPromptView(
+            SyncedServerSetupPrompt(
                 descriptor: descriptor,
-                accent: resolvedPalette.accent,
+                palette: resolvedPalette,
                 onSignIn: {
                     serverPromptFollowUp = .signIn(descriptor)
                     appModel.clearPendingSyncedServerPrompt()
@@ -270,7 +270,7 @@ public struct PlozziOSRootView: View {
         .transientStatusOverlay(
             presenter: appModel.transientStatusPresenter,
             bottomPadding: 72,
-            isLightSurface: resolvedPalette.isLight
+            palette: resolvedPalette
         )
         .environment(appModel)
         .environment(heroTrailerController)
@@ -559,15 +559,20 @@ public struct PlozziOSRootView: View {
             // Suppress the mid-session drawer while the full-page "we found your setup"
             // cover is (or is about to be) presented at cold launch, so the two don't
             // fight over the same server.
-            get: { (showDetectedCover || detectedFollowUpReceive) ? nil : appModel.pendingSyncedServerPrompt },
+            get: {
+                (appModel.isSettingsPresented || showDetectedCover || detectedFollowUpReceive)
+                    ? nil : appModel.pendingSyncedServerPrompt
+            },
             set: { if $0 == nil { appModel.clearPendingSyncedServerPrompt() } }
         )
     }
 
     private func considerColdLaunchDetection() {
         guard !coldLaunchDetectionHandled else { return }
-        guard !appModel.pendingServersNeedingSetup.isEmpty else { return }
+        let offers = appModel.pendingSetupOffers
+        guard !offers.isEmpty else { return }
         coldLaunchDetectionHandled = true
+        detectedSetupServers = offers
         // The cover supersedes the drawer for these servers this launch.
         appModel.clearPendingSyncedServerPrompt()
         showDetectedCover = true
@@ -608,13 +613,6 @@ private struct PlozziOSScenePhaseEffects: View {
 private struct PendingPairing: Identifiable {
     let invite: String
     var id: String { invite }
-}
-
-/// The action a user chose in the new-server prompt, deferred until the prompt sheet
-/// dismisses so a follow-up sheet never races the dismissal.
-private enum ServerPromptFollowUp {
-    case signIn(SyncedAccountDescriptor)
-    case pairDevice(SyncedAccountDescriptor)
 }
 
 private enum PlozziOSDestination: String, CaseIterable, Identifiable, Hashable {
@@ -906,6 +904,10 @@ private struct PlozziOSTabShell: View {
                 sharedHomeViewModel: sharedHomeViewModel,
                 onAddServer: onAddServer,
                 onShowSettings: showSettings
+            )
+            .environment(
+                \.plozziOSHomeIsFrontmost,
+                effectiveSelectedDestination == .home && !isShowingMorePage && !showingSettings
             )
             .plozziOSLibraryDestination(appModel: appModel)
             .plozziOSItemNavigation(appModel: appModel, registersScreenshotRouting: true)
@@ -1585,6 +1587,7 @@ private struct PlozziOSHomeLandingView: View {
                 onAddServer: onAddServer,
                 onShowSettings: onShowSettings
             )
+            .id(ObjectIdentifier(viewModel))
         }
     }
 }

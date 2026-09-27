@@ -107,21 +107,32 @@ public struct LeadingEdgeFadeMask: View {
 /// clipped focused cards at the row's left and right bounds despite drawing no fade.
 /// Branching in this dedicated view means native content receives no mask at all,
 /// while pinned-sidebar content keeps the exact safe-area + feather treatment.
+///
+/// `verticalOverhang` is the room the row reserves for a focused card's lift and
+/// shadow; the mask reaches that far past the row so the lift is never clipped.
+///
+/// `cardPitch` (a card slot plus the gap after it) keeps the row's cards on
+/// their slots. tvOS parks a card it scrolls to against the screen's own safe
+/// area and ignores the gutter, so the leftmost card would otherwise stop short
+/// of where the first card opened, under the sidebar.
 public struct PinnedSidebarLeadingFade<Content: View>: View {
     private let isActive: Bool
     private let inset: CGFloat
     private let verticalOverhang: CGFloat
+    private let cardPitch: CGFloat?
     private let content: Content
 
     public init(
         isActive: Bool,
         inset: CGFloat,
         verticalOverhang: CGFloat = 0,
+        cardPitch: CGFloat? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.isActive = isActive
         self.inset = inset
         self.verticalOverhang = verticalOverhang
+        self.cardPitch = cardPitch
         self.content = content()
     }
 
@@ -133,14 +144,101 @@ public struct PinnedSidebarLeadingFade<Content: View>: View {
         if isActive {
             content
                 .safeAreaPadding(.leading, inset)
-                .leadingEdgeFadeMask(
-                    fadeWidth: inset,
-                    verticalOverhang: verticalOverhang,
-                    horizontalOverhang: verticalOverhang
-                )
+                .modifier(RowSlotParking(pitch: cardPitch))
+                // The first card parks right at the gutter's inner edge, and
+                // focus grows it back across that edge. The feather keeps its
+                // full width but sits that much further left, so a focused first
+                // card and its shadow stay whole while cards scrolling out still
+                // dissolve smoothly before they pass under the sidebar.
+                .mask {
+                    // The mask starts at the screen's safe area, and the first
+                    // card opens the gutter's width past it.
+                    PinnedSidebarFeather(start: inset)
+                        .padding(.vertical, -verticalOverhang)
+                        .padding(.trailing, -verticalOverhang)
+                }
         } else {
             content
         }
+    }
+}
+
+/// Stops a horizontal row's scrolls on card-slot boundaries, so the leftmost
+/// card always sits exactly where the first card opened.
+///
+/// The focus engine's own scroll aims at the boundary directly. If a scroll
+/// still comes to rest between boundaries, the row finishes the move itself.
+private struct RowSlotParking: ViewModifier {
+    let pitch: CGFloat?
+    @State private var position = ScrollPosition(edge: .leading)
+
+    func body(content: Content) -> some View {
+        if let pitch, pitch > 0 {
+            content
+                .scrollPosition($position)
+                .scrollTargetBehavior(RowSlotTargets(pitch: pitch))
+                .onScrollPhaseChange { _, phase, context in
+                    guard phase == .idle else { return }
+                    let offset = context.geometry.contentOffset.x
+                    // Content offsets start at minus the inset; slots start at zero.
+                    let inset = context.geometry.contentInsets.leading
+                    let slot = RowSlotTargets.slot(for: offset + inset, pitch: pitch)
+                    guard abs(slot - (offset + inset)) > 0.5 else { return }
+                    withAnimation(.smooth(duration: 0.3)) {
+                        position.scrollTo(x: slot)
+                    }
+                }
+        } else {
+            content
+        }
+    }
+}
+
+/// Moves a scroll's target onto the nearest card-slot boundary.
+private struct RowSlotTargets: ScrollTargetBehavior {
+    let pitch: CGFloat
+
+    func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
+        target.rect.origin.x = Self.slot(for: target.rect.minX, pitch: pitch)
+    }
+
+    /// The slot boundary nearest `position`, measured from where the row opened
+    /// (zero) in whole card pitches. The engine stops within a gutter's width
+    /// of a boundary, well under half a pitch.
+    static func slot(for position: CGFloat, pitch: CGFloat) -> CGFloat {
+        max(0, (position / pitch).rounded()) * pitch
+    }
+}
+
+/// The pinned sidebar's feather: clear under the sidebar's icons, rising to
+/// solid just before a focused first card's lift, so cards scrolling out
+/// dissolve before they reach the icons.
+private struct PinnedSidebarFeather: View {
+    /// Where the first card's slot opens.
+    let start: CGFloat
+
+    /// How far a focused first card's lift reaches back from its slot.
+    static let lift: CGFloat = 18
+    /// The feather's width, ending clear just past the sidebar's icons.
+    static let width: CGFloat = 34
+
+    var body: some View {
+        let solid = max(0, start - Self.lift)
+        let clear = max(0, solid - Self.width)
+        HStack(spacing: 0) {
+            Color.clear.frame(width: clear)
+            LinearGradient(
+                stops: (0 ... 24).map { step in
+                    let t = Double(step) / 24
+                    return Gradient.Stop(color: .black.opacity(t * t * (3 - 2 * t)), location: t)
+                },
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            .frame(width: solid - clear)
+            Color.black
+        }
+        .environment(\.layoutDirection, .leftToRight)
     }
 }
 

@@ -35,6 +35,13 @@ public struct HeroSettings: Codable, Equatable, Sendable {
     /// from every hero source.
     public var hideWatched: Bool
 
+    /// Uses unseen/least-recently-shown picks instead of the established Watchlist order.
+    public var watchlistDiscoveryEnabled: Bool
+    public var discoverySources: [HeroDiscoverySource]
+
+    /// Optional catalog credits on Home.
+    public var showsDiscoverySources: Bool
+
     /// Scores are optional Home chrome, independent of detail-page rating preferences.
     public var showsRatings: Bool
     public var ratingPreferences: DetailPageSettings
@@ -50,9 +57,25 @@ public struct HeroSettings: Codable, Equatable, Sendable {
     /// Seconds between auto-advances (clamped to ``autoAdvanceRange``).
     public var autoAdvanceSeconds: Int
 
-    /// Sensible defaults: hero on, all sources enabled (Featured is inert until
-    /// Seerr exists, so it's safe to list first), a modest rotation, trailers
-    /// off (opt-in), all libraries for Random, gentle auto-advance.
+    /// How Apple TV's Home is arranged. Other platforms always show the carousel.
+    /// Lives with the hero's settings because Fullscreen Hero is the carousel, but it is
+    /// a layout choice, not a hero option: Showcase has no hero section at all.
+    public var style: HeroStyle
+
+    /// How the backdrop changes between titles when the hero follows focus.
+    public var backdropTransition: HeroBackdropTransition
+
+    /// Whether cards keep their title lines when the hero follows focus. Off by
+    /// default: the hero already names whatever is focused.
+    public var showsCardCaptions: Bool
+
+    /// Whether the Showcase layout adds a row of discovery picks — what the
+    /// Fullscreen Hero's Featured source would show. Off by default.
+    public var showsDiscoverRow: Bool
+
+    /// Hero on, all content categories enabled, a modest rotation, all libraries
+    /// for Random, and gentle auto-advance. Optional discovery credits are hidden.
+    /// Feed defaults are defined by ``HeroDiscoverySource/defaultSelection``.
     public static let `default` = HeroSettings(
         isEnabled: true,
         sources: HeroSourceKind.allCases,
@@ -75,11 +98,18 @@ public struct HeroSettings: Codable, Equatable, Sendable {
         maxItems: Int,
         trailersEnabled: Bool,
         hideWatched: Bool = true,
+        watchlistDiscoveryEnabled: Bool = false,
+        discoverySources: [HeroDiscoverySource] = HeroDiscoverySource.defaultSelection,
+        showsDiscoverySources: Bool = false,
         showsRatings: Bool = false,
         ratingPreferences: DetailPageSettings = .default,
         randomLibraryKeys: Set<String>,
         autoAdvance: Bool,
-        autoAdvanceSeconds: Int
+        autoAdvanceSeconds: Int,
+        style: HeroStyle = .carousel,
+        backdropTransition: HeroBackdropTransition = .crossfade,
+        showsCardCaptions: Bool = false,
+        showsDiscoverRow: Bool = false
     ) {
         self.isEnabled = isEnabled
         // De-duplicate while preserving order so the picker can't persist a
@@ -89,17 +119,27 @@ public struct HeroSettings: Codable, Equatable, Sendable {
         self.maxItems = maxItems.clamped(to: HeroSettings.maxItemsRange)
         self.trailersEnabled = trailersEnabled
         self.hideWatched = hideWatched
+        self.watchlistDiscoveryEnabled = watchlistDiscoveryEnabled
+        self.discoverySources = HeroDiscoverySource.normalized(discoverySources)
+        self.showsDiscoverySources = showsDiscoverySources
         self.showsRatings = showsRatings
         self.ratingPreferences = ratingPreferences
         self.randomLibraryKeys = randomLibraryKeys
         self.autoAdvance = autoAdvance
         self.autoAdvanceSeconds = autoAdvanceSeconds.clamped(to: HeroSettings.autoAdvanceRange)
+        self.style = style
+        self.backdropTransition = backdropTransition
+        self.showsCardCaptions = showsCardCaptions
+        self.showsDiscoverRow = showsDiscoverRow
     }
 
     private enum CodingKeys: String, CodingKey {
         case isEnabled, sources, maxItems, trailersEnabled, hideWatched, showsRatings
+        case watchlistDiscoveryEnabled
+        case discoverySources, showsDiscoverySources
         case ratingPreferences
         case randomLibraryKeys, autoAdvance, autoAdvanceSeconds
+        case style, backdropTransition, showsCardCaptions, showsDiscoverRow
         case offeredSourcesVersion
     }
 
@@ -122,11 +162,24 @@ public struct HeroSettings: Codable, Equatable, Sendable {
             maxItems: value(Int.self, .maxItems, d.maxItems),
             trailersEnabled: value(Bool.self, .trailersEnabled, d.trailersEnabled),
             hideWatched: value(Bool.self, .hideWatched, d.hideWatched),
+            watchlistDiscoveryEnabled: value(
+                Bool.self, .watchlistDiscoveryEnabled, d.watchlistDiscoveryEnabled
+            ),
+            discoverySources: value(
+                [String].self, .discoverySources, d.discoverySources.map(\.rawValue)
+            ).compactMap(HeroDiscoverySource.init(rawValue:)),
+            showsDiscoverySources: value(
+                Bool.self, .showsDiscoverySources, d.showsDiscoverySources
+            ),
             showsRatings: value(Bool.self, .showsRatings, d.showsRatings),
             ratingPreferences: value(DetailPageSettings.self, .ratingPreferences, d.ratingPreferences),
             randomLibraryKeys: value(Set<String>.self, .randomLibraryKeys, d.randomLibraryKeys),
             autoAdvance: value(Bool.self, .autoAdvance, d.autoAdvance),
-            autoAdvanceSeconds: value(Int.self, .autoAdvanceSeconds, d.autoAdvanceSeconds)
+            autoAdvanceSeconds: value(Int.self, .autoAdvanceSeconds, d.autoAdvanceSeconds),
+            style: value(HeroStyle.self, .style, d.style),
+            backdropTransition: value(HeroBackdropTransition.self, .backdropTransition, d.backdropTransition),
+            showsCardCaptions: value(Bool.self, .showsCardCaptions, d.showsCardCaptions),
+            showsDiscoverRow: value(Bool.self, .showsDiscoverRow, d.showsDiscoverRow)
         )
     }
 
@@ -175,11 +228,18 @@ public struct HeroSettings: Codable, Equatable, Sendable {
         try c.encode(maxItems, forKey: .maxItems)
         try c.encode(trailersEnabled, forKey: .trailersEnabled)
         try c.encode(hideWatched, forKey: .hideWatched)
+        try c.encode(watchlistDiscoveryEnabled, forKey: .watchlistDiscoveryEnabled)
+        try c.encode(discoverySources, forKey: .discoverySources)
+        try c.encode(showsDiscoverySources, forKey: .showsDiscoverySources)
         try c.encode(showsRatings, forKey: .showsRatings)
         try c.encode(ratingPreferences, forKey: .ratingPreferences)
         try c.encode(randomLibraryKeys, forKey: .randomLibraryKeys)
         try c.encode(autoAdvance, forKey: .autoAdvance)
         try c.encode(autoAdvanceSeconds, forKey: .autoAdvanceSeconds)
+        try c.encode(style, forKey: .style)
+        try c.encode(backdropTransition, forKey: .backdropTransition)
+        try c.encode(showsCardCaptions, forKey: .showsCardCaptions)
+        try c.encode(showsDiscoverRow, forKey: .showsDiscoverRow)
         try c.encode(Self.currentOfferedSourcesVersion, forKey: .offeredSourcesVersion)
     }
 
@@ -194,13 +254,29 @@ public struct HeroSettings: Codable, Equatable, Sendable {
         isEnabled && !sources.isEmpty
     }
 
+    /// Whether Apple TV's Home uses the Showcase layout. Independent of the
+    /// hero's switch and sources, which belong to the Fullscreen Hero: every title here
+    /// comes from the rows.
+    public var followsFocus: Bool {
+        style == .followsFocus
+    }
+
+    public var usesDiscoveryWatchlistSeeds: Bool {
+        isActive && isEnabled(.featured) && discoverySources.contains(where: \.usesTitleSeeds)
+    }
+
     public func shouldShowRatings(for item: MediaItem, spoilerSettings: SpoilerSettings) -> Bool {
         showsRatings && !spoilerSettings.shouldHideRatings(for: item)
     }
 
+    /// Credit actual contributors, including cached or library-bound titles.
+    public func discoveryAttributionSources(for item: MediaItem) -> [HeroDiscoverySource] {
+        showsDiscoverySources ? HeroDiscoverySource.normalized(item.discoverySources) : []
+    }
+
     /// Whether honoring Hide Watched requires live external watch history beyond
     /// the already-resolved Continue Watching / Watchlist sources. Only the async
-    /// discovery sources — Featured (Seerr) and Random-from-library — surface
+    /// discovery sources — Featured and Random-from-library — surface
     /// titles whose current per-profile watch state isn't already known, so this
     /// is the single predicate that gates the extra provider watch-state fetch and
     /// the hero's `externalRefreshRevision` bump.
@@ -208,6 +284,22 @@ public struct HeroSettings: Codable, Equatable, Sendable {
         isActive && hideWatched
             && (isEnabled(.featured) || isEnabled(.randomFromLibrary))
     }
+}
+
+/// How the Home hero chooses what it shows.
+public enum HeroStyle: String, Codable, CaseIterable, Sendable {
+    /// A rotating spotlight of curated titles, with its own actions, above the rows.
+    case carousel
+    /// Whatever title is focused in the rows fills the screen; rows hold one position.
+    case followsFocus
+}
+
+/// How the full-screen backdrop moves from one focused title to the next.
+public enum HeroBackdropTransition: String, Codable, CaseIterable, Sendable {
+    /// A gentle dissolve.
+    case crossfade
+    /// The carousel's sideways wipe, entering from the direction of travel.
+    case slide
 }
 
 private extension Comparable {

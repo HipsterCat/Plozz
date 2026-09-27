@@ -231,12 +231,25 @@ struct TrickplayInfoDto: Decodable {
 struct PlaybackInfoResponse: Decodable {
     let MediaSources: [MediaSourceInfo]
     let PlaySessionId: String?
+    let ErrorCode: String?
+
+    private enum CodingKeys: String, CodingKey { case MediaSources, PlaySessionId, ErrorCode }
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ErrorCode = try container.decodeIfPresent(String.self, forKey: .ErrorCode)
+        PlaySessionId = try container.decodeIfPresent(String.self, forKey: .PlaySessionId)
+        if ErrorCode != nil {
+            MediaSources = try container.decodeIfPresent([MediaSourceInfo].self, forKey: .MediaSources) ?? []
+        } else {
+            MediaSources = try container.decode([MediaSourceInfo].self, forKey: .MediaSources)
+        }
+    }
 }
 
 struct MediaSourceInfo: Decodable {
     let Id: String?
     let ETag: String?
-    let TranscodingUrl: String?
+    var TranscodingUrl: String?
     let TranscodingSubProtocol: String?
     let SupportsDirectPlay: Bool?
     let SupportsDirectStream: Bool?

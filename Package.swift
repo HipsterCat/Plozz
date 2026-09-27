@@ -33,6 +33,7 @@ let package = Package(
         .library(name: "FeatureDiscoveryCore", targets: ["FeatureDiscoveryCore"]),
         .library(name: "FeatureDiscovery", targets: ["FeatureDiscovery"]),
         .library(name: "ProviderJellyfin", targets: ["ProviderJellyfin"]),
+        .library(name: "ProviderSilo", targets: ["ProviderSilo"]),
         .library(name: "ProviderPlex", targets: ["ProviderPlex"]),
         .library(name: "ProviderKinoPubDemo", targets: ["ProviderKinoPubDemo"]),
         .library(name: "ProviderShare", targets: ["ProviderShare"]),
@@ -87,7 +88,8 @@ let package = Package(
         // Powers the native HLS-fMP4 remux path for MKV → DoVi + Atmos + seek.
         // See AGENTS.local.md › "Playback engine (AetherEngine / Plozzigen)".
         //
-        // Pinned to the UPSTREAM release tag 7.7.1 -> fa67d5862730e820eb1718d16c24f4db18251237.
+        // Pinned to upstream release 7.16.1:
+        // 4ef5ef95faf271cb0c0e9cc79a0bf81a54b1244b.
         //
         // Plozz no longer carries an AetherEngine fork. Everything the old
         // `plozz-pin-*` stack existed for is upstream as of 5.23.2:
@@ -135,10 +137,9 @@ let package = Package(
         //     breaking change across the 84 releases in this range; no public
         //     symbol was removed or renamed.
         //
-        // Pinned to the 6.34.1 RELEASE rather than upstream HEAD. Same reasoning as
-        // the exact-SHA pin: the playback path takes documented, released changes
-        // only. The SHA is the COMMIT the 6.34.1 tag points at, not the annotated
-        // tag object's own id — a `revision:` pin wants the commit.
+        // The 6.34.1 update used its release commit rather than moving HEAD.
+        // A `revision:` pin always names the immutable commit, not an annotated
+        // tag object's id. The current release is identified above.
         //
         // Moved up from 6.15.2. Nineteen minors plus patches, every one documented
         // drop-in with no consumer source change and no symbol removed or renamed.
@@ -186,9 +187,38 @@ let package = Package(
         // avoids dispatch-pool starvation in loopback I/O. FFmpegBuild 3.4.x adds
         // AV1 Dolby Vision sample-entry support; deployment targets are unchanged.
         //
+        // 7.8.1 includes the merged item-diagnostic and subtitle-OCR fixes:
+        // native log reads stay off the main actor, and Vision recognition stays
+        // off Swift's cooperative executor with bounded, cancellation-safe admission.
+        // It also fixes Matroska keyframe segment boundaries and bridged-audio
+        // priming. FFmpegBuild advances to 3.4.x; platform minimums are unchanged.
+        // The new live-recording API remains opt-in and is not enabled here.
+        //
+        // 7.10.0 publishes the structural HDR10+ validator and cancellable
+        // whole-probe controls, including the follow-up fixes for retained
+        // positive evidence, stream analysis, and HTTP origin-slot waiting.
+        // Plozz retains its provider and HTTP transport safeguards.
+        //
+        // 7.15.1 notices a media services reset after tvOS sleep instead of
+        // reloading onto the invalidated player, stops waiting on a media server
+        // that no longer answers (AetherEngine#597), keeps the playhead through a
+        // rebuild raised just after another (#464), and no longer latches an HDR
+        // refusal made while the display is ineligible (#535). 7.11.0 matches
+        // audio and subtitle language preferences on parsed tags (en-US answers
+        // en), which can change the default track picked for some titles.
+        // FFmpegBuild advances to 3.5.x (FFmpeg n8.1.3); platform minimums are
+        // unchanged.
+        //
+        // 7.16.1 carries the two stage-2 recovery fixes Plozz contributed for
+        // issue #61 (AetherEngine#621, #623): the media fallback comes back where
+        // the refused item was placed instead of the session's first mount, and a
+        // recovery reload leaves a paused viewer paused instead of starting the
+        // title behind the tvOS screensaver. 7.16.0 keeps IPTV path credentials
+        // out of the engine log; 7.15.2 times remote-HLS sourceTime to the picture.
+        //
         // SMB enters AetherEngine only through Plozz's protocol-neutral custom-source
         // bridge; the engine's legacy SMB URL product is not linked.
-        .package(url: "https://github.com/superuser404notfound/AetherEngine", revision: "fa67d5862730e820eb1718d16c24f4db18251237"),
+        .package(url: "https://github.com/superuser404notfound/AetherEngine", revision: "4ef5ef95faf271cb0c0e9cc79a0bf81a54b1244b"),
         // NOTE: FFmpegBuild (FFmpeg n8.1.x decode-only) and LibDovi (Dolby Vision
         // RPU parser) are pulled in TRANSITIVELY by AetherEngine — its own manifest
         // declares and consumes them. Plozz used to declare them directly only for
@@ -291,6 +321,10 @@ let package = Package(
             dependencies: ["CoreModels", "CoreNetworking"]
         ),
         .target(
+            name: "ProviderSilo",
+            dependencies: ["CoreModels", "CoreNetworking"]
+        ),
+        .target(
             name: "ProviderPlex",
             dependencies: ["CoreModels", "CoreNetworking"]
         ),
@@ -375,11 +409,11 @@ let package = Package(
         ),
         .target(
             name: "FeatureAuthCore",
-            dependencies: ["CoreModels", "CoreNetworking", "CoreSecureStore", "ProviderJellyfin", "ProviderPlex"]
+            dependencies: ["CoreModels", "CoreNetworking", "CoreSecureStore", "ProviderJellyfin", "ProviderPlex", "ProviderSilo"]
         ),
         .target(
             name: "FeatureAuth",
-            dependencies: ["CoreModels", "PlozzCoreUI", "FeatureAuthCore", "ProviderPlex"]
+            dependencies: ["CoreModels", "PlozzCoreUI", "FeatureAuthCore", "ProviderPlex", "ProviderSilo"]
         ),
         .target(
             name: "FeatureHomeCore",
@@ -406,6 +440,7 @@ let package = Package(
         .target(
             name: "FeaturePlayback",
             dependencies: ["CoreModels", "CoreNetworking", "PlozzCoreUI", "TraktService", "MetadataKit"],
+            resources: [.process("Resources")],
             linkerSettings: [
                 // Force-link AVKit on tvOS so its `UIWindow (AVAdditions)`
                 // category (which adds `avDisplayManager`, used to drive the
@@ -670,6 +705,7 @@ let package = Package(
                 "CoreModels",
                 "CoreNetworking",
                 "PlozzCoreUI",
+                "MetadataKit",
                 "FeatureAuthCore",
                 // The universal watchlist runtime lives here so tvOS and iOS share
                 // one implementation instead of two 560-line copies.
@@ -686,6 +722,7 @@ let package = Package(
                 "MediaTransportSMB",
                 "MediaTransportWebDAV",
                 "ProviderJellyfin",
+                "ProviderSilo",
                 "ProviderPlex",
                 "ProviderShare",
                 "CoreSecureStore"
@@ -735,6 +772,7 @@ let package = Package(
                 "MetadataKit",
                 "ProviderJellyfin",
                 "ProviderKinoPubDemo",
+                "ProviderSilo",
                 "ProviderPlex",
                 "ProviderShare",
                 "ProviderTrailers",
@@ -789,6 +827,8 @@ let package = Package(
                 "MediaTransportWebDAV",
                 "ProviderJellyfin",
                 "ProviderKinoPubDemo",
+                "ProviderSilo",
+                "FeatureAuth",
                 "ProviderPlex",
                 "ProviderShare",
                 "RatingsService",
@@ -846,7 +886,7 @@ let package = Package(
         ),
         .testTarget(
             name: "AppRuntimeTests",
-            dependencies: ["AppRuntime", "CoreModels", "FeatureAuthCore", "CrashReporting"]
+            dependencies: ["AppRuntime", "CoreModels", "FeatureAuthCore", "CrashReporting", "FeatureHome"]
         ),
         .testTarget(
             name: "MediaDownloadsTests",
@@ -875,6 +915,10 @@ let package = Package(
         .testTarget(
             name: "ProviderJellyfinTests",
             dependencies: ["ProviderJellyfin", "ProviderPlex", "CoreModels", "CoreNetworking"]
+        ),
+        .testTarget(
+            name: "ProviderSiloTests",
+            dependencies: ["ProviderSilo", "CoreModels", "CoreNetworking"]
         ),
         .testTarget(
             name: "ProviderPlexTests",
@@ -910,7 +954,7 @@ let package = Package(
         ),
         .testTarget(
             name: "FeatureAuthTests",
-            dependencies: ["FeatureAuthCore", "CoreModels"]
+            dependencies: ["FeatureAuthCore", "CoreModels", "CoreNetworking", "ProviderSilo"]
         ),
         .testTarget(
             name: "FeatureHomeTests",
@@ -949,6 +993,10 @@ let package = Package(
         .testTarget(
             name: "FeaturePlaybackTests",
             dependencies: ["FeaturePlayback", "CoreModels", "PlozzCoreUI"]
+        ),
+        .testTarget(
+            name: "ProviderPlaybackIntegrationTests",
+            dependencies: ["AppRuntime", "FeaturePlayback", "ProviderJellyfin", "ProviderPlex", "ProviderSilo", "CoreNetworking", "CoreModels"]
         ),
         .testTarget(
             name: "ProviderShareTests",

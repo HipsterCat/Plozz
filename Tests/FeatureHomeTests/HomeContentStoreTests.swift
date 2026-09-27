@@ -3,8 +3,26 @@ import CoreModels
 @testable import FeatureHome
 @testable import FeatureHomeCore
 
+private final class HomeContentThreadProbe: HomeContentStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var observations: [Bool] = []
+
+    var mainThreadObservations: [Bool] { lock.withLock { observations } }
+    func recordThread() { lock.withLock { observations.append(Thread.isMainThread) } }
+    func load() -> HomeViewModel.Content? {
+        recordThread()
+        return nil
+    }
+    func save(_ content: HomeViewModel.Content) {}
+    func loadHero(for key: HeroConfigurationKey) -> [MediaItem]? { nil }
+    func saveHero(_ items: [MediaItem], for key: HeroConfigurationKey) {}
+    func clearHero() {}
+    func clear() {}
+    func clearRows() {}
+}
+
 /// Locks down `HomeContentStore` — the per-profile snapshot that lets Home paint
-/// the hero + Continue Watching instantly on the next launch. Covers round-trip,
+/// stable rows immediately while volatile rows refresh. Covers round-trip,
 /// bounding, per-profile (namespace) isolation, stale (`maxAge`) + empty misses,
 /// and the in-memory / no-op variants.
 final class HomeContentStoreTests: XCTestCase {
@@ -35,6 +53,49 @@ final class HomeContentStoreTests: XCTestCase {
         XCTAssertNil(store.load())
     }
 
+    func testPrewarmerRunsFactoryAndLoadOffMainThread() async {
+        let probe = HomeContentThreadProbe()
+        await HomeContentPrewarmer().prepare {
+            probe.recordThread()
+            return probe
+        }
+        XCTAssertEqual(probe.mainThreadObservations, [false, false])
+    }
+
+    func testReadCannotRepublishContentAfterRowsAreCleared() {
+        let store = HomeContentStore(namespace: "read-clear", directory: tempDir)
+        let old = content(latest: 2)
+        let result = store.load { _ in
+            store.clearRows()
+            return old
+        }
+        XCTAssertNil(result)
+        XCTAssertNil(store.load())
+    }
+
+    func testReadCannotRepublishContentAfterWholeCacheIsCleared() {
+        let store = HomeContentStore(namespace: "read-clear-all", directory: tempDir)
+        let old = content(latest: 2)
+        let result = store.load { _ in
+            store.clear()
+            return old
+        }
+        XCTAssertNil(result)
+        XCTAssertNil(store.load())
+    }
+
+    func testReadCannotMemoizeContentSupersededBySave() {
+        let store = HomeContentStore(namespace: "read-save", directory: tempDir)
+        let old = content(latest: 2)
+        let newest = content(latest: 5)
+        let result = store.load { _ in
+            store.save(newest)
+            return old
+        }
+        XCTAssertNil(result)
+        XCTAssertEqual(store.load()?.latest.count, 5)
+    }
+
     func testSaveLoadRoundTrip() {
         let store = HomeContentStore(namespace: nil, directory: tempDir)
         store.save(content(cw: 3, latest: 5, watchlist: 2))
@@ -43,6 +104,61 @@ final class HomeContentStoreTests: XCTestCase {
         XCTAssertEqual(loaded?.latest.count, 5)
         XCTAssertEqual(loaded?.watchlist.count, 2)
         XCTAssertEqual(loaded?.continueWatching.first?.id, "i0")
+    }
+
+    func testLegacySnapshotRemovesSyntheticCollectionLibrariesWithoutLosingRows() throws {
+        struct Stored: Codable {
+            var content: HomeViewModel.Content
+            var savedAt: Date
+        }
+        let store = HomeContentStore(directory: tempDir)
+        store.save(content(latest: 1))
+        let schema = try XCTUnwrap(FileManager.default
+            .contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil)
+            .first(where: \.hasDirectoryPath))
+        let file = try XCTUnwrap(FileManager.default
+            .contentsOfDirectory(at: schema, includingPropertiesForKeys: nil)
+            .first { $0.pathExtension == "json" })
+        let libraries = collectionMigrationLibraries()
+        var legacy = content(cw: 2, latest: 1, watchlist: 3)
+        legacy.libraries = libraries
+        try JSONEncoder().encode(Stored(content: legacy, savedAt: Date())).write(to: file)
+
+        let loaded = try XCTUnwrap(store.load())
+        XCTAssertEqual(loaded.libraries, Array(libraries.dropFirst()))
+        XCTAssertEqual(loaded.continueWatching, legacy.continueWatching)
+        XCTAssertEqual(loaded.latest, legacy.latest)
+        XCTAssertEqual(loaded.watchlist, legacy.watchlist)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    func testSavedSnapshotExcludesRetiredShortcutsButKeepsNativeCollections() {
+        let store = HomeContentStore(directory: tempDir)
+        var snapshot = content(latest: 1)
+        let libraries = collectionMigrationLibraries()
+        snapshot.libraries = libraries
+        store.save(snapshot)
+        XCTAssertEqual(store.load()?.libraries, Array(libraries.dropFirst()))
+    }
+
+    private func collectionMigrationLibraries() -> [AggregatedLibrary] {
+        [
+            AggregatedLibrary(
+                accountID: "plex", accountName: "Viewer", serverName: "Plex",
+                providerKind: .plex,
+                library: MediaLibrary(id: "plex:collections:1", title: "Collections in Movies", kind: .collection)
+            ),
+            AggregatedLibrary(
+                accountID: "plex", accountName: "Viewer", serverName: "Plex",
+                providerKind: .plex,
+                library: MediaLibrary(id: "1", title: "Movies", kind: .movie)
+            ),
+            AggregatedLibrary(
+                accountID: "emby", accountName: "Viewer", serverName: "Emby",
+                providerKind: .emby,
+                library: MediaLibrary(id: "boxsets", title: "Collections", kind: .collection)
+            )
+        ]
     }
 
     func testSaveBoundsDiscoveryPreviewsButPreservesContinueWatchingAndWatchlist() {
@@ -302,13 +418,13 @@ final class HomeContentStoreTests: XCTestCase {
         XCTAssertFalse(store.hasPendingLegacyWatchlistSeed)
     }
 
-    func testStaleSnapshotIsDroppedAndDeleted() {
+    func testStaleSnapshotIsMemoizedAsMissWithoutDeletingAReplacement() {
         // Persist with a normal store, then read through one with maxAge == 0 so the
         // (freshly-written) file is considered stale. Same namespace/dir ⇒ same file.
         HomeContentStore(namespace: nil, directory: tempDir).save(content(cw: 2))
         let expiring = HomeContentStore(namespace: nil, directory: tempDir, maxAge: 0)
         XCTAssertNil(expiring.load(), "A snapshot older than maxAge is a miss")
-        // And a subsequent normal read finds nothing (the stale file was removed).
+        // The miss remains memoized; a reader must not delete a concurrent write.
         XCTAssertNil(HomeContentStore(namespace: nil, directory: tempDir).load())
     }
 
@@ -513,9 +629,50 @@ final class HomeContentStoreTests: XCTestCase {
         )
     }
 
-    func testALegacyFeaturedOnlySeedIsStillReadableForAFeaturedOnlyHero() throws {
-        // The one case where the old file is genuinely a seed of the whole
-        // carousel, because Featured was the only source.
+    func testRetiredFeaturedCandidatePoolIsRejectedWithoutClearingExposureHistory() {
+        var settings = HeroSettings.default
+        settings.sources = [.featured]
+        let current = HeroConfigurationKey(settings: settings)
+        var retired = current
+        retired.discoveryContentVersion = HeroDiscoveryRecency.contentVersion - 1
+        let store = HomeContentStore(namespace: "retired-featured", directory: tempDir)
+        let items = makeItems(2)
+        store.saveHeroCandidatePool(.init(buckets: [.init(source: .featured, items: items)]), for: retired)
+        var history = HeroExposureHistory()
+        history.record(items[0])
+        store.saveHeroExposureHistory(history)
+
+        XCTAssertNotNil(store.loadHeroCandidatePool(for: retired))
+        XCTAssertNil(store.loadHeroCandidatePool(for: current))
+        XCTAssertNil(store.loadHero(for: current))
+        XCTAssertEqual(store.loadHeroExposureHistory(), history)
+    }
+
+    func testStoredSimklPoolCannotBeRestoredAfterSourceRetirement() throws {
+        let oldKey = try JSONDecoder().decode(
+            HeroConfigurationKey.self,
+            from: Data(#"""
+            {"sources":["featured"],"maxItems":8,"hideWatched":true,
+             "discoverySources":["tmdb","simkl"],"discoveryContentVersion":2}
+            """#.utf8)
+        )
+        var settings = HeroSettings.default
+        settings.sources = [.featured]
+        settings.discoverySources = [.tmdb]
+        let current = HeroConfigurationKey(settings: settings)
+        XCTAssertEqual(oldKey.discoverySources, current.discoverySources)
+        XCTAssertNotEqual(oldKey, current)
+
+        let store = HomeContentStore(namespace: "retired-simkl", directory: tempDir)
+        store.saveHeroCandidatePool(
+            .init(buckets: [.init(source: .featured, items: makeItems(2))]),
+            for: oldKey
+        )
+        XCTAssertNil(store.loadHeroCandidatePool(for: current))
+        XCTAssertNil(store.loadHero(for: current))
+    }
+
+    func testLegacyFeaturedSeedCannotRestoreTheRetiredAllTimeFeed() throws {
         try writeLegacyHeroFile(
             namespace: "legacy-featured",
             sources: ["featured"],
@@ -535,10 +692,10 @@ final class HomeContentStoreTests: XCTestCase {
         )
         let store = HomeContentStore(namespace: "legacy-featured", directory: tempDir)
 
-        XCTAssertEqual(
-            store.loadHero(for: HeroConfigurationKey(settings: settings))?.map(\.id),
-            ["f0", "f1"]
-        )
+        let key = HeroConfigurationKey(settings: settings)
+        XCTAssertEqual(key.discoveryContentVersion, HeroDiscoveryRecency.contentVersion)
+        XCTAssertNil(store.loadHero(for: key))
+        XCTAssertNil(store.loadHeroCandidatePool(for: key))
     }
 
     func testALegacyFeaturedBucketIsNeverRepaintedAsAMixedHero() throws {

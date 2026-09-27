@@ -26,6 +26,9 @@ final class HeroSettingsTests: XCTestCase {
         XCTAssertEqual(d.sources, HeroSourceKind.allCases)
         XCTAssertTrue(d.hideWatched)
         XCTAssertFalse(d.showsRatings)
+        XCTAssertFalse(d.showsDiscoverySources)
+        XCTAssertFalse(d.watchlistDiscoveryEnabled)
+        XCTAssertEqual(d.maxItems, 8)
     }
 
     func testMaxItemsIsClamped() {
@@ -57,7 +60,7 @@ final class HeroSettingsTests: XCTestCase {
 
     func testStoreRoundTrip() {
         let store = HeroSettingsStore(defaults: defaults, namespace: nil)
-        let settings = HeroSettings(isEnabled: true, sources: [.featured, .randomFromLibrary], maxItems: 6, trailersEnabled: true, hideWatched: false, randomLibraryKeys: ["a:1", "a:2"], autoAdvance: false, autoAdvanceSeconds: 20)
+        let settings = HeroSettings(isEnabled: true, sources: [.featured, .randomFromLibrary], maxItems: 6, trailersEnabled: true, hideWatched: false, showsDiscoverySources: true, randomLibraryKeys: ["a:1", "a:2"], autoAdvance: false, autoAdvanceSeconds: 20)
         store.save(settings)
         XCTAssertEqual(store.load(), settings)
     }
@@ -89,6 +92,48 @@ final class HeroSettingsTests: XCTestCase {
         XCTAssertEqual(decoded.autoAdvanceSeconds, HeroSettings.default.autoAdvanceSeconds)
         XCTAssertTrue(decoded.hideWatched)
         XCTAssertFalse(decoded.showsRatings)
+        XCTAssertFalse(decoded.showsDiscoverySources)
+    }
+
+    // MARK: Hero style
+
+    func testExistingSettingsKeepTheCarouselAndCrossfade() throws {
+        let decoded = try JSONDecoder().decode(
+            HeroSettings.self, from: Data(#"{"isEnabled":true,"maxItems":4}"#.utf8)
+        )
+        XCTAssertEqual(decoded.style, .carousel)
+        XCTAssertEqual(decoded.backdropTransition, .crossfade)
+        XCTAssertFalse(decoded.followsFocus)
+        XCTAssertFalse(decoded.showsCardCaptions, "The hero names the focused title, so cards start without one")
+        XCTAssertFalse(decoded.showsDiscoverRow)
+    }
+
+    func testAnUnknownStyleFallsBackWithoutResettingOtherSettings() throws {
+        let data = Data(#"{"maxItems":4,"style":"someday","backdropTransition":"spin"}"#.utf8)
+        let decoded = try JSONDecoder().decode(HeroSettings.self, from: data)
+        XCTAssertEqual(decoded.style, .carousel)
+        XCTAssertEqual(decoded.backdropTransition, .crossfade)
+        XCTAssertEqual(decoded.maxItems, 4)
+    }
+
+    func testFollowingFocusRoundTripsAndNeedsOnlyTheSwitch() {
+        var settings = HeroSettings.default
+        settings.style = .followsFocus
+        settings.backdropTransition = .slide
+        settings.showsCardCaptions = true
+        settings.showsDiscoverRow = true
+        settings.sources = []
+        let store = HeroSettingsStore(defaults: defaults)
+        store.save(settings)
+        let loaded = store.load()
+        XCTAssertEqual(loaded.style, .followsFocus)
+        XCTAssertEqual(loaded.backdropTransition, .slide)
+        XCTAssertTrue(loaded.showsCardCaptions)
+        XCTAssertTrue(loaded.showsDiscoverRow)
+        XCTAssertTrue(loaded.followsFocus, "Its titles come from the rows, not the carousel's sources")
+
+        settings.isEnabled = false
+        XCTAssertTrue(settings.followsFocus, "Immersive is a layout, not the Spotlight's switch")
     }
 
     func testInMemoryStoreRoundTrips() {
@@ -153,6 +198,150 @@ final class HeroSettingsTests: XCTestCase {
             XCTAssertEqual(settings.maxItems, 4)
             XCTAssertFalse(settings.hideWatched)
         }
+    }
+
+    func testDiscoveryCreditsDefaultOffAndRetiredSourceDoesNotResetOtherSettings() throws {
+        for field in [
+            "",
+            #","showsDiscoverySources":null"#,
+            #","showsDiscoverySources":"invalid""#,
+            #","showsDiscoverySources":1"#
+        ] {
+            let data = Data(
+                #"{"maxItems":4,"hideWatched":false,"discoverySources":["simkl","anilist"]\#(field)}"#.utf8
+            )
+            let settings = try JSONDecoder().decode(HeroSettings.self, from: data)
+            XCTAssertFalse(settings.showsDiscoverySources)
+            XCTAssertEqual(settings.maxItems, 4)
+            XCTAssertFalse(settings.hideWatched)
+            XCTAssertEqual(settings.discoverySources, [.anilist])
+        }
+    }
+
+    func testDiscoveryCreditPreferenceRoundTripsAndTransfersPerProfile() {
+        var settings = HeroSettings.default
+        settings.showsDiscoverySources = true
+        settings.discoverySources = [.tvdb, .anilist]
+        let first = HeroSettingsStore(defaults: defaults, namespace: "first")
+        let second = HeroSettingsStore(defaults: defaults, namespace: "second")
+        first.save(settings)
+        XCTAssertEqual(first.load(), settings)
+        XCTAssertFalse(second.load().showsDiscoverySources)
+
+        let snapshot = ProfileSettingsTransfer.capture(namespace: "first", defaults: defaults)
+        ProfileSettingsTransfer.apply(snapshot, namespace: "second", defaults: defaults)
+        XCTAssertEqual(second.load(), settings)
+
+        settings.showsDiscoverySources = false
+        first.save(settings)
+        XCTAssertEqual(first.load(), settings)
+        XCTAssertTrue(second.load().showsDiscoverySources)
+        XCTAssertEqual(first.load().discoverySources, [.tvdb, .anilist])
+        XCTAssertEqual(second.load().discoverySources, [.tvdb, .anilist])
+    }
+
+    func testDiscoveryCreditsHideOptionalSourcesByDefault() {
+        var item = MediaItem(id: "title", title: "A title", kind: .movie)
+        item.discoverySources = [.tmdb, .tvmaze, .anilist, .tvdb, .tmdb]
+        XCTAssertEqual(HeroSettings.default.discoveryAttributionSources(for: item), [])
+    }
+
+    func testDiscoveryCreditsOptInNormalizesActualContributorsInOrder() {
+        var settings = HeroSettings.default
+        settings.showsDiscoverySources = true
+        settings.discoverySources = [.tmdb]
+        var item = MediaItem(id: "title", title: "A title", kind: .series)
+        item.discoverySources = [.tvmaze, .tmdb, .tvmaze, .tvdb, .anilist, .tvdb]
+        XCTAssertEqual(
+            settings.discoveryAttributionSources(for: item),
+            [.tvmaze, .tmdb, .tvdb, .anilist]
+        )
+    }
+
+    func testOptedInDiscoveryCreditFollowsTheDisplayedItemNotCurrentFeedSelection() {
+        var settings = HeroSettings.default
+        settings.discoverySources = []
+        settings.showsDiscoverySources = true
+        let item = MediaItem(
+            id: "cached-title", title: "A cached title", kind: .movie,
+            discoverySources: [.tvdb, .tmdb]
+        )
+        XCTAssertEqual(settings.discoveryAttributionSources(for: item), [.tvdb, .tmdb])
+    }
+
+    func testDiscoveryCreditsDoNotInventContributorsForOrdinaryLibraryItems() {
+        let item = MediaItem(id: "library-title", title: "A library title", kind: .movie)
+        var settings = HeroSettings.default
+        for showsSources in [false, true] {
+            settings.showsDiscoverySources = showsSources
+            XCTAssertEqual(settings.discoveryAttributionSources(for: item), [])
+        }
+    }
+
+    func testDiscoveryCreditsAndLinksSurviveLibraryPresentationMergeAndItemRoundTrip() throws {
+        var libraryItem = MediaItem(
+            id: "library-title", title: "A library title", kind: .series,
+            sourceAccountID: "library-account"
+        )
+        let discoveryItem = MediaItem(
+            id: "discovery-title", title: "A discovered title", kind: .series,
+            discoverySources: [.tvdb, .tvmaze],
+            discoveryURLs: [
+                "tvdb": try XCTUnwrap(URL(string: "https://thetvdb.com/series/example")),
+                "tvmaze": try XCTUnwrap(URL(string: "https://www.tvmaze.com/shows/123/example"))
+            ],
+            locallyValidatedPlayableSource: false
+        )
+        libraryItem.fillingMissingPresentation(from: discoveryItem)
+        let decoded = try JSONDecoder().decode(
+            MediaItem.self, from: JSONEncoder().encode(libraryItem)
+        )
+        XCTAssertEqual(decoded.id, "library-title")
+        XCTAssertEqual(decoded.sourceAccountID, "library-account")
+        XCTAssertTrue(decoded.locallyValidatedPlayableSource)
+        XCTAssertEqual(decoded.discoveryURLs, discoveryItem.discoveryURLs)
+
+        var settings = HeroSettings.default
+        XCTAssertEqual(settings.discoveryAttributionSources(for: decoded), [])
+        settings.showsDiscoverySources = true
+        XCTAssertEqual(settings.discoveryAttributionSources(for: decoded), [.tvdb, .tvmaze])
+    }
+
+    @MainActor
+    func testDiscoveryCreditTogglePersistsThroughTheExistingHeroModel() {
+        let store = InMemoryHeroSettingsStore()
+        let model = HeroSettingsModel(store: store)
+        let originalSources = model.settings.discoverySources
+        XCTAssertFalse(model.settings.showsDiscoverySources)
+        model.settings.showsDiscoverySources = true
+        XCTAssertTrue(store.load().showsDiscoverySources)
+        model.settings.showsDiscoverySources = false
+        XCTAssertFalse(store.load().showsDiscoverySources)
+        XCTAssertEqual(store.load().discoverySources, originalSources)
+    }
+
+    func testWatchlistDiscoveryDefaultsOffForLegacyOrMalformedSettings() throws {
+        for field in ["", #","watchlistDiscoveryEnabled":null"#, #","watchlistDiscoveryEnabled":"invalid""#] {
+            let data = Data(#"{"maxItems":20,"hideWatched":false\#(field)}"#.utf8)
+            let settings = try JSONDecoder().decode(HeroSettings.self, from: data)
+            XCTAssertFalse(settings.watchlistDiscoveryEnabled)
+            XCTAssertEqual(settings.maxItems, 20)
+            XCTAssertFalse(settings.hideWatched)
+        }
+    }
+
+    func testWatchlistDiscoveryIsPersistedAndTransferredPerProfile() {
+        var settings = HeroSettings.default
+        settings.watchlistDiscoveryEnabled = true
+        settings.maxItems = 20
+        let first = HeroSettingsStore(defaults: defaults, namespace: "first")
+        let second = HeroSettingsStore(defaults: defaults, namespace: "second")
+        first.save(settings)
+        XCTAssertEqual(first.load(), settings)
+        XCTAssertFalse(second.load().watchlistDiscoveryEnabled)
+        let snapshot = ProfileSettingsTransfer.capture(namespace: "first", defaults: defaults)
+        ProfileSettingsTransfer.apply(snapshot, namespace: "second", defaults: defaults)
+        XCTAssertEqual(second.load(), settings)
     }
 
     func testHomeRatingsVisibilityStillHonorsSpoilersForEachPlayableKind() {

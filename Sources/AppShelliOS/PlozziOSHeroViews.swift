@@ -674,7 +674,7 @@ private struct PlozziOSHeroStage<Foreground: View>: View {
         .task(
             id: PlozziOSHeroPlaybackID(
                 itemID: item.id,
-                isActive: isActive,
+                isActive: isActive && !trailerController.isPlaybackSuppressed,
                 trailerEnabled: surfaceTrailerEnabled,
                 role: surfaceRole
             )
@@ -685,6 +685,7 @@ private struct PlozziOSHeroStage<Foreground: View>: View {
     }
 
     private func updateTrailerPlayback() async {
+        guard !trailerController.isPlaybackSuppressed else { return }
         guard isActive, surfaceTrailerEnabled else {
             trailerController.stop(ifShowing: item.id)
             return
@@ -708,7 +709,7 @@ private struct PlozziOSHeroStage<Foreground: View>: View {
             return
         }
         guard let source = await trailerResolver(item),
-              !Task.isCancelled else {
+              !Task.isCancelled, !trailerController.isPlaybackSuppressed else {
             return
         }
         trailerController.prepare(
@@ -724,6 +725,7 @@ private struct PlozziOSHeroStage<Foreground: View>: View {
                 return
             }
             guard !Task.isCancelled,
+                  !trailerController.isPlaybackSuppressed,
                   isActive,
                   trailerController.isShowing(item.id) else {
                 return
@@ -741,6 +743,7 @@ private struct PlozziOSHeroStage<Foreground: View>: View {
             return
         }
         guard !Task.isCancelled,
+              !trailerController.isPlaybackSuppressed,
               isActive,
               trailerController.isShowing(item.id) else {
             return
@@ -749,6 +752,7 @@ private struct PlozziOSHeroStage<Foreground: View>: View {
     }
 
     private func releaseTrailerSurface() {
+        guard !trailerController.isPlaybackSuppressed else { return }
         if surfaceRole == .detail {
             trailerController.clearEndHandler(ownerID: detailEndHandlerOwnerID)
             trailerController.releaseSurface(.detail)
@@ -757,7 +761,8 @@ private struct PlozziOSHeroStage<Foreground: View>: View {
         }
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(250))
-            if trailerController.isClaimed(by: .home, itemID: item.id) {
+            if !trailerController.isPlaybackSuppressed,
+               trailerController.isClaimed(by: .home, itemID: item.id) {
                 trailerController.releaseSurface(.home)
                 trailerController.stop(ifShowing: item.id)
             }

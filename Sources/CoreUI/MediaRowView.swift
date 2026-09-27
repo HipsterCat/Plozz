@@ -69,6 +69,7 @@ public struct MediaRowView: View {
     /// both copies survive into the row.
     private let items: [MediaItem]
     private let presentation: Presentation
+    private let artworkPolicy: CardArtworkPolicy
     private let spoilerSettings: SpoilerSettings
     /// Identify each card by its show — the show's artwork with its logo over it
     /// — rather than by the item's own thumbnail. Continue Watching opts in.
@@ -116,6 +117,9 @@ public struct MediaRowView: View {
     /// spans the full width — which is what lets cards scroll *under* the rail and
     /// fade out there instead of being cut off at a narrowed viewport edge.
     @Environment(\.plozzNavigationContentInset) private var navigationContentInset
+    @Environment(\.plozzCardCaptionsHidden) private var captionsHidden
+    @Environment(\.plozzCardStyle) private var cardStyle
+    @Environment(\.plozzRowTitleTightening) private var titleTightening
     /// Keeps branch-specific masking completely out of native navigation styles.
     @Environment(\.plozzPinnedSidebarActive) private var pinnedSidebarActive
 
@@ -137,6 +141,10 @@ public struct MediaRowView: View {
     /// `onFocusChange`, this is not settle-debounced and is intended for lightweight
     /// cosmetic state such as the series hero recede.
     private let onFocusEntered: (() -> Void)?
+    /// Fires synchronously every time focus lands on a card, with no settle
+    /// debounce and no once-per-entry gate. For layout that has to follow focus
+    /// immediately, such as a Home that pins the focused row.
+    private let onCardFocused: ((MediaItem) -> Void)?
     /// Optional localized cue drawn on selected card kinds (e.g. a Related row
     /// marks sequels/spin-offs as "Continues"). The row owns card construction,
     /// so callers need this seam rather than rebuilding the whole rail.
@@ -186,6 +194,7 @@ public struct MediaRowView: View {
     @State private var artworkPrefetchTasks = ArtworkPrefetchTasks()
     /// Cards whose detail-hero backdrop has been warmed — see `prefetchHeroPreview`.
     @State private var prefetchedHeroIDs: Set<String> = []
+    @State private var logoPrefetchHistory = MediaRowLogoPrefetchHistory()
     /// The card focus was on when this row's page was covered — see `isCovered`.
     @State private var coveredFocusID: String?
     @Namespace private var episodeEntrySpace
@@ -198,6 +207,7 @@ public struct MediaRowView: View {
         title: Text?,
         items: [MediaItem],
         style: PosterCardView.Style = .poster,
+        artworkPolicy: CardArtworkPolicy = .standard,
         spoilerSettings: SpoilerSettings = .default,
         showsSeriesArtwork: Bool = false,
         initialFocusID: String? = nil,
@@ -209,6 +219,7 @@ public struct MediaRowView: View {
         leadingInset: CGFloat = PlozzTheme.Metrics.screenPadding,
         onFocusEntered: (() -> Void)? = nil,
         onFocusChange: ((MediaItem?) -> Void)? = nil,
+        onCardFocused: ((MediaItem) -> Void)? = nil,
         statusCue: ((MediaItem) -> LocalizedStringResource?)? = nil,
         pendingRemovalIDs: Set<String> = [],
         loadingPlaceholderCount: Int = 0,
@@ -220,6 +231,7 @@ public struct MediaRowView: View {
             title: title,
             items: items,
             presentation: style == .poster ? .poster : .landscape,
+            artworkPolicy: artworkPolicy,
             spoilerSettings: spoilerSettings,
             showsSeriesArtwork: showsSeriesArtwork,
             initialFocusID: initialFocusID,
@@ -231,6 +243,7 @@ public struct MediaRowView: View {
             leadingInset: leadingInset,
             onFocusEntered: onFocusEntered,
             onFocusChange: onFocusChange,
+            onCardFocused: onCardFocused,
             statusCue: statusCue,
             pendingRemovalIDs: pendingRemovalIDs,
             loadingPlaceholderCount: loadingPlaceholderCount,
@@ -244,6 +257,7 @@ public struct MediaRowView: View {
         title: Text?,
         items: [MediaItem],
         presentation: Presentation,
+        artworkPolicy: CardArtworkPolicy = .standard,
         spoilerSettings: SpoilerSettings = .default,
         showsSeriesArtwork: Bool = false,
         initialFocusID: String? = nil,
@@ -255,6 +269,7 @@ public struct MediaRowView: View {
         leadingInset: CGFloat = PlozzTheme.Metrics.screenPadding,
         onFocusEntered: (() -> Void)? = nil,
         onFocusChange: ((MediaItem?) -> Void)? = nil,
+        onCardFocused: ((MediaItem) -> Void)? = nil,
         statusCue: ((MediaItem) -> LocalizedStringResource?)? = nil,
         pendingRemovalIDs: Set<String> = [],
         loadingPlaceholderCount: Int = 0,
@@ -268,6 +283,7 @@ public struct MediaRowView: View {
         let uniqueItems = Self.uniqued(items)
         self.items = uniqueItems
         self.presentation = presentation
+        self.artworkPolicy = artworkPolicy
         self.spoilerSettings = spoilerSettings
         self.showsSeriesArtwork = showsSeriesArtwork
         self.initialFocusID = Self.presentationID(
@@ -288,6 +304,7 @@ public struct MediaRowView: View {
         self.leadingInset = leadingInset
         self.onFocusEntered = onFocusEntered
         self.onFocusChange = onFocusChange
+        self.onCardFocused = onCardFocused
         self.statusCue = statusCue
         self.pendingRemovalIDs = pendingRemovalIDs
         self.playsOnSelect = playsOnSelect
@@ -441,18 +458,34 @@ public struct MediaRowView: View {
     private struct MediaRowHeader: View {
         let title: Text
         @Environment(\.plozzMetrics) private var metrics
+        @Environment(\.redactionReasons) private var redactionReasons
+        @Environment(\.themePalette) private var palette
 
         var body: some View {
-            title
+            let header = title
                 .font(PlozzRailTitle.font(
                     sectionHeaderFontSize: metrics.sectionHeaderFontSize
                 ))
+            if redactionReasons.contains(.placeholder) {
+                // A loading row keeps the title's exact height and draws Home's
+                // skeleton title pill in place of the words.
+                header
+                    .hidden()
+                    .overlay(alignment: .leading) {
+                        Capsule(style: .continuous)
+                            .fill(palette.fill)
+                            .frame(width: 220, height: 26)
+                    }
+                    .shimmering()
+            } else {
+                header
+            }
         }
     }
 
     public var body: some View {
         if !items.isEmpty || loadingPlaceholderCount > 0 || episodeEntry != nil {
-            VStack(alignment: .leading, spacing: layoutMetrics.sectionTitleSpacing) {
+            VStack(alignment: .leading, spacing: layoutMetrics.sectionTitleSpacing - titleTightening) {
                 if let title {
                     MediaRowHeader(title: title)
                         .padding(.leading, leadingInset + navigationContentInset)
@@ -461,7 +494,8 @@ public struct MediaRowView: View {
                 PinnedSidebarLeadingFade(
                     isActive: pinnedSidebarActive,
                     inset: navigationContentInset,
-                    verticalOverhang: layoutMetrics.railShadowClearance
+                    verticalOverhang: layoutMetrics.railShadowClearance,
+                    cardPitch: presentation == .episodeColumn ? nil : cardSlotWidth + layoutMetrics.cardSpacing
                 ) {
                     ScrollViewReader { proxy in
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -483,8 +517,9 @@ public struct MediaRowView: View {
                             }
                         }
                         // The row's ordinary page gutter, unchanged from before the
-                        // navigation rail existed.
-                        .padding(.leading, leadingInset)
+                        // navigation rail existed, with the first card's visible
+                        // edge under the title.
+                        .padding(.leading, cardsLeadingInset)
                         .padding(.trailing, PlozzTheme.Metrics.screenPadding)
                         // Reserve generous vertical room *inside* the clip so a
                         // focused card's lift + drop shadow are never cut. The
@@ -657,6 +692,7 @@ public struct MediaRowView: View {
                     prefetchedIDs.removeAll(keepingCapacity: true)
                     prefetchedPreviewIDs.removeAll(keepingCapacity: true)
                     lastArtworkPrefetchIndex = nil
+                    logoPrefetchHistory = MediaRowLogoPrefetchHistory()
                     pendingEntryHandoff = false
                 }
             }
@@ -696,6 +732,7 @@ public struct MediaRowView: View {
                 PosterCardView(
                     item: item,
                     style: .poster,
+                    artworkPolicy: artworkPolicy,
                     spoilerSettings: spoilerSettings,
                     showsSeriesArtwork: showsSeriesArtwork,
                     statusCue: statusCue?(item),
@@ -711,6 +748,7 @@ public struct MediaRowView: View {
                 PosterCardView(
                     item: item,
                     style: .landscape,
+                    artworkPolicy: artworkPolicy,
                     spoilerSettings: spoilerSettings,
                     showsSeriesArtwork: showsSeriesArtwork,
                     statusCue: statusCue?(item),
@@ -783,8 +821,16 @@ public struct MediaRowView: View {
         }
     }
 
+    /// Where the first card's slot starts, so its visible edge lines up with the
+    /// row's title.
+    private var cardsLeadingInset: CGFloat {
+        guard presentation != .episodeColumn else { return leadingInset }
+        return layoutMetrics.cardRowLeadingPadding(leadingInset, cardStyle: cardStyle)
+    }
+
     /// The layout width reserved for one card in the rail — its full glass-surface
     /// width, so `cardSpacing` lands as a true visible gap between cards.
+
     private var cardSlotWidth: CGFloat {
         switch presentation {
         case .poster:
@@ -802,11 +848,17 @@ public struct MediaRowView: View {
 
     @ViewBuilder
     private var loadingPlaceholder: some View {
+        // The same shape and caption the real cards will have, so nothing in
+        // the row moves when they arrive.
         switch presentation {
         case .poster:
-            SkeletonCardView(style: .poster)
+            SkeletonCardView(style: .poster, showsCaption: !captionsHidden)
         case .landscape:
-            SkeletonCardView(style: .landscape)
+            SkeletonCardView(
+                style: .landscape,
+                showsCaption: !captionsHidden && !showsSeriesArtwork,
+                showsSeriesArtwork: showsSeriesArtwork
+            )
         case .episodeColumn:
             EpisodeRowEntryPlaceholder()
         }
@@ -927,6 +979,7 @@ public struct MediaRowView: View {
             artworkPrefetchTasks.cancelAll()
             prefetchedIDs.removeAll(keepingCapacity: true)
             prefetchedPreviewIDs.removeAll(keepingCapacity: true)
+            logoPrefetchHistory = MediaRowLogoPrefetchHistory()
         }
         artworkPrefetchDirection = direction
         lastArtworkPrefetchIndex = index
@@ -960,7 +1013,8 @@ public struct MediaRowView: View {
                 for: candidate,
                 style: artworkStyle,
                 spoilerSettings: spoilerSettings,
-                showsSeriesArtwork: showsSeriesArtwork
+                showsSeriesArtwork: showsSeriesArtwork,
+                artworkPolicy: artworkPolicy
             )
             // Queue a tiny nearest-first frame before this card's heavier full
             // decode. One preview candidate is enough; if the primary is invalid,
@@ -988,9 +1042,12 @@ public struct MediaRowView: View {
             // under the viewer, which is the one thing a rail must not do. Warm
             // both, so the card is finished before it is reached.
             if showsSeriesArtwork {
+                let includeLogo = logoPrefetchHistory.shouldPrefetch(
+                    id: candidate.stablePresentationID,
+                    references: candidate.artworkReferences(for: .logo)
+                )
                 MediaArtworkPrefetchPolicy.warmSeriesPresentation(
-                    for: candidate,
-                    variant: variant
+                    for: candidate, variant: variant, includeLogo: includeLogo
                 )
             }
         }
@@ -1007,7 +1064,8 @@ public struct MediaRowView: View {
                           for: candidate,
                           style: artworkStyle,
                           spoilerSettings: spoilerSettings,
-                          showsSeriesArtwork: showsSeriesArtwork
+                          showsSeriesArtwork: showsSeriesArtwork,
+                          artworkPolicy: artworkPolicy
                       ).first,
                       ArtworkImageVariant.posterPreview.hasDistinctRequestURL(
                           from: .posterCard,
@@ -1098,6 +1156,7 @@ public struct MediaRowView: View {
         // (focus actually left the row, up to the season bar).
         guard let newValue else { return }
         hasBrowsedSinceTargetChange = true
+        if let onCardFocused, let item = itemByID[newValue] { onCardFocused(item) }
         if !focusEngaged { onFocusEntered?() }
         lastFocusedID = newValue
         if !focusEngaged,
@@ -1191,7 +1250,8 @@ public struct MediaRowView: View {
     /// costs nothing, where warming every candidate would cost on every card.
     private func prefetchHeroPreview(for item: MediaItem?) {
         #if canImport(UIKit)
-        guard let item,
+        guard artworkPolicy == .standard,
+              let item,
               !prefetchedHeroIDs.contains(item.stablePresentationID) else {
             return
         }
@@ -1299,6 +1359,16 @@ enum MediaRowFocusPolicy {
     }
 }
 
+struct MediaRowLogoPrefetchHistory {
+    private var referencesByID: [String: [ArtworkReference]] = [:]
+
+    mutating func shouldPrefetch(id: String, references: [ArtworkReference]) -> Bool {
+        guard referencesByID[id] != references else { return false }
+        referencesByID[id] = references
+        return true
+    }
+}
+
 public enum MediaArtworkPrefetchPolicy {
     /// Warms both pieces of a Continue Watching card: its clean series backdrop
     /// and the logo drawn over it. Shared by tvOS and iOS rails so one platform
@@ -1306,11 +1376,14 @@ public enum MediaArtworkPrefetchPolicy {
     @MainActor
     public static func warmSeriesPresentation(
         for item: MediaItem,
-        variant: ArtworkImageVariant
+        variant: ArtworkImageVariant,
+        includeLogo: Bool = true
     ) {
-        HeroLogoPipeline.shared.prefetch(
-            references: item.artworkReferences(for: .logo)
-        )
+        if includeLogo {
+            HeroLogoPipeline.shared.prefetch(
+                references: item.artworkReferences(for: .logo)
+            )
+        }
         TextlessBackdropStore.shared.warm(for: item, variant: variant)
     }
 
@@ -1318,13 +1391,16 @@ public enum MediaArtworkPrefetchPolicy {
         for item: MediaItem,
         style: PosterCardView.Style,
         spoilerSettings: SpoilerSettings,
-        showsSeriesArtwork: Bool = false
+        showsSeriesArtwork: Bool = false,
+        artworkPolicy: CardArtworkPolicy = .standard
     ) -> [URL] {
         // Series-artwork mode paints show art on every card regardless of watch
         // state, so warm that rather than a thumbnail the card will never draw.
         // Movies and series keep their own art — they already *are* the show.
         if showsSeriesArtwork {
-            guard item.kind == .episode else { return item.artworkCandidates(for: style) }
+            guard item.kind == .episode else {
+                return item.artworkCandidates(for: style, artworkPolicy: artworkPolicy)
+            }
             return seriesArtworkCandidates(for: item, style: style)
         }
         if item.kind == .episode,
@@ -1348,7 +1424,7 @@ public enum MediaArtworkPrefetchPolicy {
             // poster the card is still drawing.
             return seriesArtworkCandidates(for: item, style: style)
         }
-        return item.artworkCandidates(for: style)
+        return item.artworkCandidates(for: style, artworkPolicy: artworkPolicy)
     }
 
     /// Spoiler-safe show art for an episode, ordered for the card's shape: a wide

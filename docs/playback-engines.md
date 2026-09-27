@@ -6,10 +6,49 @@ with the best possible quality (Dolby Vision, Atmos, full-timeline seek).
 
 ## Dependency version
 
-Plozz pins upstream AetherEngine **7.7.1** to commit
-`fa67d5862730e820eb1718d16c24f4db18251237`. Its iOS/tvOS 18 minimum matches
-Plozz's existing deployment targets. The engine owns the FFmpegBuild 3.4.x and
-LibDovi 2.1.x dependencies; Plozz does not link a second FFmpeg build.
+Plozz pins upstream release **7.16.1**, commit
+`4ef5ef95faf271cb0c0e9cc79a0bf81a54b1244b`. It carries the two stage-2
+recovery fixes behind issue #61: the media fallback comes back where the
+refused item was placed rather than where the session first started
+([superuser404notfound/AetherEngine#621](https://github.com/superuser404notfound/AetherEngine/pull/621)),
+and a recovery reload leaves a paused viewer paused rather than starting the
+title behind the tvOS screensaver
+([superuser404notfound/AetherEngine#623](https://github.com/superuser404notfound/AetherEngine/pull/623)).
+7.16.0 keeps IPTV path credentials out of the engine log. Since 7.10.0 it notices a media
+services reset after tvOS sleep instead of reloading onto the invalidated
+player, stops waiting on a media server that no longer answers
+([superuser404notfound/AetherEngine#597](https://github.com/superuser404notfound/AetherEngine/issues/597)),
+keeps the playhead through a rebuild raised just after another, and no longer
+latches an HDR refusal made while the display is ineligible. Audio and subtitle
+language preferences now match parsed tags (`en-US` answers `en`), which can
+change the default track picked for some titles. It contains the structural HDR10+
+validator and shared probe limits/cancellation from
+[superuser404notfound/AetherEngine#583](https://github.com/superuser404notfound/AetherEngine/pull/583),
+plus the follow-up fixes in
+[superuser404notfound/AetherEngine#586](https://github.com/superuser404notfound/AetherEngine/pull/586).
+Validated positive evidence survives later packet damage or soft pass-budget
+expiry; whole-probe cancellation/deadlines still throw. Controlled probing
+retains normal stream analysis within its input limit, and bounded HTTP probes
+wait for an origin slot until their deadline. Plozz's existing public-API
+integration and stricter HTTP transport remain unchanged.
+
+Its iOS/tvOS 18 minimum matches Plozz's existing deployment targets. The engine
+owns the FFmpegBuild 3.5.x and LibDovi 2.1.x dependencies; Plozz does not link a
+second FFmpeg build. This release also retains both earlier integration fixes:
+
+- [superuser404notfound/AetherEngine#566](https://github.com/superuser404notfound/AetherEngine/pull/566):
+  item-bound background access/error-log reads, stale-result fencing, and bounded
+  diagnostic admission. The release also includes the upstream dedicated-thread
+  follow-up for saturated dispatch pools.
+- [superuser404notfound/AetherEngine#568](https://github.com/superuser404notfound/AetherEngine/pull/568):
+  Vision subtitle OCR runs off the cooperative executor, with one actual native
+  operation admitted process-wide and cancellation-safe cursor replay.
+
+The update also includes Matroska keyframe-boundary, bridged-audio priming,
+HDR-route preservation, and screensaver/Now Playing fixes. New prewarm and
+live-recording APIs remain opt-in; this update does not enable new app features.
+The engine's diagnostic fix does not change Plozz's separate native-AVPlayer
+diagnostics sampler.
 
 This dependency update retains Plozz's playback routing and optional-feature
 settings. It does not connect container chapters to Up Next; marker-less content
@@ -66,18 +105,21 @@ can confirm HDR10+ on an original HEVC source independently of its audio codec,
 including titles whose Atmos badge is already known. It is not a library-wide
 scan and playback never waits for it.
 
-The HDR probe examines bounded video packets, not filenames or arbitrary byte
-matches in a container. Only positively identified HDR10+ metadata upgrades the
-source badge. An exhausted budget, inaccessible stream or ordinary HDR10 result
-does not downgrade a server declaration. Dolby Vision keeps its primary
-classification. The existing Atmos decode probe is requested only when its own
-confirmation is missing.
+Plozz delegates structural HDR10+ validation and Atmos detection to Aether's
+combined probe instead of maintaining a second parser and FFmpeg demux loop.
+The requested details are independent: a known Atmos badge does not suppress
+missing HDR10+ detection. Only positive evidence upgrades the source badge;
+an exhausted budget, inaccessible stream or unconfirmed result never disproves
+a server declaration. Dolby Vision keeps its primary classification.
 
-HDR inspection is capped at 8 MiB of reserved HTTP ranges, 128 packets and five
-seconds, with two-second request deadlines. Ignored or invalid Range responses
-are rejected before buffering a full body; redirects may not cross origins.
-The engine's existing FFmpeg libraries demux the bounded data, and the probe
-validates HEVC SEI/T.35 HDR10+ payloads without opening a video decoder.
+The app retains bounded HTTP transport, including 8 MiB of reserved ranges,
+two-second request deadlines, validated partial responses and same-origin
+redirects. Upstream whole-probe limits cover opening, analysis, seeks and detail
+passes; cancellation interrupts the owned reader and rejects late results.
+Those engine limits count delivered input bytes, not network-wire traffic or a
+hard native-allocation ceiling. Transport safeguards therefore remain separate
+from upstream packet parsing. Network-share probes use the same combined API
+through their independent, representation-bound transport readers.
 
 Probe coverage and positive results are cached independently for audio and
 video, scoped to the original media-source revision. A replaced file invalidates

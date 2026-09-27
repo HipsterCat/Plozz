@@ -38,6 +38,14 @@ public final class NativeVideoEngine: VideoEngine {
         player?.timeControlStatus == .playing
     }
 
+    public var hasPresentedVideoFrame: Bool {
+        #if canImport(UIKit)
+        status == .ready && videoOutputView?.playerLayer.isReadyForDisplay == true
+        #else
+        false
+        #endif
+    }
+
     public var currentTime: TimeInterval {
         guard let seconds = player?.currentTime().seconds, seconds.isFinite else { return 0 }
         return max(0, seconds)
@@ -94,6 +102,8 @@ public final class NativeVideoEngine: VideoEngine {
     @ObservationIgnored private var request: PlaybackRequest?
     @ObservationIgnored private let authenticatedHTTPResolver:
         (any AuthenticatedHTTPResourceResolving)?
+    @ObservationIgnored private let streamingPlaylistClient: (any HTTPClient)?
+    @ObservationIgnored private let startsMuted: Bool
     @ObservationIgnored private var timeObserver: (owner: AVPlayer, token: Any)?
     /// Fences reentrant async loads. A newer load or stop invalidates every older
     /// continuation before it can publish or start a stale player.
@@ -101,6 +111,8 @@ public final class NativeVideoEngine: VideoEngine {
     @ObservationIgnored private let reportInterval: TimeInterval = 10
     @ObservationIgnored private var lastReportedSecond: Int = -1
     @ObservationIgnored private var fallbackMonitorTask: Task<Void, Never>?
+    @ObservationIgnored private var lifecycleDiagnostics: NativePlaybackLifecycleDiagnostics?
+    @ObservationIgnored private var startupResume: NativeStartupResume?
     /// Detects an item that decodes audio but renders **no video frames** (e.g.
     /// HEVC AVPlayer can't display) so we can swap to the on-device engine.
     @ObservationIgnored private var missingVideoProbeTask: Task<Void, Never>?
@@ -108,6 +120,7 @@ public final class NativeVideoEngine: VideoEngine {
     /// with playback start) so a known AVPlayer-hostile codec can swap instantly
     /// instead of waiting out the no-frames probe.
     @ObservationIgnored private var formatInspectTask: Task<Void, Never>?
+    private var convertedVideoFormat: NativePlaybackFailure.VideoFormat?
     @ObservationIgnored private var audioSessionConfigured = false
     /// Retains the resource-loader delegate that serves injected subtitle
     /// playlists; `AVAssetResourceLoader` holds it only weakly.
@@ -117,6 +130,11 @@ public final class NativeVideoEngine: VideoEngine {
     /// time-to-first-frame; cancelled on teardown so a stale selection never
     /// applies to a replaced player item.
     @ObservationIgnored private var defaultSubtitleSelectionTask: Task<Void, Never>?
+    /// The text track the view model asked AVPlayer to draw itself (an embedded
+    /// text track the overlay has no cue source for), or `nil` for none. Kept
+    /// across item rebuilds so a transcode-fallback reload restores it instead
+    /// of disabling the draw.
+    @ObservationIgnored private var requestedLegibleTrack: MediaTrack?
     /// Off-critical-path preferred-audio-language pick (per-series memory /
     /// prefer-original-language). AVPlayer otherwise just plays the asset's default
     /// audio track, so without this the audio half of those features no-ops on the
@@ -139,10 +157,14 @@ public final class NativeVideoEngine: VideoEngine {
 
     public init(
         style: SubtitleStyle = .default,
-        authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)? = nil
+        authenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)? = nil,
+        streamingPlaylistClient: (any HTTPClient)? = nil,
+        startsMuted: Bool = false
     ) {
         self.style = style
         self.authenticatedHTTPResolver = authenticatedHTTPResolver
+        self.streamingPlaylistClient = streamingPlaylistClient
+        self.startsMuted = startsMuted
         PlaybackInstrumentation.increment(.nativeEngine)
     }
 
@@ -186,6 +208,7 @@ public final class NativeVideoEngine: VideoEngine {
     // MARK: - Lifecycle
 
     public func load(request: PlaybackRequest, startPosition: TimeInterval) async {
+        guard !Task.isCancelled else { return }
         loadGeneration &+= 1
         let generation = loadGeneration
         status = .loading
@@ -203,8 +226,8 @@ public final class NativeVideoEngine: VideoEngine {
             do {
                 streamURL = try await authenticatedHTTPResolver?.resolve(locator)
             } catch {
-                guard generation == loadGeneration else { return }
-                let appError = AppError.unknown(String(describing: error))
+                guard generation == loadGeneration, !Task.isCancelled else { return }
+                let appError = (error as? AppError) ?? .unknown("")
                 status = .failed(appError)
                 onFailure?(appError)
                 return
@@ -212,16 +235,35 @@ public final class NativeVideoEngine: VideoEngine {
         } else {
             streamURL = request.streamURL ?? request.playbackSource?.publicURL
         }
-        guard generation == loadGeneration else { return }
-        guard let streamURL else {
+        guard generation == loadGeneration, !Task.isCancelled else { return }
+        guard var streamURL else {
             let error = AppError.unknown("Native playback requires a URL source")
             status = .failed(error)
             onFailure?(error)
             return
         }
 
+        if request.streamingOptions != nil, request.isTranscoding, request.isManifestStream {
+            do {
+                let mediaURL = try await StreamingMediaPlaylist.resolve(streamURL, using: streamingPlaylistClient)
+                guard generation == loadGeneration, !Task.isCancelled else { return }
+                if let mediaURL {
+                    streamURL = mediaURL
+                    HandoffDiagnostics.emit("native STREAM_PLAYLIST single-rendition-media=true")
+                } else {
+                    HandoffDiagnostics.emit("native STREAM_PLAYLIST original-manifest=true")
+                }
+            } catch {
+                guard generation == loadGeneration, !Task.isCancelled else { return }
+                // Inspection is optional; let AVPlayer report the original
+                // stream's authoritative transport/format failure if it persists.
+                PlozzLog.playback.error("Could not inspect the converted HLS playlist; retaining the original manifest.")
+            }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
+        }
+
         let injectableSubtitles = await resolveInjectableSubtitles(for: request)
-        guard generation == loadGeneration else { return }
+        guard generation == loadGeneration, !Task.isCancelled else { return }
         let asset: AVURLAsset
         var item: AVPlayerItem
         if let audioURL = request.externalAudioURL {
@@ -236,7 +278,7 @@ public final class NativeVideoEngine: VideoEngine {
             // re-resolves through the engine's transcode fallback to the
             // progressive muxed (audible ~360p) stream.
             let muxItem = await makeTrailerMuxItem(videoURL: streamURL, audioURL: audioURL)
-            guard generation == loadGeneration else { return }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             if let muxItem {
                 item = muxItem
                 asset = AVURLAsset(url: streamURL)
@@ -260,22 +302,50 @@ public final class NativeVideoEngine: VideoEngine {
         configureDynamicRange(for: request, item: item)
 
         let player = AVPlayer(playerItem: item)
+        player.isMuted = startsMuted
         #if os(iOS)
         player.audiovisualBackgroundPlaybackPolicy = backgroundAudioEnabled ? .continuesIfPossible : .automatic
         #endif
         player.allowsExternalPlayback = true
         self.player = player
+        if HandoffDiagnostics.isEnabled {
+            lifecycleDiagnostics = NativePlaybackLifecycleDiagnostics(player: player, request: request)
+        }
         #if canImport(UIKit)
         videoOutputView?.player = player
         #endif
 
+        let inspectsConvertedFormat = request.isTranscoding && request.streamingOptions != nil
+        if inspectsConvertedFormat { inspectVideoFormat(asset: asset, item: item, request: request) }
         furthestObservedPosition = max(furthestObservedPosition, startPosition)
         if startPosition > 1 {
-            await seekWhenReady(player: player, to: startPosition)
-            guard generation == loadGeneration else {
+            let result = await resumePlayback(
+                player: player, item: item, to: startPosition, generation: generation
+            )
+            guard generation == loadGeneration, !Task.isCancelled else { return }
+            switch result {
+            case .ready: break
+            case .cancelled:
+                status = .failed(.cancelled)
+                return
+            case .failed:
+                PlozzLog.playback.error("Native startup seek did not reach the requested position.")
+                let error = currentPlayerError()
+                status = .failed(error)
+                onFailure?(error)
+                return
+            }
+            guard generation == loadGeneration, !Task.isCancelled else {
                 player.pause()
                 return
             }
+        }
+        guard generation == loadGeneration, !Task.isCancelled else { return }
+        if item.status == .failed {
+            let error = currentPlayerError()
+            status = .failed(error)
+            onFailure?(error)
+            return
         }
 
         // Watch for a direct-play item that can't actually be decoded so we can
@@ -293,7 +363,7 @@ public final class NativeVideoEngine: VideoEngine {
         // Inspect the *real* container video format as soon as it loads (in
         // parallel — adds no startup delay) so a known AVPlayer-hostile codec can
         // swap to the on-device engine near-instantly, before the no-frames probe.
-        inspectVideoFormat(asset: asset, request: request)
+        if !inspectsConvertedFormat { inspectVideoFormat(asset: asset, item: item, request: request) }
 
         installTimeObserver(on: player)
         status = .ready
@@ -310,11 +380,13 @@ public final class NativeVideoEngine: VideoEngine {
         // critical path because resolving the asset's `AVMediaSelectionGroup`
         // involves extra I/O the first video frame must not wait on. Cancelled in
         // `teardownPlayer` so it never applies to a replaced player item.
-        defaultSubtitleSelectionTask?.cancel()
-        defaultSubtitleSelectionTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.disableLegibleSubtitleSelection(for: item)
+        // The one exception is a track the view model explicitly handed to
+        // AVPlayer (still present in this request), which is re-applied instead.
+        if let requested = requestedLegibleTrack,
+           !request.subtitleTracks.contains(where: { $0.id == requested.id }) {
+            requestedLegibleTrack = nil
         }
+        applyLegibleSelection(for: item)
 
         // Apply the resolved audio-language preference (per-series memory /
         // prefer-original-language) the same off-critical-path way. AVPlayer has no
@@ -343,12 +415,11 @@ public final class NativeVideoEngine: VideoEngine {
     /// when the provider omitted or misclassified HDR; AVFoundation applies only
     /// metadata actually present in the stream.
     private func configureDynamicRange(for request: PlaybackRequest, item: AVPlayerItem) {
-        let mode = HDRDisplayMode(request.sourceMetadata)
         item.appliesPerFrameHDRDisplayMetadata = true
         #if os(tvOS)
         displayCriteria.configure(
             asset: item.asset,
-            fallback: makeDisplayCriteria(mode: mode, metadata: request.sourceMetadata))
+            fallback: nativeBootstrapDisplayCriteria(metadata: request.sourceMetadata))
         #endif
     }
 
@@ -668,7 +739,7 @@ public final class NativeVideoEngine: VideoEngine {
                 guard let self else { return }
                 switch item.status {
                 case .failed:
-                    PlaybackTrace.note("native item FAILED after \(Self.ms(since: monitorStart))ms err=\(String(describing: item.error))")
+                    PlaybackTrace.note("native item FAILED after \(Self.ms(since: monitorStart))ms chain=\(NativePlaybackLifecycleDiagnostics.errorChain(item.error as NSError?))")
                     self.onFailure?(self.currentPlayerError())
                     return
                 case .readyToPlay:
@@ -681,7 +752,33 @@ public final class NativeVideoEngine: VideoEngine {
         }
     }
 
+    public var streamingOutputDynamicRange: SourceDynamicRange? { convertedVideoFormat?.dynamicRange }
+    public var streamingOutputVideoCodec: DirectPlayVideoCodec? { convertedVideoFormat?.videoCodec }
+
+    public var streamingFailure: StreamingPlaybackFailure? {
+        guard let item = player?.currentItem else { return nil }
+        let lastError = item.errorLog()?.events.last
+        guard item.error != nil || lastError != nil else { return nil }
+        let http = lastError.flatMap { (400...599).contains($0.errorStatusCode) ? $0.errorStatusCode : nil }
+        let error = (item.error as NSError?) ?? lastError.map {
+            NSError(domain: $0.errorDomain, code: $0.errorStatusCode)
+        }
+        let failure = NativePlaybackFailure.classify(
+            error, httpStatus: http, convertedFormat: convertedVideoFormat,
+            provider: request?.sourceProvider,
+            convertingHDRSource: request?.isTranscoding == true && request?.streamingOptions != nil
+                && SourceDynamicRange.providerHint(from: request?.sourceMetadata)?.isHDR == true
+        )
+        return failure
+    }
+
     private func currentPlayerError() -> AppError {
+        if let failure = streamingFailure {
+            HandoffDiagnostics.emit(
+                "native STREAM_FAILURE kind=\(failure.kind) code=\(failure.diagnosticCode ?? "unreported")"
+                    + " chain=\(NativePlaybackLifecycleDiagnostics.errorChain(player?.currentItem?.error as NSError?))"
+            )
+        }
         if player?.currentItem?.error != nil {
             return .invalidResponse
         }
@@ -696,11 +793,40 @@ public final class NativeVideoEngine: VideoEngine {
     /// sub-second, before the first frame paints), and a hostile codec swaps
     /// near-instantly rather than after the slower no-frames probe.
     ///
-    /// This asks the container itself rather than trusting server metadata (which
-    /// for some files reports no codec tag at all). Scoped to **SDR** so the
-    /// validated AVPlayer Dolby Vision/HDR path is left untouched.
-    private func inspectVideoFormat(asset: AVAsset, request: PlaybackRequest) {
+    /// This asks the container itself rather than trusting server metadata.
+    /// Managed conversions retain actual codec/transfer evidence for error advice;
+    /// the original-file compatibility fallback remains scoped to SDR.
+    private func inspectVideoFormat(asset: AVAsset, item: AVPlayerItem, request: PlaybackRequest) {
         formatInspectTask?.cancel()
+        if request.isTranscoding, request.streamingOptions != nil {
+            let generation = loadGeneration
+            formatInspectTask = Task { [weak self] in
+                do {
+                    let format = try await NativePlaybackFailure.probeConvertedFormat(
+                        read: {
+                            let loadedTrack = item.tracks.compactMap(\.assetTrack).first { $0.mediaType == .video }
+                            let track: AVAssetTrack?
+                            if let loadedTrack { track = loadedTrack }
+                            else { track = try await asset.loadTracks(withMediaType: .video).first }
+                            guard let track, let description = try await track.load(.formatDescriptions).first else { return nil }
+                            return NativePlaybackFailure.VideoFormat(description)
+                        },
+                        isCurrent: { [weak self] in self?.loadGeneration == generation }
+                    )
+                    guard let format else { return }
+                    guard let self, !Task.isCancelled, generation == self.loadGeneration else { return }
+                    self.convertedVideoFormat = format
+                    HandoffDiagnostics.emit("native STREAM_FORMAT codec=\(format.codec) range=\(format.dynamicRange?.rawValue ?? "unknown")")
+                    if format.isHDRH264 {
+                        HandoffDiagnostics.emit("native STREAM_FORMAT hdr-h264=true")
+                    }
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    PlozzLog.playback.debug("Converted stream format could not be inspected; retaining generic failure classification.")
+                }
+            }
+            return
+        }
         guard HDRDisplayMode(request.sourceMetadata) == .sdr else { return }
         let expectsVideo = request.sourceMetadata?.video != nil
 
@@ -853,12 +979,16 @@ public final class NativeVideoEngine: VideoEngine {
     }
 
     private func teardownPlayer() {
+        startupResume?.cancel()
+        startupResume = nil
+        lifecycleDiagnostics = nil
         fallbackMonitorTask?.cancel()
         fallbackMonitorTask = nil
         missingVideoProbeTask?.cancel()
         missingVideoProbeTask = nil
         formatInspectTask?.cancel()
         formatInspectTask = nil
+        convertedVideoFormat = nil
         defaultSubtitleSelectionTask?.cancel()
         defaultSubtitleSelectionTask = nil
         preferredAudioSelectionTask?.cancel()
@@ -877,31 +1007,70 @@ public final class NativeVideoEngine: VideoEngine {
     // MARK: - Seeking
 
     public func seek(to seconds: TimeInterval) async {
-        guard let player else { return }
-        await seek(player: player, to: seconds, kind: .exact)
+        await seek(to: seconds, kind: .exact)
     }
 
     public func seek(to seconds: TimeInterval, kind: VideoSeekKind) async {
         guard let player else { return }
+        if let resume = startupResume, let item = player.currentItem,
+           resume.replaceSeek(with: { [weak self] completion in
+               guard let self else { completion(false); return }
+               self.beginManagedSeek(player: player, item: item, to: seconds, kind: kind, completion: completion)
+           }) {
+            _ = await resume.waitForCompletion()
+            return
+        }
         await seek(player: player, to: seconds, kind: kind)
     }
 
-    /// Waits (briefly) for the player item to become ready before seeking. A
-    /// resume seek issued before the asset is ready — common for far positions —
-    /// is silently dropped by AVPlayer, leaving playback at 0.
-    private func seekWhenReady(player: AVPlayer, to seconds: TimeInterval) async {
-        guard let item = player.currentItem else { return }
-        PlaybackTrace.note("NATIVE resumeSeek WAIT to=\(String(format: "%.2f", seconds)) status=\(item.status.rawValue)")
-        let deadline = Date().addingTimeInterval(5)
-        // 20ms poll keeps resume start-up snappy: most assets reach
-        // `.readyToPlay` within one or two ticks, instead of waiting out a
-        // coarse 50ms slot before the seek can fire.
-        while item.status != .readyToPlay, Date() < deadline {
-            if item.status == .failed { return }
-            try? await Task.sleep(nanoseconds: 20_000_000)
+    private func beginManagedSeek(
+        player: AVPlayer, item: AVPlayerItem, to seconds: TimeInterval, kind: VideoSeekKind,
+        completion: @escaping @Sendable (Bool) -> Void
+    ) {
+        let target = seekTarget(seconds, item: item)
+        let time = CMTime(seconds: target, preferredTimescale: 600)
+        let toleranceSeconds: TimeInterval = kind == .fast ? 5 : 1
+        let tolerance = CMTime(seconds: toleranceSeconds, preferredTimescale: 600)
+        let generation = loadGeneration
+        HandoffDiagnostics.emit(
+            "native RESUME_SEEK_BEGIN generation=\(loadGeneration) target=\(String(format: "%.2f", target)) status=\(item.status.rawValue)"
+        )
+        player.seek(to: time, toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak player] finished in
+            Task { @MainActor in
+                let position = player?.currentTime().seconds ?? .nan
+                let landed = NativeStartupResume.didLand(
+                    finished: finished, position: position,
+                    target: target, tolerance: toleranceSeconds
+                )
+                HandoffDiagnostics.emit(
+                    "native RESUME_SEEK_END generation=\(generation) finished=\(finished)"
+                        + " target=\(String(format: "%.2f", target)) position=\(String(format: "%.2f", position)) landed=\(landed)"
+                )
+                completion(landed)
+            }
         }
-        PlaybackTrace.note("NATIVE resumeSeek FIRE to=\(String(format: "%.2f", seconds)) status=\(item.status.rawValue)")
-        await seek(player: player, to: seconds)
+    }
+
+    private func resumePlayback(
+        player: AVPlayer, item: AVPlayerItem, to seconds: TimeInterval, generation: UInt
+    ) async -> NativeStartupResume.Result {
+        let resume = NativeStartupResume(
+            itemStatus: { item.status },
+            isCurrent: { [weak self] in
+                self?.loadGeneration == generation && self?.player === player && player.currentItem === item
+            },
+            beginSeek: { [weak self] completion in
+                guard let self else { completion(false); return }
+                self.beginManagedSeek(player: player, item: item, to: seconds, kind: .exact, completion: completion)
+            },
+            cancelSeek: { item.cancelPendingSeeks() }
+        )
+        startupResume = resume
+        HandoffDiagnostics.emit("native RESUME_WAIT generation=\(generation) status=\(item.status.rawValue)")
+        let result = await resume.run()
+        if startupResume === resume { startupResume = nil }
+        HandoffDiagnostics.emit("native RESUME_RESULT generation=\(generation) result=\(result)")
+        return result
     }
 
     private func seek(player: AVPlayer, to seconds: TimeInterval) async {
@@ -984,8 +1153,8 @@ public final class NativeVideoEngine: VideoEngine {
 
     // MARK: - Subtitle / audio track selection
 
-    /// Disables AVPlayer's legible (subtitle) selection on the player item so the
-    /// engine never draws a subtitle itself. Plozz routes the user's default and
+    /// Applies ``requestedLegibleTrack`` to the player item's legible group —
+    /// usually `nil`, so the engine never draws a subtitle itself. Plozz routes the user's default and
     /// manual subtitle choices through its own SDR overlay
     /// (`PlayerViewModel.applyInitialSubtitleSelectionIfReady` /
     /// `selectSubtitleOption`), which fetches/decodes the same track and renders
@@ -993,9 +1162,33 @@ public final class NativeVideoEngine: VideoEngine {
     /// `default`/`autoselect`/forced characteristic the asset (or an injected HLS
     /// rendition) would otherwise honour. Best-effort: failure simply leaves
     /// AVPlayer's own selection untouched and never affects playback.
-    private func disableLegibleSubtitleSelection(for item: AVPlayerItem) async {
-        guard let group = await legibleGroup(for: item.asset) else { return }
-        item.select(nil, in: group)
+    private func applyLegibleSelection(for item: AVPlayerItem) {
+        let track = requestedLegibleTrack
+        defaultSubtitleSelectionTask?.cancel()
+        defaultSubtitleSelectionTask = Task { @MainActor [weak self] in
+            guard let self, let group = await self.legibleGroup(for: item.asset),
+                  !Task.isCancelled else { return }
+            item.select(track.flatMap { Self.legibleOption(for: $0, in: group) }, in: group)
+        }
+    }
+
+    /// Finds the legible option AVPlayer exposes for a provider track. An
+    /// injected sidecar rendition carries the track's display title as its HLS
+    /// `NAME`, so match that first; otherwise fall back to canonicalised language
+    /// matching (`eng` ⇄ `en`), preferring the same forced-ness.
+    private static func legibleOption(
+        for track: MediaTrack, in group: AVMediaSelectionGroup
+    ) -> AVMediaSelectionOption? {
+        if let named = group.options.first(where: { $0.displayName == track.displayTitle }) {
+            return named
+        }
+        guard let language = track.language else { return nil }
+        let candidates = AVMediaSelectionGroup.mediaSelectionOptions(
+            from: group.options, filteredAndSortedAccordingToPreferredLanguages: [language]
+        )
+        return candidates.first {
+            $0.hasMediaCharacteristic(.containsOnlyForcedSubtitles) == track.isForced
+        } ?? candidates.first
     }
 
     /// Selects the audible track best matching an ordered list of preferred
@@ -1024,17 +1217,13 @@ public final class NativeVideoEngine: VideoEngine {
         try? await asset.loadMediaSelectionGroup(for: .legible)
     }
 
-    /// Best-effort manual subtitle selection by matching the track's language
-    /// against the asset's legible options. Currently the native
-    /// `AVPlayerViewController` picker drives subtitle changes, so this is unused
-    /// by the UI; it exists so a future custom picker (or non-native engine) can
-    /// switch tracks through the `VideoEngine` abstraction.
+    /// Asks AVPlayer to draw `track` itself (an embedded text track), or to draw
+    /// nothing when `nil` because the overlay owns the subtitle. Best-effort: an
+    /// unmatched track leaves AVPlayer drawing nothing.
     public func selectSubtitleTrack(_ track: MediaTrack?) {
-        guard let player, let item = player.currentItem else { return }
-        Task { [weak self] in
-            guard let self, let group = await self.legibleGroup(for: item.asset) else { return }
-            self.select(track: track, in: group, on: item)
-        }
+        requestedLegibleTrack = track
+        guard let item = player?.currentItem else { return }
+        applyLegibleSelection(for: item)
     }
 
     /// Re-applies subtitle styling to the *current* player item so an in-player
@@ -1090,6 +1279,215 @@ public final class NativeVideoEngine: VideoEngine {
         return view
     }
     #endif
+}
+
+/// Startup resume is bounded by the owner's startup watchdog, not a timer that
+/// seeks an unready HLS item. All continuation and seek ownership stays on main.
+@MainActor
+final class NativeStartupResume {
+    enum Result: Equatable, Sendable {
+        case ready, failed, cancelled
+    }
+
+    static func didLand(
+        finished: Bool, position: TimeInterval, target: TimeInterval, tolerance: TimeInterval
+    ) -> Bool {
+        finished && position.isFinite && target.isFinite
+            && abs(position - target) <= tolerance + 0.1
+    }
+
+    private let itemStatus: @MainActor () -> AVPlayerItem.Status
+    private let isCurrent: @MainActor () -> Bool
+    private var beginSeek: @MainActor (@escaping @Sendable (Bool) -> Void) -> Void
+    private let cancelSeek: @MainActor () -> Void
+    private let pause: @MainActor () async throws -> Void
+    private var cancelled = false
+    private var seekContinuation: CheckedContinuation<Bool, Never>?
+    private var seekRevision: UInt = 0
+    private var pendingSeekRevision: UInt?
+    private var completedResult: Result?
+
+    init(
+        itemStatus: @escaping @MainActor () -> AVPlayerItem.Status,
+        isCurrent: @escaping @MainActor () -> Bool,
+        beginSeek: @escaping @MainActor (@escaping @Sendable (Bool) -> Void) -> Void,
+        cancelSeek: @escaping @MainActor () -> Void,
+        pause: @escaping @MainActor () async throws -> Void = {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+    ) {
+        self.itemStatus = itemStatus
+        self.isCurrent = isCurrent
+        self.beginSeek = beginSeek
+        self.cancelSeek = cancelSeek
+        self.pause = pause
+    }
+
+    func run() async -> Result {
+        let result: Result = await withTaskCancellationHandler {
+            while !cancelled, !Task.isCancelled, isCurrent() {
+                switch itemStatus() {
+                case .failed: return .failed
+                case .readyToPlay:
+                    let revision = seekRevision
+                    let finished = await withCheckedContinuation { continuation in
+                        guard !cancelled, !Task.isCancelled, isCurrent() else {
+                            continuation.resume(returning: false)
+                            return
+                        }
+                        seekContinuation = continuation
+                        pendingSeekRevision = revision
+                        beginSeek { [weak self] finished in
+                            Task { @MainActor in self?.completeSeek(finished, revision: revision) }
+                        }
+                    }
+                    guard !cancelled, !Task.isCancelled, isCurrent() else { return .cancelled }
+                    if revision != seekRevision { continue }
+                    return finished && itemStatus() == .readyToPlay ? .ready : .failed
+                default:
+                    do { try await pause() }
+                    catch { return .cancelled }
+                }
+            }
+            return .cancelled
+        } onCancel: {
+            Task { @MainActor in self.cancel() }
+        }
+        completedResult = result
+        return result
+    }
+
+    /// A same-item transport seek replaces the startup target, not the load.
+    /// Its completion remains behind readiness and the owner's cancellation.
+    func replaceSeek(
+        with action: @escaping @MainActor (@escaping @Sendable (Bool) -> Void) -> Void
+    ) -> Bool {
+        guard !cancelled, completedResult == nil, isCurrent() else { return false }
+        beginSeek = action
+        seekRevision &+= 1
+        if let revision = pendingSeekRevision {
+            cancelSeek()
+            completeSeek(false, revision: revision)
+        }
+        return true
+    }
+
+    func waitForCompletion() async -> Result {
+        while !Task.isCancelled {
+            if let completedResult { return completedResult }
+            do { try await Task.sleep(nanoseconds: 20_000_000) }
+            catch { return .cancelled }
+        }
+        return .cancelled
+    }
+
+    func cancel() {
+        guard !cancelled else { return }
+        cancelled = true
+        guard let revision = pendingSeekRevision else { return }
+        // This closure owns the old item, never the engine's mutable current item.
+        cancelSeek()
+        completeSeek(false, revision: revision)
+    }
+
+    private func completeSeek(_ finished: Bool, revision: UInt) {
+        guard pendingSeekRevision == revision else { return }
+        let continuation = seekContinuation
+        seekContinuation = nil
+        pendingSeekRevision = nil
+        continuation?.resume(returning: finished)
+    }
+}
+
+/// Observes the whole item lifetime, including failures after startup's
+/// readyToPlay gate. Evidence only: notifications never stop, retry or resume.
+final class NativePlaybackLifecycleDiagnostics {
+    private let observations: [NSKeyValueObservation]
+    private let notificationObservers: [NSObjectProtocol]
+
+    init(
+        player: AVPlayer,
+        request: PlaybackRequest,
+        emit: @escaping @Sendable (String) -> Void = { HandoffDiagnostics.emit($0) }
+    ) {
+        guard let item = player.currentItem else {
+            observations = []
+            notificationObservers = []
+            return
+        }
+        let context = "load=\(UUID().uuidString) provider=\(request.sourceProvider?.rawValue ?? "unknown")"
+            + " item=\(HandoffDiagnostics.correlationID(request.item.id))"
+            + " session=\(HandoffDiagnostics.correlationID(request.playSessionID))"
+        observations = [
+            item.observe(\.status, options: [.initial, .new]) { [weak player] item, _ in
+                emit(Self.line(event: "ITEM_STATUS", context: context, item: item, player: player))
+            },
+            player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak item] player, _ in
+                guard let item else { return }
+                emit(Self.line(event: "TIME_CONTROL", context: context, item: item, player: player))
+            }
+        ]
+        notificationObservers = [
+            (AVPlayerItem.playbackStalledNotification, "STALLED"),
+            (AVPlayerItem.failedToPlayToEndTimeNotification, "FAILED_TO_END"),
+            (AVPlayerItem.newErrorLogEntryNotification, "ERROR_LOG")
+        ].map { name, event in
+            NotificationCenter.default.addObserver(
+                forName: name, object: item, queue: nil
+            ) { [weak item, weak player] notification in
+                guard let item else { return }
+                let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? NSError
+                emit(Self.line(event: event, context: context, item: item, player: player, error: error))
+            }
+        }
+    }
+
+    deinit {
+        observations.forEach { $0.invalidate() }
+        notificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    }
+
+    private static func line( // l10n:content - structured diagnostic event, never presented as UI copy.
+        event: String, context: String, item: AVPlayerItem, player: AVPlayer?, error: NSError? = nil
+    ) -> String {
+        let lastError = item.errorLog()?.events.last
+        let observedError = error ?? (item.error as NSError?) ?? lastError.map {
+            NSError(domain: $0.errorDomain, code: $0.errorStatusCode)
+        }
+        let failure = NativePlaybackFailure.classify(
+            observedError,
+            httpStatus: lastError?.errorStatusCode
+        )
+        let bufferedThrough = item.loadedTimeRanges.map {
+            CMTimeRangeGetEnd($0.timeRangeValue).seconds
+        }.filter(\.isFinite).max() ?? 0
+        return "native LIFECYCLE event=\(event) \(context)"
+            + " status=\(item.status.rawValue) timeControl=\(player?.timeControlStatus.rawValue ?? -1)"
+            + " position=\(String(format: "%.2f", item.currentTime().seconds))"
+            + " bufferEmpty=\(item.isPlaybackBufferEmpty) likelyToKeepUp=\(item.isPlaybackLikelyToKeepUp)"
+            + " bufferedThrough=\(String(format: "%.2f", bufferedThrough))"
+            + " waiting=\(player?.reasonForWaitingToPlay?.rawValue ?? "none")"
+            + " kind=\(failure.kind) code=\(failure.diagnosticCode ?? "none") chain=\(errorChain(observedError))"
+    }
+
+    static func errorChain(_ error: NSError?) -> String {
+        var current = error
+        var visited = Set<ObjectIdentifier>()
+        var codes: [String] = []
+        while let value = current, visited.count < 8, visited.insert(ObjectIdentifier(value)).inserted {
+            let domain: String?
+            switch value.domain {
+            case AVFoundationErrorDomain: domain = "AV"
+            case "CoreMediaErrorDomain": domain = "CoreMedia"
+            case NSURLErrorDomain: domain = "URL"
+            case NSOSStatusErrorDomain: domain = "OSStatus"
+            default: domain = nil
+            }
+            if let domain { codes.append("\(domain):\(value.code)") }
+            current = value.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return codes.isEmpty ? "none" : codes.joined(separator: ">")
+    }
 }
 
 #if canImport(UIKit)

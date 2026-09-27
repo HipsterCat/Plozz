@@ -221,12 +221,43 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
 
     /// The subtitle typeface. Defaults to bundled Atkinson Hyperlegible.
     public var fontFamily: SubtitleFontFamily
+    /// An optional device font, independent of following the complete system style.
+    public var systemFont: SubtitleSystemFont?
+    /// Exact font copied from the device caption preference. Kept until the
+    /// viewer deliberately chooses a different family; weight edits preserve
+    /// its other descriptor attributes.
+    public var fontDescriptor: SubtitleFontDescriptor?
+    public var usesSourceEmphasis: Bool {
+        get { captionSourceOverrides?.font ?? true }
+        set {
+            guard newValue != usesSourceEmphasis else { return }
+            if captionSourceOverrides == nil {
+                var policy = SubtitleCaptionSourceOverrides()
+                policy.foregroundColor = usesSourceColors
+                policy.foregroundOpacity = usesSourceColors
+                captionSourceOverrides = policy
+            }
+            captionSourceOverrides?.font = newValue
+        }
+    }
+    public var captionSourceOverrides: SubtitleCaptionSourceOverrides?
+    /// Retains Apple's "undefined" or future edge preference independently of
+    /// the drawable fallback in `edge`. Cleared when the edge is edited.
+    public var captionEdgeStyleRawValue: Int?
+    public var availableFontWeights: [SubtitleFontWeight] {
+        systemFont == nil && fontDescriptor == nil ? fontFamily.availableWeights : SubtitleFontWeight.allCases
+    }
     /// The global typeface weight. The active family snaps this to the nearest
     /// weight it actually bundles, so the value persists across family switches
     /// even when a family (e.g. Atkinson) offers fewer weights.
     public var fontWeight: SubtitleFontWeight
     /// Multiplier on the base caption size (1.0 == default).
     public var fontScale: Double
+    public static let fontScaleRange: ClosedRange<Double> = 0.2...4
+    public static let fontScaleStep: Double = 0.01
+    public static let fontScalePercentages = Array(
+        Int((fontScaleRange.lowerBound * 100).rounded())...Int((fontScaleRange.upperBound * 100).rounded())
+    )
     /// Vertical position measured upward from the screen bottom. The chosen
     /// anchor stays fixed as lines change.
     /// `0` aligns the block's bottom with the screen bottom, `1` aligns its top.
@@ -251,6 +282,9 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
 
     /// Fill colour of the glyphs (its own alpha is respected).
     public var textColor: Color
+    /// Color/opacity behind each rendered text line, independent of the enclosing
+    /// window (`background`). Old custom styles did not have this layer.
+    public var glyphBackground: Color
     /// Master opacity applied to the **whole** subtitle (text + background +
     /// edge + border). A separate axis from colour and from HDR luminance.
     public var opacity: Double
@@ -372,33 +406,61 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
 
     // MARK: Behaviour
 
-    /// When true, defer entirely to the system/Settings caption style (no
-    /// in-app style overrides are applied).
+    /// "Use System Caption Style": draw subtitles in the caption style set for
+    /// the whole device (Settings › Accessibility › Subtitles & Captioning). The
+    /// device decides the typeface, size, colours, box and edge, for every
+    /// engine using the owned overlay; source formatting follows the system's
+    /// per-field policy. Placement, HDR brightness and dual subtitles remain
+    /// Plozz controls.
     public var followsSystemStyle: Bool
+
+    // MARK: Source formatting
+
+    /// Draw text cues where the subtitle file places them (ASS `\an`/`\pos`,
+    /// SRT `{\an8}`, WebVTT `line`/`position`). Off seats every cue in the
+    /// dialogue lane at ``verticalPosition``. Cues without placement always
+    /// use that lane.
+    public var usesSourcePosition: Bool
+    /// Draw text in the colours the subtitle file specifies (ASS `\c`, SRT
+    /// `<font color>`, WebVTT colour classes). Off paints everything in
+    /// ``textColor``. Uncoloured text always uses ``textColor``.
+    public var usesSourceColors: Bool
 
     public init(
         fontFamily: SubtitleFontFamily = .atkinson,
+        systemFont: SubtitleSystemFont? = nil,
+        fontDescriptor: SubtitleFontDescriptor? = nil,
+        captionSourceOverrides: SubtitleCaptionSourceOverrides? = nil,
+        captionEdgeStyleRawValue: Int? = nil,
         fontWeight: SubtitleFontWeight = .regular,
         fontScale: Double = 1.0,
         verticalPosition: Double = 0.06,
         verticalAnchor: VerticalAnchor = .bottom,
         horizontalOffset: Double = 0,
         textColor: Color = .white,
+        glyphBackground: Color = .clear,
         opacity: Double = 1.0,
         hdrLuminanceScale: Double = 1.0,
         background: Background = Background(),
         edge: Edge = Edge(),
         border: Border = Border(),
         secondary: Secondary? = nil,
-        followsSystemStyle: Bool = false
+        followsSystemStyle: Bool = false,
+        usesSourcePosition: Bool = true,
+        usesSourceColors: Bool = true
     ) {
         self.fontFamily = fontFamily
+        self.systemFont = systemFont
+        self.fontDescriptor = fontDescriptor
+        self.captionSourceOverrides = captionSourceOverrides
+        self.captionEdgeStyleRawValue = captionEdgeStyleRawValue
         self.fontWeight = fontWeight
         self.fontScale = fontScale
         self.verticalPosition = verticalPosition
         self.verticalAnchor = verticalAnchor
         self.horizontalOffset = horizontalOffset
         self.textColor = textColor
+        self.glyphBackground = glyphBackground
         self.opacity = opacity
         self.hdrLuminanceScale = hdrLuminanceScale
         self.background = background
@@ -406,9 +468,11 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
         self.border = border
         self.secondary = secondary
         self.followsSystemStyle = followsSystemStyle
+        self.usesSourcePosition = usesSourcePosition
+        self.usesSourceColors = usesSourceColors
     }
 
-    /// The curated default look: white Atkinson with a **true outer outline** and
+    /// The historical custom baseline: white Atkinson with a **true outer outline** and
     /// a soft drop shadow, no background box — the modern, clean, highly-legible
     /// baseline. Users can switch on the box (one toggle) for the BBC/high-contrast
     /// style. The outline width is in points at the base size and the renderer
@@ -419,6 +483,25 @@ public struct SubtitleStyle: Codable, Equatable, Sendable {
         edge: Edge(style: .dropShadow, color: Color(red: 0, green: 0, blue: 0, alpha: 0.75), thickness: 2.5),
         border: Border(isEnabled: true, color: .black, width: 2.5)
     )
+
+    /// New profiles use current device captions. Explicit Reset uses `.default`,
+    /// Plozz's own appearance, without enabling system matching.
+    public static let profileDefault: SubtitleStyle = {
+        var style = SubtitleStyle.default
+        style.followsSystemStyle = true
+        return style
+    }()
+
+    /// Color and text opacity are separate MediaAccessibility preferences.
+    /// A forced device color must not discard permitted source alpha (or vice versa).
+    public func sourceTextColor(_ source: Color) -> Color? {
+        let permitsColor = usesSourceColors && (captionSourceOverrides?.foregroundColor ?? true)
+        let permitsOpacity = captionSourceOverrides?.foregroundOpacity ?? usesSourceColors
+        guard permitsColor || permitsOpacity else { return nil }
+        var result = permitsColor ? source : textColor
+        result.alpha = permitsOpacity ? source.alpha : textColor.alpha
+        return result
+    }
 }
 
 // MARK: - Per-content-type resolution seam
@@ -445,7 +528,7 @@ public extension SubtitleStyle {
     /// honoured only on the AVPlayer path and is ignored by Plozz's own overlay
     /// renderer, so preserving it would give a migrated viewer system captions on
     /// one path and Plozz styling on the other. Normalising it to `false` (the new
-    /// default) makes Plozz own subtitle appearance consistently everywhere.
+    /// custom baseline) makes Plozz own subtitle appearance consistently everywhere.
     init(from legacy: LegacyCaptionSettings) {
         self.init(
             fontScale: legacy.fontScale,
@@ -466,10 +549,9 @@ public extension SubtitleStyle {
 extension SubtitleStyle {
     /// Folds a legacy `.uniform` edge — the old "second outline" — into the single
     /// explicit `border`, then drops the edge to shadow-only. Shadow and outline
-    /// are now two independent concerns in the model and menu, so any persisted
-    /// style, migrated `CaptionSettings`, or preset that expressed an outline via
-    /// the edge round-trips through the one Outline control, and no live style
-    /// carries a `.uniform` edge any more.
+    /// are independent concerns in the model and menu. Only legacy styles without
+    /// an explicit caption policy go through this migration; current captured or
+    /// deliberately edited uniform edges must keep the public system edge value.
     mutating func foldUniformEdgeIntoBorder() {
         guard edge.style == .uniform else { return }
         if !border.isEnabled {
@@ -516,9 +598,10 @@ public extension SubtitleStyle {
 
 extension SubtitleStyle {
     private enum CodingKeys: String, CodingKey {
-        case fontFamily, fontWeight, fontScale, verticalPosition, verticalAnchor, horizontalOffset
-        case textColor, opacity, hdrLuminanceScale
-        case background, edge, border, secondary, followsSystemStyle
+        case fontFamily, systemFont, fontDescriptor, captionSourceOverrides, fontWeight, fontScale, verticalPosition, verticalAnchor, horizontalOffset
+        case textColor, glyphBackground, opacity, hdrLuminanceScale
+        case background, edge, border, secondary, followsSystemStyle, captionEdgeStyleRawValue
+        case usesSourcePosition, usesSourceColors
     }
 
     /// Custom decoder so a style persisted by an older build (missing keys added
@@ -528,20 +611,29 @@ extension SubtitleStyle {
         let d = SubtitleStyle.default
         self.init(
             fontFamily: try c.decodeIfPresent(SubtitleFontFamily.self, forKey: .fontFamily) ?? d.fontFamily,
+            systemFont: try c.decodeIfPresent(SubtitleSystemFont.self, forKey: .systemFont),
+            fontDescriptor: try c.decodeIfPresent(SubtitleFontDescriptor.self, forKey: .fontDescriptor),
+            captionSourceOverrides: try c.decodeIfPresent(SubtitleCaptionSourceOverrides.self, forKey: .captionSourceOverrides),
+            captionEdgeStyleRawValue: try c.decodeIfPresent(Int.self, forKey: .captionEdgeStyleRawValue),
             fontWeight: try c.decodeIfPresent(SubtitleFontWeight.self, forKey: .fontWeight) ?? d.fontWeight,
             fontScale: try c.decodeIfPresent(Double.self, forKey: .fontScale) ?? d.fontScale,
             verticalPosition: try c.decodeIfPresent(Double.self, forKey: .verticalPosition) ?? d.verticalPosition,
             verticalAnchor: try c.decodeIfPresent(VerticalAnchor.self, forKey: .verticalAnchor) ?? d.verticalAnchor,
             horizontalOffset: try c.decodeIfPresent(Double.self, forKey: .horizontalOffset) ?? d.horizontalOffset,
             textColor: try c.decodeIfPresent(Color.self, forKey: .textColor) ?? d.textColor,
+            glyphBackground: try c.decodeIfPresent(Color.self, forKey: .glyphBackground) ?? .clear,
             opacity: try c.decodeIfPresent(Double.self, forKey: .opacity) ?? d.opacity,
             hdrLuminanceScale: try c.decodeIfPresent(Double.self, forKey: .hdrLuminanceScale) ?? d.hdrLuminanceScale,
             background: try c.decodeIfPresent(Background.self, forKey: .background) ?? d.background,
             edge: try c.decodeIfPresent(Edge.self, forKey: .edge) ?? d.edge,
             border: try c.decodeIfPresent(Border.self, forKey: .border) ?? d.border,
             secondary: try c.decodeIfPresent(Secondary.self, forKey: .secondary),
-            followsSystemStyle: try c.decodeIfPresent(Bool.self, forKey: .followsSystemStyle) ?? d.followsSystemStyle
+            followsSystemStyle: try c.decodeIfPresent(Bool.self, forKey: .followsSystemStyle) ?? d.followsSystemStyle,
+            usesSourcePosition: try c.decodeIfPresent(Bool.self, forKey: .usesSourcePosition) ?? d.usesSourcePosition,
+            usesSourceColors: try c.decodeIfPresent(Bool.self, forKey: .usesSourceColors) ?? d.usesSourceColors
         )
-        foldUniformEdgeIntoBorder()
+        // Frozen system edges are already explicit; preserve the public uniform
+        // style instead of rewriting it during a save/load round trip.
+        if captionSourceOverrides == nil { foldUniformEdgeIntoBorder() }
     }
 }

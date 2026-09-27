@@ -103,6 +103,18 @@ final class UserSessionRedactionTests: XCTestCase {
 }
 
 final class HandoffDiagnosticsRedactionTests: XCTestCase {
+    func testLifecycleCorrelationIsStableAndDoesNotExposeOpaqueIdentifiers() {
+        XCTAssertEqual(HandoffDiagnostics.correlationID(nil), "none")
+        XCTAssertEqual(HandoffDiagnostics.correlationID(""), "none")
+        XCTAssertEqual(HandoffDiagnostics.correlationID("abc"), "ba7816bf8f01cfea")
+        let identifier = "https://server.test?api_key=private-session"
+        let correlation = HandoffDiagnostics.correlationID(identifier)
+        XCTAssertEqual(correlation, HandoffDiagnostics.correlationID(identifier))
+        XCTAssertNotEqual(correlation, HandoffDiagnostics.correlationID("other-session"))
+        XCTAssertEqual(correlation.count, 16)
+        XCTAssertTrue(correlation.allSatisfy { $0.isHexDigit })
+    }
+
     func testRedactsURLsAndCredentialAssignments() {
         let raw = """
         NativeAVPlayerHost failed url=https://server.test/video?token=secret \
@@ -122,11 +134,13 @@ final class HandoffDiagnosticsRedactionTests: XCTestCase {
 
 final class ProviderKindTests: XCTestCase {
     func testDedicatedServersAreFirstClassProviders() {
-        XCTAssertEqual(Set(ProviderKind.allCases), [.jellyfin, .emby, .plex, .mediaShare])
-        XCTAssertEqual(ProviderKind.allCases, [.jellyfin, .plex, .emby, .mediaShare])
+        XCTAssertEqual(Set(ProviderKind.allCases), [.jellyfin, .emby, .plex, .silo, .mediaShare])
+        XCTAssertEqual(ProviderKind.allCases, [.jellyfin, .plex, .emby, .silo, .mediaShare])
         XCTAssertEqual(ProviderKind.jellyfin.displayName, "Jellyfin")
         XCTAssertEqual(ProviderKind.emby.displayName, "Emby")
         XCTAssertEqual(ProviderKind.plex.displayName, "Plex")
+        XCTAssertEqual(ProviderKind.silo.displayName, "Silo")
+        XCTAssertFalse(ProviderKind.silo.usesMediaBrowserAPI)
         XCTAssertEqual(ProviderKind.mediaShare.displayName, "Media Share")
         XCTAssertTrue(ProviderKind.emby.usesMediaBrowserAPI)
     }

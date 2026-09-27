@@ -18,8 +18,9 @@ struct ScrubGestureInterpreter {
 
     /// What the host controller should do for one `.changed` pan sample.
     enum PanOutcome: Equatable {
-        /// Still deciding the axis (travel below the dead-zone), or a suppressed
-        /// vertical drag — do nothing this sample.
+        /// Still deciding the axis (travel below the dead-zone, or a vertical lean
+        /// short of `verticalNavigationDistance`), or a suppressed vertical drag —
+        /// do nothing this sample.
         case ignore
         /// A deliberate downward swipe — reveal the Info card.
         case enterControlBar
@@ -31,8 +32,8 @@ struct ScrubGestureInterpreter {
         /// Advance the scrub head by `deltaPoints` at `smoothedSpeed`. On the
         /// sample that first locks horizontal, exactly one of `beginScrub` /
         /// `continueTraversal` is true (a fresh session vs. resuming a flick-bridged
-        /// one); both are false on every later sample. `deltaPoints` is 0 on that
-        /// first sample, so locking the axis never itself moves the head.
+        /// one); both are false on every later sample. The first sample excludes
+        /// only the dead-zone distance, not movement coalesced before delivery.
         case advance(deltaPoints: Double, smoothedSpeed: Double,
                      beginScrub: Bool, continueTraversal: Bool)
     }
@@ -49,8 +50,12 @@ struct ScrubGestureInterpreter {
 
     /// Distance (points) a touch must travel before we lock to an axis.
     let axisDeadZone: Double
-    /// EMA weight for the per-sample pan speed that drives scrub acceleration.
-    /// Lower = smoother (more lag), higher = more responsive (more jitter).
+    /// Vertical travel (points) before a swipe leaves the scrub surface for the
+    /// controls. Longer than the dead-zone so a horizontal swipe whose first
+    /// delivered sample still leans vertical can lock horizontal on a later one.
+    let verticalNavigationDistance: Double
+    /// EMA weight at the 60 Hz reference cadence. Actual samples are weighted by
+    /// elapsed time, so matching 24 Hz video does not slow the acceleration ramp.
     let speedSmoothing: Double
     /// Lift speed (points/sec) at or above which a scrub is treated as a
     /// mid-traversal flick (defer the commit) rather than a deliberate landing.
@@ -58,17 +63,20 @@ struct ScrubGestureInterpreter {
 
     private(set) var axis: Axis = .undecided
     /// The pan `translation.x` from the previous scrub sample. Each sample scrubs
-    /// by the increment since this value, seeded at the axis-decision translation
-    /// so the dead-zone travel spent deciding never counts as scrub distance.
+    /// by the increment since this value, seeded at the dead-zone boundary so
+    /// delayed delivery cannot discard most or all of a short swipe.
     private var lastTranslationX: Double = 0
     /// Low-pass-filtered pan speed (points/sec). Reset to 0 only when a fresh
     /// scrub begins, so a flick-bridged continuation carries its momentum.
     private var smoothedSpeed: Double = 0
 
     init(axisDeadZone: Double = 18,
+         verticalNavigationDistance: Double = 54,
          speedSmoothing: Double = 0.25,
          flickCommitThreshold: Double = 1000) {
+        precondition((0...1).contains(speedSmoothing))
         self.axisDeadZone = axisDeadZone
+        self.verticalNavigationDistance = verticalNavigationDistance
         self.speedSmoothing = speedSmoothing
         self.flickCommitThreshold = flickCommitThreshold
     }
@@ -88,8 +96,10 @@ struct ScrubGestureInterpreter {
         velocityX: Double,
         isScrubbing: Bool,
         seekWithoutPausing: Bool,
-        isPaused: Bool
+        isPaused: Bool,
+        elapsed: TimeInterval = 1.0 / 60.0
     ) -> PanOutcome {
+        precondition(elapsed.isFinite && elapsed >= 0)
         var beginScrub = false
         var continueTraversal = false
 
@@ -113,10 +123,12 @@ struct ScrubGestureInterpreter {
                     beginScrub = true
                     smoothedSpeed = 0
                 }
-                // Seed the incremental anchor at THIS translation so the axis
-                // dead-zone travel is excluded (the first scrub sample moves by 0).
-                lastTranslationX = translationX
+                lastTranslationX = translationX < 0 ? -axisDeadZone : axisDeadZone
             } else {
+                // Leaving the surface needs more travel than a scrub. UIKit can deliver
+                // a right swipe's first sample while it still leans downward; locking
+                // there opened Info and the rest of the swipe moved focus to Cast.
+                guard absY >= verticalNavigationDistance else { return .ignore }
                 axis = .verticalIgnored
                 return translationY > 0 ? .enterControlBar : .moveUp
             }
@@ -127,7 +139,8 @@ struct ScrubGestureInterpreter {
         let dx = translationX - lastTranslationX
         lastTranslationX = translationX
         let rawSpeed = abs(velocityX)
-        smoothedSpeed += (rawSpeed - smoothedSpeed) * speedSmoothing
+        let weight = 1 - pow(1 - speedSmoothing, elapsed * 60)
+        smoothedSpeed += (rawSpeed - smoothedSpeed) * weight
         return .advance(deltaPoints: dx, smoothedSpeed: smoothedSpeed,
                         beginScrub: beginScrub, continueTraversal: continueTraversal)
     }

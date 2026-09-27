@@ -286,7 +286,8 @@ public struct SubtitleOverlayView: View {
                 fontSize: Self.baseFontSize * style.fontScale,
                 fillColor: scaled(style.textColor),
                 textAlignment: a.textAlignment,
-                style: style
+                style: style,
+                colorScale: lumaScale
             )
             .frame(maxWidth: videoRect.width * 0.92, alignment: a.frameTextAlignment)
 
@@ -357,7 +358,8 @@ public struct SubtitleOverlayView: View {
                         text: t,
                         fontSize: Self.baseFontSize * style.fontScale,
                         fillColor: scaled(style.textColor),
-                        style: style
+                        style: style,
+                        colorScale: lumaScale
                     )
                 }
             }
@@ -375,11 +377,15 @@ public struct SubtitleOverlayView: View {
             VStack(spacing: 2) {
                 ForEach(secondary.filter { !$0.isImage }) { cue in
                     if case .text(let t) = cue.body {
+                        // A distinct second-line colour is an explicit choice, so it
+                        // wins over the file's colours.
                         StyledCueText(
                             text: t,
                             fontSize: Self.baseFontSize * style.fontScale * secScale,
                             fillColor: secFill,
-                            style: style
+                            style: style,
+                            colorScale: lumaScale,
+                            usesSourceColors: sec.differentiate ? false : nil
                         )
                     }
                 }
@@ -390,6 +396,7 @@ public struct SubtitleOverlayView: View {
     // MARK: - Helpers
 
     private func isSourcePositioned(_ cue: SubtitleCue) -> Bool {
+        guard style.usesSourcePosition else { return false }
         if case .text(let t) = cue.body { return t.layout?.isSourcePositioned == true }
         return false
     }
@@ -452,33 +459,66 @@ private extension SubtitleAlignment {
 ///   so it stays a constant fraction of the glyph height.
 /// * **Shadow** — the directional edge styles (`.dropShadow` / `.raised` /
 ///   `.depressed`) become a soft or hard offset shadow drawn behind the outline.
-private struct StyledCueText: View {
+struct StyledCueText: View {
     let text: SubtitleText
     let fontSize: CGFloat
     let fillColor: Color
     var textAlignment: TextAlignment = .center
     let style: SubtitleStyle
+    /// HDR luminance scale applied to source colours, matching `fillColor`.
+    var colorScale: Double = 1
+    var usesSourceColors: Bool? = nil
 
     var body: some View {
-        content
+        renderedLine
     }
 
-    @ViewBuilder
-    private var content: some View {
+    var renderedLine: CoreTextSubtitleLine {
         CoreTextSubtitleLine(
             text: text.string,
             family: style.fontFamily,
             weight: style.fontWeight,
             fontSize: fontSize,
-            isBold: text.isBold,
-            isItalic: text.isItalic,
+            isBold: allowsSourceFont && text.isBold,
+            isItalic: allowsSourceFont && text.isItalic,
             fill: UIColor(fillColor),
             outline: outlineUIColor,
             outlineWidth: visibleOutlineWidth,
             shadow: shadowSpec,
             background: backgroundSpec,
-            alignment: nsAlignment
+            alignment: nsAlignment,
+            fillSpans: fillSpans,
+            systemFontDescriptor: fontDescriptor,
+            glyphBackground: style.glyphBackground.alpha > 0 ? uiColor(style.glyphBackground) : nil
         )
+    }
+
+    private var allowsSourceFont: Bool {
+        style.usesSourceEmphasis
+    }
+
+    private var fontDescriptor: UIFontDescriptor? {
+        style.resolvedFontDescriptor
+    }
+
+    /// The file's colour spans, as UTF-16 ranges, when the style honours them.
+    /// Uncoloured spans are left to `fillColor`.
+    private var fillSpans: [SubtitleFillSpan] {
+        guard usesSourceColors != false, let runs = text.runs else { return [] }
+        var spans: [SubtitleFillSpan] = []
+        var location = 0
+        for run in runs {
+            let length = (run.text as NSString).length
+            if let source = run.color, let c = style.sourceTextColor(source) {
+                let k = colorScale
+                spans.append(SubtitleFillSpan(
+                    location: location, length: length,
+                    color: UIColor(red: c.red * k, green: c.green * k, blue: c.blue * k, alpha: c.alpha)
+                ))
+            }
+            location += length
+        }
+        return spans
     }
 
     /// The rounded background box, drawn inside the renderer so it hugs the text

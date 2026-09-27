@@ -13,8 +13,8 @@ import MetadataKit
 /// Watchlist actions.
 ///
 /// Content is whatever the ``HeroCurator`` produced for the user's per-profile
-/// ``HeroSettings`` (Continue Watching, Random, Watchlist and — once Seerr lands
-/// — Featured). The carousel auto-advances on a timer and pages on the remote
+/// ``HeroSettings`` (Continue Watching, Random, Watchlist and Featured discovery).
+/// The carousel auto-advances on a timer and pages on the remote
 /// per ``HeroCarouselFocus`` (right at the last button advances; left at the
 /// first button steps back / escapes to the sidebar).
 ///
@@ -67,6 +67,7 @@ struct HomeHeroView: View {
     /// status) when this is `true`; otherwise the slide shows with no primary
     /// button (Play/Resume for ordinary library items is unaffected).
     var seerConnected: Bool = false
+    var canRequestDiscoveryItem: @MainActor (MediaItem) -> Bool = { _ in true }
     /// One-tap request for a not-owned featured title. Returns the title's new
     /// availability so the pill can flip to Requested/Downloading immediately, or
     /// `nil` if the request failed. `nil` closure disables requesting entirely.
@@ -86,6 +87,8 @@ struct HomeHeroView: View {
     /// in without ever displacing what the viewer is looking at (see
     /// ``HeroLiveMerge``). Fires on appearance and on every page.
     var onPinnedItemsChanged: (Set<String>) -> Void = { _ in }
+    var onItemExposed: (MediaItem) -> Void = { _ in }
+    var exposureScopeID: ObjectIdentifier?
     /// Leaf-owned recede state. Passing the model reference keeps the high-frequency
     /// animation state out of `HomeView`'s observation surface, so moving between
     /// the hero and Continue Watching no longer invalidates every Home row.
@@ -391,14 +394,14 @@ struct HomeHeroView: View {
             availability: requestOverrides[item.id] ?? item.availability,
             downloadProgress: item.downloadProgress,
             hasValidatedPlayableSource: item.hasPlayableLibraryTarget(),
-            seerConnected: seerConnected
+            seerConnected: seerConnected && canRequestDiscoveryItem(item)
         )
     }
 
     /// The leading primary button for `item`, or `nil` when the slide offers no
     /// primary action (a not-owned featured title with Seerr disconnected).
     private func primaryButton(for item: MediaItem) -> HeroButton? {
-        if item.kind == .series, seerConnected, onRequestSeasons != nil,
+        if item.kind == .series, seerConnected, canRequestDiscoveryItem(item), onRequestSeasons != nil,
            !item.hasPlayableLibraryTarget() {
             return .request
         }
@@ -521,7 +524,35 @@ struct HomeHeroView: View {
             // why every earlier attempt left the artwork stuck full-screen.
             heroBackdrop(height: height)
         }
+        .overlay(alignment: .bottomTrailing) {
+            if let item = current {
+                let attributionSources = settings.discoveryAttributionSources(for: item)
+                if !attributionSources.isEmpty {
+                    // Share one credit across both foreground renderers, in the
+                    // trailing paging band without changing the action-row layout.
+                    HeroDiscoveryAttribution(sources: attributionSources)
+                        .frame(maxWidth: Self.screenWidth * 0.3, alignment: .trailing)
+                        .padding(.trailing, PlozzTheme.Metrics.screenPadding)
+                        .padding(.bottom, Self.contentBottomInset - Self.pagingDotsDrop)
+                        .allowsHitTesting(false)
+                        .opacity(isFrontmost && !receded && metadataVisible ? 1 : 0)
+                        .accessibilityHidden(!isFrontmost || receded || !metadataVisible || !heroVisible)
+                        .transaction {
+                            if !isFrontmost || receded || !metadataVisible {
+                                $0.animation = nil
+                            }
+                        }
+                }
+            }
+        }
         .opacity(heroVisible ? 1 : 0)
+        .trackHeroExposure(
+            item: current,
+            isVisible: isFrontmost && !receded && heroVisible && metadataVisible
+                && seasonPickerItem == nil && !showingSeasonLookupFailure,
+            scopeID: exposureScopeID,
+            onExposure: onItemExposed
+        )
         .confirmationDialog(
             seasonPickerItem?.title ?? "Request Seasons",
             isPresented: Binding(
@@ -1379,46 +1410,12 @@ struct HomeHeroView: View {
     /// The air-schedule badge above the logo. Mirrors the detail hero's badge so a
     /// series reads the same on both screens; this is the SwiftUI fallback path,
     /// with the UIKit renderer drawing its own flat equivalent.
-    @ViewBuilder
     private func scheduleBadge(_ text: LocalizedStringResource) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
-        Text(text)
-            .font(.system(size: 24, weight: .semibold))
-            .foregroundStyle(Color.primary)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
-            .background {
-                if #available(tvOS 26.0, *) {
-                    shape.fill(.regularMaterial)
-                } else {
-                    shape.fill(.ultraThinMaterial)
-                }
-            }
-            .overlay { shape.stroke(Color.primary.opacity(0.16), lineWidth: 1) }
-            .contentTransition(.opacity)
-            .accessibilityLabel(text)
+        HeroScheduleBadge(text: text)
     }
 
-    @ViewBuilder
     private func metadataLine(for item: MediaItem) -> some View {
-        let metadata = GenreDisplayFormatter.displayNames(for: item.genres)
-        let badge = HeroForegroundModelBuilder.ratingBadgeText(for: item).map {
-            MediaBadge($0, style: .rating)
-        }
-        if badge != nil || !metadata.isEmpty {
-            HStack(alignment: .center, spacing: 16) {
-                if let badge {
-                    MediaBadgeChip(badge: badge)
-                }
-                if !metadata.isEmpty {
-                    Text(metadata.joined(separator: "  ·  "))
-                        .font(.system(size: 23, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .contentTransition(.opacity)
-                }
-            }
-        }
+        HeroMetadataLine(item: item)
     }
 
     // MARK: - Action row + focus/paging
@@ -2540,4 +2537,54 @@ struct HomeHeroView: View {
     }
 }
 
+/// The hero's content-rating chip and genre line, shared by the carousel and the
+/// hero that follows focus.
+struct HeroMetadataLine: View {
+    let item: MediaItem
+
+    var body: some View {
+        let metadata = GenreDisplayFormatter.displayNames(for: item.genres)
+        let badge = HeroForegroundModelBuilder.ratingBadgeText(for: item).map {
+            MediaBadge($0, style: .rating)
+        }
+        if badge != nil || !metadata.isEmpty {
+            HStack(alignment: .center, spacing: 16) {
+                if let badge {
+                    MediaBadgeChip(badge: badge)
+                }
+                if !metadata.isEmpty {
+                    Text(metadata.joined(separator: "  ·  "))
+                        .font(.system(size: 23, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .contentTransition(.opacity)
+                }
+            }
+        }
+    }
+}
+
+/// The air-schedule badge above a hero's logo ("New episode every Wednesday").
+struct HeroScheduleBadge: View {
+    let text: LocalizedStringResource
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        Text(text)
+            .font(.system(size: 24, weight: .semibold))
+            .foregroundStyle(Color.primary)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .background {
+                if #available(tvOS 26.0, *) {
+                    shape.fill(.regularMaterial)
+                } else {
+                    shape.fill(.ultraThinMaterial)
+                }
+            }
+            .overlay { shape.stroke(Color.primary.opacity(0.16), lineWidth: 1) }
+            .contentTransition(.opacity)
+            .accessibilityLabel(text)
+    }
+}
 #endif

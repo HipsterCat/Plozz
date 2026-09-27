@@ -2,11 +2,57 @@
 import AVFoundation
 import CoreMedia
 import XCTest
+import CoreModels
 @testable import FeaturePlayback
 
 @MainActor
 final class NativeDisplayCriteriaTests: XCTestCase {
     private let asset = AVURLAsset(url: URL(fileURLWithPath: "/nonexistent/display-test.mp4"))
+
+    func testPreviewCannotTakeAnAlreadyOwnedDisplay() async throws {
+        let target = Target()
+        let otherPlayer = try criteria(rate: 24)
+        target.playbackDisplayCriteria = otherPlayer
+        let desired = try criteria(rate: 60)
+        var refused = false
+        let controller = NativeDisplayCriteriaController(requiresUnownedTarget: true) { _ in desired }
+        controller.onOwnershipConflict = { refused = true }
+        controller.attach(to: target)
+        controller.configure(asset: asset, fallback: nil)
+        await waitFor { refused }
+        controller.stop()
+        XCTAssertTrue(target.playbackDisplayCriteria === otherPlayer)
+        XCTAssertEqual(target.writeCount, 1)
+    }
+
+    func testPreviewRejectsAnOwnerThatArrivesWhileAssetCriteriaLoad() async throws {
+        let target = Target()
+        let loader = Loader()
+        var refused = false
+        let controller = NativeDisplayCriteriaController(requiresUnownedTarget: true, loadCriteria: loader.load)
+        controller.onOwnershipConflict = { refused = true }
+        controller.attach(to: target)
+        controller.configure(asset: asset, fallback: nil)
+        await waitFor { loader.waiters.count == 1 }
+        let otherPlayer = try criteria(rate: 24)
+        target.playbackDisplayCriteria = otherPlayer
+        loader.finish(0, with: .success(try criteria(rate: 60)))
+        await waitFor { refused }
+        controller.stop()
+        XCTAssertTrue(target.playbackDisplayCriteria === otherPlayer)
+        XCTAssertEqual(target.writeCount, 1)
+    }
+
+    func testPreviewReportsCriteriaFailureRatherThanWaitingForever() async {
+        var failed = false
+        let controller = NativeDisplayCriteriaController(requiresUnownedTarget: true) { _ in
+            throw URLError(.cannotDecodeContentData)
+        }
+        controller.onCriteriaFailure = { failed = true }
+        controller.configure(asset: asset, fallback: nil)
+        await waitFor { failed }
+        controller.stop()
+    }
 
     func testDefaultLoaderUsesAVFoundationsCriteriaFromAnActualAsset() async throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
@@ -250,6 +296,24 @@ final class NativeDisplayCriteriaTests: XCTestCase {
         func finish(_ index: Int, with result: Result<AVDisplayCriteria, Error>) {
             waiters[index].resume(with: result)
         }
+    }
+
+    // MARK: Source-hint bootstrap (#58)
+
+    func testHDR10PlusRequestsNoSyntheticBootstrapCriteria() {
+        let metadata = MediaSourceMetadata(
+            video: .init(codec: "hevc", width: 3840, height: 2160, videoRangeType: "HDR10Plus"))
+        XCTAssertNil(nativeBootstrapDisplayCriteria(metadata: metadata))
+    }
+
+    func testOtherHDRSourcesKeepTheirBootstrapCriteria() {
+        for range in ["HDR10", "DOVI", "HLG"] {
+            let metadata = MediaSourceMetadata(
+                video: .init(codec: "hevc", width: 3840, height: 2160, videoRangeType: range))
+            XCTAssertNotNil(nativeBootstrapDisplayCriteria(metadata: metadata), range)
+        }
+        XCTAssertNil(nativeBootstrapDisplayCriteria(metadata: .init(
+            video: .init(codec: "h264", videoRangeType: "SDR"))))
     }
 }
 #endif

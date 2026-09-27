@@ -19,6 +19,7 @@ struct SettingsContext {
     /// unreachable), so the My Libraries screen can distinguish "couldn't reach
     /// this server" from a genuinely empty one.
     let unreachableLibraryAccountIDs: Set<String>
+    var libraryFailures: [String: AppError] = [:]
     let reloadLibraries: () async -> Void
     let accounts: [Account]
     let activeAccountID: String?
@@ -120,6 +121,7 @@ public enum SettingsRoute: Hashable {
     case detailPage
     case nightShift
     case playback
+    case subtitleStyle(liveTV: Bool)
     case spoilers
     case integrations
     case metadata

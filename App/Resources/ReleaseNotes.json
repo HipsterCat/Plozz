@@ -2,6 +2,152 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/042",
+      "version": "2026.9.23",
+      "build": 42,
+      "releasedAt": "2026-09-24",
+      "sections": [
+        {
+          "category": "Updated",
+          "items": [
+            "Updated the playback engine, with steadier recovery after the device wakes from sleep and lower memory use while streaming.",
+            "Preferred audio and subtitle languages now also match region-specific tracks, such as English (US) for English.",
+            {
+              "text": "HDR10+ videos played through the system player now let tvOS choose the display mode from the video itself.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            {
+              "text": "Paused videos no longer jump back to where you started, or start playing and wake the screen, when the screensaver comes on.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Pressing Play/Pause on the Siri Remote now shows the player controls and keeps them up while paused.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Swiping right during playback scrubs again instead of opening Info and Cast.",
+              "platforms": ["tvOS"]
+            },
+            "Detail pages keep their 4K and audio badges when a title's HDR10+ badge appears."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "release/041",
+      "version": "2026.9.23",
+      "build": 41,
+      "releasedAt": "2026-09-23",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            {
+              "text": "Change playback quality with transcoding presets or custom resolution/bitrate limits for Plex, Jellyfin, Emby, and Silo, with per-network defaults and supported codec choices.",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Native Silo support with profiles, libraries, playback, watchlists, subtitle downloads, and offline downloads.",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Native Silo support with profiles, libraries, playback, watchlists, and subtitle downloads.",
+              "platforms": ["tvOS"]
+            },
+            "Jump to a letter in individual and combined libraries.",
+            "Switch versions from the player while keeping your playback position and settings."
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            "Updated the playback engine and improved HDR10+ and Atmos metadata detection.",
+            "Clearer playback information and audio controls, including measured converted-stream quality and separate original-file diagnostics.",
+            "Clearer server setup and sign-in recovery, theme-consistent status messages, and separate detail-page controls for review scores and Common Sense ages.",
+            {
+              "text": "More compact detail headers, clearer device-to-device imports, and streamlined playback menus, recovery messages, and scrolling diagnostics.",
+              "platforms": ["iOS"]
+            }
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            "Fixed episode badge refreshes and older watchlist synchronization, including imported titles reappearing as user-added entries.",
+            "Emby resume syncing no longer risks stopping active playback.",
+            {
+              "text": "Fixed pending-server setup actions, screen locking during startup or buffering, background hero trailers, and disappearing player menus.",
+              "platforms": ["iOS"]
+            },
+            {
+              "text": "Corrected the alphabet indicator while scrolling library grids.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "release/040",
+      "version": "2026.9.20",
+      "build": 40,
+      "releasedAt": "2026-09-20",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Browse collections inside Plex, Jellyfin, and Emby libraries, with full paged collection grids."
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            "The Home hero's Featured section now supports TMDB, TheTVDB, TVmaze, and optional AniList anime.",
+            "Reduced repeated artwork, metadata, and sync work while Home loads.",
+            {
+              "text": "Rebuilt library grids for improved performance and scrolling.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "The default library grid now uses six columns.",
+              "platforms": ["tvOS"]
+            },
+            "Updated the playback engine and improved HDR10+ detection for Emby.",
+            {
+              "text": "Improved native HDR and Dolby Vision display matching.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Animated startup logo.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            "Extras now use their own thumbnails instead of inherited movie artwork.",
+            "Opening a Plex collection now loads its titles correctly.",
+            "Plex edition labels and selected playback versions stay consistent across libraries and servers.",
+            "Artwork loads and network-share connections can recover after stalls or failures.",
+            {
+              "text": "Seek swipes retain movement at the start and end of each gesture.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Settings descriptions remain readable on focused rows.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/039",
       "version": "2026.9.18",
       "build": 39,

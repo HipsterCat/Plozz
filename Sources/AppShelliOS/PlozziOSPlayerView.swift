@@ -1,5 +1,6 @@
 #if os(iOS)
 import CoreModels
+import PlozzCoreUI
 import FeatureHomeCore
 import FeaturePlayback
 import SwiftUI
@@ -41,6 +42,16 @@ struct PlozziOSPlayerView: View {
     @State private var playerIdentity = UUID()
     @State private var handoffTask: Task<Void, Never>?
     @State private var isPresented = false
+    @State private var heroPlaybackOwner: UUID?
+    @State private var streamingNetwork: StreamingNetwork = .unknown
+    @State private var streamingConnection: StreamingConnection?
+    @State private var presentsStreamingQuality = false
+    @State private var activeItem: MediaItem?
+    @State private var presentsVersions = false
+    @State private var showsSDRVersions = false
+    @State private var selectedSDRAlternative = false
+    @State private var announcedSDRPlayer: UUID?
+    @State private var playbackStatus = TransientStatusPresenter()
     /// See the bisect note in `body`.
 
     let request: PlozziOSPlaybackRequest
@@ -54,14 +65,25 @@ struct PlozziOSPlayerView: View {
                 PlayerView(
                     viewModel: viewModel,
                     showDiagnostics: appModel.settings.diagnostics.settings.isEnabled,
-                    showsSharedControls: false
+                    showsSharedControls: false,
+                    onChangeQuality: { presentsStreamingQuality = true },
+                    onChangeVersion: PlayerVersionSelection.versions(for: versionItem).count > 1
+                        ? { showVersions(onlySDR: false) } : nil,
+                    onPlaySDRVersion: viewModel.streamingHasHDRConversionError
+                        && !PlayerVersionSelection.sdrAlternatives(
+                            for: versionItem, mediaSourceID: viewModel.currentMediaSourceID
+                        ).isEmpty ? { showVersions(onlySDR: true) } : nil
                 )
                 .id(playerIdentity)
-                if viewModel.phase == .ready {
+                if viewModel.phase == .ready, !viewModel.showBringUpSpinner {
                     PlozziOSPlayerControlsOverlay(
                         viewModel: viewModel,
+                        hasVersions: PlayerVersionSelection.versions(for: versionItem).count > 1,
+                        versionsPresented: presentsVersions,
+                        onShowVersions: { showVersions(onlySDR: false) },
                         onClose: { dismiss() }
                     )
+                    .id(playerIdentity)
                 } else {
                     closeButton
                 }
@@ -73,12 +95,16 @@ struct PlozziOSPlayerView: View {
             }
         }
         .statusBarHidden()
+        .overlay(alignment: .top) {
+            TransientStatusView(presenter: playbackStatus).padding(.top, 60)
+        }
         .onAppear {
-            trailerController.stop()
+            suspendHeroPlayback()
             isPresented = true
         }
         .onDisappear {
             isPresented = false
+            playbackStatus.dismiss()
             handoffTask?.cancel()
             handoffTask = nil
             // Explicitly drop the player once the cover is gone. A
@@ -90,17 +116,56 @@ struct PlozziOSPlayerView: View {
             // match the presentation.
             let outgoing = viewModel
             viewModel = nil
-            if let outgoing {
-                Task { @MainActor in await outgoing.stop() }
+            let heroOwner = heroPlaybackOwner
+            let heroController = trailerController
+            heroPlaybackOwner = nil
+            Task { @MainActor in
+                if let outgoing { await outgoing.stop() }
+                if let heroOwner { heroController.resumeAfterPlayback(owner: heroOwner) }
             }
         }
         .task {
-            guard viewModel == nil else { return }
-            viewModel = makeViewModel(
-                item: request.item,
-                startPosition: request.startPosition
+            suspendHeroPlayback()
+            guard usesStreamingQuality else {
+                if viewModel == nil {
+                    viewModel = makeViewModel(item: request.item, startPosition: request.startPosition)
+                    PlozziOSScreenshotSeed.freezeIfRequested(viewModel)
+                }
+                return
+            }
+            for await network in PlozziOSStreamingNetwork.updates() {
+                guard !Task.isCancelled else { return }
+                streamingNetwork = network
+                let connection = resolvedStreamingConnection()
+                if viewModel == nil {
+                    streamingConnection = connection
+                    viewModel = makeViewModel(item: request.item, startPosition: request.startPosition)
+                    PlozziOSScreenshotSeed.freezeIfRequested(viewModel)
+                } else if streamingConnection != connection {
+                    streamingConnection = connection
+                    viewModel?.changeStreamingOptions(appModel.settings.playback.settings.streaming.options(for: connection))
+                }
+            }
+        }
+        .sheet(isPresented: $presentsStreamingQuality) {
+            if let viewModel { PlozziOSStreamingQualitySheet(viewModel: viewModel) }
+        }
+        .sheet(isPresented: $presentsVersions) {
+            PlozziOSPlayerVersionSheet(
+                item: versionItem, mediaSourceID: viewModel?.currentMediaSourceID,
+                onlySDR: showsSDRVersions,
+                onSelect: switchVersion
             )
-            PlozziOSScreenshotSeed.freezeIfRequested(viewModel)
+        }
+        .onChange(of: viewModel?.showBringUpSpinner) { _, _ in presentSDRNoticeIfReady() }
+        .onChange(of: viewModel?.streamingUsesSDRConversion) { _, _ in presentSDRNoticeIfReady() }
+        .onChange(of: viewModel?.phase) { _, phase in
+            guard phase == .ready, usesStreamingQuality else { return }
+            let actual = resolvedStreamingConnection()
+            if actual != streamingConnection {
+                streamingConnection = actual
+                viewModel?.changeStreamingOptions(appModel.settings.playback.settings.streaming.options(for: actual))
+            }
         }
         .onChange(of: viewModel?.pendingNextEpisode?.id) { _, nextID in
             guard nextID != nil,
@@ -122,6 +187,8 @@ struct PlozziOSPlayerView: View {
                     return
                 }
                 viewModel = incoming
+                activeItem = next
+                selectedSDRAlternative = false
                 playerIdentity = UUID()
                 handoffTask = nil
             }
@@ -148,10 +215,80 @@ struct PlozziOSPlayerView: View {
         .padding()
     }
 
+    private var usesStreamingQuality: Bool {
+        provider is any StreamingQualityProviding && [.movie, .episode].contains(request.item.kind)
+    }
+
+    private func resolvedStreamingConnection() -> StreamingConnection {
+        let locality = provider.connectionLocality
+        let connection = StreamingConnection.resolve(network: streamingNetwork, locality: locality)
+        let settings = appModel.settings.playback.settings.streaming
+        HandoffDiagnostics.emit(
+            "streaming DEFAULTS network=\(streamingNetwork) locality=\(locality) connection=\(connection.rawValue) "
+                + "profileScope=\(appModel.profiles.activeNamespace == nil ? "default" : "named") "
+                + "quality=\(settings.options(for: connection).quality.diagnosticName) "
+                + "local=\(settings.local.diagnosticName) remote=\(settings.remote.diagnosticName) cellular=\(settings.cellular.diagnosticName)"
+        )
+        return connection
+    }
+
+    private func suspendHeroPlayback() {
+        guard heroPlaybackOwner == nil else { return }
+        let owner = UUID()
+        heroPlaybackOwner = owner
+        trailerController.suspendForPlayback(owner: owner)
+    }
+
+    private var versionItem: MediaItem {
+        PlayerVersionSelection.item(
+            opened: activeItem ?? request.item, resolved: viewModel?.currentPlaybackItem
+        )
+    }
+
+    private func showVersions(onlySDR: Bool) {
+        showsSDRVersions = onlySDR
+        presentsVersions = true
+    }
+
+    private func presentSDRNoticeIfReady() {
+        guard let viewModel, viewModel.phase == .ready, !viewModel.showBringUpSpinner,
+              announcedSDRPlayer != playerIdentity,
+              selectedSDRAlternative || viewModel.streamingUsesSDRConversion else { return }
+        announcedSDRPlayer = playerIdentity
+        playbackStatus.present(icon: "display", text: "Playing in SDR")
+    }
+
+    private func switchVersion(_ id: String) {
+        guard let outgoing = viewModel, handoffTask == nil,
+              let incomingItem = PlayerVersionSelection.selecting(id, in: versionItem) else { return }
+        let continuation = outgoing.continuationForVersionChange()
+        let choseSDR = showsSDRVersions && PlayerVersionSelection.sdrAlternatives(
+            for: versionItem, mediaSourceID: outgoing.currentMediaSourceID
+        ).contains { $0.id == id }
+        if let version = PlayerVersionSelection.versions(for: versionItem).first(where: { $0.id == id }) {
+            appModel.versionPreferences.rememberVersion(
+                version, forTitle: DetailPlaybackSelection.versionPreferenceKey(for: versionItem)
+            )
+        }
+        handoffTask = Task { @MainActor in
+            await outgoing.stop()
+            guard !Task.isCancelled, isPresented else { handoffTask = nil; return }
+            let incoming = makeViewModel(
+                item: incomingItem, startPosition: continuation.position, continuation: continuation
+            )
+            activeItem = incomingItem
+            selectedSDRAlternative = choseSDR
+            viewModel = incoming
+            playerIdentity = UUID()
+            handoffTask = nil
+        }
+    }
+
     private func makeViewModel(
         item: MediaItem,
         startPosition: TimeInterval,
-        adoptedResolved: PlayerViewModel.PrefetchedPlayback? = nil
+        adoptedResolved: PlayerViewModel.PrefetchedPlayback? = nil,
+        continuation: PlaybackContinuation? = nil
     ) -> PlayerViewModel {
         let resolver = appModel.authenticatedHTTPResolver
         let playbackSettings = appModel.settings.playback.settings
@@ -163,6 +300,7 @@ struct PlozziOSPlayerView: View {
             itemID: item.id,
             mediaSourceID: item.selectedVersionID,
             offlineItem: item,
+            continuation: continuation,
             offlinePlaybackResolver: appModel.downloads.offlineResolver,
             behavior: appModel.settings.subtitleBehavior.settings,
             style: appModel.settings.subtitleStyle.style,
@@ -173,6 +311,9 @@ struct PlozziOSPlayerView: View {
                 settings: playbackSettings
             ),
             playbackSettings: playbackSettings,
+            streamingOptions: usesStreamingQuality ? playbackSettings.streaming.options(
+                for: resolvedStreamingConnection()
+            ) : nil,
             spoilerSettings: appModel.settings.spoilers.settings,
             seriesTrackStore: appModel.seriesTrackStore,
             seriesAccountFallbackID: item.sourceAccountID,

@@ -63,7 +63,15 @@ struct PlozziOSItemDetailView: View {
 
     @ViewBuilder
     private var detailBody: some View {
-        if let library = MediaFolderNavigation.library(
+        if let collection = CollectionBrowseRoute(
+            item: item,
+            fallbackAccountID: originSourceAccountID ?? provider.session.server.id
+        ) {
+            PlozziOSLibraryDestinationView(
+                appModel: appModel,
+                route: PlozziOSLibraryRoute(collection: collection)
+            )
+        } else if let library = MediaFolderNavigation.library(
             for: item,
             providerKind: provider.kind,
             sourceAccountID: originSourceAccountID ?? item.sourceAccountID ?? provider.session.server.id
@@ -404,15 +412,17 @@ private struct PlozziOSCanonicalItemDetailView: View {
             seriesHeroShowsSeries = false
         }
         .modifier(requestPresentation(inDownloadSheet: false))
-        .fullScreenCover(item: $playbackRequest) {
-            if let playbackProvider = appModel.provider(for: $0.item) {
-                PlozziOSPlayerView(request: $0, provider: playbackProvider)
+        .fullScreenCover(item: $playbackRequest) { request in
+            if let playbackProvider = appModel.provider(for: request.item) {
+                PlozziOSPlayerView(request: request, provider: playbackProvider)
             } else {
                 ContentUnavailableView(
                     "Server unavailable",
                     systemImage: "server.rack",
                     description: Text("Reconnect the selected server and try again.")
                 )
+                .onAppear { trailerController.suspendForPlayback(owner: request.id) }
+                .onDisappear { trailerController.resumeAfterPlayback(owner: request.id) }
             }
         }
     }
@@ -420,7 +430,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
     private func detailContent(_ detail: ItemDetailViewModel.Detail) -> some View {
         let heroTarget = seriesHeroShowsSeries
             ? detail.item
-            : (seriesPlayTarget ?? detail.item)
+            : viewModel.episodeWithEnrichedBadges(seriesPlayTarget ?? detail.item)
         let playableHeroTarget = seriesPlayTarget.map(playbackItem(for:))
             ?? detailPlayableItem(for: detail.item)
         let seasons = detail.children.filter { $0.kind == .season }
@@ -601,6 +611,10 @@ private struct PlozziOSCanonicalItemDetailView: View {
         .task(id: seasonRequestRefreshKey(for: detail)) {
             await refreshVisibleSeasonRequests(for: detail)
         }
+        .task(id: viewModel.episodeBadgeEnrichmentKey(for: playableHeroTarget)) {
+            guard let episode = playableHeroTarget, episode.kind == .episode else { return }
+            _ = await viewModel.enrichEpisodeBadgesIfNeeded(episode)
+        }
         .task(id: isDiscoveryItem) {
             await pollDiscoveryStatus()
         }
@@ -727,7 +741,8 @@ private struct PlozziOSCanonicalItemDetailView: View {
             libraryOrigin: viewModel.originSourceAccountID,
             itemSourceAccountID: item.sourceAccountID,
             sources: available,
-            capabilities: capabilities
+            capabilities: capabilities,
+            openingSource: item.editionOpeningSource
         )
         let sources = DetailPlaybackSelection.serverChoices(from: available)
         let versions = DetailPlaybackSelection.versions(
@@ -842,7 +857,8 @@ private struct PlozziOSCanonicalItemDetailView: View {
             libraryOrigin: viewModel.originSourceAccountID,
             itemSourceAccountID: item.sourceAccountID,
             sources: sources,
-            capabilities: capabilities
+            capabilities: capabilities,
+            openingSource: item.editionOpeningSource
         )
         let choices = DetailPlaybackSelection.serverChoices(from: sources)
         let versions = DetailPlaybackSelection.versions(
@@ -895,7 +911,6 @@ private struct PlozziOSCanonicalItemDetailView: View {
     }
 
     private func play(_ item: MediaItem, fromBeginning: Bool = false) {
-        trailerController.stop()
         // A series can't be played directly (see `playbackTarget`), so resolve
         // its next-up episode first. Every other kind plays as-is.
         guard item.kind == .series else {
@@ -925,13 +940,15 @@ private struct PlozziOSCanonicalItemDetailView: View {
     }
 
     private func playbackItem(for item: MediaItem) -> MediaItem {
+        let item = viewModel.episodeWithEnrichedBadges(item)
         let sources = availableSources
         let source = DetailPlaybackSelection.preferredSource(
             sourceOverride: sourceOverride,
             libraryOrigin: viewModel.originSourceAccountID,
             itemSourceAccountID: item.sourceAccountID,
             sources: sources,
-            capabilities: capabilities
+            capabilities: capabilities,
+            openingSource: item.editionOpeningSource
         )
         let versions = DetailPlaybackSelection.versions(
             for: item,

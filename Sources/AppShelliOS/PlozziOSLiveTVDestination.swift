@@ -105,7 +105,10 @@ struct PlozziOSLiveTVDestination: View {
             prepareLibraryChannels: runtime.prepareForEditing,
             libraryIsAuthorized: { [weak runtime] in runtime?.authorizationID != nil },
             sourceApprovalContext: { [profiles] in LiveTVSourceApprovalContext(profiles: profiles) },
-            onOpenTitle: navigateToItem
+            onOpenTitle: navigateToItem,
+            // The guide draws its own top row (browse controls and this), in
+            // place of the navigation bar, which is hidden below.
+            topBarAccessory: AnyView(PlozziOSSettingsAvatarButton(size: 36, action: onShowSettings))
         ) { playback in
             LiveChannelPlayerView(
                 channelID: playback.channel.id,
@@ -173,28 +176,27 @@ struct PlozziOSLiveTVDestination: View {
                     return restored && isCurrentProfileScope
                 },
                 onStopPlayback: playback.stopPlayback,
-                onOpenLibraryItem: playback.openLibraryItem
+                onOpenLibraryItem: playback.openLibraryItem,
+                program: playback.program,
+                loadOnNow: playback.onNow,
+                onTuneChannel: playback.tuneChannel,
+                guideOverlay: playback.guideOverlay
             )
         }
     }
 
     var body: some View {
-        LiveTVCatalogStorageView(load: { try LiveTVCatalogStorage.cache(profileID: profileID) }) { cache in
+        LiveTVCatalogStorageView(
+            load: { try LiveTVCatalogStorage.cache(profileID: profileID) },
+            loading: AnyView(LiveTVLoadingSkeleton())
+        ) { cache in
             LiveTVLibraryRuntimeView(profileID: profileID, profiles: profiles, accounts: accountsProviders) { runtime in
                 liveTVContent(cache: cache, runtime: runtime)
             }
         }
         .id(profileScope)
         .toolbar(isExpanded ? .hidden : .visible, for: .tabBar)
-        .toolbar(isExpanded ? .hidden : .visible, for: .navigationBar)
-        .toolbarBackground(.hidden, for: .navigationBar)
-        .toolbar {
-            if !isExpanded {
-                ToolbarItem(placement: .topBarTrailing) {
-                    PlozziOSSettingsAvatarButton(size: 36, action: onShowSettings)
-                }
-            }
-        }
+        .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             network.start()
         }

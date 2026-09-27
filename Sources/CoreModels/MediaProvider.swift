@@ -17,6 +17,11 @@ public protocol MediaProvider: Sendable {
     /// The authenticated session this provider is bound to.
     var session: UserSession { get }
 
+    /// Catalog/search cards may expose one external ID but omit the other
+    /// namespaces needed to match a title across providers. Fetch full details
+    /// before publishing those cards as complete identity-index/search evidence.
+    var catalogIdentityRequiresEnrichment: Bool { get }
+
     // MARK: Library browsing
 
     /// Top-level libraries/views available to the user.
@@ -89,6 +94,17 @@ public protocol MediaProvider: Sendable {
     /// the sort means restarting paging from `startIndex` 0.
     func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage
 
+    /// Server-defined collections belonging to this library, ordered/paged as a
+    /// collection list. This is distinct from browsing a collection's members.
+    /// Providers advertise support with `ProviderCapability.libraryCollections`.
+    /// Unsupported providers throw `.notFound`, never a misleading empty page.
+    func collections(in libraryID: String, page: PageRequest) async throws -> MediaPage
+
+    /// Members of a server-defined collection, not a library's collection list.
+    /// Preserve the server's collection order (including smart/custom ordering);
+    /// `page.sort` is deliberately ignored. Do not filter members to collections.
+    func collectionMembers(of collectionID: String, page: PageRequest) async throws -> MediaPage
+
     /// The alphabet fast-scroll index for a container browsed by **name**: for
     /// each present letter, the 0-based index of its first item in the current
     /// sort. Powers the trailing A–Z rail on the library grid.
@@ -96,10 +112,13 @@ public protocol MediaProvider: Sendable {
     /// Only meaningful for `sort.field == .name`; providers return an empty
     /// array for every other sort (there is no letter to jump to) and callers
     /// hide the rail when it's empty. The default is empty, so the rail is a
-    /// purely additive capability — test doubles and providers that can't
-    /// cheaply compute it (e.g. the cross-server aggregate, whose merged order
-    /// has no stable per-letter offset) simply never show it.
+    /// purely additive capability. Providers without cheap native offsets may
+    /// return deferred entries and resolve them through `letterPosition`.
     func letterIndex(in containerID: String, kind: MediaItemKind, sort: SortDescriptor) async throws -> [LibraryLetterIndexEntry]
+    /// Resolves a deferred letter target in this exact library/order. Nil means
+    /// no matching titles; unavailable or incomplete sources must throw.
+    func letterPosition(in containerID: String, kind: MediaItemKind, letter: String,
+                        sort: SortDescriptor) async throws -> Int?
 
     /// Provider-native "hubs" for a single library — the promoted discovery rows a
     /// backend defines at the library level (Plex `/hubs/sections/{id}`: "More in
@@ -181,6 +200,14 @@ public protocol MediaProvider: Sendable {
     /// playback/transcode session — used to observe a just-downloaded subtitle so
     /// it can be hot-loaded into the running player. Default: none.
     func subtitleTracks(forItemID itemID: String) async throws -> [MediaTrack]
+
+    /// Session-aware counterparts. Defaults preserve existing item-scoped providers.
+    func remoteSubtitleSearch(context: RemoteSubtitleContext, language: String,
+                              preference: SubtitleSearchPreference) async throws -> [RemoteSubtitle]
+    /// A provider receipt may identify the exact attached sidecar. Returning nil
+    /// uses the shared refresh/poll path; it never requires another playback start.
+    func downloadRemoteSubtitle(context: RemoteSubtitleContext, subtitleID: String) async throws -> MediaTrack?
+    func subtitleTracks(context: RemoteSubtitleContext) async throws -> [MediaTrack]
 
     // MARK: Skip segments
 
@@ -365,6 +392,22 @@ public enum MediaProviderURLIdentity {
 // doubles) inherit safe no-ops, so adding the capability never forces every
 // conformer to implement it.
 public extension MediaProvider {
+    var catalogIdentityRequiresEnrichment: Bool { false }
+
+    func collections(in libraryID: String, page: PageRequest) async throws -> MediaPage {
+        throw AppError.notFound
+    }
+
+    func collectionMembers(of collectionID: String, page: PageRequest) async throws -> MediaPage {
+        guard page.startIndex >= 0, page.limit > 0 else { throw AppError.invalidResponse }
+        let members = try await children(of: collectionID)
+        return MediaPage(
+            items: Array(members.dropFirst(page.startIndex).prefix(page.limit)),
+            startIndex: page.startIndex,
+            totalCount: members.count
+        )
+    }
+
     func reauthenticatedImageURL(
         _ persistedURL: URL,
         maxWidth: Int?
@@ -382,6 +425,12 @@ public extension MediaProvider {
     /// facet) override this; test doubles and the cross-server aggregate inherit
     /// the safe empty result.
     func letterIndex(in containerID: String, kind: MediaItemKind, sort: SortDescriptor) async throws -> [LibraryLetterIndexEntry] { [] }
+
+    func letterPosition(in containerID: String, kind: MediaItemKind, letter: String,
+                        sort: SortDescriptor) async throws -> Int? {
+        try await letterIndex(in: containerID, kind: kind, sort: sort)
+            .first { $0.letter == letter }?.startIndex
+    }
 
     /// Default: no native hubs. Only Plex (via `/hubs/sections/{id}`) overrides
     /// this; Jellyfin and test doubles inherit the safe empty result, so unmerged
@@ -416,6 +465,20 @@ public extension MediaProvider {
     func remoteSubtitleSearch(itemID: String, language: String, preference: SubtitleSearchPreference) async throws -> [RemoteSubtitle] { [] }
     func downloadRemoteSubtitle(itemID: String, subtitleID: String) async throws {}
     func subtitleTracks(forItemID itemID: String) async throws -> [MediaTrack] { [] }
+
+    func remoteSubtitleSearch(context: RemoteSubtitleContext, language: String,
+                              preference: SubtitleSearchPreference) async throws -> [RemoteSubtitle] {
+        try await remoteSubtitleSearch(itemID: context.itemID, language: language, preference: preference)
+    }
+
+    func downloadRemoteSubtitle(context: RemoteSubtitleContext, subtitleID: String) async throws -> MediaTrack? {
+        try await downloadRemoteSubtitle(itemID: context.itemID, subtitleID: subtitleID)
+        return nil
+    }
+
+    func subtitleTracks(context: RemoteSubtitleContext) async throws -> [MediaTrack] {
+        try await subtitleTracks(forItemID: context.itemID)
+    }
 
     /// Convenience: search with the default (no-op) preference. Keeps existing
     /// callers/tests that don't care about the SDH/Forced knobs working.

@@ -19,6 +19,66 @@ private final class LiveChannelObservationChanges: @unchecked Sendable {
 
 @MainActor
 final class LiveChannelPlayerModelTests: XCTestCase {
+    func testPausingAtTheEdgeKeepsTimeShiftIntentWhileTheDelayGrows() async {
+        let engine = LiveEngineSpy()
+        engine.liveSnapshot.behindLiveSeconds = 1
+        let model = makeModel(engine: engine)
+        defer { model.stop() }
+        await model.start()
+        model.togglePlayPause()
+        model.refreshFromEngine()
+        XCTAssertFalse(model.canGoLive)
+        engine.liveSnapshot.behindLiveSeconds = 5
+        model.refreshFromEngine()
+        XCTAssertTrue(model.canGoLive, "An initial near-edge refresh must not forget the deliberate pause.")
+    }
+
+    func testLiveStyleRefreshesOverlayAndNativeRendererWithoutRetuning() async throws {
+        let name = "LiveCaptionStyle.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let settings = SubtitleStyleModel(store: SubtitleStyleStore(defaults: defaults, namespace: "viewer"))
+        settings.style.followsSystemStyle = false
+        settings.style.textColor = .yellow
+        settings.usesSeparateLiveTVStyle = true
+        settings.resolvedLiveTVStyle.fontScale = 0.4
+        let preferences = LiveChannelTrackPreferences(namespace: "viewer", defaults: defaults)
+        let engine = LiveEngineSpy()
+        let model = LiveChannelPlayerModel(
+            engine: engine, streamURL: URL(string: "https://example.invalid/channel.m3u8")!,
+            trackPreferences: preferences
+        )
+        defer { model.stop() }
+        await model.start()
+        model.refreshFromEngine()
+        XCTAssertEqual(model.subtitles.style.fontScale, 0.4)
+        XCTAssertEqual(engine.subtitleStyles.last, settings.resolvedLiveTVStyle)
+
+        settings.resolvedLiveTVStyle.followsSystemStyle = true
+        model.refreshFromEngine()
+        XCTAssertTrue(model.subtitles.style.followsSystemStyle)
+        XCTAssertEqual(engine.subtitleStyles.last, settings.resolvedLiveTVStyle)
+        XCTAssertFalse(settings.style.followsSystemStyle)
+        let count = engine.subtitleStyles.count
+        model.refreshFromEngine()
+        XCTAssertEqual(engine.subtitleStyles.count, count)
+
+        let other = SubtitleStyleModel(store: SubtitleStyleStore(defaults: defaults, namespace: "other"))
+        other.style.textColor = .pink
+        model.refreshFromEngine()
+        XCTAssertEqual(engine.subtitleStyles.count, count)
+
+        settings.usesSeparateLiveTVStyle = false
+        model.refreshFromEngine()
+        XCTAssertEqual(model.subtitles.style, settings.style)
+        XCTAssertEqual(engine.subtitleStyles.last, settings.style)
+        XCTAssertEqual(engine.liveLoads, 1)
+        engine.onProgrammeChanged?()
+        model.refreshFromEngine()
+        XCTAssertEqual(engine.subtitleStyles.last, settings.style)
+        XCTAssertEqual(engine.subtitleStyles.count, count + 2)
+    }
+
     func testLiveFailureCopyDoesNotAskPublicChannelViewersToSignInAgain() {
         let messages: [(AppError, String)] = [
             (.notFound, "playlist link may be outdated"),
@@ -583,6 +643,8 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         let model = makeModel(engine: engine)
         defer { model.stop() }
         await model.start()
+        model.togglePlayPause()
+        model.refreshFromEngine()
         XCTAssertTrue(model.canGoLive)
         await model.goLive()
         XCTAssertEqual(engine.goLiveCount, 1)
@@ -595,8 +657,12 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         let model = makeModel(engine: engine)
         defer { model.stop() }
         await model.start()
+        model.togglePlayPause()
+        model.refreshFromEngine()
+        XCTAssertTrue(model.canGoLive)
         engine.onGoLive = { model.togglePlayPause() }
         await model.goLive()
+        XCTAssertEqual(engine.goLiveCount, 1)
         model.refreshFromEngine()
         XCTAssertEqual(engine.playCount, 0)
         XCTAssertEqual(model.phase, .paused)
@@ -606,8 +672,12 @@ final class LiveChannelPlayerModelTests: XCTestCase {
         let engine = LiveEngineSpy()
         let model = makeModel(engine: engine)
         await model.start()
+        model.togglePlayPause()
+        model.refreshFromEngine()
+        XCTAssertTrue(model.canGoLive)
         engine.onGoLive = { model.stop() }
         await model.goLive()
+        XCTAssertEqual(engine.goLiveCount, 1)
         XCTAssertEqual(engine.playCount, 0)
         XCTAssertNil(engine.onLiveSourceReset)
     }
@@ -824,26 +894,18 @@ final class LiveChannelPlayerModelTests: XCTestCase {
 }
 
 final class LiveChannelPlaybackFocusPolicyTests: XCTestCase {
-    func testPlaybackPrefersPlayPauseWhenAvailable() {
-        let availability = LiveChannelPlaybackFocusPolicy.Availability(
-            isPresented: true,
-            canPlayPause: true,
-            canGoLive: false,
-            canToggleFavorite: true
-        )
+    func testPlaybackPrefersTheTimelineWhateverElseIsAvailable() {
+        for canPlayPause in [true, false] {
+            let availability = LiveChannelPlaybackFocusPolicy.Availability(
+                isPresented: true,
+                canPlayPause: canPlayPause,
+                canGoLive: false,
+                canToggleFavorite: true
+            )
 
-        XCTAssertEqual(availability.preferredControl, .playPause)
-    }
-
-    func testPlaybackFallsBackToNextWhenPlayPauseIsUnavailable() {
-        let availability = LiveChannelPlaybackFocusPolicy.Availability(
-            isPresented: true,
-            canPlayPause: false,
-            canGoLive: false,
-            canToggleFavorite: true
-        )
-
-        XCTAssertEqual(availability.preferredControl, .next)
+            XCTAssertEqual(availability.preferredControl, .timeline)
+            XCTAssertTrue(availability.contains(availability.preferredControl))
+        }
     }
 
     func testNewPlayPauseAvailabilityDoesNotInvalidateExistingTransportFocus() {
@@ -856,7 +918,8 @@ final class LiveChannelPlaybackFocusPolicyTests: XCTestCase {
 
         XCTAssertTrue(availability.contains(.next))
         XCTAssertTrue(availability.contains(.previous))
-        XCTAssertTrue(availability.contains(.tracks))
+        XCTAssertTrue(availability.contains(.audio))
+        XCTAssertTrue(availability.contains(.subtitles))
     }
 
     func testPlaybackEligibilityExcludesMissingAndEscapeControls() {
@@ -871,7 +934,8 @@ final class LiveChannelPlaybackFocusPolicyTests: XCTestCase {
         XCTAssertTrue(availability.contains(.goLive))
         XCTAssertTrue(availability.contains(.next))
         XCTAssertTrue(availability.contains(.favorite))
-        XCTAssertTrue(availability.contains(.tracks))
+        XCTAssertTrue(availability.contains(.audio))
+        XCTAssertTrue(availability.contains(.subtitles))
         XCTAssertFalse(availability.contains(.playPause))
         XCTAssertFalse(availability.contains(.surface))
         XCTAssertFalse(availability.contains(.close))
@@ -881,7 +945,7 @@ final class LiveChannelPlaybackFocusPolicyTests: XCTestCase {
             LiveChannelPlaybackFocusPolicy.Availability.hidden.contains(.next)
         )
         XCTAssertFalse(
-            LiveChannelPlaybackFocusPolicy.Availability.hidden.contains(.tracks)
+            LiveChannelPlaybackFocusPolicy.Availability.hidden.contains(.timeline)
         )
     }
 
@@ -1257,6 +1321,8 @@ final class LiveEngineSpy: LiveChannelEngine {
     var externalPlaybackRouteName: String?
     var onPresentationLayerChanged: (() -> Void)?
     var nativeSubtitlesActive = false
+    var subtitleStyles: [SubtitleStyle] = []
+    func updateSubtitleStyle(_ style: SubtitleStyle) { subtitleStyles.append(style) }
     func pictureInPicturePlayerLayer() -> AVPlayerLayer? { nil }
     func setPictureInPictureActive(_ active: Bool) { continuesPlaybackInBackground = active }
     func setNativeSubtitlesActive(_ active: Bool) { nativeSubtitlesActive = active }

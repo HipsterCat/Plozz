@@ -117,7 +117,7 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
                 XCTAssertEqual(layout.contentFrame.maxX + layout.guideTrailingExtension, layout.bounds.maxX)
                 XCTAssertEqual(
                     layout.contentFrame.minX - layout.bounds.minX,
-                    (navigationInset > 0 ? 90 : 32) + navigationInset
+                    32 + (navigationInset > 0 ? PrototypeLayout.inset : 0) + navigationInset
                 )
                 XCTAssertEqual(PrototypeLayout.guideTrailingInset, 0)
                 XCTAssertEqual(PrototypeLayout.guideShape.cornerRadii.topTrailing, 0)
@@ -507,7 +507,7 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
         XCTAssertEqual(rail.bounds, plain.bounds)
         XCTAssertEqual(rail.videoFrame, plain.videoFrame)
         #if os(tvOS)
-        XCTAssertEqual(rail.contentFrame.minX - plain.contentFrame.minX, 112 + 90 - 32, accuracy: 0.5)
+        XCTAssertEqual(rail.contentFrame.minX - plain.contentFrame.minX, 112 + PrototypeLayout.inset, accuracy: 0.5)
         #else
         XCTAssertEqual(rail.contentFrame.minX - plain.contentFrame.minX, 112, accuracy: 0.5)
         #endif
@@ -530,7 +530,7 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
                 pinned.contentFrame.minX - normal.contentFrame.minX,
                 64 + PrototypeLayout.inset
             )
-            XCTAssertEqual(pinned.contentFrame.minX - pinned.bounds.minX, max(64, safeLeading) + 64)
+            XCTAssertEqual(pinned.contentFrame.minX - pinned.bounds.minX, 32 + PrototypeLayout.inset + 64)
             XCTAssertEqual(pinned.contentFrame.maxX, normal.contentFrame.maxX)
             XCTAssertEqual(pinned.videoFrame, normal.videoFrame)
             XCTAssertEqual(hiddenForSearch.contentFrame, normal.contentFrame)
@@ -610,7 +610,14 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
 
     func testGuideAndLogoCornersStayConcentric() {
         XCTAssertEqual(PrototypeLayout.guideRadius, PrototypeLayout.rowRadius + PrototypeLayout.guideInset)
+        #if os(iOS)
+        // A phone's short rows take a squarer, TV-proportioned radius instead.
+        if UIDevice.current.userInterfaceIdiom != .phone {
+            XCTAssertEqual(PrototypeLayout.rowRadius, PrototypeLayout.logoRadius + PrototypeLayout.rowInset)
+        }
+        #else
         XCTAssertEqual(PrototypeLayout.rowRadius, PrototypeLayout.logoRadius + PrototypeLayout.rowInset)
+        #endif
         XCTAssertEqual(PrototypeLayout.rowHeight, PrototypeLayout.stationSize + PrototypeLayout.rowInset * 2)
         XCTAssertEqual(PrototypeLayout.stationArtworkInset, PrototypeLayout.guideInset + 8)
         XCTAssertEqual(
@@ -644,7 +651,7 @@ final class LiveTVGuideRowLayoutTests: XCTestCase {
             #else
             XCTAssertLessThanOrEqual(size.width, width + 0.5)
             #endif
-            XCTAssertGreaterThanOrEqual(size.height, PrototypeLayout.controlHeight)
+            XCTAssertGreaterThanOrEqual(size.height, PrototypeBrowseToolbar.controlHeight)
         }
     }
 

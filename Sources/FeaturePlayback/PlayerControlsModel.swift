@@ -22,14 +22,17 @@ public struct PlayerTrackOption: Identifiable, Hashable, Sendable {
     public static let offID = -1
     public var id: Int
     public var title: Text
+    /// Localized plain-text counterpart for native UIKit menus.
+    public var nativeTitle: String
     public var isSelected: Bool
     /// `true` for an external (downloaded / sidecar) subtitle, so the menu can mark
     /// it apart from the media's embedded tracks.
     public var isExternal: Bool
 
-    public init(id: Int, title: Text, isSelected: Bool, isExternal: Bool = false) {
+    public init(id: Int, title: Text, isSelected: Bool, isExternal: Bool = false, nativeTitle: String? = nil) {
         self.id = id
         self.title = title
+        self.nativeTitle = nativeTitle ?? String(localized: "Track \(id)") // l10n:content - legacy UIKit fallback; track builders supply locale-refreshed titles.
         self.isSelected = isSelected
         self.isExternal = isExternal
     }
@@ -37,12 +40,14 @@ public struct PlayerTrackOption: Identifiable, Hashable, Sendable {
     public static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id
             && lhs.title == rhs.title
+            && lhs.nativeTitle == rhs.nativeTitle
             && lhs.isSelected == rhs.isSelected
             && lhs.isExternal == rhs.isExternal
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(id)
+        hasher.combine(nativeTitle)
         hasher.combine(isSelected)
         hasher.combine(isExternal)
     }
@@ -62,7 +67,7 @@ public enum SecondarySubtitleStatus: Equatable, Sendable {
 }
 
 /// State of the in-player subtitle **search + download** screen (server-proxied
-/// on Jellyfin/Plex). Drives the results list, spinner, and empty/error copy.
+/// by supported media servers). Drives the results list, spinner, and empty/error copy.
 public enum SubtitleDownloadState: Equatable, Sendable {
     /// Nothing searched yet.
     case idle
@@ -78,6 +83,8 @@ public enum SubtitleDownloadState: Equatable, Sendable {
     case added
     /// The search or download failed.
     case failed
+    /// The provider gave an actionable reason rather than an empty result.
+    case unavailable(LocalizedStringResource)
 }
 
 /// The hand-off that decides where Siri-Remote focus lands when the player's
@@ -171,6 +178,7 @@ public final class InfoCardModel {
     public var overview: String = ""   // l10n:content — media metadata from the server
     /// Technical badges (resolution/codec/HDR/etc.).
     public var badges: [MediaBadge] = []
+    public var isTranscoding = false
     /// On-screen talent for what is playing, driving the in-player Cast tab.
     ///
     /// Arrives with the item, so it needs no request of its own — and the tab
@@ -396,6 +404,7 @@ public final class PlayerControlsModel {
     public let infoCard = InfoCardModel()
 
     // MARK: Track menus
+    public let versions = PlayerVersionMenuModel()
     public var audioOptions: [PlayerTrackOption] = []
     public var subtitleOptions: [PlayerTrackOption] = []
     /// Eligible tracks for the **second** (dual) subtitle line, as an ordered
@@ -485,6 +494,9 @@ public final class PlayerControlsModel {
     /// while focus is in the bar and restarts the idle auto-hide countdown on
     /// each change, so the transport never hides out from under an active viewer.
     public var controlBarActivity: Int = 0
+    /// Joins the Siri Remote's Play/Pause press and its Now Playing command into
+    /// one input: the view model reports commands, the input controller presses.
+    let remotePlayPause = RemotePlayPauseInput()
 
 
     // MARK: Skipping
@@ -523,6 +535,7 @@ public final class PlayerControlsModel {
     }
 
     public var hasSelectableAudio: Bool { audioOptions.count > 1 }
+    public var hasAudioControls: Bool { hasSelectableAudio || engineCapabilities.contains(.dialogEnhance) }
     public var hasSelectableSubtitles: Bool { !subtitleOptions.isEmpty }
 
     /// The skippable segment whose window currently contains the live position,
@@ -562,10 +575,10 @@ public final class PlayerControlsModel {
     public var skipButtonVisible: Bool {
         guard activeSkipSegment != nil else { return false }
         if creditsOwnedByUpNext { return false }
-        // Skip OFF must never surface a button — even after a grace-window seek.
-        // Markers are now fetched when the Up Next card is enabled (skip can be
-        // off), so without this guard a seek near an intro/credits marker would
-        // resurrect a Skip button the viewer turned off.
+        // Skip OFF (for this segment's kind) must never surface a button — even
+        // after a grace-window seek. Markers are fetched when the Up Next card is
+        // enabled or another kind is on, so without this guard a seek near a
+        // marker would resurrect a Skip button the viewer turned off.
         guard skipMode != .off else { return false }
         if activeSkipWasSeekEntered { return true }
         return skipMode == .on || skipMode == .autoDelay
@@ -626,10 +639,18 @@ public final class PlayerControlsModel {
         return !hasCreditsMarker && isNearEndByTime
     }
 
-    /// How intros/credits are handled (Off / On / Auto (delay) / Auto (instant)).
-    /// Mirrors the per-profile setting; set when markers load. Drives whether the
-    /// Skip button is surfaced, auto-skipped after a delay, or skipped instantly.
-    public var skipMode: SkipIntrosMode = .off
+    /// How each kind of marker is handled (Off / On / Auto (delay) / Auto
+    /// (instant)), per the per-profile settings; set when markers load.
+    public var skipModes: SkipMarkerModes = .allOff
+
+    /// The mode in force right now: the active segment's kind decides it. With
+    /// no active segment it's the credits mode — the only time it's read then is
+    /// for the Up Next card, which stands in for credits (including the
+    /// time-based fallback on marker-less content). Drives whether the Skip
+    /// button is surfaced, auto-skipped after a delay, or skipped instantly.
+    public var skipMode: SkipIntrosMode {
+        skipModes.mode(for: activeSkipSegment?.kind ?? .credits)
+    }
 
     /// In `.autoDelay`, the playback position (seconds) at which the active
     /// segment auto-skips. Set while the button counts down; `nil` otherwise.

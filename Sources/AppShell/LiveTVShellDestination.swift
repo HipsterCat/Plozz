@@ -8,6 +8,25 @@ import FeatureLiveTVCore
 import FeaturePlayback
 import SwiftUI
 
+/// Match native tabs: construct Live TV on its first visit, then retain its state.
+struct RetainedLiveTVDestination<Content: View>: View {
+    let isActive: Bool
+    private let content: () -> Content
+    @State private var hasAppeared = false
+
+    init(isActive: Bool, @ViewBuilder content: @escaping () -> Content) {
+        self.isActive = isActive
+        self.content = content
+    }
+
+    var body: some View {
+        if isActive || hasAppeared {
+            content()
+                .onAppear { hasAppeared = true }
+        }
+    }
+}
+
 /// Composition root for Live TV inside Plozz's navigation.
 ///
 /// The prototype owns one player construction site and keeps this child at a
@@ -79,7 +98,10 @@ struct LiveTVShellDestination: View {
     }
 
     private var liveTVContent: some View {
-        LiveTVCatalogStorageView(load: { try LiveTVCatalogStorage.cache(profileID: profileID) }) { cache in
+        LiveTVCatalogStorageView(
+            load: { try LiveTVCatalogStorage.cache(profileID: profileID) },
+            loading: AnyView(LiveTVLoadingSkeleton())
+        ) { cache in
             LiveTVLibraryRuntimeView(profileID: profileID, profiles: profiles, accounts: accountsProviders) { library in
                 liveTVContent(cache: cache, library: library)
             }
@@ -156,7 +178,11 @@ struct LiveTVShellDestination: View {
                 isMultiview: playback.isMultiview,
                 trackPreferences: library.trackPreferences,
                 isAuthorized: playback.isAuthorized,
-                onOpenLibraryItem: playback.openLibraryItem
+                onOpenLibraryItem: playback.openLibraryItem,
+                program: playback.program,
+                loadOnNow: playback.onNow,
+                onTuneChannel: playback.tuneChannel,
+                guideOverlay: playback.guideOverlay
             )
         }
         .id(profileID)

@@ -34,6 +34,38 @@ first-class backends; co-equal with `ProviderJellyfin`.
   rewrites the stored admin account's token; per-user tokens live in a
   short-lived override map.
 
+## Collections
+
+`libraries()` returns actual server sections only. Collection discovery is an
+option inside a movie/TV library, exposed by `.libraryCollections` and
+`MediaProvider.collections(in:page:)`. It pages the dedicated
+`/library/sections/{sectionID}/collections` endpoint with the selected sort.
+Discovery deliberately omits `includeElements=Stream`: Plex documents
+`includeElements` as an element whitelist, not a request for additional streams.
+Nonempty envelopes with missing metadata are failures, not empty libraries.
+
+Previously persisted `plex:collections:<sectionID>` IDs still route to scoped
+discovery, but new library lists never synthesize these shortcuts. Legacy
+`MediaLibrary` Codable fields remain readable while navigation migrates caches.
+
+Collection membership
+uses `MediaProvider.collectionMembers(of:page:)`, backed by paged
+`/library/metadata/{ratingKey}/children`, with no type or sort override. That same
+endpoint serves static and smart collections and preserves their server order.
+Both platforms browse members in the existing vertical library grid, fetching
+bounded pages on demand rather than loading a whole collection before first paint.
+Failures remain separate from empty results and expose retry.
+
+Protocol references: [Plex's official API and response customization](https://developer.plex.tv/pms/)
+documents the dedicated collection endpoint and `MediaContainer.Metadata` JSON
+envelope. python-plexapi uses the alternative `/all?type=18` discovery query:
+[`LibrarySection.collections` / `search`](https://github.com/pkkid/python-plexapi/blob/master/plexapi/library.py),
+[`SEARCHTYPES`](https://github.com/pkkid/python-plexapi/blob/master/plexapi/utils.py),
+and [`Collection._items`](https://github.com/pkkid/python-plexapi/blob/master/plexapi/collection.py)
+documents the shared static/smart membership path.
+
+Tests: `PlexCollectionBrowsingTests` and shared `CollectionDetailBrowsingTests`.
+
 ## Where to look first
 
 - `PlexProvider.swift` / `PlexClient.swift` — the `MediaProvider` entry.

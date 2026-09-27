@@ -16,6 +16,12 @@ struct ProductionHomeFixture: View {
     @State private var nativeSidebarFocus = NavigationDestinationFocusHandoff()
 
     private var isPinned: Bool { ProcessInfo.processInfo.arguments.contains("--pinned-home") }
+    /// `--focus-style=<name>` picks a card focus style; native system focus otherwise.
+    private static var focusStyle: CardFocusStyle {
+        ProcessInfo.processInfo.arguments
+            .first { $0.hasPrefix("--focus-style=") }
+            .flatMap { CardFocusStyle(rawValue: String($0.dropFirst("--focus-style=".count))) } ?? .system
+    }
     private var isNativeSidebar: Bool {
         ProcessInfo.processInfo.arguments.contains("--native-sidebar-home")
     }
@@ -99,12 +105,26 @@ struct ProductionHomeFixture: View {
                 ProgressView("Preparing local Home data")
             }
         }
-        .environment(\.plozzCardFocusStyle, .system)
-        .environment(\.plozzCardStyle, .borderless)
+        .environment(\.plozzCardFocusStyle, Self.focusStyle)
+        .environment(\.plozzCardStyle, ProcessInfo.processInfo.arguments.contains("--framed-cards") ? .framed : .borderless)
         .task {
             guard fixture == nil else { return }
             fixture = await ProductionHomeState.load()
         }
+        .task {
+            guard ProcessInfo.processInfo.arguments.contains("--home-hitch-positive-control") else { return }
+            for _ in 0..<200 {
+                do { try await Task.sleep(for: .milliseconds(450)) }
+                catch is CancellationError { return }
+                catch { preconditionFailure("Unexpected fixture control delay failure: \(error)") }
+                Self.blockForHitchControl()
+            }
+        }
+    }
+
+    @MainActor
+    private static func blockForHitchControl() {
+        Thread.sleep(forTimeInterval: 0.12)
     }
 }
 
@@ -149,6 +169,22 @@ private struct ProductionHomeContent: View {
             }
         }
         .reportsNavigationDepth(path.count, to: isPinned ? fixture.chrome : nil)
+        .mediaItemActionHandler(
+            ProcessInfo.processInfo.arguments.contains("--home-menu-control") ? fixture.actions : nil
+        )
+    }
+}
+
+@MainActor
+private final class ProductionHomeActions: MediaItemActionHandling {
+    private(set) var performed: [MediaItemAction] = []
+
+    func actions(for item: MediaItem, context: MediaItemActionContext) -> [MediaItemAction] {
+        [.markWatched, .addToWatchlist, .removeFromContinueWatching]
+    }
+
+    func perform(_ action: MediaItemAction, on item: MediaItem, context: MediaItemActionContext) {
+        performed.append(action)
     }
 }
 
@@ -161,6 +197,7 @@ private final class ProductionHomeState {
     let trailer = HeroTrailerController()
     let runtime = HomeHeroRuntimeState()
     let chrome = NavigationChromeModel()
+    let actions = ProductionHomeActions()
     private let provider: ProductionHomeProvider
     private var details: [String: ItemDetailViewModel] = [:]
 
@@ -177,9 +214,12 @@ private final class ProductionHomeState {
             contentStore: InMemoryHomeContentStore()
         )
         var settings = heroSettings.settings
+        settings.isEnabled = !ProcessInfo.processInfo.arguments.contains("--hero-disabled-home")
         settings.sources = [.continueWatching, .recentlyAdded]
         settings.autoAdvance = false
         settings.trailersEnabled = false
+        // Settings persist between launches, so every launch picks its layout.
+        settings.style = ProcessInfo.processInfo.arguments.contains("--immersive-home") ? .followsFocus : .carousel
         heroSettings.settings = settings
         background.settings.homeTrailerEnabled = false
     }
@@ -200,28 +240,53 @@ private final class ProductionHomeState {
         let backdrop = await artwork(name: "backdrop", size: CGSize(width: 960, height: 540), color: .systemBlue)
         let logo = await artwork(name: "logo", size: CGSize(width: 320, height: 100), color: .white)
         let state = ProductionHomeState(poster: poster, backdrop: backdrop, logo: logo)
-        await state.model.load()
+        if ProcessInfo.processInfo.arguments.contains("--slow-home-load") {
+            // Show Home at once and let its rows arrive late, over the skeleton.
+            Task { await state.model.load() }
+        } else {
+            await state.model.load()
+        }
         return state
     }
 
     private static func artwork(name: String, size: CGSize, color: UIColor) async -> URL {
         let url = URL(string: "https://production-home.example.test/\(name).png")!
-        let image = UIGraphicsImageRenderer(size: size).image {
-            color.setFill()
-            $0.fill(CGRect(origin: .zero, size: size))
+        let complex = ProcessInfo.processInfo.arguments.contains("--complex-home-artwork")
+        let image = UIGraphicsImageRenderer(size: size).image { context in
+            if complex, name == "logo" {
+                for index in 0..<8 {
+                    UIColor(hue: CGFloat(index) / 8, saturation: 0.85, brightness: 0.95, alpha: 1).setFill()
+                    UIBezierPath(roundedRect: CGRect(
+                        x: CGFloat(index) * size.width / 8 + 2, y: 15,
+                        width: size.width / 8 - 4, height: 70 - CGFloat(index % 3) * 9
+                    ), cornerRadius: 5).fill()
+                }
+            } else if complex {
+                NativeComparisonPattern.makeImage().draw(in: CGRect(origin: .zero, size: size))
+            } else {
+                color.setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+            }
         }
         guard let bytes = image.pngData(), let cache = ArtworkSession.shared.configuration.urlCache else {
             preconditionFailure("The isolated Home fixture requires its local artwork cache.")
         }
+        let references = ProcessInfo.processInfo.arguments.contains("--distinct-home-artwork")
+            ? [url] + (0..<150).map { ProductionHomeProvider.artworkURL(url, index: $0) }
+            : [url]
+        for reference in references {
+            for variant in ArtworkImageVariant.allCases {
+                let requestURL = variant.requestURL(for: reference)
+                let response = HTTPURLResponse(
+                    url: requestURL, statusCode: 200, httpVersion: nil,
+                    headerFields: ["Content-Type": "image/png", "Cache-Control": "max-age=3600"]
+                )!
+                cache.storeCachedResponse(
+                    CachedURLResponse(response: response, data: bytes), for: URLRequest(url: requestURL)
+                )
+            }
+        }
         for variant in ArtworkImageVariant.allCases {
-            let requestURL = variant.requestURL(for: url)
-            let response = HTTPURLResponse(
-                url: requestURL, statusCode: 200, httpVersion: nil,
-                headerFields: ["Content-Type": "image/png", "Cache-Control": "max-age=3600"]
-            )!
-            cache.storeCachedResponse(
-                CachedURLResponse(response: response, data: bytes), for: URLRequest(url: requestURL)
-            )
             guard await ArtworkImageCache.shared.image(for: url, variant: variant) != nil else {
                 preconditionFailure("The isolated Home fixture artwork failed to decode.")
             }
@@ -234,6 +299,18 @@ private struct ProductionHomeProvider: MediaProvider {
     let poster: URL
     let backdrop: URL
     let logo: URL
+    private var rowCount: Int {
+        ProcessInfo.processInfo.arguments.contains("--home-performance-fixture") ? 75 : 24
+    }
+
+    static func artworkURL(_ base: URL, index: Int) -> URL {
+        base.appending(queryItems: [URLQueryItem(name: "fixture-item", value: String(index))])
+    }
+
+    private func reference(_ base: URL, index: Int) -> URL {
+        ProcessInfo.processInfo.arguments.contains("--distinct-home-artwork")
+            ? Self.artworkURL(base, index: index) : base
+    }
     var kind: ProviderKind { .jellyfin }
     var session: UserSession {
         UserSession(
@@ -243,24 +320,37 @@ private struct ProductionHomeProvider: MediaProvider {
     }
 
     private func movie(_ index: Int) -> MediaItem {
+        let poster = reference(self.poster, index: index)
+        let backdrop = reference(self.backdrop, index: index)
         var item = MediaItem(
             id: "home-movie-\(index)", title: "Fixture movie \(index)", kind: .movie,
             posterURL: poster, backdropURL: backdrop
         )
         item.sourceAccountID = "home-fixture"
-        item.logoURL = logo
+        item.logoURL = reference(logo, index: index)
         item.heroBackdropURL = backdrop
         item.runtime = 7200
-        item.resumePosition = index < 24 ? 1800 : nil
+        item.resumePosition = index < rowCount ? 1800 : nil
         item.overview = "A locally supplied movie for measuring the production Home view."
         return item
     }
 
     func libraries() async throws -> [MediaLibrary] { [] }
-    func continueWatching(limit: Int) async throws -> [MediaItem] { Array((0..<24).prefix(limit).map(movie)) }
-    func latest(limit: Int) async throws -> [MediaItem] { Array((24..<48).prefix(limit).map(movie)) }
+    func continueWatching(limit: Int) async throws -> [MediaItem] {
+        try await holdForSlowLoad()
+        return Array((0..<rowCount).prefix(limit).map(movie))
+    }
+    func latest(limit: Int) async throws -> [MediaItem] {
+        try await holdForSlowLoad()
+        return Array((rowCount..<(rowCount * 2)).prefix(limit).map(movie))
+    }
+    /// Keeps Home on its loading skeleton for a while so it can be captured.
+    private func holdForSlowLoad() async throws {
+        guard ProcessInfo.processInfo.arguments.contains("--slow-home-load") else { return }
+        try await Task.sleep(for: .seconds(6))
+    }
     func item(id: String) async throws -> MediaItem {
-        guard let index = Int(id.split(separator: "-").last ?? ""), (0..<48).contains(index) else {
+        guard let index = Int(id.split(separator: "-").last ?? ""), (0..<(rowCount * 2)).contains(index) else {
             throw AppError.notFound
         }
         return movie(index)
@@ -272,5 +362,8 @@ private struct ProductionHomeProvider: MediaProvider {
     func search(query: String, limit: Int) async throws -> [MediaItem] { [] }
     func playbackInfo(for itemID: String) async throws -> PlaybackRequest { throw AppError.notFound }
     func reportPlayback(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {}
-    func imageURL(itemID: String, kind: ImageKind, maxWidth: Int?) -> URL? { poster }
+    func imageURL(itemID: String, kind: ImageKind, maxWidth: Int?) -> URL? {
+        guard let index = Int(itemID.split(separator: "-").last ?? "") else { return poster }
+        return reference(poster, index: index)
+    }
 }

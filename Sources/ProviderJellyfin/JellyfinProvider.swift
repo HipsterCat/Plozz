@@ -13,6 +13,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     public let accountID: String
     public let credentialRevision: CredentialRevision
     let client: JellyfinClient
+    let collectionLibraryCache = MediaBrowserCollectionLibraryCache()
     let liveTVLeases = JellyfinLiveTVLeaseStore()
     let themeArchiveResolver: @Sendable (String?) async -> URL?
     private let authenticatedStreamProber: (any AuthenticatedHTTPStreamProbing)?
@@ -785,6 +786,20 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         }
     }
 
+    public func collectionMembers(of collectionID: String, page: PageRequest) async throws -> MediaPage {
+        guard page.startIndex >= 0, page.limit > 0 else { throw AppError.invalidResponse }
+        let response = try await client.collectionMembers(
+            userID: session.userID, collectionID: collectionID, page: page
+        )
+        let count = response.Items.count
+        return MediaPage(
+            items: response.Items.map(map(item:)),
+            startIndex: page.startIndex,
+            totalCount: response.TotalRecordCount
+                ?? (page.startIndex + count + (count == page.limit && count > 0 ? 1 : 0))
+        )
+    }
+
     /// The alphabet fast-scroll index for a name-sorted library. For each of
     /// A…Z it asks the server how many items sort before that letter
     /// (`NameLessThan=L`, matched against `SortName` — the same key the browse
@@ -812,6 +827,13 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
                 includeItemTypes: includeItemTypes, recursive: recursive
             )
         }
+        async let lastLetterTask: Int = limiter.run {
+            try await client.itemCount(
+                userID: userID, parentID: containerID,
+                includeItemTypes: includeItemTypes, recursive: recursive,
+                nameStartsWith: "Z"
+            )
+        }
 
         var offsets: [String: Int] = [:]
         try await withThrowingTaskGroup(of: (String, Int).self) { group in
@@ -830,9 +852,19 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             for try await (letter, count) in group { offsets[letter] = count }
         }
         let total = try await totalTask
+        let lastLetterCount = try await lastLetterTask
+        var previous = 0
+        for letter in letters {
+            guard let offset = offsets[letter], offset >= previous, offset <= total else {
+                throw AppError.invalidResponse
+            }
+            previous = offset
+        }
+        guard lastLetterCount <= total - previous else { throw AppError.invalidResponse }
 
         let entries = LibraryLetterIndex.entries(
-            lessThanOffsetsByLetter: offsets, totalCount: total, direction: sort.direction
+            lessThanOffsetsByLetter: offsets, totalCount: total, lastLetterCount: lastLetterCount,
+            direction: sort.direction
         )
         PlozzLog.networking.info(
             "Library letter index: container=\(containerID) total=\(total) letters=\(entries.count) dir=\(sort.direction.rawValue)"
@@ -928,6 +960,21 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     }
 
     public func playbackInfo(for itemID: String, mediaSourceID: String?, forceTranscode: Bool) async throws -> PlaybackRequest {
+        try await resolvePlayback(for: itemID, mediaSourceID: mediaSourceID, forceTranscode: forceTranscode)
+    }
+
+    private func validateStreamingDecision(_ info: PlaybackInfoResponse) async throws {
+        guard let error = info.streamingError else { return }
+        if let id = info.PlaySessionId { await releaseStreamingEncoding(id) }
+        PlozzLog.playback.error("Server rejected streaming negotiation: \(error.diagnosticCode ?? "unspecified")")
+        throw error
+    }
+
+    func resolvePlayback(
+        for itemID: String, mediaSourceID: String?, forceTranscode: Bool,
+        streaming: StreamingPlaybackOptions? = nil
+    ) async throws -> PlaybackRequest {
+        try streaming?.quality.validate()
         // Jellyfin needs two independent round-trips here — the item detail and
         // the playback decision (media sources). They don't depend on each other,
         // so issue them concurrently to halve the time-to-first-frame latency
@@ -938,12 +985,69 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             userID: session.userID,
             itemID: itemID,
             mediaSourceID: mediaSourceID,
-            mode: forceTranscode ? .transcode : .auto
+            mode: forceTranscode || streaming?.forceTranscoding == true ? .transcode : .auto,
+            streaming: streaming
         )
         let detail = try await detailTask
         var info = try await infoTask
+        var streaming = streaming
+        if streaming != nil { try await validateStreamingDecision(info) }
         // Prefer the explicitly chosen source; fall back to the server default.
-        guard var source = Self.selectSource(mediaSourceID, in: info.MediaSources) else { throw AppError.notFound }
+        guard var source = Self.selectSource(mediaSourceID, in: info.MediaSources) else {
+            if streaming != nil, let id = info.PlaySessionId { await releaseStreamingEncoding(id) }
+            if streaming != nil { throw StreamingQualityError.sourceUnavailable }
+            throw AppError.notFound
+        }
+        if streaming != nil, let mediaSourceID, source.Id != mediaSourceID {
+            if let id = info.PlaySessionId { await releaseStreamingEncoding(id) }
+            PlozzLog.playback.error("Streaming quality negotiation returned a different media source.")
+            throw StreamingQualityError.sourceUnavailable
+        }
+        if let options = streaming {
+            let tracks = (source.MediaStreams ?? detail.MediaStreams ?? []).filter { $0.Type == "Audio" }.map(map(stream:))
+            streaming?.audioTrack = options.selectedAudio(in: tracks)
+            let subtitles = (source.MediaStreams ?? detail.MediaStreams ?? []).filter { $0.Type == "Subtitle" }.map(map(stream:))
+            let selected = options.selectedSubtitle(in: subtitles)
+            streaming?.subtitleTrack = selected
+            streaming?.subtitlesOff = selected == nil
+        }
+        let mustConvert = streaming.map { $0.forceTranscoding || forceTranscode || !source.fits($0.quality) } ?? false
+        if mustConvert, source.SupportsTranscoding == false {
+            if let id = info.PlaySessionId { await releaseStreamingEncoding(id) }
+            PlozzLog.playback.error("Server marked this source as unavailable for transcoding.")
+            throw StreamingQualityError.noCompatibleStream
+        }
+        if streaming != nil, !mustConvert, source.SupportsDirectPlay == true {
+            source.TranscodingUrl = nil
+        }
+        if let streaming, mustConvert, source.TranscodingUrl == nil {
+            if let oldSession = info.PlaySessionId {
+                do { try await client.stopActiveEncoding(playSessionID: oldSession) }
+                catch { PlozzLog.playback.error("Unable to release a rejected streaming decision.") }
+            }
+            info = try await client.playbackInfo(
+                userID: session.userID, itemID: itemID, mediaSourceID: source.Id ?? mediaSourceID,
+                mode: .transcode, streaming: streaming
+            )
+            try await validateStreamingDecision(info)
+            guard let converted = Self.selectSource(source.Id ?? mediaSourceID, in: info.MediaSources),
+                  converted.Id == source.Id, converted.TranscodingUrl != nil else {
+                if let id = info.PlaySessionId { await releaseStreamingEncoding(id) }
+                PlozzLog.playback.error("Server did not provide the requested bounded transcode.")
+                throw StreamingQualityError.unavailable
+            }
+
+            source = converted
+        }
+        if let streaming, source.TranscodingUrl != nil {
+            do {
+                source.TranscodingUrl = try source.boundedTranscodingURL(streaming, supportsHEVC: client.canRequestHEVC)
+            }
+            catch {
+                if let id = info.PlaySessionId { await releaseStreamingEncoding(id) }
+                throw error
+            }
+        }
 
         // Surface the server's direct-play-vs-transcode decision and, when it
         // transcodes, *why* (e.g. `SubtitleCodecNotSupported`). Logged before any
@@ -963,7 +1067,15 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         // remux response describes the output container instead.
         let originalSource = source
         let originalContainer = source.Container
-        let originalStreams = source.MediaStreams ?? detail.MediaStreams ?? []
+        let sourceRevision = Self.sourceRevision(itemID: itemID, source: originalSource)
+        let detailSourceRevision = detail.MediaSources?
+            .first { ($0.Id ?? itemID) == (originalSource.Id ?? itemID) }
+            .map { Self.sourceRevision(itemID: itemID, source: $0) }
+        // Different-revision detail headers cannot supply playback or remux evidence.
+        let canReuseDetailStreams = kind != .emby
+            || detailSourceRevision == nil || detailSourceRevision == sourceRevision
+        let fallbackStreams = canReuseDetailStreams ? detail.MediaStreams ?? [] : []
+        let originalStreams = source.MediaStreams ?? fallbackStreams
 
         // Track whether we deliberately swapped to a server **remux** (DirectStream,
         // video stream-copied) so diagnostics can report it as a lossless remux
@@ -982,7 +1094,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         // Both route to AVPlayer automatically via `isTranscoding`. Best-effort: if
         // the remux fails or the server offers no stream URL, fall back to direct
         // play (the router then sends `hev1` to the on-device engine as a net).
-        if !forceTranscode, Self.shouldRequestDoViRemux(source) || Self.shouldRequestHvc1Remux(source) {
+        if streaming == nil, !forceTranscode, Self.shouldRequestDoViRemux(source) || Self.shouldRequestHvc1Remux(source) {
             if let remuxInfo = try? await client.playbackInfo(
                 userID: session.userID,
                 itemID: itemID,
@@ -1002,7 +1114,9 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             playSessionID: info.PlaySessionId,
             didRemux: didRemux
         )
-        let sourceRevision = Self.sourceRevision(itemID: itemID, source: originalSource)
+        if kind == .emby {
+            await probeDescriptors.remember(itemID: itemID, sources: [originalSource])
+        }
         let cachedProbe = kind == .emby
             ? await probeDescriptors.cachedResult(for: sourceRevision)
             : (completed: false, facts: nil)
@@ -1010,7 +1124,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             && cachedProbe.facts?.audioIsAtmos == true
         var mappedItem = map(item: detail)
 
-        let streams = source.MediaStreams ?? detail.MediaStreams ?? []
+        let streams = source.MediaStreams ?? fallbackStreams
         var audio = streams.filter { $0.`Type` == "Audio" }.map(map(stream:))
         var mappedSourceMetadata = Self.sourceMetadata(
             container: originalContainer,
@@ -1018,11 +1132,41 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             sourceRevision: sourceRevision,
             fileSizeBytes: originalSource.Size
         )
-        if confirmsAtmos {
-            mappedItem = mappedItem.confirmingAtmos()
-            if let metadata = mappedSourceMetadata {
-                mappedSourceMetadata = metadata.confirmingAtmos()
+        if cachedProbe.completed, let facts = cachedProbe.facts {
+            let selectedSourceID = originalSource.Id ?? itemID
+            let selectedMetadata = mappedSourceMetadata ?? MediaSourceMetadata(sourceRevision: sourceRevision)
+            if !mappedItem.versions.isEmpty {
+                mappedItem.selectedVersionID = selectedSourceID
             }
+            if mappedItem.mediaInfo?.sourceRevision != sourceRevision {
+                mappedItem.mediaInfo = selectedMetadata
+            }
+            mappedItem.versions = mappedItem.versions.map { version in
+                guard version.id == selectedSourceID else { return version }
+                var version = version
+                if detailSourceRevision != sourceRevision {
+                    // A stale detail response may describe the same file ID's
+                    // old representation. Its flattened facts are not evidence
+                    // for this playback revision, even when metadata is sparse.
+                    version.width = selectedMetadata.video?.width
+                    version.height = selectedMetadata.video?.height
+                    version.bitrate = originalSource.Bitrate ?? selectedMetadata.video?.bitrate
+                    version.sizeBytes = originalSource.Size
+                    version.duration = originalSource.RunTimeTicks.map { TimeInterval($0) / 10_000_000 }
+                    version.videoCodec = selectedMetadata.video?.codec
+                    version.videoRange = selectedMetadata.video?.videoRangeType ?? selectedMetadata.video?.videoRange
+                    version.audioCodec = selectedMetadata.audio?.codec
+                    version.audioChannels = selectedMetadata.audio?.channels
+                    version.audioProfile = selectedMetadata.audio?.profile
+                    version.container = originalContainer
+                }
+                version.sourceMetadata = selectedMetadata
+                return version
+            }
+            mappedItem = mappedItem.applyingSupplementalStreamFacts(facts)
+            mappedSourceMetadata = facts.applying(to: selectedMetadata)
+        }
+        if confirmsAtmos {
             let targetIndex = audio.firstIndex {
                 $0.isDefault && $0.codec?.lowercased() == "eac3"
             } ?? audio.firstIndex {
@@ -1032,14 +1176,12 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
                 audio[targetIndex].isAtmos = true
             }
         }
-        if cachedProbe.completed, cachedProbe.facts?.videoRangeType == "HDR10Plus" {
-            mappedItem = mappedItem.confirmingHDR10Plus()
-            mappedSourceMetadata = mappedSourceMetadata?.confirmingHDR10Plus()
-        }
         let sourceID = source.Id ?? itemID
         let subs = try streams.filter { $0.`Type` == "Subtitle" }.map { stream in
             try map(subtitleStream: stream, itemID: itemID, sourceID: sourceID)
         }
+        // Probe-only DOVI is a display fact, not a profile/compatibility proof.
+        // Keep the local-remux descriptor based on the original provider streams.
         let localRemuxSource = try? localRemuxSourceDescriptor(
             itemID: itemID,
             source: originalSource,
@@ -1058,7 +1200,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             purpose: .originalFile
         )
 
-        return PlaybackRequest(
+        var request = PlaybackRequest(
             item: mappedItem,
             playbackSource: .authenticatedHTTP(playbackLocator),
             playSessionID: info.PlaySessionId,
@@ -1078,6 +1220,19 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             sourceFileName: PlaybackRequest.sourceFileName(from: originalSource.Path)
                 ?? PlaybackRequest.sourceFileName(from: originalSource.Name)
         )
+        if let streaming {
+            request.streamingOptions = streaming
+            request.streamingSessionID = info.PlaySessionId
+            if request.isTranscoding {
+                request.negotiatedStreamingVideoCodec = source.TranscodingUrl
+                    .flatMap { URLComponents(string: $0)?.queryItems }
+                    .flatMap { $0.first { $0.name.caseInsensitiveCompare("VideoCodec") == .orderedSame }?.value }
+                    .flatMap { DirectPlayVideoCodec(rawValue: $0.lowercased()) }
+                request.originalFileSource = nil
+                request.localRemuxSource = nil
+            }
+        }
+        return request
     }
 
     private func scrubPreview(
@@ -1471,11 +1626,15 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     }
 
     public func reportPlayback(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {
-        try await client.reportPlaybackProgress(progress, event: event)
+        try await reportPlayback(progress, event: event, origin: "provider-report")
+    }
+
+    private func reportPlayback(_ progress: PlaybackProgress, event: PlaybackEvent, origin: String) async throws {
+        try await client.reportPlaybackProgress(progress, event: event, origin: origin)
         // On stop, also release any server-side transcode job for this session.
         // Best-effort: cleanup failure must not surface as a playback error.
         if event == .stop, let playSessionID = progress.playSessionID, !playSessionID.isEmpty {
-            try? await client.stopActiveEncoding(playSessionID: playSessionID)
+            try? await client.stopActiveEncoding(playSessionID: playSessionID, origin: "playback-stop-report")
         }
     }
 
@@ -2273,10 +2432,12 @@ extension JellyfinProvider: SupplementalStreamFactsProviding {
 
     private static func supplementalConfirmations(_ facts: ProbedStreamFacts?, for item: MediaItem) -> ProbedStreamFacts? {
         guard var facts else { return nil }
-        if SourceDynamicRange.providerHint(from: item.mediaInfo) == .dolbyVision {
+        if SourceDynamicRange.providerHint(from: item.mediaInfo) == .dolbyVision,
+           SourceDynamicRange.classify(videoRangeType: facts.videoRangeType) != .dolbyVision {
             facts.videoRangeType = nil
         }
-        return facts.audioIsAtmos || facts.videoRangeType != nil ? facts : nil
+        return facts.audioIsAtmos || facts.videoRangeType != nil
+            || facts.carriesHDR10PlusMetadata == true ? facts : nil
     }
 }
 
@@ -2306,17 +2467,21 @@ extension JellyfinProvider: ResumeStateWriting {
     /// silently dropped (durability / never-drop). Documented caveat: on that
     /// older-server fallback only, a convergence write can still disturb a
     /// concurrent live session of the same title.
+    ///
+    /// Emby uses its own user-scoped UserData endpoint. A failed Emby write must
+    /// throw so the durable outbox retries it, never synthesize a stop that could
+    /// terminate a concurrently playing transcode on that device.
     public func setResumePosition(_ seconds: TimeInterval, itemID: String, capturedAt: Date = Date()) async throws {
         do {
             try await client.updatePlaybackPosition(max(seconds, 0), userID: session.userID, itemID: itemID, lastPlayedAt: capturedAt)
-        } catch AppError.notFound {
+        } catch AppError.notFound where kind == .jellyfin {
             let progress = PlaybackProgress(
                 itemID: itemID,
                 playSessionID: nil,
                 positionSeconds: max(seconds, 0),
                 isPaused: true
             )
-            try await reportPlayback(progress, event: .stop)
+            try await reportPlayback(progress, event: .stop, origin: "resume-convergence-fallback")
         }
     }
 }

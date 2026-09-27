@@ -171,8 +171,8 @@ final class PlayerInputView: UIView {
 
 /// Owns the focusable input surface, hosts the engine's bare video output view,
 /// the SwiftUI controls overlay, and every Siri Remote gesture. Scrubbing is
-/// preview-only — the engine is never seeked until the viewer commits (Select),
-/// so the scrub stays perfectly smooth regardless of stream/seek latency. All
+/// preview-only: movement updates the timeline independently of a committed
+/// engine seek, including when an earlier seek is still settling. All
 /// playback is driven through the `VideoEngine` protocol + `PlayerActions`, never
 /// a concrete player, so this UI is reused verbatim by every engine.
 final class PlayerInputViewController: UIViewController, UIGestureRecognizerDelegate {
@@ -189,6 +189,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     /// per-gesture state that used to live inline in `handlePan`; the point→
     /// seconds math stays in ``ScrubGeometry`` and the side effects stay here.
     private var scrubGesture = ScrubGestureInterpreter()
+    private var lastPanSampleTimestamp: TimeInterval?
     private var resumeAfterScrub = false
 
     /// Pending debounced commit for a *flick*-ended scrub. A fast flick lift
@@ -212,11 +213,14 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     private var surfacePan: PlayerSurfacePanGestureRecognizer?
     private var selectRecognizer: UIGestureRecognizer?
 
+    #if !os(iOS)
     /// Suppresses the tvOS screensaver / Apple TV sleep while video is actively
     /// playing, and releases it the instant playback pauses, ends, or this host
     /// goes away. Driven every refresh tick off `engine.preventsDisplaySleep`, so
     /// it behaves identically for every engine/decoder (AVPlayer *and* Plozzigen).
+    /// iOS owns its lease at the presentation level, including startup/buffering.
     private let idleSleepGuard = IdleSleepGuard()
+    #endif
 
     /// Whether the Siri Remote currently drives the scrub surface or the bottom
     /// control bar. In `.controlBar` the surface gesture recognizers are disabled
@@ -325,8 +329,10 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         if ScrubDiagnostics.forceScrubRefresh { engine.setScrubRefreshBoost(false) }
         subtitleClock?.invalidate()
         subtitleClock = nil
+        #if !os(iOS)
         // Leaving playback: let the screensaver / Apple TV sleep resume.
         idleSleepGuard.allowSleep()
+        #endif
 #if os(tvOS)
         remoteTouchInput.stop()
 #endif
@@ -445,9 +451,12 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     /// interaction is off so indirect-touch scrub pans flow to the surface and it
     /// can't steal focus.
     func attachControls(themePalette: ThemePaletteBox) {
+        // The remote's Play/Pause reaches the view model as a Now Playing command
+        // while video plays; this is where it becomes the same input as a press.
+        model.remotePlayPause.onSystemCommand = { [weak self] in self?.revealAfterPlayPause() }
         let exitToSurface: () -> Void = { [weak self] in self?.exitToSurface() }
         let actions = PlayerOptionsActions(
-            togglePlayPause: { [weak self] in self?.actions.togglePlayPause() },
+            togglePlayPause: { [weak self] in self?.togglePlayPauseFromControlBar() },
             selectAudio: { [weak self] in self?.actions.selectAudio($0) },
             selectSubtitle: { [weak self] in self?.actions.selectSubtitle($0) },
             selectSecondarySubtitle: { [weak self] in self?.actions.selectSecondarySubtitle($0) },
@@ -545,16 +554,19 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     }
 
     private func refreshFromEngine() {
+        #if !os(iOS)
         // Keep the display awake only while frames are actually advancing.
         // Evaluated every tick, before any early-return, so a pause, end-of-
         // stream, or stall promptly releases the wake lock for every engine.
         idleSleepGuard.keepAwake(engine.preventsDisplaySleep)
+        #endif
         let resolution = PlaybackClockReconciler.reconcile(
             snapshot: .init(
                 currentTime: engine.currentTime,
                 duration: engine.duration,
                 bufferedPosition: engine.bufferedPosition,
-                isPaused: engine.isPaused),
+                isPaused: engine.isPaused,
+                isLoading: engine.status == .loading),
             isScrubbing: model.isScrubbing,
             pendingSeekTarget: model.pendingSeekTarget,
             isResumeConfirming: model.isResumeConfirming)
@@ -586,7 +598,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     ///    `autoSkipDelay` seconds (the button's ring counts the wait down; the
     ///    viewer can skip now or swipe-up to cancel).
     ///  * `.autoInstant` — skip immediately with only a brief notice, no button.
-    ///  * `.off` — never reached (markers aren't fetched).
+    ///  * `.off` (for the active segment's kind) — no button; tears one down.
     /// Only auto-presents from the scrub surface so it never yanks focus out of
     /// the control bar or a scrub; returns focus to the surface once the segment
     /// passes or is dismissed.
@@ -711,7 +723,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     /// transport bar — so the affordance stays put. The countdown ring freezes on
     /// its own because it's driven by playback position, which stops while paused.
     private func togglePlayPauseFromOverlay() {
-        actions.togglePlayPause()
+        togglePlayPauseFromPress()
     }
 
     /// `.autoDelay` deadline reached: seek past the segment (no notice — the
@@ -939,59 +951,30 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
             maxAccelMultiplier: 5)
     }
 
-    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
-        guard model.duration > 0 else { return }
+    /// Whether scrub or skip input may act. A loading engine (bring-up, or the
+    /// rebuild after tvOS suspended the app) has no playhead to seek from, and the
+    /// model's kept duration must not let new input seek it mid-rebuild (issue
+    /// #61). A scrub already under way may still move, commit or cancel.
+    private var canSeekFromPosition: Bool {
+        model.duration > 0 && (model.isScrubbing || engine.status != .loading)
+    }
+
+    @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
+        guard canSeekFromPosition else { return }
         guard focusContext == .surface else { return }
         guard surfacePan?.click.suppressesPan != true else { return }
         switch gesture.state {
         case .began:
+            if model.isScrubbing { cancelScrubCommit() }
             scrubGesture.begin()
+            lastPanSampleTimestamp = (gesture as? PlayerSurfacePanGestureRecognizer)?.contactStartTimestamp
             ScrubDiagnostics.note("remote-pan began context=\(focusContext)")
+            advanceScrub(using: gesture)
         case .changed:
-            let translation = gesture.translation(in: view)
-            let sampleStart = ScrubDiagnostics.enabled ? CACurrentMediaTime() : 0
-            let wasUndecided = scrubGesture.axis == .undecided
-            let outcome = scrubGesture.changed(
-                translationX: Double(translation.x),
-                translationY: Double(translation.y),
-                velocityX: Double(gesture.velocity(in: view).x),
-                isScrubbing: model.isScrubbing,
-                seekWithoutPausing: model.skipGesture.seekWithoutPausing,
-                isPaused: model.isPaused)
-            if ScrubDiagnostics.enabled, wasUndecided, scrubGesture.axis != .undecided {
-                ScrubDiagnostics.note(
-                    "remote-pan lock x=\(translation.x) y=\(translation.y) outcome=\(outcome) "
-                        + "paused=\(model.isPaused) scrubbing=\(model.isScrubbing)")
-            }
-            switch outcome {
-            case .ignore:
-                break
-            case .enterControlBar:
-                handleDown()
-            case .moveUp:
-                handleUp()
-            case .flashAndSuppress:
-                // Pause-to-seek gate: flash the transport for feedback only.
-                flashControls()
-            case let .advance(deltaPoints, smoothedSpeed, beginScrub, continueTraversal):
-                // Continuing a flick-bridged traversal cancels the pending commit
-                // and keeps scrubbing (momentum carried in the interpreter).
-                if continueTraversal { cancelScrubCommit() }
-                if beginScrub { self.beginScrub() }
-                model.scrubSeconds = ScrubGeometry.advance(
-                    scrubSeconds: model.scrubSeconds,
-                    translationDeltaPoints: deltaPoints,
-                    speedPointsPerSecond: smoothedSpeed,
-                    tuning: scrubTuning,
-                    duration: model.duration)
-                let cacheHit = updatePreviewThumbnail()
-                if ScrubDiagnostics.enabled {
-                    scrubDiag.recordSample(
-                        handlerMs: (CACurrentMediaTime() - sampleStart) * 1000,
-                        cacheHit: cacheHit)
-                }
-            }
+            advanceScrub(using: gesture)
         case .ended, .cancelled, .failed:
+            // A coalesced flick can arrive as began/ended with no changed event.
+            if gesture.state == .ended { advanceScrub(using: gesture) }
             ScrubDiagnostics.note("remote-pan end state=\(gesture.state.rawValue) axis=\(scrubGesture.axis)")
             // Auto-commit a horizontal scrub on lift, like Apple's own
             // AVPlayerViewController — but distinguish a deliberate landing
@@ -1002,7 +985,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
                 velocityX: Double(gesture.velocity(in: view).x),
                 isScrubbing: model.isScrubbing) {
             case .none:
-                break
+                if model.isScrubbing, scrubCommitTask == nil { scheduleScrubCommit() }
             case .commit:
                 commitScrub()
             case .bridgeCommit:
@@ -1010,6 +993,69 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
             }
         default:
             break
+        }
+    }
+
+    /// Records a swipe that left the scrub surface in the persistent playback
+    /// trace, so a right swipe that opened the controls instead of scrubbing can
+    /// be diagnosed from the device afterwards, without a console capture.
+    private func traceVerticalSwipe(
+        _ direction: String, phase: UIGestureRecognizer.State, translation: CGPoint
+    ) {
+        HandoffDiagnostics.emit(
+            "input SWIPE_VERTICAL dir=\(direction) phase=\(phase.rawValue)"
+                + " x=\(Int(translation.x)) y=\(Int(translation.y))"
+        )
+    }
+
+    private func advanceScrub(using gesture: UIPanGestureRecognizer) {
+        let translation = gesture.translation(in: view)
+        let sampleStart = ScrubDiagnostics.enabled ? CACurrentMediaTime() : 0
+        let timestamp = (gesture as? PlayerSurfacePanGestureRecognizer)?.sampleTimestamp ?? CACurrentMediaTime()
+        let elapsed = lastPanSampleTimestamp.map { max(0, timestamp - $0) } ?? (1.0 / 60.0)
+        lastPanSampleTimestamp = timestamp
+        let wasUndecided = scrubGesture.axis == .undecided
+        let outcome = scrubGesture.changed(
+            translationX: Double(translation.x),
+            translationY: Double(translation.y),
+            velocityX: Double(gesture.velocity(in: view).x),
+            isScrubbing: model.isScrubbing,
+            seekWithoutPausing: model.skipGesture.seekWithoutPausing,
+            isPaused: model.isPaused,
+            elapsed: elapsed)
+        if ScrubDiagnostics.enabled, wasUndecided, scrubGesture.axis != .undecided {
+            ScrubDiagnostics.note(
+                "remote-pan lock phase=\(gesture.state.rawValue) dt=\(elapsed) x=\(translation.x) y=\(translation.y) outcome=\(outcome) "
+                    + "paused=\(model.isPaused) scrubbing=\(model.isScrubbing)")
+        }
+        switch outcome {
+        case .ignore:
+            break
+        case .enterControlBar:
+            traceVerticalSwipe("down", phase: gesture.state, translation: translation)
+            if model.isScrubbing { scheduleScrubCommit() }
+            handleDown()
+        case .moveUp:
+            traceVerticalSwipe("up", phase: gesture.state, translation: translation)
+            if model.isScrubbing { scheduleScrubCommit() }
+            handleUp()
+        case .flashAndSuppress:
+            flashControls()
+        case let .advance(deltaPoints, smoothedSpeed, beginScrub, continueTraversal):
+            if continueTraversal { cancelScrubCommit() }
+            if beginScrub { self.beginScrub() }
+            model.scrubSeconds = ScrubGeometry.advance(
+                scrubSeconds: model.scrubSeconds,
+                translationDeltaPoints: deltaPoints,
+                speedPointsPerSecond: smoothedSpeed,
+                tuning: scrubTuning,
+                duration: model.duration)
+            let cacheHit = updatePreviewThumbnail()
+            if ScrubDiagnostics.enabled {
+                scrubDiag.recordSample(
+                    handlerMs: (CACurrentMediaTime() - sampleStart) * 1000,
+                    cacheHit: cacheHit)
+            }
         }
     }
 
@@ -1121,9 +1167,30 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         }
     }
 
-    @objc private func handlePlayPause() {
+    @objc func handlePlayPause() {
         if model.isScrubbing { commitScrub() }
+        togglePlayPauseFromPress()
+        flashControls()
+    }
+
+    /// Play/Pause while focus is in the control bar. The transport is already up;
+    /// restarting its countdown here is what lets a resume time out again.
+    private func togglePlayPauseFromControlBar() {
+        togglePlayPauseFromPress()
+        revealAfterPlayPause()
+    }
+
+    /// Every Play/Pause press toggles through here, unless the same press already
+    /// reached the view model as a Now Playing command (`RemotePlayPauseInput`).
+    private func togglePlayPauseFromPress() {
+        guard model.remotePlayPause.admit(.press) else { return }
         actions.togglePlayPause()
+    }
+
+    /// A Play/Pause the view model has already applied, from whichever path
+    /// delivered it: reveal the transport and count the idle timeout from now.
+    private func revealAfterPlayPause() {
+        guard ControlsAutoHidePolicy.playPauseRevealsTransport(focus: focusContext.policyFocus) else { return }
         flashControls()
     }
 
@@ -1176,7 +1243,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     }
 
     private func skip(by seconds: TimeInterval) {
-        guard model.duration > 0 else { return }
+        guard canSeekFromPosition else { return }
         if model.isScrubbing {
             model.scrubSeconds = min(max(0, model.scrubSeconds + seconds), model.duration)
             updatePreviewThumbnail()

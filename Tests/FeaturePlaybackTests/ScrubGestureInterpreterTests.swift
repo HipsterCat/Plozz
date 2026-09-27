@@ -25,17 +25,16 @@ final class ScrubGestureInterpreterTests: XCTestCase {
         XCTAssertEqual(g.axis, .undecided)
     }
 
-    func testHorizontalPastDeadZoneBeginsScrubWithZeroFirstDelta() {
+    func testHorizontalPastDeadZoneKeepsTheTravelBeyondTheDeadZone() {
         var g = makeInterpreter()
         g.begin()
-        // Paused (seek engages) → a fresh scrub begins; first sample delta is 0 so
-        // locking the axis never itself moves the head.
+        // The threshold consumes 18 points, not the whole first delivered sample.
         let outcome = g.changed(translationX: 20, translationY: 3, velocityX: 800,
                                 isScrubbing: false, seekWithoutPausing: true, isPaused: true)
         guard case let .advance(delta, smoothed, beginScrub, continueTraversal) = outcome else {
             return XCTFail("expected advance, got \(outcome)")
         }
-        XCTAssertEqual(delta, 0, accuracy: 0.0001)
+        XCTAssertEqual(delta, 2, accuracy: 0.0001)
         XCTAssertTrue(beginScrub)
         XCTAssertFalse(continueTraversal)
         // Fresh scrub resets smoothing to 0 first, then EMA: 800 * 0.25 = 200.
@@ -46,31 +45,55 @@ final class ScrubGestureInterpreterTests: XCTestCase {
     func testVerticalDownEntersControlBarAndLocksVertical() {
         var g = makeInterpreter()
         g.begin()
-        let outcome = g.changed(translationX: 3, translationY: 25, velocityX: 0,
+        let outcome = g.changed(translationX: 3, translationY: 60, velocityX: 0,
                                 isScrubbing: false, seekWithoutPausing: true, isPaused: true)
         XCTAssertEqual(outcome, .enterControlBar)
         XCTAssertEqual(g.axis, .verticalIgnored)
         // Subsequent samples in the same gesture do nothing (locked vertical).
-        let next = g.changed(translationX: 60, translationY: 40, velocityX: 500,
+        let next = g.changed(translationX: 90, translationY: 70, velocityX: 500,
                              isScrubbing: false, seekWithoutPausing: true, isPaused: true)
         XCTAssertEqual(next, .ignore)
+    }
+
+    func testCoalescedInitialTravelIsNotDiscardedInEitherDirection() {
+        for x in [178.719, 333.251, 764.738, 1501.275, -178.719, -1501.275] {
+            var gesture = makeInterpreter()
+            gesture.begin()
+            let outcome = gesture.changed(
+                translationX: x, translationY: 0, velocityX: 0,
+                isScrubbing: false, seekWithoutPausing: true, isPaused: true
+            )
+            guard case let .advance(delta, _, began, _) = outcome else {
+                return XCTFail("Expected captured horizontal travel to advance the scrubber.")
+            }
+            XCTAssertTrue(began)
+            XCTAssertEqual(delta, x - (x < 0 ? -18 : 18), accuracy: 0.001)
+            let next = gesture.changed(
+                translationX: x + 10, translationY: 0, velocityX: 0,
+                isScrubbing: true, seekWithoutPausing: true, isPaused: true
+            )
+            guard case let .advance(nextDelta, _, _, _) = next else {
+                return XCTFail("Expected incremental movement after the initial sample.")
+            }
+            XCTAssertEqual(nextDelta, 10, accuracy: 0.001)
+        }
     }
 
     func testVerticalUpMovesUpAndLocksVertical() {
         var g = makeInterpreter()
         g.begin()
-        let outcome = g.changed(translationX: 3, translationY: -25, velocityX: 0,
+        let outcome = g.changed(translationX: 3, translationY: -60, velocityX: 0,
                                 isScrubbing: false, seekWithoutPausing: true, isPaused: true)
         XCTAssertEqual(outcome, .moveUp)
         XCTAssertEqual(g.axis, .verticalIgnored)
-        let next = g.changed(translationX: 60, translationY: -40, velocityX: 500,
+        let next = g.changed(translationX: 90, translationY: -70, velocityX: 500,
                              isScrubbing: false, seekWithoutPausing: true, isPaused: true)
         XCTAssertEqual(next, .ignore)
     }
 
     func testVerticalNavigationDoesNotRequirePausing() {
-        for (translationY, expected) in [(25.0, ScrubGestureInterpreter.PanOutcome.enterControlBar),
-                                         (-25.0, .moveUp)] {
+        for (translationY, expected) in [(60.0, ScrubGestureInterpreter.PanOutcome.enterControlBar),
+                                         (-60.0, .moveUp)] {
             var g = makeInterpreter()
             g.begin()
             XCTAssertEqual(
@@ -79,6 +102,95 @@ final class ScrubGestureInterpreterTests: XCTestCase {
                 expected)
             XCTAssertEqual(g.ended(gestureEnded: true, velocityX: 0, isScrubbing: false), .none)
         }
+    }
+
+    // MARK: Vertical navigation distance
+
+    func testRightSwipeWhoseFirstSampleLeansDownStillScrubs() {
+        // The pan's first delivered sample can catch the thumb rolling downward
+        // before it travels right. Locking there opened Info and the rest of the
+        // swipe moved focus to Cast; it must wait and then scrub.
+        for (firstX, firstY) in [(8.0, 20.0), (2.0, 19.0), (12.0, 50.0)] {
+            var g = makeInterpreter()
+            g.begin()
+            XCTAssertEqual(
+                g.changed(translationX: firstX, translationY: firstY, velocityX: 600,
+                          isScrubbing: false, seekWithoutPausing: true, isPaused: true),
+                .ignore)
+            XCTAssertEqual(g.axis, .undecided)
+            let outcome = g.changed(translationX: 60, translationY: firstY + 6, velocityX: 1500,
+                                    isScrubbing: false, seekWithoutPausing: true, isPaused: true)
+            guard case let .advance(delta, _, beginScrub, _) = outcome else {
+                return XCTFail("expected advance after (\(firstX), \(firstY)), got \(outcome)")
+            }
+            XCTAssertEqual(delta, 42, accuracy: 0.0001)
+            XCTAssertTrue(beginScrub)
+            XCTAssertEqual(g.axis, .horizontal)
+        }
+    }
+
+    func testCoalescedRightFlickWithDownwardFirstSampleScrubsOnLift() {
+        var g = makeInterpreter()
+        g.begin()
+        XCTAssertEqual(
+            g.changed(translationX: 6, translationY: 24, velocityX: 0,
+                      isScrubbing: false, seekWithoutPausing: true, isPaused: true),
+            .ignore)
+        // The lift is the only other sample a coalesced flick delivers.
+        let lift = g.changed(translationX: 260, translationY: 30, velocityX: 1200,
+                             isScrubbing: false, seekWithoutPausing: true, isPaused: true)
+        guard case let .advance(delta, _, beginScrub, _) = lift else {
+            return XCTFail("expected advance, got \(lift)")
+        }
+        XCTAssertEqual(delta, 242, accuracy: 0.0001)
+        XCTAssertTrue(beginScrub)
+    }
+
+    func testVerticalSwipesNavigateOnceTheyTravelTheNavigationDistance() {
+        for (sign, expected) in [(1.0, ScrubGestureInterpreter.PanOutcome.enterControlBar),
+                                 (-1.0, .moveUp)] {
+            var g = makeInterpreter()
+            g.begin()
+            for y in [20.0, 53.9] {
+                XCTAssertEqual(
+                    g.changed(translationX: 2, translationY: sign * y, velocityX: 0,
+                              isScrubbing: false, seekWithoutPausing: false, isPaused: false),
+                    .ignore)
+                XCTAssertEqual(g.axis, .undecided)
+            }
+            XCTAssertEqual(
+                g.changed(translationX: 4, translationY: sign * 54, velocityX: 0,
+                          isScrubbing: false, seekWithoutPausing: false, isPaused: false),
+                expected)
+            XCTAssertEqual(g.axis, .verticalIgnored)
+        }
+    }
+
+    func testSwipeDownWithSidewaysWobbleStillEntersControlBar() {
+        var g = makeInterpreter()
+        g.begin()
+        // Waiting for vertical travel never hands a downward swipe to scrubbing:
+        // horizontal still needs at least as much x as y.
+        for (x, y) in [(3.0, 30.0), (20.0, 45.0)] {
+            XCTAssertEqual(
+                g.changed(translationX: x, translationY: y, velocityX: 300,
+                          isScrubbing: false, seekWithoutPausing: true, isPaused: true),
+                .ignore)
+        }
+        XCTAssertEqual(
+            g.changed(translationX: 25, translationY: 70, velocityX: 300,
+                      isScrubbing: false, seekWithoutPausing: true, isPaused: true),
+            .enterControlBar)
+    }
+
+    func testShortVerticalTwitchDoesNothing() {
+        var g = makeInterpreter()
+        g.begin()
+        XCTAssertEqual(
+            g.changed(translationX: 2, translationY: 40, velocityX: 0,
+                      isScrubbing: false, seekWithoutPausing: true, isPaused: true),
+            .ignore)
+        XCTAssertEqual(g.ended(gestureEnded: true, velocityX: 0, isScrubbing: false), .none)
     }
 
     func testAxisLockKeepsScrubbingDespiteVerticalDrift() {
@@ -142,6 +254,41 @@ final class ScrubGestureInterpreterTests: XCTestCase {
         XCTAssertEqual(smoothed, 687.5, accuracy: 0.0001)
     }
 
+    func testSmoothingRespondsEquallyAt24And60Hz() {
+        func speed(after intervals: [Double]) -> Double {
+            var gesture = makeInterpreter()
+            gesture.begin()
+            var result = 0.0
+            for (index, elapsed) in intervals.enumerated() {
+                let outcome = gesture.changed(
+                    translationX: 20 + Double(index), translationY: 0, velocityX: 2000,
+                    isScrubbing: index > 0, seekWithoutPausing: true, isPaused: true,
+                    elapsed: elapsed
+                )
+                if case let .advance(_, speed, _, _) = outcome { result = speed }
+            }
+            return result
+        }
+        let sixtyHz = speed(after: Array(repeating: 1.0 / 60.0, count: 10))
+        let twentyFourHz = speed(after: Array(repeating: 1.0 / 24.0, count: 4))
+        XCTAssertEqual(twentyFourHz, sixtyHz, accuracy: 0.0001)
+    }
+
+    func testCoalescedSampleUsesElapsedTimeRatherThanOneFilterStep() {
+        var gesture = makeInterpreter()
+        gesture.begin()
+        let outcome = gesture.changed(
+            translationX: 500, translationY: 0, velocityX: 2000,
+            isScrubbing: false, seekWithoutPausing: true, isPaused: true,
+            elapsed: 0.1
+        )
+        guard case let .advance(delta, speed, _, _) = outcome else {
+            return XCTFail("Expected coalesced input to advance immediately.")
+        }
+        XCTAssertEqual(delta, 482)
+        XCTAssertEqual(speed, 2000 * (1 - pow(0.75, 6)), accuracy: 0.0001)
+    }
+
     // MARK: Multi-swipe traversal continuation
 
     func testContinueTraversalWhenAlreadyScrubbing() {
@@ -159,7 +306,7 @@ final class ScrubGestureInterpreterTests: XCTestCase {
         guard case let .advance(delta, smoothed, beginScrub, continueTraversal) = outcome else {
             return XCTFail("expected advance, got \(outcome)")
         }
-        XCTAssertEqual(delta, 0, accuracy: 0.0001)
+        XCTAssertEqual(delta, 12, accuracy: 0.0001)
         XCTAssertTrue(continueTraversal)
         XCTAssertFalse(beginScrub)
         // Momentum from the first gesture (1000) decays but was NOT reset to 0:
