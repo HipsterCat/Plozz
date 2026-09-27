@@ -2,6 +2,7 @@ import CoreModels
 import CoreUI
 import FeatureHome
 import FeatureHomeCore
+import MetadataKit
 import SwiftUI
 import UIKit
 @testable import AppShell
@@ -238,7 +239,11 @@ private final class ProductionHomeState {
         settingsStore.save(settings)
         let poster = await artwork(name: "poster", size: CGSize(width: 240, height: 360), color: .systemIndigo)
         let backdrop = await artwork(name: "backdrop", size: CGSize(width: 960, height: 540), color: .systemBlue)
-        let logo = await artwork(name: "logo", size: CGSize(width: 320, height: 100), color: .white)
+        let scheduleFixture = ProcessInfo.processInfo.arguments.contains("--showcase-schedule-fixture")
+        let logo = await artwork(
+            name: "logo", size: scheduleFixture ? CGSize(width: 180, height: 320) : CGSize(width: 320, height: 100),
+            color: .white
+        )
         let state = ProductionHomeState(poster: poster, backdrop: backdrop, logo: logo)
         if ProcessInfo.processInfo.arguments.contains("--slow-home-load") {
             // Show Home at once and let its rows arrive late, over the skeleton.
@@ -253,7 +258,12 @@ private final class ProductionHomeState {
         let url = URL(string: "https://production-home.example.test/\(name).png")!
         let complex = ProcessInfo.processInfo.arguments.contains("--complex-home-artwork")
         let image = UIGraphicsImageRenderer(size: size).image { context in
-            if complex, name == "logo" {
+            if name == "logo", ProcessInfo.processInfo.arguments.contains("--showcase-schedule-fixture") {
+                UIColor.systemGreen.setFill()
+                context.fill(CGRect(x: 20, y: 10, width: 40, height: 300))
+                context.fill(CGRect(x: 50, y: 10, width: 110, height: 40))
+                context.fill(CGRect(x: 50, y: 140, width: 70, height: 40))
+            } else if complex, name == "logo" {
                 for index in 0..<8 {
                     UIColor(hue: CGFloat(index) / 8, saturation: 0.85, brightness: 0.95, alpha: 1).setFill()
                     UIBezierPath(roundedRect: CGRect(
@@ -323,7 +333,8 @@ private struct ProductionHomeProvider: MediaProvider {
         let poster = reference(self.poster, index: index)
         let backdrop = reference(self.backdrop, index: index)
         var item = MediaItem(
-            id: "home-movie-\(index)", title: "Fixture movie \(index)", kind: .movie,
+            id: "home-movie-\(index)", title: "Fixture movie \(index)",
+            kind: ProcessInfo.processInfo.arguments.contains("--showcase-schedule-fixture") ? .series : .movie,
             posterURL: poster, backdropURL: backdrop
         )
         item.sourceAccountID = "home-fixture"
@@ -338,7 +349,23 @@ private struct ProductionHomeProvider: MediaProvider {
     func libraries() async throws -> [MediaLibrary] { [] }
     func continueWatching(limit: Int) async throws -> [MediaItem] {
         try await holdForSlowLoad()
-        return Array((0..<rowCount).prefix(limit).map(movie))
+        let items = Array((0..<rowCount).prefix(limit).map(movie))
+        if ProcessInfo.processInfo.arguments.contains("--showcase-schedule-fixture") {
+            let now = Date()
+            for item in items {
+                await SeriesScheduleStore.shared.store(SeriesScheduleRecord(
+                    seriesKey: MetadataQuery(item).seriesScoped.enrichmentCacheKey,
+                    upcomingEpisode: UpcomingEpisode(
+                        seriesIdentity: .external(source: "fixture", value: item.id),
+                        airDate: now.addingTimeInterval(20 * 86_400),
+                        datePrecision: .dateOnly, source: .tvdb, refreshedAt: now
+                    ),
+                    cadence: AirCadence(weekdays: [6]),
+                    refreshedAt: now, refreshDueAt: now.addingTimeInterval(3_600)
+                ))
+            }
+        }
+        return items
     }
     func latest(limit: Int) async throws -> [MediaItem] {
         try await holdForSlowLoad()

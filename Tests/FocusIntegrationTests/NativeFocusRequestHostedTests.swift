@@ -9,6 +9,36 @@ import CoreModels
 
 @MainActor
 final class NativeFocusRequestHostedTests: XCTestCase {
+    func testNativePosterLayoutSlotDoesNotChangeWhenFocusMarginsSettle() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let size = CGSize(width: 388, height: 264)
+        let image = UIGraphicsImageRenderer(size: size).image {
+            UIColor.blue.setFill()
+            $0.fill(CGRect(origin: .zero, size: size))
+        }
+        let poster = NativeTVPoster<EmptyView>.Poster(image: image)
+        poster.contentSize = size
+        _ = poster.imageView.overlayContentView
+        let container = NativeTVPoster<EmptyView>.Container(poster: poster)
+        let initial = container.intrinsicContentSize
+        container.frame = CGRect(origin: CGPoint(x: 200, y: 200), size: initial)
+        let controller = UIViewController()
+        fixture.window.rootViewController = controller
+        controller.view.addSubview(container)
+        container.layoutIfNeeded()
+        poster.layoutIfNeeded()
+        container.layoutIfNeeded()
+        XCTAssertEqual(container.intrinsicContentSize, initial,
+                       "Native focus clearance must not change the lazy row's height after realization.")
+        XCTAssertEqual(container.intrinsicContentSize, size,
+                       "Both axes of the layout slot describe artwork, not native focus margins.")
+        let artwork = poster.imageView.convert(poster.imageView.bounds, to: container)
+        XCTAssertEqual(artwork.midX, container.bounds.midX, accuracy: 0.5)
+        XCTAssertEqual(artwork.midY, container.bounds.midY, accuracy: 0.5)
+        XCTAssertEqual(poster.imageView.bounds.height, size.height, accuracy: 0.5)
+    }
+
     private final class BitmapProbe {
         var createdImages: [UIImage?] = []
     }

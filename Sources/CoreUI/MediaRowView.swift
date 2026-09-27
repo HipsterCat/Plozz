@@ -488,7 +488,9 @@ public struct MediaRowView: View {
             VStack(alignment: .leading, spacing: layoutMetrics.sectionTitleSpacing - titleTightening) {
                 if let title {
                     MediaRowHeader(title: title)
+                        .accessibilityIdentifier("media-row-title")
                         .padding(.leading, leadingInset + navigationContentInset)
+                        .modifier(PlozzRowTitlePosition())
                 }
 
                 PinnedSidebarLeadingFade(

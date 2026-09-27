@@ -21,6 +21,26 @@ public extension EnvironmentValues {
         get { self[PlozzRowTitleTighteningKey.self] }
         set { self[PlozzRowTitleTighteningKey.self] = newValue }
     }
+
+    /// Read by the title alone, so a focus change never invalidates the media rail.
+    var plozzRowTitleOffset: @MainActor @Sendable () -> CGFloat {
+        get { self[PlozzRowTitleOffsetKey.self] }
+        set { self[PlozzRowTitleOffsetKey.self] = newValue }
+    }
+}
+
+public struct PlozzRowTitlePosition: ViewModifier {
+    @Environment(\.plozzRowTitleOffset) private var offset
+
+    public init() {}
+
+    public func body(content: Content) -> some View {
+        content.offset(y: offset())
+    }
+}
+
+private struct PlozzRowTitleOffsetKey: EnvironmentKey {
+    static let defaultValue: @MainActor @Sendable () -> CGFloat = { 0 }
 }
 
 private struct PlozzRowTitleTighteningKey: EnvironmentKey {

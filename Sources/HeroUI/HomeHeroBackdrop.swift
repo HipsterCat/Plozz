@@ -374,21 +374,21 @@ public struct HomeHeroBackdrop: View {
         case .carousel:
             easedVerticalFade(start: receded ? recededMeltStart : meltStart)
         case .browse:
-            // Short, eased feathers on the left and bottom: long enough to melt
-            // into the page, short enough that most of the picture shows whole.
+            // Broad eased feathers keep the picture's edge from reading as a
+            // separate rectangle behind the focused rows.
             LinearGradient(
                 stops: [
                     .init(color: .clear, location: 0),
-                    .init(color: .white.opacity(0.18), location: 0.08),
-                    .init(color: .white.opacity(0.6), location: 0.18),
-                    .init(color: .white.opacity(0.92), location: 0.26),
-                    .init(color: .white, location: 0.3),
+                    .init(color: .white.opacity(0.18), location: 0.12),
+                    .init(color: .white.opacity(0.6), location: 0.25),
+                    .init(color: .white.opacity(0.92), location: 0.36),
+                    .init(color: .white, location: 0.42),
                     .init(color: .white, location: 1),
                 ],
                 startPoint: .leading,
                 endPoint: .trailing
             )
-            .mask(easedVerticalFade(start: 0.7))
+            .mask(easedVerticalFade(start: 0.55))
         }
     }
 

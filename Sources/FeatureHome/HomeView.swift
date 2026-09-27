@@ -1311,7 +1311,7 @@ public struct HomeView: View {
             (
                 FocusHeroRow(
                     id: "home-\(row.kind)",
-                    itemIDs: row.items.map(\.id),
+                    itemIDs: row.items.map(\.stablePresentationID),
                     leadItem: row.items.first,
                     items: row.items,
                     cardArtwork: row.style == .landscape
@@ -1340,7 +1340,7 @@ public struct HomeView: View {
             let continueWatching = result.firstIndex { $0.row.id == "home-\(HomeRowKind.continueWatching)" }
             let index = continueWatching.map { $0 + 1 } ?? result.firstIndex { $0.row.id != "home-notice" } ?? result.count
             result.insert((
-                FocusHeroRow(id: "home-discover", itemIDs: discover.map(\.id), leadItem: discover.first, items: discover),
+                FocusHeroRow(id: "home-discover", itemIDs: discover.map(\.stablePresentationID), leadItem: discover.first, items: discover),
                 .discover(discover)
             ), at: index)
         }
@@ -1358,7 +1358,7 @@ public struct HomeView: View {
                 result.append((
                     FocusHeroRow(
                         id: "section-\(group.id)-\(section.id)",
-                        itemIDs: section.items.map(\.id),
+                        itemIDs: section.items.map(\.stablePresentationID),
                         leadItem: section.items.first,
                         items: section.items,
                         cardArtwork: section.style == .landscape
@@ -1448,6 +1448,7 @@ public struct HomeView: View {
                 focusHomeRowView(source, reporter: reporter)
             }
         }
+        .id(ObjectIdentifier(viewModel))
         #endif
     }
 
@@ -2034,8 +2035,10 @@ private struct HomeLibrariesRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: metrics.sectionTitleSpacing - titleTightening) {
             Text("Libraries")
+                .accessibilityIdentifier("media-row-title")
                 .font(.system(size: metrics.sectionHeaderFontSize, weight: .bold))
                 .padding(.leading, PlozzTheme.Metrics.screenPadding + navigationContentInset)
+                .modifier(PlozzRowTitlePosition())
             PinnedSidebarLeadingFade(
                 isActive: pinnedSidebarActive,
                 inset: navigationContentInset,

@@ -64,6 +64,7 @@ public struct PosterCardView: View {
     @State private var textlessAnswerRevision = 0
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
     @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.locale) private var locale
     /// Per-profile card presentation (framed glass card vs borderless artwork).
     @Environment(\.plozzCardStyle) private var cardStyle
     /// Per-profile focus treatment. With the outline off, a framed card keeps its
@@ -465,6 +466,10 @@ public struct PosterCardView: View {
             }
         }
         .padding(.horizontal, metrics.borderlessCardSideMargin)
+        #if os(tvOS)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(verbatim: nativePosterTitle.resolve(locale: locale)))
+        #endif
         .focusableCard(isFocused: $isFocused, cornerRadius: borderlessCornerRadius, action: selectCard)
         // A borderless card's focus halo + scale bloom extend *beyond* the layout
         // bounds. `compositingGroup` composites them as one unit without clipping;

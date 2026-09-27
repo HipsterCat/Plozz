@@ -423,7 +423,7 @@ struct NativeTVPoster<Overlay: View>: UIViewRepresentable {
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
         override var intrinsicContentSize: CGSize {
-            CGSize(width: poster.contentSize.width, height: poster.intrinsicContentSize.height)
+            poster.contentSize
         }
 
         override var preferredFocusEnvironments: [any UIFocusEnvironment] { [poster] }
@@ -432,18 +432,18 @@ struct NativeTVPoster<Overlay: View>: UIViewRepresentable {
             let intrinsic = poster.intrinsicContentSize
             let size = CGSize(width: ceil(intrinsic.width), height: ceil(intrinsic.height))
             guard poster.bounds.size != size else { return }
-            // TVUIKit can settle its focus clearance during the first native layout.
-            invalidateIntrinsicContentSize()
+            // Focus clearance settles after realization, but is drawing overflow,
+            // not a change to the artwork slot in the containing lazy row.
             setNeedsLayout()
         }
 
         override func layoutSubviews() {
             super.layoutSubviews()
-            // Native focus margins are drawing clearance, not more artwork width.
-            // Feeding them back through a SwiftUI stack enlarges every card.
+            // Keep both native focus margins outside the artwork's layout slot.
             let intrinsic = poster.intrinsicContentSize
             let size = CGSize(width: ceil(intrinsic.width), height: ceil(intrinsic.height))
-            poster.frame = CGRect(x: (bounds.width - size.width) / 2, y: 0,
+            poster.frame = CGRect(x: (bounds.width - size.width) / 2,
+                                  y: (bounds.height - size.height) / 2,
                                   width: size.width, height: size.height)
         }
     }

@@ -13,7 +13,7 @@ final class FocusHeroModelTests: XCTestCase {
     }
 
     private func row(_ id: String, _ items: [String]) -> FocusHeroRow {
-        FocusHeroRow(id: id, itemIDs: items, leadItem: items.first.map(item))
+        FocusHeroRow(id: id, itemIDs: items, leadItem: items.first.map(item), items: items.map(item))
     }
 
     func testTheFirstRowStandsInUntilSomethingIsFocused() {
@@ -70,6 +70,35 @@ final class FocusHeroModelTests: XCTestCase {
         model.record(height: 540, for: "watchlist")
         model.record(height: 540.3, for: "watchlist")
         XCTAssertEqual(model.rowHeights["watchlist"], 540)
+    }
+
+    func testFocusedSubjectTakesFreshRowStateWithoutAnotherFocusMove() {
+        let model = FocusHeroModel()
+        var episode = MediaItem(id: "episode", title: "Episode", kind: .episode)
+        episode.isPlayed = true
+        let initial = FocusHeroRow(id: "row", itemIDs: [episode.stablePresentationID], leadItem: episode, items: [episode])
+        model.activate(initial, in: [initial])
+        model.show(.item(episode), in: initial)
+        episode.isPlayed = false
+        let fresh = FocusHeroRow(id: "row", itemIDs: [episode.stablePresentationID], leadItem: episode, items: [episode])
+        model.seed(from: [fresh])
+        XCTAssertEqual(model.subject?.item?.isPlayed, false)
+        XCTAssertEqual(model.activeRowID, "row")
+    }
+
+    func testSameProviderIDOnDifferentAccountsDoesNotKeepRemovedSubject() {
+        let model = FocusHeroModel()
+        var first = item("shared-id")
+        first.sourceAccountID = "first"
+        var second = first
+        second.sourceAccountID = "second"
+        let initial = FocusHeroRow(id: "row", itemIDs: [first.stablePresentationID], leadItem: first, items: [first])
+        model.activate(initial, in: [initial])
+        model.show(.item(first), in: initial)
+        let fresh = FocusHeroRow(id: "row", itemIDs: [second.stablePresentationID], leadItem: second, items: [second])
+        model.seed(from: [fresh])
+        XCTAssertEqual(model.subject?.item?.sourceAccountID, "second")
+        XCTAssertNotEqual(FocusHeroSubject.item(first).id, FocusHeroSubject.item(second).id)
     }
 
     func testEveryTitleGetsTheSameFilledInDetails() async {

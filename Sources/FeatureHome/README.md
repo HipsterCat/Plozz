@@ -26,6 +26,45 @@ fallback when the user's server has no attached trailer.
   trailer, by routing through `ProviderTrailers.YouTubeTrailerProvider`
   to surface a real `PlaybackRequest`.
 
+## Showcase
+
+`FocusHeroHomeView` keeps focus-driven movement and hero updates outside the
+row-building view. Posters use the profile's full normal poster dimensions.
+Preview headings sit close to their cards; only the active heading lifts for
+focus clearance. That movement is a title-only drawing offset, not a rail
+relayout. Native card/shadow drawing bounds remain intact.
+The 200ms row transition exposes the next native focus target before rapid
+remote repeats. The schedule badge sits 16pt above the logo slot; Showcase
+constrains even tall logos to that slot rather than letting artwork grow into
+the badge. The outgoing row fades over 64pt, with its bottom edge trimmed so no
+strip remains above the next row. Earlier rows retain native Up eligibility;
+making their entire mask transparent would break that navigation. Showcase's
+backdrop uses wider leading and bottom gradients without lengthening its crossfade.
+
+Native poster layout slots use artwork size on both axes. TVUIKit's focus
+margins settle after realization and draw outside that slot; feeding their
+changing height into a lazy row shifts both the pinned row and hero during deep
+horizontal scrolling. Hosted native-poster coverage checks this before and
+after layout, and the Home UI regression traverses all 75 fixture cards.
+
+Metadata belongs to the current Home view-model identity (profile, account set,
+and credential generation), never a process-global cache. Cached details only
+fill presentation gaps in the current row record: watched/resume state, source
+identity, availability, and the selected series remain current. Background
+enrichment publishes batches of at most four, and focus-driven loads share the
+same deduplication. `FocusHeroMetadataTests` covers freshness and ownership;
+`ShowcaseNavigationTests` covers geometry and native presented-frame hitches.
+For existing-library coverage, the guarded physical driver supports
+`--run-showcase-mixed`: it verifies on-screen Continue Watching, deep mixed-speed
+paging, rapid reversals, sustained deep holds, stable vertical anchors, and
+slow/fast tours through multiple real rows.
+Its functional result is separate from `--measure-right` and
+`--measure-vertical-burst` native hitch measurements. The driver accepts an
+explicitly confirmed `PLOZZ_HOME_APP_CONFIGURATION=Debug-optimized` candidate
+as well as Release; it never rebuilds or replaces the app under measurement.
+Use optimized physical-device measurements for performance acceptance, not
+simulator timing or passing navigation assertions alone.
+
 ## Invariants
 
 - **Provider-agnostic.** All data flows through `MediaProvider`. No

@@ -1,0 +1,233 @@
+import XCTest
+
+@MainActor
+final class ShowcaseNavigationTests: XCTestCase {
+    func testScheduleBadgeClearsTallLogoDuringHorizontalNavigation() throws {
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = [
+            "--production-home-fixture", "--pinned-home", "--immersive-home",
+            "--showcase-schedule-fixture",
+        ]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        try enterMediaRow(in: app)
+        for _ in 0..<4 {
+            let badge = app.descendants(matching: .any)["showcase-schedule"].firstMatch
+            let logo = app.images["showcase-title-logo"].firstMatch
+            XCTAssertTrue(badge.waitForExistence(timeout: 5))
+            XCTAssertTrue(logo.waitForExistence(timeout: 5), "Measure decoded artwork, not the fallback title.")
+            XCTAssertLessThanOrEqual(logo.frame.height, 124.5)
+            XCTAssertGreaterThanOrEqual(logo.frame.minY - badge.frame.maxY, 15.5)
+            XCTAssertGreaterThanOrEqual(badge.frame.minY, app.frame.minY)
+            XCUIRemote.shared.press(.right)
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "showcase-schedule-above-tall-logo"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    func testLargerPostersAndCompactHeadingsWithNativeFocus() throws {
+        try checkGeometry(focusStyle: "system")
+    }
+
+    func testLargerPostersAndCompactHeadingsWithHighlightFocus() throws {
+        try checkGeometry(focusStyle: "highlight")
+    }
+
+    func testHorizontalNavigationHitches() throws {
+        try measureNavigation(vertical: false)
+    }
+
+    func testVerticalNavigationHitches() throws {
+        try measureNavigation(vertical: true)
+    }
+
+    func testHorizontalRowAndHeroAnchorsStayFixed() throws {
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = [
+            "--production-home-fixture", "--pinned-home", "--immersive-home",
+            "--home-performance-fixture", "--distinct-home-artwork",
+        ]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        try enterMediaRow(in: app)
+        let title = app.staticTexts["Continue Watching"]
+        let description = app.staticTexts["A locally supplied movie for measuring the production Home view."].firstMatch
+        XCTAssertTrue(description.waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 1)
+        var rowPositions = [title.frame.minY]
+        var heroPositions = [description.frame.minY]
+        for direction in [XCUIRemote.Button.right, .left] {
+            for _ in 0..<16 {
+                XCUIRemote.shared.press(direction)
+                Thread.sleep(forTimeInterval: 0.65)
+                rowPositions.append(title.frame.minY)
+                heroPositions.append(description.frame.minY)
+            }
+        }
+        let evidence = XCTAttachment(string: "rowY=\(rowPositions)\nheroY=\(heroPositions)")
+        evidence.name = "showcase-horizontal-anchors"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+        XCTAssertLessThanOrEqual((rowPositions.max() ?? 0) - (rowPositions.min() ?? 0), 0.5)
+        XCTAssertLessThanOrEqual((heroPositions.max() ?? 0) - (heroPositions.min() ?? 0), 0.5)
+    }
+
+    func testDeepHorizontalTraversalKeepsRowAndHeroAnchorsFixed() throws {
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = [
+            "--production-home-fixture", "--pinned-home", "--immersive-home",
+            "--home-performance-fixture", "--distinct-home-artwork",
+        ]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        try enterMediaRow(in: app)
+        let heading = app.staticTexts["Continue Watching"]
+        let description = app.staticTexts["A locally supplied movie for measuring the production Home view."].firstMatch
+        XCTAssertTrue(description.waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 1)
+        let headingY = heading.frame.minY
+        let heroY = description.frame.minY
+        let initialLabel = focusedCard(in: app).label
+        for _ in 0..<3 {
+            XCUIRemote.shared.press(.right, forDuration: 4)
+            Thread.sleep(forTimeInterval: 0.3)
+            XCTAssertEqual(heading.frame.minY, headingY, accuracy: 0.5)
+            XCTAssertEqual(description.frame.minY, heroY, accuracy: 0.5)
+        }
+        XCTAssertEqual(focusedCard(in: app).label, "Fixture movie 74",
+                       "Traverse the entire long row, beyond its initially realized native posters.")
+        for _ in 0..<3 {
+            XCUIRemote.shared.press(.left, forDuration: 4)
+            Thread.sleep(forTimeInterval: 0.3)
+            XCTAssertEqual(heading.frame.minY, headingY, accuracy: 0.5)
+            XCTAssertEqual(description.frame.minY, heroY, accuracy: 0.5)
+        }
+        XCTAssertEqual(focusedCard(in: app).label, initialLabel)
+    }
+
+    private func measureNavigation(vertical: Bool) throws {
+        guard #available(tvOS 26.0, *) else {
+            throw XCTSkip("Presented-frame measurements require tvOS 26.")
+        }
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = [
+            "--production-home-fixture", "--pinned-home", "--immersive-home",
+            "--home-performance-fixture", "--distinct-home-artwork",
+        ]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        try enterMediaRow(in: app)
+        let first = focusedCard(in: app)
+        let originalLabel = first.label
+        XCTAssertTrue(originalLabel.contains("Fixture movie"), "The workload must start on a real card.")
+        XCUIRemote.shared.press(.down)
+        XCTAssertNotEqual(focusedCard(in: app).label, originalLabel, "The lower row must be reachable.")
+        XCUIRemote.shared.press(.up)
+        XCTAssertEqual(focusedCard(in: app).label, originalLabel)
+
+        let options = XCTMeasureOptions()
+        options.iterationCount = 3
+        options.invocationOptions = [.manuallyStart, .manuallyStop]
+        measure(metrics: [XCTHitchMetric(application: app)], options: options) {
+            startMeasuring()
+            if vertical {
+                for _ in 0..<6 {
+                    XCUIRemote.shared.press(.down)
+                    XCUIRemote.shared.press(.up)
+                }
+            } else {
+                XCUIRemote.shared.press(.right, forDuration: 3)
+            }
+            stopMeasuring()
+            if !vertical {
+                XCTAssertNotEqual(focusedCard(in: app).label, originalLabel)
+                XCUIRemote.shared.press(.left, forDuration: 4)
+            }
+            XCTAssertEqual(focusedCard(in: app).label, originalLabel, "Navigation must return to the same card.")
+        }
+    }
+
+    private func checkGeometry(focusStyle: String) throws {
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = [
+            "--production-home-fixture", "--pinned-home", "--immersive-home",
+            "--focus-style=\(focusStyle)",
+        ]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        try enterMediaRow(in: app)
+        let first = focusedCard(in: app)
+        let initialLabel = first.label
+        let currentTitle = app.staticTexts["Continue Watching"]
+        XCTAssertLessThan(currentTitle.frame.maxY, first.frame.minY, "The active title must clear focused artwork.")
+        let inactiveTitle = app.staticTexts["Recently Added"]
+        let preview = app.buttons.allElementsBoundByIndex
+            .filter {
+                $0.frame.height > 100 && $0.frame.width > 200 && $0.frame.width < 400
+                    && $0.frame.minY > inactiveTitle.frame.minY
+                    && $0.frame.minY < inactiveTitle.frame.maxY + 100
+            }
+            .min { $0.frame.minX < $1.frame.minX }
+        let next = try XCTUnwrap(preview)
+        let inactiveGap = next.frame.minY - inactiveTitle.frame.maxY
+        XCTAssertGreaterThan(app.frame.maxY - next.frame.minY, 20, "Down needs real visible card area.")
+        XCUIRemote.shared.press(.down)
+        let poster = focusedCard(in: app)
+        let activeGap = poster.frame.minY - inactiveTitle.frame.maxY
+        XCTAssertGreaterThanOrEqual(poster.frame.width, 280, "Showcase uses full-size posters instead of 70% artwork.")
+        // A 280pt slot includes two 10pt side margins; the 2:3 artwork is 260x390.
+        // Native focus expands its AX frame; custom focus keeps the layout frame.
+        XCTAssertGreaterThanOrEqual(poster.frame.height, 390)
+        XCTAssertEqual(poster.label, "Fixture movie 24", "Hidden captions must retain the media title.")
+        XCTAssertGreaterThan(activeGap, 8, "Focus growth must leave clear space beneath the row label.")
+        XCTAssertGreaterThan(activeGap, inactiveGap, "The active heading makes room for focus; previews stay compact.")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "showcase-poster-\(focusStyle)"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        for _ in 0..<4 {
+            XCUIRemote.shared.press(.up)
+            XCTAssertEqual(focusedCard(in: app).label, initialLabel)
+            XCUIRemote.shared.press(.down)
+            XCTAssertEqual(focusedCard(in: app).label, poster.label)
+        }
+    }
+
+    private func enterMediaRow(in app: XCUIApplication) throws {
+        if focusedCard(in: app).elementType != .button {
+            XCUIRemote.shared.press(.right)
+        }
+        let ready = NSPredicate { [self] _, _ in focusedCard(in: app).elementType == .button }
+        let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: ready, object: nil)], timeout: 5)
+        XCTAssertEqual(result, .completed, "The workload requires actual media focus.")
+        if result != .completed {
+            let tree = XCTAttachment(string: app.debugDescription)
+            tree.name = "showcase-focus-tree"
+            tree.lifetime = .keepAlways
+            add(tree)
+            let image = XCTAttachment(screenshot: app.screenshot())
+            image.name = "showcase-focus-failure"
+            image.lifetime = .keepAlways
+            add(image)
+            throw NSError(domain: "ShowcaseNavigationTests", code: 1)
+        }
+    }
+
+    private func focusedCard(in app: XCUIApplication) -> XCUIElement {
+        return app.buttons.allElementsBoundByIndex
+            .filter {
+                $0.label.contains("Fixture movie") && $0.frame.width > 100 && $0.frame.height > 100
+                    && ($0.hasFocus || $0.descendants(matching: .any)
+                        .matching(NSPredicate(format: "hasFocus == true")).count > 0)
+            }
+            .min { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height } ?? app
+    }
+}
