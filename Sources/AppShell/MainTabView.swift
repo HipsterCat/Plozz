@@ -4,6 +4,7 @@ import AppRuntime
 import CoreModels
 import CoreNetworking
 import CoreUI
+import CrashReporting
 import FeatureHomeCore
 import FeatureHome
 import FeatureMusic
@@ -1641,6 +1642,7 @@ struct MainTabView: View {
             if let selected = NavigationRailDestination(storageValue: destination) {
                 releaseExplicitLiveTVEntry(ifLeavingFor: selected)
             }
+            MainThreadStallProbe.context = CrashReportScreen(context: destination).rawValue
             BrowseDiagnostics.event("screen tab=\(destination)")
             // Keeps person tracing alive across relaunches once it has been
             // asked for, so restoring the live stream never costs the repro.

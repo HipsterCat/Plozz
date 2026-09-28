@@ -8,7 +8,8 @@ import Sentry
 ///
 /// What is sent (only when the user has opted in AND a DSN is baked in):
 ///   • Crash stack traces (the whole point) and watchdog/hang signals.
-///   • Coarse tags: app version/build, OS version, device model, provider kinds.
+///   • Coarse tags: app version/build, OS version, device model, provider kinds,
+///     and the last observed fixed screen category (never a route or content name).
 /// What is NOT sent: user identity, IP, server URLs/hostnames, media titles,
 /// profile names, network/UI breadcrumbs, or performance traces.
 @MainActor
@@ -65,6 +66,13 @@ public final class SentryCrashReporter: CrashReporter {
     public func update(context: CrashReportContext) {
         guard isActive else { return }
         applyScope(context)
+    }
+
+    public func setScreen(_ screen: CrashReportScreen) {
+        guard isActive else { return }
+        SentrySDK.configureScope { scope in
+            scope.setTag(value: screen.rawValue, key: "last_screen")
+        }
     }
 
     public func stop() {

@@ -1,9 +1,9 @@
 import Foundation
 
 /// Non-secret context attached to every crash report as tags. This is the
-/// **only** app data we deliberately send. It must never contain PII, auth
-/// tokens, server URLs/hostnames, media titles, or profile names — just the
-/// coarse facts needed to triage a crash.
+/// only app data we deliberately send, along with a fixed screen category.
+/// It must never contain PII, auth tokens, server URLs/hostnames, media titles,
+/// or profile names — just the coarse facts needed to triage a crash.
 public struct CrashReportContext: Sendable {
     /// Sentry "release" identifier, e.g. `com.thatcube.Plozz@1.4.0+1004`.
     public var releaseName: String
@@ -83,6 +83,31 @@ public struct CrashReportContext: Sendable {
     }
 }
 
+/// Fixed screen categories only. Never send a route, library ID, title, or
+/// other free-form view context to the crash-reporting service.
+public enum CrashReportScreen: String, Sendable {
+    case startup, home, library, detail, settings, watchlist, search
+    case music, liveTV, downloads, playback, profiles, unknown
+
+    public init(context: String) {
+        switch context {
+        case "startup": self = .startup
+        case "home": self = .home
+        case "library", "allLibraries": self = .library
+        case "detail": self = .detail
+        case "settings": self = .settings
+        case "watchlist": self = .watchlist
+        case "search": self = .search
+        case "music": self = .music
+        case "liveTV": self = .liveTV
+        case "downloads": self = .downloads
+        case "playback": self = .playback
+        case "profiles": self = .profiles
+        default: self = context.hasPrefix("library:") ? .library : .unknown
+        }
+    }
+}
+
 /// Abstraction so the app can hold a reporter without importing Sentry directly,
 /// and so builds without a DSN transparently do nothing.
 @MainActor
@@ -90,6 +115,7 @@ public protocol CrashReporter: AnyObject {
     var isActive: Bool { get }
     func start(context: CrashReportContext)
     func update(context: CrashReportContext)
+    func setScreen(_ screen: CrashReportScreen)
     func stop()
 }
 
@@ -101,6 +127,7 @@ public final class NoopCrashReporter: CrashReporter {
     public private(set) var isActive = false
     public func start(context: CrashReportContext) {}
     public func update(context: CrashReportContext) {}
+    public func setScreen(_ screen: CrashReportScreen) {}
     public func stop() {}
 }
 
@@ -109,6 +136,7 @@ public final class NoopCrashReporter: CrashReporter {
 @MainActor
 public final class CrashReportingController {
     private let reporter: CrashReporter
+    private var screen: CrashReportScreen = .startup
 
     /// True when this build shipped with a crash-reporting endpoint (a non-empty
     /// DSN was baked into Info.plist). When false the opt-in UI is shown disabled
@@ -149,9 +177,20 @@ public final class CrashReportingController {
                 reporter.update(context: context)
             } else {
                 reporter.start(context: context)
+                reporter.setScreen(screen)
             }
         } else if reporter.isActive {
             reporter.stop()
+        }
+    }
+
+    /// Cache the current category even before consent, so enabling reporting
+    /// mid-session tags the active screen without collecting prior navigation.
+    public func setScreen(_ screen: CrashReportScreen) {
+        guard self.screen != screen else { return }
+        self.screen = screen
+        if isConfigured && reporter.isActive {
+            reporter.setScreen(screen)
         }
     }
 
