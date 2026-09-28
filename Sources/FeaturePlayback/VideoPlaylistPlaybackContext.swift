@@ -48,10 +48,15 @@ public final class VideoPlaylistPlaybackContext {
         } else {
             let provider = provider
             let playlistID = playlistID
-            let page = PageRequest(startIndex: pageStart, limit: pageSize)
+            let requestedSize = pageSize
             request = InFlight(
                 id: UUID(),
-                task: Task { try await provider.videoPlaylistMembers(of: playlistID, page: page) },
+                task: Task {
+                    try await Self.fetchPage(
+                        provider: provider, playlistID: playlistID,
+                        startIndex: pageStart, limit: requestedSize
+                    )
+                },
                 waiters: [waiterID]
             )
             inFlight[pageStart] = request
@@ -66,8 +71,7 @@ public final class VideoPlaylistPlaybackContext {
             }
             try Task.checkCancellation()
             guard page.startIndex == pageStart, page.totalCount >= 0,
-                  page.items.count <= pageSize, page.endIndex <= page.totalCount,
-                  page.endIndex == page.totalCount || page.items.count == pageSize else {
+                  page.items.count <= pageSize, page.endIndex <= page.totalCount else {
                 throw AppError.invalidResponse
             }
             if inFlight[pageStart]?.id == request.id {
@@ -90,6 +94,32 @@ public final class VideoPlaylistPlaybackContext {
             }
             throw error
         }
+    }
+
+    private nonisolated static func fetchPage(
+        provider: any MediaProvider, playlistID: String, startIndex: Int, limit: Int
+    ) async throws -> MediaPage {
+        var members: [MediaItem] = []
+        var totalCount: Int?
+        while members.count < limit {
+            try Task.checkCancellation()
+            let start = startIndex + members.count
+            if let totalCount, start >= totalCount { break }
+            let page = try await provider.videoPlaylistMembers(
+                of: playlistID,
+                page: PageRequest(startIndex: start, limit: limit - members.count)
+            )
+            guard page.startIndex == start, page.totalCount >= 0,
+                  page.items.count <= limit - members.count,
+                  page.endIndex <= page.totalCount,
+                  !page.items.isEmpty || start >= page.totalCount else {
+                throw AppError.invalidResponse
+            }
+            totalCount = page.totalCount
+            members.append(contentsOf: page.items)
+            if page.items.isEmpty { break }
+        }
+        return MediaPage(items: members, startIndex: startIndex, totalCount: totalCount ?? 0)
     }
 
     private func cancelWaiter(pageStart: Int, id: UUID, waiterID: UUID) {

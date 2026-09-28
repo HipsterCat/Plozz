@@ -236,6 +236,54 @@ final class PlayerViewModelEOFTests: XCTestCase {
         XCTAssertEqual(finalRequests, 2)
     }
 
+    func testPlaylistContextFillsShortServerPagesWithoutReordering() async throws {
+        let entries = (0..<28).map {
+            MediaItem(id: "\($0)", title: "Movie \($0)", kind: .movie)
+        }
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: entries[0], streamURL: URL(string: "https://example.test/movie.m3u8")!
+            ),
+            playlistMembers: entries,
+            playlistPageLimit: 7
+        )
+        let context = VideoPlaylistPlaybackContext(
+            origin: .init(
+                playlistID: "playlist", accountID: "account", index: 0,
+                totalCount: entries.count, item: entries[0].taggingSource("account")
+            ),
+            provider: provider
+        )
+        let nearEnd = try await context.item(at: 23)
+        let last = try await context.item(at: 27)
+        let requests = await provider.playlistMemberRequests
+        XCTAssertEqual(nearEnd?.id, "23")
+        XCTAssertEqual(last?.id, "27")
+        XCTAssertEqual(requests, 5)
+        XCTAssertEqual(context.items[27]?.sourceAccountID, "account")
+    }
+
+    func testEpisodeBrowserShowsLooseEpisodesAndAvoidsRepeatedDiscovery() async {
+        let episode = MediaItem(
+            id: "loose", title: "Special", kind: .episode,
+            seriesID: "series", seasonID: nil
+        ).taggingSource("account")
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: episode, streamURL: URL(string: "https://example.test/special.m3u8")!
+            ),
+            childrenByParent: ["series": [episode]]
+        )
+        let browser = PlayerEpisodeBrowser(item: episode, provider: provider)
+        await browser.loadIfNeeded()
+        await browser.loadIfNeeded()
+        XCTAssertTrue(browser.seasons.isEmpty)
+        XCTAssertEqual(browser.episodes.map(\.id), ["loose"])
+        XCTAssertEqual(browser.episodes.first?.sourceAccountID, "account")
+        let requests = await provider.childRequests
+        XCTAssertEqual(requests, 1)
+    }
+
     func testPlaylistPageFailureCanRetryWithoutLosingSeededSelection() async throws {
         let first = MediaItem(id: "first", title: "First", kind: .movie)
         let second = MediaItem(id: "second", title: "Second", kind: .movie)
@@ -1405,8 +1453,11 @@ private actor RecordingPlaybackProvider: MediaProvider {
     private let request: PlaybackRequest
     private let requestsByItemID: [String: PlaybackRequest]
     private let playlistMembers: [MediaItem]
+    private let playlistPageLimit: Int?
+    private let childrenByParent: [String: [MediaItem]]
     private var playlistMemberError: AppError?
     private(set) var playlistMemberRequests = 0
+    private(set) var childRequests = 0
     private(set) var reports: [Report] = []
     private(set) var playbackInfoCallCount = 0
     private(set) var itemCallCount = 0
@@ -1415,12 +1466,16 @@ private actor RecordingPlaybackProvider: MediaProvider {
         request: PlaybackRequest,
         kind: ProviderKind = .jellyfin,
         requestsByItemID: [String: PlaybackRequest] = [:],
-        playlistMembers: [MediaItem] = []
+        playlistMembers: [MediaItem] = [],
+        playlistPageLimit: Int? = nil,
+        childrenByParent: [String: [MediaItem]] = [:]
     ) {
         self.request = request
         self.kind = kind
         self.requestsByItemID = requestsByItemID
         self.playlistMembers = playlistMembers
+        self.playlistPageLimit = playlistPageLimit
+        self.childrenByParent = childrenByParent
     }
 
     func libraries() async throws -> [MediaLibrary] { [] }
@@ -1430,7 +1485,10 @@ private actor RecordingPlaybackProvider: MediaProvider {
         itemCallCount += 1
         return requestsByItemID[id]?.item ?? request.item
     }
-    func children(of itemID: String) async throws -> [MediaItem] { [] }
+    func children(of itemID: String) async throws -> [MediaItem] {
+        childRequests += 1
+        return childrenByParent[itemID] ?? []
+    }
     func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
         MediaPage(items: [], startIndex: page.startIndex, totalCount: 0)
     }
@@ -1438,7 +1496,10 @@ private actor RecordingPlaybackProvider: MediaProvider {
         playlistMemberRequests += 1
         if let playlistMemberError { throw playlistMemberError }
         return MediaPage(
-            items: Array(playlistMembers.dropFirst(page.startIndex).prefix(page.limit)),
+            items: Array(
+                playlistMembers.dropFirst(page.startIndex)
+                    .prefix(min(page.limit, playlistPageLimit ?? page.limit))
+            ),
             startIndex: page.startIndex, totalCount: playlistMembers.count
         )
     }

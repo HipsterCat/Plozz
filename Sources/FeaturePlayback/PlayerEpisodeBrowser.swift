@@ -19,6 +19,7 @@ public final class PlayerEpisodeBrowser {
     private let accountID: String?
     @ObservationIgnored private var seasonCache: [String: [MediaItem]] = [:]
     @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var didLoad = false
 
     public init(item: MediaItem, provider: any MediaProvider) {
         self.provider = provider
@@ -28,15 +29,26 @@ public final class PlayerEpisodeBrowser {
     }
 
     public func loadIfNeeded() async {
-        guard seasons.isEmpty, selectedSeasonID == nil, !isLoading else { return }
+        guard !didLoad, !isLoading else { return }
         isLoading = true
         do {
             let all = try await provider.children(of: seriesID)
             try Task.checkCancellation()
             seasons = all.filter { $0.kind == .season }
+            if seasons.isEmpty {
+                episodes = all.filter { $0.kind == .episode }.map { item in
+                    accountID.map { item.taggingSource($0) } ?? item
+                }
+                didLoad = true
+                isLoading = false
+                loadError = nil
+                return
+            }
             let selected = seasons.first(where: { $0.id == initialSeasonID })?.id
                 ?? initialSeasonID ?? seasons.first?.id
+            didLoad = true
             isLoading = false
+            loadError = nil
             if let selected { await selectSeason(selected) }
         } catch is CancellationError {
             isLoading = false
