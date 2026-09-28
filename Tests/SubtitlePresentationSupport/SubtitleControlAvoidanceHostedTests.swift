@@ -127,8 +127,8 @@ final class SubtitleControlAvoidanceHostedTests: XCTestCase {
             window.rootViewController = nil
             previous?.makeKeyAndVisible()
         }
-        let normal = try await captionPosition(with: nil, in: window, host: host)
         let menu = try await captionPosition(with: .subtitleTracks, in: window, host: host)
+        let normal = try await captionPosition(with: nil, in: window, host: host)
         XCTAssertEqual(menu.minY, normal.minY, accuracy: 1)
         XCTAssertEqual(menu.size, normal.size)
     }
