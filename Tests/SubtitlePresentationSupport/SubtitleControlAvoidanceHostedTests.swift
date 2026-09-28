@@ -156,7 +156,13 @@ final class SubtitleControlAvoidanceHostedTests: XCTestCase {
             $0.disablesAnimations = true
             $0.animation = nil
         }.id(UUID()))
-        try await waitUntil {
+        try await waitUntil(
+            failureMessage: "Subtitle menu layout did not settle: panelOpen=\(model.isPanelOpen), "
+                + "pendingPanel=\(String(describing: PlayerScreenshotHook.pendingPanel)), "
+                + "title=\(model.subtitleLayout.frame(for: .title) != nil), "
+                + "menu=\(model.subtitleLayout.frame(for: .menu) != nil), "
+                + "captions=\(self.frames(in: host.view, relativeTo: window).count)"
+        ) {
             window.layoutIfNeeded()
             return model.subtitleLayout.frame(for: .title) != nil
                 && !self.frames(in: host.view, relativeTo: window).isEmpty
@@ -298,12 +304,15 @@ final class SubtitleControlAvoidanceHostedTests: XCTestCase {
             .first { $0.activationState == .foregroundActive })
     }
 
-    private func waitUntil(_ condition: () -> Bool) async throws {
+    private func waitUntil(
+        failureMessage: @autoclosure () -> String = "Subtitle/control layout did not settle",
+        _ condition: () -> Bool
+    ) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !condition(), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
-        XCTAssertTrue(condition(), "Subtitle/control layout did not settle")
+        XCTAssertTrue(condition(), failureMessage())
     }
 }
 
