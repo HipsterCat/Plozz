@@ -217,22 +217,35 @@ struct PrototypeBrowser: View {
                 timeline.pageWidth = PrototypeLayout.timelineWidth(for: new)
                 timeline.pageSeconds = PrototypeLayout.viewportSeconds(for: new)
                 // Keep the same programme time at the leading edge.
-                let seconds = timeline.offset / PrototypeLayout.timelineX(1, for: old)
+                let seconds = (old > 0 ? timeline.offset : timelineOffset)
+                    / PrototypeLayout.timelineX(1, for: old > 0 ? old : new)
+                let adjustedOffset = max(0, PrototypeLayout.timelineX(seconds.isFinite ? seconds : 0, for: new))
+                guideHours = max(guideHours, PrototypeLayout.hoursCoveringTimelineOffset(adjustedOffset, for: new))
                 setTimelineOffset(min(
                     PrototypeLayout.maximumTimelineOffset(for: new, span: guideSpan),
-                    max(0, PrototypeLayout.timelineX(seconds.isFinite ? seconds : 0, for: new))
+                    adjustedOffset
                 ))
             }
         }
         .onAppear {
             let committed = $timelineOffset
+            let hours = $guideHours
+            let width = $guideWidth
             timeline.settled = { committed.wrappedValue = $0 }
-            timeline.moved = { extendGuideIfNeeded(at: $0) }
+            timeline.moved = { Self.extendGuideIfNeeded(at: $0, width: width.wrappedValue, hours: hours) }
         }
-        .onChange(of: guideStart) { _, _ in guideHours = Self.initialGuideHours }
+        .onDisappear {
+            timeline.stop()
+        }
+        .onChange(of: guideStart) { _, _ in
+            guideHours = PrototypeLayout.hoursCoveringTimelineOffset(timelineOffset, for: guideWidth)
+        }
         .onChange(of: timelineOffset, initial: true) { _, value in
             // Now, guide time and bookmarks move the guide from outside.
-            if abs(timeline.offset - value) >= 1 { timeline.offset = value }
+            if abs(timeline.offset - value) >= 1 {
+                guideHours = max(guideHours, PrototypeLayout.hoursCoveringTimelineOffset(value, for: guideWidth))
+                timeline.offset = value
+            }
         }
         .padding([.leading, .top], PrototypeLayout.guideInset)
         .padding(.trailing, PrototypeLayout.guideTrailingInset)
@@ -642,13 +655,14 @@ struct PrototypeBrowser: View {
 
     /// Adds the next six hours once the viewer is within a screen of the end,
     /// so listings are requested before they are reached.
-    private func extendGuideIfNeeded(at offset: CGFloat) {
-        guard guideWidth > 0, guideSpan < PrototypeLayout.maximumTimelineSpanSeconds else { return }
-        let remaining = PrototypeLayout.maximumTimelineOffset(for: guideWidth, span: guideSpan) - offset
-        guard remaining <= PrototypeLayout.timelineWidth(for: guideWidth) else { return }
-        guideHours = min(
+    private static func extendGuideIfNeeded(at offset: CGFloat, width: CGFloat, hours: Binding<Int>) {
+        let span = TimeInterval(hours.wrappedValue) * 3_600
+        guard width > 0, span < PrototypeLayout.maximumTimelineSpanSeconds else { return }
+        let remaining = PrototypeLayout.maximumTimelineOffset(for: width, span: span) - offset
+        guard remaining <= PrototypeLayout.timelineWidth(for: width) else { return }
+        hours.wrappedValue = min(
             Int(PrototypeLayout.maximumTimelineSpanSeconds / 3_600),
-            guideHours + Int(Self.guideStepSeconds / 3_600))
+            hours.wrappedValue + Int(Self.guideStepSeconds / 3_600))
     }
 
     /// Moves the rows and the owner's committed offset together, so a pending
@@ -1355,6 +1369,13 @@ final class PrototypeTimelineScroll {
             guard let self, !Task.isCancelled else { return }
             self.settled?(self.offset)
         }
+    }
+
+    func stop() {
+        commit?.cancel()
+        commit = nil
+        settled = nil
+        moved = nil
     }
 }
 

@@ -157,6 +157,16 @@ enum PrototypeLayout {
         max(0, timelineContentWidth(for: width, span: span) - timelineWidth(for: width))
     }
 
+    static func hoursCoveringTimelineOffset(_ offset: CGFloat, for width: CGFloat) -> Int {
+        let initialHours = Int(timelineSpanSeconds / 3_600)
+        guard width > 0, offset.isFinite else { return initialHours }
+        let visibleEnd = Double(max(0, offset) / timelineWidth(for: width)) * viewportSeconds(for: width)
+            + viewportSeconds(for: width)
+        let cappedEnd = min(maximumTimelineSpanSeconds, visibleEnd)
+        guard cappedEnd.isFinite else { return Int(maximumTimelineSpanSeconds / 3_600) }
+        return max(initialHours, Int(ceil(cappedEnd / timelineSpanSeconds)) * initialHours)
+    }
+
     static func programHeight(in rowHeight: CGFloat) -> CGFloat {
         max(1, rowHeight - programInset * 2)
     }
