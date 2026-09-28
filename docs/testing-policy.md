@@ -561,6 +561,13 @@ Explicit episode entry keeps its immediate browser behavior; Reduce Motion uses
 an immediate completion. Once revealed, lower content remains mounted so later
 navigation preserves its state. No extra hosting controller divides native
 button focus from the original page tree.
+`DetailTransitionVisualRegressionTests` also moves horizontally between real
+episodes during the production browser reveal. The outer page must remain at
+zero, the compact logo must retain its 72pt top clearance, and normal scrolling
+must be restored afterward. Pixel checks compare the season pill's outer edge,
+resting episode artwork, and About's leading keyline. Coverage includes all
+card focus styles, explicit episode entry, and scroll-guard
+removal without disabling nested rails or overriding an existing entrance gate.
 
 `NativePosterComparisonTests` is an opt-in, simulator-only comparison, enabled by
 `TEST_RUNNER_PLOZZ_NATIVE_POSTER_COMPARISON=1` on `PlozzHomeRemoteTests`. It captures

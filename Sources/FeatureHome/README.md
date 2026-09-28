@@ -22,6 +22,12 @@ fallback when the user's server has no attached trailer.
   The compact logo above Seasons fits wholly inside its 200pt slot, including
   tall wordmarks; it does not use the full hero's flexible height allowance.
   This changes only artwork sizing, not season/episode focus geometry.
+  While the browser reveals, only the outer page's native scrolling is held:
+  horizontal episode focus stays live without provoking a second vertical
+  scroll that lifts the logo. The page restores normal scrolling when the
+  reveal finishes or is cancelled. Season pills, resting episode artwork,
+  loading cards, and About share the same leading keyline; card spacing stays
+  on the trailing side rather than indenting the artwork.
   When pinned navigation hides on detail pages, horizontal rows draw through
   the empty side gutter to the screen edge, including focused episode artwork.
   The sidebar's mask changes without replacing the scroll view, preserving

@@ -122,7 +122,7 @@ struct EpisodeRowEntryPlaceholder: View {
             .offset(y: reduceMotion || focusStyle.usesSystemEffect || isFocused ? 0 : -metrics.focusCaptionPush)
         }
         .frame(width: EpisodeColumnCard.artworkSize.width, alignment: .leading)
-        .padding(.horizontal, EpisodeColumnCard.sideMargin)
+        .padding(.trailing, EpisodeColumnCard.trailingSpacing)
         .compositingGroup()
         .plozzCardFocusTransition(isFocused: isFocused, animates: !reduceMotion)
     }

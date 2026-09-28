@@ -366,6 +366,72 @@ struct SeriesRecedeReveal<Content: View>: View {
     }
 }
 
+#if os(tvOS)
+/// While the browser moves into place, native focus must not reveal its moving
+/// cards by scrolling the page as well. Only the outer scroll view is gated;
+/// horizontal episode navigation and the page's explicit scrollTo remain live.
+struct SeriesBrowserRevealScrollGuard: UIViewRepresentable {
+    let isActive: Bool
+
+    func makeUIView(context: Context) -> GuardView {
+        let view = GuardView()
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ view: GuardView, context: Context) {
+        view.isActive = isActive
+        view.apply()
+    }
+
+    static func dismantleUIView(_ view: GuardView, coordinator: ()) {
+        view.restore()
+    }
+
+    final class GuardView: UIView {
+        var isActive = false
+        private weak var scrollView: UIScrollView?
+        private var wasScrollEnabled: Bool?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            apply()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            apply()
+        }
+
+        func apply() {
+            guard window != nil, isActive else {
+                restore()
+                return
+            }
+            var ancestor = superview
+            while let view = ancestor {
+                if let scroll = view as? UIScrollView {
+                    if scrollView !== scroll {
+                        restore()
+                        scrollView = scroll
+                        wasScrollEnabled = scroll.isScrollEnabled
+                    }
+                    scroll.isScrollEnabled = false
+                    return
+                }
+                ancestor = view.superview
+            }
+        }
+
+        func restore() {
+            if let wasScrollEnabled { scrollView?.isScrollEnabled = wasScrollEnabled }
+            scrollView = nil
+            wasScrollEnabled = nil
+        }
+    }
+}
+#endif
+
 private struct SeriesRecededLogo: View {
     let series: MediaItem
     let recedeModel: SeriesHeroRecedeModel

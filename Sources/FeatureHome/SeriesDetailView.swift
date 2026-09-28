@@ -75,6 +75,7 @@ struct SeriesDetailView: View {
     @State private var seasonBarEngaged = false
     @State private var browserEntry = SeriesBrowserEntry.hero
     @State private var browserPresentationSettled = false
+    @State private var browserRevealInFlight = false
     @State private var browserPresentationGeneration = 0
     @State private var hasPresentedEpisodeBrowser = false
     /// Whether focus is currently somewhere inside the episode browser.
@@ -533,11 +534,8 @@ struct SeriesDetailView: View {
                             // hierarchy (masked, not alpha-zero) so pressing down still
                             // lands on the active season chip.
                             //
-                            // `seasonBarEngaged` is an additional reveal condition
-                            // because the recede is now a function of scroll offset:
-                            // if the focus engine ever moves onto the bar without
-                            // scrolling past the threshold, the chips must still be
-                            // visible rather than leaving focus on invisible controls.
+                            // A native season handoff must make the chips visible
+                            // even before the browser reveal has finished.
                             SeriesRecedeReveal(
                                 recedeModel: recedeModel,
                                 forceVisible: seasonBarEngaged
@@ -606,16 +604,13 @@ struct SeriesDetailView: View {
                         .id(Self.extrasAnchorID)
                     }
                     }
-                    // Static. The column's layout position never changes — it is
-                    // permanently at its browsing position, which is what keeps
-                    // the season bar and episode rail inside the viewport and the
-                    // focus engine quiet.
+                    // Keep the browser's settled layout at its fixed stage.
                     .padding(.top, -SeriesEpisodeBrowserLayout.heroOverlap)
                     // The ONE thing that moves for the resting page, and it moves
                     // the browser, Cast and Related as a single body — they are
-                    // one column and must travel as one. Render-only, so every
-                    // layout/focus frame stays exactly where the focus engine
-                    // expects it and no reveal scroll is ever provoked.
+                    // one column and must travel as one. Native focus can still
+                    // request a reveal of these moving controls, so the outer
+                    // scroll guard owns the page during this animation.
                     .offset(
                         y: recedeModel.isReceded
                             ? 0
@@ -631,6 +626,9 @@ struct SeriesDetailView: View {
                 // column past the viewport, which is what let tvOS pan the page
                 // sideways and shove focus off the left edge.
                 .frame(maxWidth: .infinity, alignment: .leading)
+                #if os(tvOS)
+                .background(SeriesBrowserRevealScrollGuard(isActive: browserRevealInFlight))
+                #endif
             }
             // The scroll view can focus a synthetic filler even while its real
             // controls are gated. Do not let early Down scroll through that gap.
@@ -753,12 +751,8 @@ struct SeriesDetailView: View {
     /// and Season → Episode moves cost nothing either.
     private func revealBrowser(using proxy: ScrollViewProxy) {
         SeriesFocusTrace.record("revealBrowser")
-        guard !recedeModel.isReceded else {
-            withAnimation(.smooth(duration: Self.recedeAnimationDuration)) {
-                proxy.scrollTo(Self.topAnchorID, anchor: .top)
-            }
-            return
-        }
+        guard !browserRevealInFlight else { return }
+        browserRevealInFlight = true
         browserPresentationSettled = false
         browserPresentationGeneration &+= 1
         let generation = browserPresentationGeneration
@@ -770,6 +764,7 @@ struct SeriesDetailView: View {
             proxy.scrollTo(Self.topAnchorID, anchor: .top)
         } completion: {
             guard generation == browserPresentationGeneration, recedeModel.isReceded else { return }
+            browserRevealInFlight = false
             browserPresentationSettled = true
             if browserEntry == .browser, !seasonBarEngaged {
                 hasPresentedEpisodeBrowser = true
@@ -783,6 +778,7 @@ struct SeriesDetailView: View {
         SeriesFocusTrace.record("heroFocusAccepted")
         rearmEpisodeRailOnHeroFocusIfNeeded()
         browserPresentationGeneration &+= 1
+        browserRevealInFlight = false
         browserPresentationSettled = false
         browserEntry = .hero
         seasonBarEngaged = false
@@ -912,12 +908,7 @@ struct SeriesDetailView: View {
                         ? PlozzTheme.Metrics.screenPadding + SeriesEpisodeBrowserLayout.seasonRequestFadeWidth
                         : PlozzTheme.Metrics.screenPadding
                 )
-                .padding(
-                    .leading,
-                    hasRequestAccessory
-                        ? PlozzTheme.Metrics.heroLeadingPadding
-                        : PlozzTheme.Metrics.screenVerticalPadding
-                )
+                .padding(.leading, PlozzTheme.Metrics.heroLeadingPadding)
                 // Headroom for the focused chip's lift so it is never clipped.
                 .padding(.vertical, 12)
             }
@@ -1943,14 +1934,8 @@ private struct SeasonRequestBoundaryModifier: ViewModifier {
                     .padding(.vertical, -SeriesEpisodeBrowserLayout.seasonBarFocusOverflow)
                 }
         } else {
-            // Keep the first chip on the hero keyline, but put its focus
-            // clearance inside the viewport instead of relying on overflow.
             content
                 .scrollClipDisabled()
-                .padding(
-                    .leading,
-                    max(0, PlozzTheme.Metrics.heroLeadingPadding - PlozzTheme.Metrics.screenVerticalPadding)
-                )
         }
     }
 }
