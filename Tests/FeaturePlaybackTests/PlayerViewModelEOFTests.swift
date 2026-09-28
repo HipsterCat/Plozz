@@ -381,7 +381,7 @@ final class PlayerViewModelEOFTests: XCTestCase {
         )
         let browser = PlayerEpisodeBrowser(item: episode, provider: provider)
         await browser.loadIfNeeded()
-        let visibleEntries = PlayerSequencePanel.episodeEntries(from: browser)
+        let visibleEntries = browser.episodes
         let initialID = browser.initialEntryID
         XCTAssertEqual(visibleEntries.map(\.item.id), ["two-1", "two-2", "two-3"])
 
@@ -390,7 +390,6 @@ final class PlayerViewModelEOFTests: XCTestCase {
         XCTAssertEqual(visibleEntries[2].item.id, "two-3",
                        "An in-flight SwiftUI row must keep captured values after prepending")
         XCTAssertEqual(browser.initialEntryID, initialID)
-        XCTAssertEqual(browser.prependAnchorID, visibleEntries.first?.id)
         XCTAssertEqual(browser.previousSeasonIndex, nil)
         XCTAssertEqual(browser.nextSeasonIndex, nil)
     }
@@ -512,12 +511,15 @@ final class PlayerViewModelEOFTests: XCTestCase {
                 ]
             )
             let browser = PlayerEpisodeBrowser(item: playing, provider: provider)
+            XCTAssertFalse(browser.hasLoaded)
             await provider.setChildError(cancellation, for: "series")
             await browser.loadIfNeeded()
             XCTAssertNil(browser.loadError)
             XCTAssertFalse(browser.isLoading)
+            XCTAssertFalse(browser.hasLoaded)
             await provider.setChildError(nil, for: "series")
             await browser.loadIfNeeded()
+            XCTAssertTrue(browser.hasLoaded)
             XCTAssertEqual(browser.episodes.map(\.item.id), ["middle"])
 
             await provider.setChildError(cancellation, for: seasons[0].id)

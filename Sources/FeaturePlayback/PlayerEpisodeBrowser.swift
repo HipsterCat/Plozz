@@ -2,7 +2,7 @@ import CoreModels
 import Foundation
 import Observation
 
-public struct PlayerEpisodeEntry: Identifiable, Sendable {
+public struct PlayerEpisodeEntry: Identifiable, Equatable, Sendable {
     public struct ID: Hashable, Sendable {
         public let seasonID: String?
         public let episodeID: String
@@ -34,18 +34,17 @@ public final class PlayerEpisodeBrowser {
     public private(set) var previousLoadError: AppError?
     public private(set) var nextLoadError: AppError?
     public private(set) var isLoading = false
+    public private(set) var hasLoaded = false
     public private(set) var isLoadingPrevious = false
     public private(set) var isLoadingNext = false
     public private(set) var previousSeasonIndex: Int?
     public private(set) var nextSeasonIndex: Int?
-    public private(set) var prependAnchorID: PlayerEpisodeEntry.ID?
 
     private let provider: any MediaProvider
     private let seriesID: String
     private let initialSeasonID: String?
     private let initialEpisodeID: String
     private let accountID: String?
-    @ObservationIgnored private var didLoad = false
 
     public init(item: MediaItem, provider: any MediaProvider) {
         self.provider = provider
@@ -63,7 +62,7 @@ public final class PlayerEpisodeBrowser {
     }
 
     public func loadIfNeeded() async {
-        guard !Task.isCancelled, !didLoad, !isLoading else { return }
+        guard !Task.isCancelled, !hasLoaded, !isLoading else { return }
         isLoading = true
         loadError = nil
         do {
@@ -84,7 +83,7 @@ public final class PlayerEpisodeBrowser {
                     try await findFirstEpisodes()
                 }
             }
-            didLoad = true
+            hasLoaded = true
             isLoading = false
         } catch where Self.isCancellation(error) {
             isLoading = false
@@ -95,7 +94,7 @@ public final class PlayerEpisodeBrowser {
     }
 
     public func loadPrevious() async {
-        guard !Task.isCancelled, didLoad, let start = previousSeasonIndex,
+        guard !Task.isCancelled, hasLoaded, let start = previousSeasonIndex,
               !isLoadingPrevious, previousLoadError == nil else { return }
         isLoadingPrevious = true
         do {
@@ -104,9 +103,7 @@ public final class PlayerEpisodeBrowser {
                 try Task.checkCancellation()
                 previousSeasonIndex = index > 0 ? index - 1 : nil
                 if !fetched.isEmpty {
-                    let anchor = episodes.first?.id
                     episodes.insert(contentsOf: fetched, at: 0)
-                    prependAnchorID = anchor
                     break
                 }
             }
@@ -120,7 +117,7 @@ public final class PlayerEpisodeBrowser {
     }
 
     public func loadNext() async {
-        guard !Task.isCancelled, didLoad, let start = nextSeasonIndex,
+        guard !Task.isCancelled, hasLoaded, let start = nextSeasonIndex,
               !isLoadingNext, nextLoadError == nil else { return }
         isLoadingNext = true
         do {

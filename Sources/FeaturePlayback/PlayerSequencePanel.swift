@@ -42,7 +42,24 @@ struct PlayerSequencePanel: View {
     let player: PlayerViewModel
     let source: Source
     @FocusState.Binding var focus: PlayerControls.FocusSlot?
-    @State private var visibleEpisodeIDs: [PlayerEpisodeEntry.ID] = []
+    @State private var episodePosition = ScrollPosition(idType: PlayerEpisodeEntry.ID.self)
+    @State private var episodeOffset = CGPoint.zero
+    @State private var previousEpisodeLoadID: PlayerEpisodeEntry.ID?
+    @State private var nextEpisodeLoadID: PlayerEpisodeEntry.ID?
+    @State private var displayedEpisodes: EpisodeRowContent?
+    @State private var episodeRowIsScrolling = false
+
+    private struct EpisodeRowContent: Equatable {
+        let entries: [PlayerEpisodeEntry]
+        let previousError: AppError?
+        let nextError: AppError?
+
+        @MainActor init(_ browser: PlayerEpisodeBrowser) {
+            entries = browser.episodes
+            previousError = browser.previousLoadError
+            nextError = browser.nextLoadError
+        }
+    }
 
     private var layout: PlayerSequenceLayout {
         PlayerSequenceLayout(
@@ -89,8 +106,15 @@ struct PlayerSequencePanel: View {
     private func episodeContent(_ browser: PlayerEpisodeBrowser) -> some View {
         if let error = browser.loadError {
             errorRow(error) { Task { await browser.loadIfNeeded() } }
-        } else if browser.isLoading {
-            ProgressView("Loading episodes…")
+        } else if browser.isLoading || !browser.hasLoaded {
+            sequenceScroll {
+                ForEach(0..<6) { _ in
+                    PlayerEpisodeLoadingCard(layout: layout)
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Loading episodes…")
         } else if browser.episodes.isEmpty {
             emptyRow("No episodes available")
         } else {
@@ -153,73 +177,103 @@ struct PlayerSequencePanel: View {
     }
 
     private func episodeRow(_ browser: PlayerEpisodeBrowser) -> some View {
-        ScrollViewReader { proxy in
-            sequenceScroll {
-                if let error = browser.previousLoadError {
-                    episodeRetry(error, title: "Earlier episodes") {
-                        Task { await browser.retryPrevious() }
-                    }
-                }
-                ForEach(Self.episodeEntries(from: browser)) { entry in
-                    Group {
-                        #if os(tvOS)
-                        PlayerEpisodeArtworkCard(
-                            entry: entry, layout: layout, focus: $focus
-                        ) { player.playEpisode(entry.item) }
-                        .environment(\.plozzCardFocusStyle, .system)
-                        #else
-                        card(
-                            entry.item, focusSlot: .episodeItem(entry.id),
-                            selected: false, episodeBadge: entry.badge
-                        ) { player.playEpisode(entry.item) }
-                        #endif
-                    }
-                    .id(entry.id)
-                }
-                if let error = browser.nextLoadError {
-                    episodeRetry(error, title: "Later episodes") {
-                        Task { await browser.retryNext() }
-                    }
+        let latest = EpisodeRowContent(browser)
+        let displayed = displayedEpisodes ?? latest
+        return sequenceScroll {
+            if let error = displayed.previousError {
+                episodeRetry(error, title: "Earlier episodes") {
+                    Task { await browser.retryPrevious() }
                 }
             }
-            .onScrollTargetVisibilityChange(idType: PlayerEpisodeEntry.ID.self) {
-                visibleEpisodeIDs = $0
+            ForEach(displayed.entries) { entry in
+                Group {
+                    #if os(tvOS)
+                    PlayerEpisodeArtworkCard(
+                        entry: entry, layout: layout, focus: $focus
+                    ) { player.playEpisode(entry.item) }
+                    .environment(\.plozzCardFocusStyle, .system)
+                    #else
+                    card(
+                        entry.item, focusSlot: .episodeItem(entry.id),
+                        selected: false, episodeBadge: entry.badge
+                    ) { player.playEpisode(entry.item) }
+                    #endif
+                }
+                .id(entry.id)
             }
-            .task(id: visiblePreviousEdge(in: browser)) {
-                guard visiblePreviousEdge(in: browser) != nil else { return }
-                await browser.loadPrevious()
-            }
-            .task(id: visibleNextEdge(in: browser)) {
-                guard visibleNextEdge(in: browser) != nil else { return }
-                await browser.loadNext()
-            }
-            .onAppear {
-                if let id = browser.initialEntryID {
-                    proxy.scrollTo(id, anchor: metrics.isVertical ? .top : .leading)
+            if let error = displayed.nextError {
+                episodeRetry(error, title: "Later episodes") {
+                    Task { await browser.retryNext() }
                 }
             }
-            .onChange(of: browser.prependAnchorID) { _, id in
-                if let id {
-                    let anchor = browser.episodes.first { visibleEpisodeIDs.contains($0.id) }?.id
-                        ?? browser.initialEntryID ?? id
-                    proxy.scrollTo(anchor, anchor: metrics.isVertical ? .top : .leading)
-                }
+        }
+        .scrollPosition($episodePosition)
+        .onScrollGeometryChange(for: CGPoint.self) {
+            CGPoint(x: $0.contentOffset.x + $0.contentInsets.leading,
+                    y: $0.contentOffset.y + $0.contentInsets.top)
+        } action: { _, offset in
+            episodeOffset = offset
+        }
+        .onScrollPhaseChange { _, phase, context in
+            episodeRowIsScrolling = phase != .idle
+            if phase == .idle {
+                episodeOffset = CGPoint(
+                    x: context.geometry.contentOffset.x + context.geometry.contentInsets.leading,
+                    y: context.geometry.contentOffset.y + context.geometry.contentInsets.top
+                )
+                updateDisplayedEpisodes(latest)
+            }
+        }
+        .onChange(of: latest) { _, value in
+            // Native focus scrolling has an absolute destination. Inserting
+            // before it mid-animation invalidates that destination and focus.
+            if !episodeRowIsScrolling { updateDisplayedEpisodes(value) }
+        }
+        .onScrollTargetVisibilityChange(idType: PlayerEpisodeEntry.ID.self) {
+            if let id = displayed.entries.first?.id, $0.contains(id) {
+                previousEpisodeLoadID = id
+            }
+            if let id = displayed.entries.last?.id, $0.contains(id) {
+                nextEpisodeLoadID = id
+            }
+        }
+        .task(id: previousEpisodeLoadID) {
+            guard previousEpisodeLoadID != nil else { return }
+            await browser.loadPrevious()
+        }
+        .task(id: nextEpisodeLoadID) {
+            guard nextEpisodeLoadID != nil else { return }
+            await browser.loadNext()
+        }
+        .onAppear {
+            displayedEpisodes = latest
+            if let id = browser.initialEntryID {
+                episodePosition.scrollTo(id: id, anchor: metrics.isVertical ? .top : .leading)
             }
         }
     }
 
-    private func visiblePreviousEdge(in browser: PlayerEpisodeBrowser) -> PlayerEpisodeEntry.ID? {
-        guard let id = browser.episodes.first?.id, visibleEpisodeIDs.contains(id) else { return nil }
-        return id
-    }
-
-    private func visibleNextEdge(in browser: PlayerEpisodeBrowser) -> PlayerEpisodeEntry.ID? {
-        guard let id = browser.episodes.last?.id, visibleEpisodeIDs.contains(id) else { return nil }
-        return id
-    }
-
-    static func episodeEntries(from browser: PlayerEpisodeBrowser) -> [PlayerEpisodeEntry] {
-        browser.episodes
+    private func updateDisplayedEpisodes(_ latest: EpisodeRowContent) {
+        guard let previous = displayedEpisodes, previous != latest else { return }
+        let prependedCount = previous.entries.first.flatMap { first in
+            latest.entries.firstIndex { $0.id == first.id }
+        } ?? 0
+        let pitch = metrics.isVertical ? metrics.castRowHeight + 8 : layout.cardWidth + layout.columnSpacing
+        let retryPitch = metrics.isVertical ? max(120, metrics.castRowHeight) + 8 : pitch
+        let errorDelta = (latest.previousError == nil ? 0 : 1) - (previous.previousError == nil ? 0 : 1)
+        let shift = CGFloat(prependedCount) * pitch + CGFloat(errorDelta) * retryPitch
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            displayedEpisodes = latest
+            if shift != 0 {
+                if metrics.isVertical {
+                    episodePosition.scrollTo(y: max(0, episodeOffset.y + shift))
+                } else {
+                    episodePosition.scrollTo(x: max(0, episodeOffset.x + shift))
+                }
+            }
+        }
     }
 
     private func playlistRow(_ playlist: VideoPlaylistPlaybackContext) -> some View {
@@ -376,6 +430,51 @@ struct PlayerSequencePanel: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(.white.opacity(0.12))
         }
+    }
+}
+
+struct PlayerEpisodeLoadingCard: View {
+    let layout: PlayerSequenceLayout
+    @Environment(\.themePalette) private var palette
+
+    var body: some View {
+        Group {
+            if layout.metrics.isVertical {
+                HStack(spacing: 12) {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(palette.fill)
+                        .frame(
+                            width: (layout.metrics.castRowHeight - 12) * 16 / 9,
+                            height: layout.metrics.castRowHeight - 12
+                        )
+                    Capsule()
+                        .fill(palette.fill)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: layout.metrics.castNameSize * 0.7)
+                }
+                .padding(.horizontal, 12)
+                .frame(height: layout.metrics.castRowHeight)
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    RoundedRectangle(
+                        cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius, style: .continuous
+                    )
+                    .fill(palette.fill)
+                    .frame(width: layout.imageWidth, height: layout.imageHeight)
+                    Capsule()
+                        .fill(palette.fill)
+                        .frame(width: layout.imageWidth * 0.65, height: layout.metrics.castNameSize * 0.7)
+                        .frame(height: layout.titleHeight)
+                        .padding(.horizontal, layout.cardMetrics.landscapeCaptionInset)
+                        .padding(.top, layout.cardMetrics.landscapeCaptionTopSpacing)
+                }
+                .padding([.top, .horizontal], layout.cardMetrics.cardInset)
+                .padding(.bottom, layout.cardMetrics.cardInset + layout.cardMetrics.landscapeCaptionInset)
+                .frame(width: layout.cardWidth, height: layout.rowHeight, alignment: .topLeading)
+            }
+        }
+        .shimmering()
+        .accessibilityHidden(true)
     }
 }
 

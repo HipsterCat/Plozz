@@ -459,7 +459,14 @@ its season/episode code on the rounded still. Only the current season loads on
 entry; adjacent seasons load as browsing reaches the row's edges. Empty seasons
 are skipped, and a failed adjacent load exposes a retry at that edge. Adjacent
 loads belong to the row and follow visible edges, not the lifecycle of lazy
-cards; task and transport cancellations do not become retry errors. On tvOS,
+cards; once started they finish even if that edge scrolls offscreen. Task and
+transport cancellations do not become retry errors. Incoming rows wait until
+native scrolling settles before changing the displayed content. Earlier seasons
+adjust the scroll offset by their exact inserted extent in the same unanimated
+update, preserving the visible artwork's position without refocusing or snapping
+the row back to a card boundary. Initial loading
+uses nonfocusable artwork/caption skeletons with the loaded cards' dimensions,
+not a spinner or visible loading message. On tvOS,
 the shared native poster owns artwork focus, leaving titles and neighboring
 tiles in place. The panel clips scrolling content and focus projection at its
 rounded boundary.
