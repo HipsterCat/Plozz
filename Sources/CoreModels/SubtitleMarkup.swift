@@ -290,8 +290,10 @@ extension SubtitleColor {
         "white": .init(red: 1, green: 1, blue: 1),
         "black": .init(red: 0, green: 0, blue: 0),
         "red": .init(red: 1, green: 0, blue: 0),
-        "lime": .init(red: 0, green: 1, blue: 0),
-        "green": .init(red: 0, green: 0.5, blue: 0),
+        "lime": .green,
+        // Caption "green" means the bright broadcast (CEA-608) green, not HTML's
+        // dim #008000, which reads as murky over video.
+        "green": .green,
         "blue": .init(red: 0, green: 0, blue: 1),
         "yellow": .init(red: 1, green: 1, blue: 0),
         "cyan": .init(red: 0, green: 1, blue: 1),
