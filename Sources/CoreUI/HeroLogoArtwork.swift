@@ -128,9 +128,29 @@ public enum HeroLogoHaloStyle: Sendable {
     case gentle
 }
 
+/// Keeps an asynchronous lookup attached to the title it resolves, even when
+/// there are no server artwork references to distinguish it from another title.
+public struct HeroLogoFallback: Sendable {
+    struct Identity: Hashable, Sendable {
+        let itemID: String
+        let sourceAccountID: String?
+        let query: MetadataQuery
+    }
+
+    let identity: Identity
+    public let resolve: @Sendable () async -> URL?
+
+    public init(for item: MediaItem, resolve: @escaping @Sendable () async -> URL?) {
+        identity = Identity(
+            itemID: item.id, sourceAccountID: item.sourceAccountID, query: MetadataQuery(item)
+        )
+        self.resolve = resolve
+    }
+}
+
 public struct HeroLogoArtwork<TextFallback: View>: View {
     private let references: [ArtworkReference]
-    private let asyncFallbackURL: (@Sendable () async -> URL?)?
+    private let asyncFallbackURL: HeroLogoFallback?
     private let backgroundSample: (@Sendable () async -> HeroBackgroundSample?)?
     private let maxWidth: CGFloat
     private let maxHeight: CGFloat
@@ -144,7 +164,7 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
 
     public init(
         primaryURL: URL?,
-        asyncFallbackURL: (@Sendable () async -> URL?)? = nil,
+        asyncFallbackURL: HeroLogoFallback? = nil,
         backgroundSample: (@Sendable () async -> HeroBackgroundSample?)? = nil,
         maxWidth: CGFloat = 620,
         maxHeight: CGFloat = 200,
@@ -175,7 +195,7 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
     /// fallback loader without exposing a transport dependency to SwiftUI.
     public init(
         references: [ArtworkReference],
-        asyncFallbackURL: (@Sendable () async -> URL?)? = nil,
+        asyncFallbackURL: HeroLogoFallback? = nil,
         backgroundSample: (@Sendable () async -> HeroBackgroundSample?)? = nil,
         maxWidth: CGFloat = 620,
         maxHeight: CGFloat = 200,
@@ -206,6 +226,7 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
         LoadedLogo(
             references: references,
             asyncFallbackURL: asyncFallbackURL,
+            prefersOnlineArtwork: MetadataProviderSettingsStore().load().preferOnlineArtwork,
             backgroundSample: backgroundSample,
             maxWidth: maxWidth,
             maxHeight: maxHeight,
@@ -235,19 +256,33 @@ public struct HeroLogoArtwork<TextFallback: View>: View {
 /// Main-actor isolated, so it needs no lock and can be read during `body`.
 @MainActor
 enum HeroLogoMemo {
-    private static var entries: [String: ProcessedLogo] = [:]
-    private static var order: [String] = []
+    struct Key: Hashable {
+        let references: [String]
+        let fallback: HeroLogoFallback.Identity?
+        let prefersOnlineArtwork: Bool
+    }
+
+    private static var entries: [Key: ProcessedLogo] = [:]
+    private static var order: [Key] = []
     /// Enough for a hero carousel plus the pages reached from it. Evicting
     /// oldest-first costs one await on the next look, not a re-decode.
     private static let capacity = 60
 
-    static func key(for references: [ArtworkReference], hasFallback: Bool = false) -> String {
-        (references.map(\.privacySafeIdentity) + [hasFallback ? "1" : "0"]).joined(separator: "|")
+    static func key(
+        for references: [ArtworkReference],
+        fallback: HeroLogoFallback? = nil,
+        prefersOnlineArtwork: Bool = false
+    ) -> Key {
+        Key(
+            references: references.map(\.privacySafeIdentity),
+            fallback: fallback?.identity,
+            prefersOnlineArtwork: fallback != nil && prefersOnlineArtwork
+        )
     }
 
-    static func value(for key: String) -> ProcessedLogo? { entries[key] }
+    static func value(for key: Key) -> ProcessedLogo? { entries[key] }
 
-    static func store(_ value: ProcessedLogo, for key: String) {
+    static func store(_ value: ProcessedLogo, for key: Key) {
         if entries[key] == nil {
             order.append(key)
             if order.count > capacity, let oldest = order.first {
@@ -262,7 +297,8 @@ enum HeroLogoMemo {
 #if canImport(UIKit)
 private struct LoadedLogo<TextFallback: View>: View {
     let references: [ArtworkReference]
-    let asyncFallbackURL: (@Sendable () async -> URL?)?
+    let asyncFallbackURL: HeroLogoFallback?
+    let prefersOnlineArtwork: Bool
     let backgroundSample: (@Sendable () async -> HeroBackgroundSample?)?
     let maxWidth: CGFloat
     let maxHeight: CGFloat
@@ -280,14 +316,14 @@ private struct LoadedLogo<TextFallback: View>: View {
     @State private var image: ProcessedLogo?
     /// The `taskKey` the current `image` was resolved for, so a re-resolve for the
     /// SAME subject can keep it on screen while a different subject clears it.
-    @State private var resolvedKey: String?
+    @State private var resolvedKey: HeroLogoMemo.Key?
 
     var body: some View {
         // Falls back to the synchronous memo, so a logo this view has already
         // resolved once paints on the FIRST frame of a rebuild. Without it every
         // rebuild drew the styled title for at least one frame, because the
         // pipeline is an actor and even a cache hit costs a suspension.
-        let shown = image ?? HeroLogoMemo.value(for: taskKey)
+        let shown = (resolvedKey == taskKey ? image : nil) ?? HeroLogoMemo.value(for: taskKey)
         Group {
             if let processed = shown {
                 logo(processed)
@@ -301,7 +337,7 @@ private struct LoadedLogo<TextFallback: View>: View {
             }
         }
         .animation(
-            reduceMotion || !presentationPolicy.animatesResolvedLogo
+            reduceMotion || resolvedKey != taskKey || !presentationPolicy.animatesResolvedLogo
                 ? nil
                 : .easeIn(duration: 0.25),
             value: shown != nil
@@ -378,8 +414,11 @@ private struct LoadedLogo<TextFallback: View>: View {
     }
 
     /// Re-run resolution whenever the candidate sources change.
-    private var taskKey: String {
-        HeroLogoMemo.key(for: references, hasFallback: asyncFallbackURL != nil)
+    private var taskKey: HeroLogoMemo.Key {
+        HeroLogoMemo.key(
+            for: references, fallback: asyncFallbackURL,
+            prefersOnlineArtwork: prefersOnlineArtwork
+        )
     }
 
     private func resolve() async {
@@ -392,11 +431,9 @@ private struct LoadedLogo<TextFallback: View>: View {
         // reference list changes as a title is enriched, and a hero carousel
         // rebuilds its slides as it pages.
         //
-        // Keeping the old logo is safe because a logo is only ever REPLACED by one
-        // that has finished decoding, so there is no window where the wrong art is
-        // shown as final. The one case that must still clear is a change of
-        // subject: `.task(id:)` re-runs when `taskKey` changes, and a slide reused
-        // for a different title must not keep the previous show's wordmark.
+        // A matching key may retain its current image. A different title,
+        // source, lookup query or artwork preference must resolve independently;
+        // `body` also rejects that old image before the new task starts.
         if resolvedKey != taskKey { image = nil }
         let key = taskKey
         // `HeroLogoPipeline` caches the processed result by URL and runs the heavy
@@ -404,8 +441,9 @@ private struct LoadedLogo<TextFallback: View>: View {
         // scrolling reuse the prepared logo instead of reprocessing it.
         guard let prepared = await loadPreparedHeroLogo(
             references: references,
-            asyncFallbackURL: asyncFallbackURL,
-            priority: .userInitiated
+            asyncFallbackURL: asyncFallbackURL?.resolve,
+            priority: .userInitiated,
+            prefersOnlineArtwork: prefersOnlineArtwork
         ) else { return }
         guard !Task.isCancelled else { return }
         let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
@@ -430,7 +468,7 @@ private struct LoadedLogo<TextFallback: View>: View {
             prepared,
             backgroundSample: nil,
             halosWhenUnmeasured: !awaitsSample
-        ))
+        ), for: key)
         guard awaitsSample else { return }
 
         // Then refine in place. A halo appearing a beat late is a soft shadow
@@ -440,12 +478,12 @@ private struct LoadedLogo<TextFallback: View>: View {
         // be proven safe.
         let sample = await backgroundSample?()
         guard !Task.isCancelled else { return }
-        adopt(HeroLogoAnalysis.analyze(prepared, backgroundSample: sample))
+        adopt(HeroLogoAnalysis.analyze(prepared, backgroundSample: sample), for: key)
     }
 
-    private func adopt(_ processed: ProcessedLogo) {
+    private func adopt(_ processed: ProcessedLogo, for key: HeroLogoMemo.Key) {
         image = processed
-        HeroLogoMemo.store(processed, for: taskKey)
+        HeroLogoMemo.store(processed, for: key)
         onResolve?(processed.tone)
     }
 }
@@ -622,10 +660,11 @@ public enum HeroLogoPreloader {
 private func loadPreparedHeroLogo(
     references: [ArtworkReference],
     asyncFallbackURL: (@Sendable () async -> URL?)?,
-    priority: TaskPriority
+    priority: TaskPriority,
+    prefersOnlineArtwork: Bool? = nil
 ) async -> PreparedLogo? {
     guard !Task.isCancelled else { return nil }
-    let prefersOnline = MetadataProviderSettingsStore().load().preferOnlineArtwork
+    let prefersOnline = prefersOnlineArtwork ?? MetadataProviderSettingsStore().load().preferOnlineArtwork
     guard let firstPaint = await ArtworkFirstPaintResolver.resolve(
         references: references,
         variant: .original,

@@ -96,6 +96,10 @@ simulator timing or passing navigation assertions alone.
 - **Server art first.** External art (`MetadataKit`) is used as a
   fallback via `CoreUI.FallbackAsyncImage`, never as the default — the
   server's own backdrop/logo is always tried first.
+  Shared logo views pair fallback lookups with the source item/account and
+  metadata query. Memoized logos and in-flight tasks also distinguish artwork
+  preference, so a missing server logo never gives unrelated titles a shared
+  cache entry. A reused view rejects the previous title's image immediately.
 - **`LoadState` everywhere.** Loading / empty / failure rendering uses
   `CoreUI.ContentStateView` so all surfaces feel identical.
 - **No tokens in logs.** Provider calls log only opaque ids — never

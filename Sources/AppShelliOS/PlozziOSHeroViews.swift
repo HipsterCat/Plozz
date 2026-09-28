@@ -1582,7 +1582,7 @@ private struct PlozziOSStableHomeHeroMetadata: View {
     let hidesRatings: Bool
     let ratingPreferences: DetailPageSettings
     let scheduleLine: LocalizedStringResource?
-    let logoFallback: (@Sendable () async -> URL?)?
+    let logoFallback: HeroLogoFallback?
     @State private var descriptionText: String?
 
     init(
@@ -1591,7 +1591,7 @@ private struct PlozziOSStableHomeHeroMetadata: View {
         hidesRatings: Bool,
         ratingPreferences: DetailPageSettings,
         scheduleLine: LocalizedStringResource?,
-        logoFallback: (@Sendable () async -> URL?)?
+        logoFallback: HeroLogoFallback?
     ) {
         self.presentation = presentation
         self.style = style
@@ -2450,7 +2450,7 @@ private struct PlozziOSHeroMetadata: View {
     /// whose server carries no logo fell straight to the styled text — most
     /// visibly on a discovery item, which comes from Seerr/TMDb and so has no
     /// provider logo at all, while TMDb itself usually has one.
-    var logoFallback: (@Sendable () async -> URL?)? = nil
+    var logoFallback: HeroLogoFallback? = nil
     /// A selected Home slide freezes its first fully prepared description. Later
     /// payload refreshes may update other chrome, but must not replace a visible
     /// overview with a newly arrived tagline.
@@ -2466,12 +2466,12 @@ private struct PlozziOSHeroMetadata: View {
 
     /// The same lookup tvOS's heroes use. Kinds that have no title art of their
     /// own are excluded rather than searched for one that cannot exist.
-    static func tmdbLogoFallback(for item: MediaItem) -> (@Sendable () async -> URL?)? {
+    static func tmdbLogoFallback(for item: MediaItem) -> HeroLogoFallback? {
         switch item.kind {
         case .folder, .collection, .playlist, .unknown:
             return nil
         default:
-            return { await ArtworkRouter.shared.artworkURL(.logo, for: item) }
+            return HeroLogoFallback(for: item) { await ArtworkRouter.shared.artworkURL(.logo, for: item) }
         }
     }
 

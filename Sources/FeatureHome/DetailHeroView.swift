@@ -1806,7 +1806,7 @@ struct DetailHeroView: View, Equatable {
     /// Last-resort title art for the hero: look the show/movie up on TMDb and use
     /// its logo. TV uses the *series* title (never an episode name); inert when no
     /// TMDb token is configured.
-    private var tmdbLogoFallback: (@Sendable () async -> URL?)? {
+    private var tmdbLogoFallback: HeroLogoFallback? {
         let source = backdrop
         switch source.kind {
         case .folder, .collection, .unknown:
@@ -1814,7 +1814,7 @@ struct DetailHeroView: View, Equatable {
         default:
             break
         }
-        return {
+        return HeroLogoFallback(for: source) {
             await ArtworkRouter.shared.artworkURL(.logo, for: source)
         }
     }

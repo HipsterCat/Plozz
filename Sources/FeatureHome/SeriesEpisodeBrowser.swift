@@ -408,9 +408,9 @@ private struct SeriesRecededLogo: View {
         .accessibilityHidden(!revealed)
     }
 
-    private var logoFallback: (@Sendable () async -> URL?)? {
+    private var logoFallback: HeroLogoFallback? {
         let source = series
-        return {
+        return HeroLogoFallback(for: source) {
             await ArtworkRouter.shared.artworkURL(.logo, for: source)
         }
     }

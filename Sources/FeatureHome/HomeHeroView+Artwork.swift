@@ -292,7 +292,7 @@ extension HomeHeroView {
         HomeHeroArtwork.backdropFallback(for: item)
     }
 
-    func logoFallback(for item: MediaItem) -> (@Sendable () async -> URL?)? {
+    func logoFallback(for item: MediaItem) -> HeroLogoFallback? {
         HomeHeroArtwork.logoFallback(for: item)
     }
 

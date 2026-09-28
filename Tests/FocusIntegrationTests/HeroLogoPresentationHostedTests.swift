@@ -1,6 +1,8 @@
 import CoreModels
 @testable import CoreUI
 @testable import FeatureHome
+import MetadataKit
+import Observation
 import SwiftUI
 import UIKit
 import XCTest
@@ -37,7 +39,10 @@ final class HeroLogoPresentationHostedTests: XCTestCase {
             )
             fixture.window.rootViewController = host
             fixture.window.layoutIfNeeded()
-            let key = HeroLogoMemo.key(for: [.remote(url)], hasFallback: true)
+            let key = HeroLogoMemo.key(
+                for: [.remote(url)], fallback: HeroLogoFallback(for: series) { url },
+                prefersOnlineArtwork: MetadataProviderSettingsStore().load().preferOnlineArtwork
+            )
             try await waitUntil { HeroLogoMemo.value(for: key) != nil }
             try await waitUntil { (try? redBounds(in: fixture.window)) != nil }
             let bounds = try XCTUnwrap(redBounds(in: fixture.window))
@@ -55,7 +60,113 @@ final class HeroLogoPresentationHostedTests: XCTestCase {
         }
     }
 
-    private func seedLogo(size: CGSize) throws -> URL {
+    func testCachedFallbackDoesNotAppearOnADifferentTitleWithoutALogo() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let url = try seedLogo(size: CGSize(width: 200, height: 100))
+        defer { removeSeededLogo(url) }
+        let first = MediaItem(id: UUID().uuidString, title: "First title", kind: .series)
+        let second = MediaItem(id: UUID().uuidString, title: "No logo", kind: .series)
+        let model = LogoModel(fallback: HeroLogoFallback(for: first) { url })
+        fixture.window.rootViewController = UIHostingController(rootView: LookupFixture(model: model))
+        try await waitUntil { model.tone != nil && (try? redBounds(in: fixture.window)) != nil }
+
+        let missing = LookupProbe()
+        model.tone = nil
+        model.fallback = HeroLogoFallback(for: second) { await missing.resolve(nil) }
+        try await waitUntil { missing.calls > 0 }
+        XCTAssertNil(try redBounds(in: fixture.window), "A reused view must clear the previous title immediately.")
+        XCTAssertNil(model.tone)
+
+        fixture.window.rootViewController = UIHostingController(rootView: LookupFixture(
+            model: LogoModel(fallback: HeroLogoFallback(for: second) { nil })
+        ))
+        fixture.window.layoutIfNeeded()
+        XCTAssertNil(try redBounds(in: fixture.window), "A new detail/card view must not reuse another title's memo.")
+
+        let returning = LogoModel(fallback: HeroLogoFallback(for: first) { url })
+        fixture.window.rootViewController = UIHostingController(rootView: LookupFixture(model: returning))
+        try await waitUntil { (try? redBounds(in: fixture.window)) != nil }
+    }
+
+    func testLateCancelledLookupCannotReplaceTheNewTitlesLogo() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let oldURL = try seedLogo(size: CGSize(width: 200, height: 100))
+        let newURL = try seedLogo(size: CGSize(width: 200, height: 100), color: .blue)
+        defer {
+            removeSeededLogo(oldURL)
+            removeSeededLogo(newURL)
+        }
+        let first = MediaItem(id: UUID().uuidString, title: "Old title", kind: .series)
+        let second = MediaItem(id: UUID().uuidString, title: "Current title", kind: .series)
+        let delayed = LookupProbe()
+        defer { delayed.release() }
+        let model = LogoModel(fallback: HeroLogoFallback(for: first) {
+            await delayed.resolve(oldURL, waitsForRelease: true)
+        })
+        fixture.window.rootViewController = UIHostingController(rootView: LookupFixture(model: model))
+        try await waitUntil { delayed.calls > 0 }
+        model.fallback = HeroLogoFallback(for: second) { newURL }
+        try await waitUntil { model.tone?.blue ?? 0 > 0.9 }
+        delayed.release()
+        try await waitUntil { delayed.completed }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(try redBounds(in: fixture.window))
+        XCTAssertNotNil(try colorBounds(in: fixture.window, channel: 2))
+        XCTAssertGreaterThan(try XCTUnwrap(model.tone).blue, 0.9)
+    }
+
+    @MainActor
+    @Observable
+    fileprivate final class LogoModel {
+        var fallback: HeroLogoFallback
+        var tone: ResolvedLogoTone?
+
+        init(fallback: HeroLogoFallback) {
+            self.fallback = fallback
+        }
+    }
+
+    private struct LookupFixture: View {
+        let model: LogoModel
+
+        var body: some View {
+            Color.black.overlay {
+                HeroLogoArtwork(
+                    references: [], asyncFallbackURL: model.fallback,
+                    maxWidth: 400, maxHeight: 200, constrainsToBounds: true,
+                    onResolve: { model.tone = $0 }
+                ) {
+                    Text("Title without a logo").foregroundStyle(.white)
+                }
+            }
+            .ignoresSafeArea()
+        }
+    }
+
+    @MainActor
+    private final class LookupProbe {
+        var calls = 0
+        var completed = false
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        func resolve(_ url: URL?, waitsForRelease: Bool = false) async -> URL? {
+            calls += 1
+            if waitsForRelease {
+                await withCheckedContinuation { continuation = $0 }
+            }
+            completed = true
+            return url
+        }
+
+        func release() {
+            continuation?.resume()
+            continuation = nil
+        }
+    }
+
+    private func seedLogo(size: CGSize, color: UIColor = .red) throws -> URL {
         let url = try XCTUnwrap(URL(string: "https://logo-fixture.example.test/\(UUID()).png"))
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -64,7 +175,7 @@ final class HeroLogoPresentationHostedTests: XCTestCase {
         let image = UIGraphicsImageRenderer(
             size: CGSize(width: size.width + 20, height: size.height + 20), format: format
         ).image { context in
-            UIColor.red.setFill()
+            color.setFill()
             context.fill(CGRect(origin: CGPoint(x: 10, y: 10), size: size))
         }
         let response = try XCTUnwrap(HTTPURLResponse(
@@ -84,6 +195,10 @@ final class HeroLogoPresentationHostedTests: XCTestCase {
     }
 
     private func redBounds(in window: UIWindow) throws -> CGRect? {
+        try colorBounds(in: window, channel: 0)
+    }
+
+    private func colorBounds(in window: UIWindow, channel: Int) throws -> CGRect? {
         window.layoutIfNeeded()
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -105,7 +220,9 @@ final class HeroLogoPresentationHostedTests: XCTestCase {
         for y in 0..<height {
             for x in 0..<width {
                 let offset = (y * width + x) * 4
-                if pixels[offset] > 150 && pixels[offset + 1] < 80 && pixels[offset + 2] < 80 {
+                if pixels[offset + channel] > 150
+                    && pixels[offset + (channel + 1) % 3] < 80
+                    && pixels[offset + (channel + 2) % 3] < 80 {
                     bounds = bounds.union(CGRect(x: x, y: y, width: 1, height: 1))
                 }
             }
