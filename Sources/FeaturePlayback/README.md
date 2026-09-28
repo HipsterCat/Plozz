@@ -452,6 +452,16 @@ Real-server playback automation is documented in
 Its synthetic harness checks and real-server results are separate; neither a
 missing provider/configuration nor a skipped XCTest is a successful live run.
 
+The player's Episodes and Playlist tabs use a full-height, focusable card row
+on tvOS and wide touch layouts, with the same inter-card spacing as Cast.
+Cards use inset, rounded landscape stills and centered two-line captions, with
+the same concentric corners as other media cards; the season picker takes space
+from the episode row without changing the panel's total height. Season selection
+uses the same focus-safe tabs as the series page, and numbered episodes show
+their season/episode code on the still. On narrow
+portrait layouts they become vertical rows, like Cast. Playlist entries retain
+their server order and load only as they become visible.
+
 ## Siri Remote input
 
 `ScrubGestureInterpreter` routes upward and downward swipes through the same

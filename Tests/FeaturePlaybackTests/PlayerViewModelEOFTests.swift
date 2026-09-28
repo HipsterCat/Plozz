@@ -10,6 +10,38 @@ import UIKit
 
 @MainActor
 final class PlayerViewModelEOFTests: XCTestCase {
+    func testSequenceCardsFillThePlayerBandWithRoomForArtworkAndTitles() {
+        for metrics in [PlayerCardMetrics.tv, .horizontalWide, .horizontalNarrow] {
+            let layout = PlayerSequenceLayout(
+                metrics: metrics, cardMetrics: .standard, hasSeasons: false, hasError: false
+            )
+            XCTAssertEqual(layout.rowHeight, metrics.cardHeight)
+            XCTAssertGreaterThan(layout.cardWidth, metrics.castCardWidth)
+            XCTAssertGreaterThan(layout.imageHeight, metrics.castHeadshot * 0.9)
+            XCTAssertGreaterThanOrEqual(
+                layout.titleHeight, metrics.castNameSize * (layout.compact ? 1 : 2)
+            )
+            XCTAssertEqual(layout.cardWidth - layout.imageWidth, layout.cardMetrics.cardInset * 2)
+            XCTAssertEqual(
+                layout.imageHeight + layout.titleHeight + layout.cardMetrics.cardInset * 2
+                    + layout.cardMetrics.landscapeCaptionInset
+                    + layout.cardMetrics.landscapeCaptionTopSpacing,
+                layout.rowHeight
+            )
+
+            let seasons = PlayerSequenceLayout(
+                metrics: metrics, cardMetrics: .standard, hasSeasons: true, hasError: false
+            )
+            XCTAssertEqual(seasons.rowHeight + seasons.seasonHeight + seasons.gap, metrics.cardHeight)
+            XCTAssertGreaterThan(seasons.imageHeight, 0)
+            XCTAssertGreaterThan(seasons.titleHeight, 0)
+        }
+        let tv = PlayerSequenceLayout(
+            metrics: .tv, cardMetrics: .standard, hasSeasons: false, hasError: false
+        )
+        XCTAssertGreaterThan(tv.imageHeight, 175)
+    }
+
     func testMobileWakeIntentCoversStartupAndBufferingButRespectsPause() async {
         let (viewModel, engine, _) = makeViewModel()
         XCTAssertEqual(viewModel.phase, .loading)
@@ -282,6 +314,37 @@ final class PlayerViewModelEOFTests: XCTestCase {
         XCTAssertEqual(browser.episodes.first?.sourceAccountID, "account")
         let requests = await provider.childRequests
         XCTAssertEqual(requests, 1)
+    }
+
+    func testSwitchingToShorterSeasonKeepsRenderedEpisodeValuesStable() async {
+        let seasonOne = MediaItem(id: "season-one", title: "Season 1", kind: .season)
+        let seasonTwo = MediaItem(id: "season-two", title: "Season 2", kind: .season)
+        let episode = MediaItem(
+            id: "two-1", title: "First", kind: .episode,
+            seriesID: "series", seasonID: seasonTwo.id
+        )
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: episode, streamURL: URL(string: "https://example.test/episode.m3u8")!
+            ),
+            childrenByParent: [
+                "series": [seasonOne, seasonTwo],
+                seasonOne.id: [MediaItem(id: "one-1", title: "Pilot", kind: .episode)],
+                seasonTwo.id: (1...3).map {
+                    MediaItem(id: "two-\($0)", title: "Episode \($0)", kind: .episode)
+                }
+            ]
+        )
+        let browser = PlayerEpisodeBrowser(item: episode, provider: provider)
+        await browser.loadIfNeeded()
+        let visibleEntries = PlayerSequencePanel.episodeEntries(from: browser)
+        XCTAssertEqual(visibleEntries.map(\.element.id), ["two-1", "two-2", "two-3"])
+
+        await browser.selectSeason(seasonOne.id)
+        XCTAssertEqual(browser.episodes.map(\.id), ["one-1"])
+        XCTAssertEqual(visibleEntries[2].element.id, "two-3",
+                       "An in-flight SwiftUI row must not index the changed browser array")
+        XCTAssertEqual(PlayerSequencePanel.episodeEntries(from: browser).map(\.element.id), ["one-1"])
     }
 
     func testPlaylistPageFailureCanRetryWithoutLosingSeededSelection() async throws {
