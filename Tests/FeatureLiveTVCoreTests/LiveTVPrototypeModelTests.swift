@@ -123,8 +123,8 @@ final class LiveTVPrototypeModelTests: XCTestCase {
             Int($0.start.timeIntervalSince1970).isMultiple(of: 1_800)
         })
         XCTAssertLessThanOrEqual(
-            model.programs(for: channel.id, from: requestedStart, hours: 100).count,
-            49
+            model.programs(for: channel.id, from: requestedStart, hours: 200).count,
+            7 * 24 * 2 + 1
         )
 
         model.advanceClock(by: 7_200)

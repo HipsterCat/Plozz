@@ -70,6 +70,15 @@ struct GuideNavigationFixture: View {
                     start: now.addingTimeInterval(boundaries[index]),
                     end: now.addingTimeInterval(boundaries[index + 1])
                 )
+            } + (0..<42).map { hour in
+                // Hourly listings past the guide's first six hours, reached
+                // only once browsing extends it.
+                LiveTVPrototypeProgram(
+                    id: "later-\(row)-\(hour)", channelID: channels[row].id,
+                    title: "Later \(row).\(hour + 1)", subtitle: "",
+                    start: now.addingTimeInterval(21_600 + Double(hour) * 3_600),
+                    end: now.addingTimeInterval(21_600 + Double(hour + 1) * 3_600)
+                )
             }
         }
         do { try model.replacePrograms(programs) }

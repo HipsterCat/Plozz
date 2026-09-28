@@ -816,7 +816,8 @@ public final class LiveTVPrototypeModel {
               hasGuide(for: channel)
         else { return [] }
 
-        let boundedHours = min(hours, 24)
+        // A week matches the guide cache's lookahead; the browsable guide grows past a day.
+        let boundedHours = min(hours, 7 * 24)
         let requestedEnd = date.addingTimeInterval(TimeInterval(boundedHours) * 3_600)
         if usesPublicStreams {
             return (importedPrograms[channelID] ?? []).filter {

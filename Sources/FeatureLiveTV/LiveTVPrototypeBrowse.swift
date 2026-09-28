@@ -48,7 +48,9 @@ struct PrototypeBrowser: View {
     @State private var mountedRows = Set<LiveTVGuideRowID>()
     @State private var restrictDirectionalEntry = true
     @State private var usesNativeSpatialNavigation = false
-    @State private var guideHours = 6
+    @State private var guideHours = Self.initialGuideHours
+    @State private var guideWidth: CGFloat = 0
+    @State private var timeline = PrototypeTimelineScroll()
     #if os(tvOS)
     @State private var nativeScroll = PrototypeGuideScrollController()
     #endif
@@ -66,11 +68,13 @@ struct PrototypeBrowser: View {
             VStack(spacing: PrototypeLayout.rulerGap) {
                 if !model.guideChannels.isEmpty || isLoading {
                     if geometry.size.width > 0 {
-                        PrototypeTimeRuler(
-                            start: guideStart, now: model.now, width: geometry.size.width,
-                            timelineOffset: timelineOffset, section: currentSection,
-                            showsNowMarker: !isLoading, isLoading: isLoading
-                        )
+                        PrototypeTimelineReader(timeline: timeline) { offset in
+                            PrototypeTimeRuler(
+                                start: guideStart, now: model.now, width: geometry.size.width,
+                                timelineOffset: offset, section: currentSection,
+                                showsNowMarker: !isLoading, isLoading: isLoading, span: guideSpan
+                            )
+                        }
                         .disabled(railActive || isRestoringFocus)
                     } else {
                         PrototypeGuideSectionLabel(section: currentSection)
@@ -138,14 +142,13 @@ struct PrototypeBrowser: View {
                                     entry: entry,
                                     showsSection: entry.startsSection && entry.section != model.guideChannels.first?.section,
                                     programs: model.programs(for: row.channelID, from: guideStart, hours: guideHours),
-                                    start: guideStart, now: model.now, width: geometry.size.width,
-                                    gatesFocus: gatesFocus,
+                                    start: guideStart, hours: guideHours, now: model.now,
+                                    width: geometry.size.width, gatesFocus: gatesFocus,
                                     returnTarget: gatesFocus && focusReturnTarget?.rowID == row ? focusReturnTarget : nil,
                                     favorite: model.favoriteIDs.contains(row.channelID),
                                     playing: model.playingChannelID == row.channelID,
                                     gapState: imports.gapState(
-                                        for: entry.channel, from: guideStart,
-                                        to: guideStart.addingTimeInterval(Double(guideHours) * 3_600)),
+                                        for: entry.channel, from: dataRange.start, to: dataRange.end),
                                     selectionAction: selectionAction,
                                     selectionMarked: selectedChannelIDs.contains(row.channelID),
                                     canHide: hideChannel != nil,
@@ -210,14 +213,26 @@ struct PrototypeBrowser: View {
                 }
             }
             .onChange(of: geometry.size.width, initial: true) { old, new in
-                guideHours = 6
+                guideWidth = new
+                timeline.pageWidth = PrototypeLayout.timelineWidth(for: new)
+                timeline.pageSeconds = PrototypeLayout.viewportSeconds(for: new)
                 // Keep the same programme time at the leading edge.
-                let seconds = timelineOffset / PrototypeLayout.timelineX(1, for: old)
-                timelineOffset = min(
-                    PrototypeLayout.maximumTimelineOffset(for: new),
+                let seconds = timeline.offset / PrototypeLayout.timelineX(1, for: old)
+                setTimelineOffset(min(
+                    PrototypeLayout.maximumTimelineOffset(for: new, span: guideSpan),
                     max(0, PrototypeLayout.timelineX(seconds.isFinite ? seconds : 0, for: new))
-                )
+                ))
             }
+        }
+        .onAppear {
+            let committed = $timelineOffset
+            timeline.settled = { committed.wrappedValue = $0 }
+            timeline.moved = { extendGuideIfNeeded(at: $0) }
+        }
+        .onChange(of: guideStart) { _, _ in guideHours = Self.initialGuideHours }
+        .onChange(of: timelineOffset, initial: true) { _, value in
+            // Now, guide time and bookmarks move the guide from outside.
+            if abs(timeline.offset - value) >= 1 { timeline.offset = value }
         }
         .padding([.leading, .top], PrototypeLayout.guideInset)
         .padding(.trailing, PrototypeLayout.guideTrailingInset)
@@ -293,10 +308,17 @@ struct PrototypeBrowser: View {
             guard let guideRequest else { return }
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
-            await imports.reloadServerGuides(
-                channelIDs: guideRequest.channels.map(\.id),
-                from: guideRequest.from, to: guideRequest.to, into: model
-            )
+            // Block by block, so extending the guide fetches only the new hours
+            // instead of re-requesting the whole span as one partly loaded chunk.
+            var blockStart = guideRequest.from
+            while blockStart < guideRequest.to, !Task.isCancelled {
+                let blockEnd = min(guideRequest.to, blockStart.addingTimeInterval(Self.guideStepSeconds))
+                await imports.reloadServerGuides(
+                    channelIDs: guideRequest.channels.map(\.id),
+                    from: blockStart, to: blockEnd, into: model
+                )
+                blockStart = blockEnd
+            }
         }
         .task(id: cachedWindowRequest) {
             guard let cachedWindowRequest else { return }
@@ -335,6 +357,7 @@ struct PrototypeBrowser: View {
         let showsSection: Bool
         let programs: [LiveTVPrototypeProgram]
         let start: Date
+        let hours: Int
         let now: Date
         let width: CGFloat
         let gatesFocus: Bool
@@ -386,7 +409,7 @@ struct PrototypeBrowser: View {
                 channel: channel, section: entry.section,
                 programs: model.programs(for: channel.id, from: guideStart, hours: guideHours),
                 start: guideStart, now: model.now,
-                width: width, timelineOffset: $timelineOffset, focus: $focused,
+                width: width, span: guideSpan, timeline: timeline, focus: $focused,
                 railActive: (railActive && restrictDirectionalEntry)
                     || isRestoringFocus || requiresContentFocusHandoff,
                 returnTarget: returnTarget,
@@ -397,9 +420,7 @@ struct PrototypeBrowser: View {
                 top: { goToTop(scrollTo: scrollTo) }, goToNow: goToNow,
                 focusChanged: confirmFocus, sources: openSources, guideTime: openGuideTime,
                 hide: hideChannel.map { action in { action(channel, entry.id) } },
-                guideGapState: imports.gapState(
-                    for: channel, from: guideStart,
-                    to: guideStart.addingTimeInterval(TimeInterval(guideHours) * 3_600)),
+                guideGapState: imports.gapState(for: channel, from: dataRange.start, to: dataRange.end),
                 selectionAction: selectionAction.map {
                     selectedChannelIDs.contains(channel.id) ? "Show in Multiview" : $0
                 },
@@ -429,7 +450,7 @@ struct PrototypeBrowser: View {
             rows: model.guideRowIDs,
             anchor: scrollID ?? confirmedFocus?.rowID ?? selectedRowID,
             references: imports.serverChannelReferences.filter { guideSources.contains($0.value.sourceID) },
-            from: guideStart, to: guideStart.addingTimeInterval(TimeInterval(guideHours) * 3_600)
+            from: dataRange.start, to: dataRange.end
         )
     }
 
@@ -442,7 +463,7 @@ struct PrototypeBrowser: View {
         return PrototypeGuideWindowRequest(
             rows: model.guideRowIDs,
             anchor: scrollID ?? confirmedFocus?.rowID ?? selectedRowID,
-            from: guideStart, to: guideStart.addingTimeInterval(TimeInterval(guideHours) * 3_600),
+            from: dataRange.start, to: dataRange.end,
             sources: imports.guideSources, enabledSourceIDs: imports.enabledSourceIDs,
             mappings: imports.mappingOverrides
         )
@@ -453,8 +474,19 @@ struct PrototypeBrowser: View {
         return PrototypeLibraryGuideRequest(
             catalog: libraryCatalog, rows: model.guideRowIDs,
             anchor: scrollID ?? confirmedFocus?.rowID ?? selectedRowID,
-            from: guideStart, to: guideStart.addingTimeInterval(TimeInterval(guideHours) * 3_600)
+            from: dataRange.start, to: dataRange.end
         )
+    }
+
+    /// Listings are loaded for the six-hour block being viewed and the blocks
+    /// either side, not the whole browsable span, so a long guide keeps a
+    /// bounded amount of data live and each move loads only what it reaches.
+    private var dataRange: DateInterval {
+        let step = Self.guideStepSeconds
+        let end = guideStart.addingTimeInterval(guideSpan)
+        let first = guideStart.addingTimeInterval(Double(max(0, timeline.block - 1)) * step)
+        let last = min(end, guideStart.addingTimeInterval(Double(timeline.block + 2) * step))
+        return DateInterval(start: min(first, last), end: last)
     }
 
     private var allChannelsHidden: Bool {
@@ -593,21 +625,45 @@ struct PrototypeBrowser: View {
         }
         let viewport = PrototypeLayout.viewportSeconds(for: width)
         let visibleStart = guideStart.addingTimeInterval(
-            Double(timelineOffset / PrototypeLayout.timelineX(1, for: width))
+            Double(timeline.offset / PrototypeLayout.timelineX(1, for: width))
         )
         let visibleEnd = visibleStart.addingTimeInterval(viewport)
         if model.now < visibleStart || model.now >= visibleEnd {
-            timelineOffset = min(PrototypeLayout.maximumTimelineOffset(for: width), max(
+            setTimelineOffset(min(PrototypeLayout.maximumTimelineOffset(for: width, span: guideSpan), max(
                 0, PrototypeLayout.timelineX(model.now.timeIntervalSince(guideStart) - viewport / 4, for: width)
-            ))
+            )))
         }
+    }
+
+    private static let initialGuideHours = Int(PrototypeLayout.timelineSpanSeconds / 3_600)
+    private static let guideStepSeconds = PrototypeLayout.timelineSpanSeconds
+
+    private var guideSpan: TimeInterval { TimeInterval(guideHours) * 3_600 }
+
+    /// Adds the next six hours once the viewer is within a screen of the end,
+    /// so listings are requested before they are reached.
+    private func extendGuideIfNeeded(at offset: CGFloat) {
+        guard guideWidth > 0, guideSpan < PrototypeLayout.maximumTimelineSpanSeconds else { return }
+        let remaining = PrototypeLayout.maximumTimelineOffset(for: guideWidth, span: guideSpan) - offset
+        guard remaining <= PrototypeLayout.timelineWidth(for: guideWidth) else { return }
+        guideHours = min(
+            Int(PrototypeLayout.maximumTimelineSpanSeconds / 3_600),
+            guideHours + Int(Self.guideStepSeconds / 3_600))
+    }
+
+    /// Moves the rows and the owner's committed offset together, so a pending
+    /// scroll commit can't restore where the guide was.
+    private func setTimelineOffset(_ offset: CGFloat) {
+        timeline.offset = offset
+        timelineOffset = offset
     }
 
     private func goToNow() {
         usesNativeSpatialNavigation = false
         timeAnchor = Date(timeIntervalSince1970: floor(model.now.timeIntervalSince1970 / 1_800) * 1_800)
         guideOffset = 0
-        timelineOffset = 0
+        guideHours = Self.initialGuideHours
+        setTimelineOffset(0)
         if let row = selectedRowID, model.guideEntry(for: row) != nil {
             let target = PrototypeBrowseFocus.defaultContent(in: model, row: row, from: guideStart, hours: guideHours)
             lastFocused = target
@@ -652,7 +708,9 @@ struct PrototypeTimeRuler: View {
     let section: LiveTVGuideSection
     let showsNowMarker: Bool
     var isLoading = false
+    var span: TimeInterval = PrototypeLayout.timelineSpanSeconds
     @Environment(\.themePalette) private var palette
+    @Environment(\.calendar) private var calendar
     @ScaledMetric(relativeTo: .caption) private var height: CGFloat = PrototypeLayout.rulerHeight
 
     var body: some View {
@@ -668,16 +726,21 @@ struct PrototypeTimeRuler: View {
             }
             .frame(width: PrototypeLayout.stationWidth(for: width), alignment: .leading)
             GeometryReader { geometry in
+                let tickWidth = geometry.size.width * 1_800 / PrototypeLayout.viewportSeconds(for: width)
+                let ticks = visibleTicks(tickWidth: tickWidth)
                 HStack(spacing: 0) {
-                    ForEach(0..<12, id: \.self) { tick in
-                        Text(start.addingTimeInterval(TimeInterval(tick * 1_800)), format: .dateTime.hour().minute())
+                    // Only labels around the visible time are built; the rest is space.
+                    Color.clear.frame(width: CGFloat(ticks.lowerBound) * tickWidth)
+                    ForEach(ticks, id: \.self) { tick in
+                        let time = start.addingTimeInterval(TimeInterval(tick * 1_800))
+                        // Midnight carries the new day's name.
+                        Text(time, format: calendar.startOfDay(for: time) == time
+                            ? .dateTime.weekday(.abbreviated).hour().minute()
+                            : .dateTime.hour().minute())
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
                             .padding(.leading, PrototypeLayout.rowInset)
-                            .frame(
-                                width: geometry.size.width * 1_800 / PrototypeLayout.viewportSeconds(for: width),
-                                alignment: .leading
-                            )
+                            .frame(width: tickWidth, alignment: .leading)
                     }
                 }
                 .frame(height: height)
@@ -689,6 +752,19 @@ struct PrototypeTimeRuler: View {
                 leadingStrength: horizontalFade.leading,
                 trailingStrength: horizontalFade.trailing
             )
+            .overlay(alignment: .leading) {
+                // Once browsing leaves today, the day stays pinned at the start.
+                if let visibleDay, !isLoading {
+                    Text(visibleDay, format: .dateTime.weekday(
+                        PrototypeLayout.isCompact(width) ? .abbreviated : .wide))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.primaryText)
+                        .lineLimit(1)
+                        .padding(.horizontal, PrototypeLayout.rowInset)
+                        .frame(maxHeight: .infinity)
+                        .background(Capsule().fill(palette.cardOpaqueSurface))
+                }
+            }
             .overlay(alignment: .bottom) {
                 if showsNowMarker {
                     PrototypeNowMarker(
@@ -703,9 +779,27 @@ struct PrototypeTimeRuler: View {
         .foregroundStyle(palette.primaryText)
     }
 
+    /// Half-hour ticks from a screen before the visible time to a screen after it.
+    private func visibleTicks(tickWidth: CGFloat) -> Range<Int> {
+        let count = Int(span / 1_800)
+        guard tickWidth > 0, count > 0 else { return 0..<0 }
+        let perScreen = Int(ceil(PrototypeLayout.viewportSeconds(for: width) / 1_800))
+        let first = Int(max(0, timelineOffset) / tickWidth)
+        let lower = min(count, max(0, first - perScreen))
+        return lower..<min(count, first + perScreen * 2 + 1)
+    }
+
+    /// The day at the visible timeline's leading edge, when it isn't today.
+    private var visibleDay: Date? {
+        let seconds = timelineOffset / PrototypeLayout.timelineX(1, for: width)
+        let leading = start.addingTimeInterval(seconds.isFinite ? TimeInterval(seconds) : 0)
+        return calendar.isDate(leading, inSameDayAs: now) ? nil : leading
+    }
+
     private var horizontalFade: PrototypeScrollFade {
         return PrototypeScrollFade(
-            before: timelineOffset, after: PrototypeLayout.maximumTimelineOffset(for: width) - timelineOffset,
+            before: timelineOffset,
+            after: PrototypeLayout.maximumTimelineOffset(for: width, span: span) - timelineOffset,
             distance: PrototypeLayout.horizontalFade
         )
     }
@@ -774,7 +868,8 @@ struct PrototypeGuideRow: View {
     let start: Date
     let now: Date
     let width: CGFloat
-    @Binding var timelineOffset: CGFloat
+    var span: TimeInterval = PrototypeLayout.timelineSpanSeconds
+    let timeline: PrototypeTimelineScroll
     let focus: FocusState<PrototypeBrowseFocus?>.Binding
     let railActive: Bool
     let returnTarget: PrototypeBrowseFocus?
@@ -839,78 +934,83 @@ struct PrototypeGuideRow: View {
                 .disabled(isFocusDisabled(channelFocus))
             if programs.isEmpty {
                 channelContent(
-                    elapsedWidth: timelineWidth * now.timeIntervalSince(start) / viewportSeconds - timelineOffset
+                    elapsedWidth: timelineWidth * now.timeIntervalSince(start) / viewportSeconds,
+                    followsTimeline: true
                 )
                     .frame(maxWidth: .infinity)
             } else {
                 PrototypeSynchronizedTimeline(
-                    offset: $timelineOffset,
+                    timeline: timeline,
                     isFocusedRow: focus.wrappedValue?.rowID == channelFocus.rowID,
                     viewportWidth: timelineWidth,
-                    maximumOffset: PrototypeLayout.maximumTimelineOffset(for: width),
+                    maximumOffset: PrototypeLayout.maximumTimelineOffset(for: width, span: span),
                     horizontalNavigation: horizontalNavigation
                 ) {
+                    // Only programmes near the viewport are built. A lazy stack
+                    // can't be used: focus can't move to cells it hasn't made.
                     HStack(spacing: 0) {
-                        ForEach(LiveTVGuideTimeline.slots(
-                            programs: programs, from: start, to: start.addingTimeInterval(21_600)
-                        )) { slot in
-                            if let program = slot.program {
-                                Button { activate(program) } label: {
-                                    PrototypeProgramLabel(
-                                        program: program, now: now,
-                                        availableWidth: max(0, cellWidth(slot) - PrototypeLayout.rowInset * 2)
-                                    )
-                                    .padding(.horizontal, min(PrototypeLayout.rowInset, slotWidth(slot) / 4))
-                                    .frame(
-                                        width: cellWidth(slot),
-                                        height: PrototypeLayout.programHeight(in: rowHeight),
-                                        alignment: .leading
-                                    )
-                                    .clipped()
-                                    .background {
-                                        PrototypeElapsedProgramFill(
-                                            elapsedWidth: timelineWidth * now.timeIntervalSince(slot.start) / viewportSeconds
+                        ForEach(timelineItems) { item in
+                            if let slot = item.slot {
+                                if let program = slot.program {
+                                    Button { activate(program) } label: {
+                                        PrototypeProgramLabel(
+                                            program: program, now: now,
+                                            availableWidth: max(0, cellWidth(slot) - PrototypeLayout.rowInset * 2)
                                         )
+                                        .padding(.horizontal, min(PrototypeLayout.rowInset, slotWidth(slot) / 4))
+                                        .frame(
+                                            width: cellWidth(slot),
+                                            height: PrototypeLayout.programHeight(in: rowHeight),
+                                            alignment: .leading
+                                        )
+                                        .clipped()
+                                        .background {
+                                            PrototypeElapsedProgramFill(
+                                                elapsedWidth: timelineWidth * now.timeIntervalSince(slot.start) / viewportSeconds
+                                            )
+                                        }
                                     }
-                                }
-                                .buttonStyle(PrototypeButtonStyle(
-                                    selected: selectedTarget == programFocus(program.id),
-                                    padded: false, surface: .program,
-                                    focusChanged: { focusChanged(programFocus(program.id), $0) }
-                                ))
-                                .focusEffectDisabled()
-                                .padding(.vertical, PrototypeLayout.programInset)
-                                .padding(.trailing, min(PrototypeLayout.cellGap, slotWidth(slot) / 4))
-                                .frame(width: slotWidth(slot), height: rowHeight)
-                                .clipped()
-                                .focused(focus, equals: programFocus(program.id))
-                                .disabled(isFocusDisabled(programFocus(program.id)))
-                                .contextMenu {
-                                    Button("Program details", systemImage: "info.circle") { details(program) }
-                                    PrototypeChannelActions(
-                                        favorite: favorite, play: tune, toggleFavorite: toggleFavorite, hide: hide,
-                                        primaryTitle: selectionAction ?? "Play channel", isSelection: selectionAction != nil,
-                                        libraryItem: channel.source == .plozz ? program.libraryItem : nil,
-                                        openLibraryItem: openLibraryItem)
-                                    Button("Search channels", systemImage: "magnifyingglass", action: controls)
-                                    Button("Sources", systemImage: "antenna.radiowaves.left.and.right", action: sources)
-                                    Button("Guide time", systemImage: "calendar", action: guideTime)
-                                    Button("Back to top", systemImage: "arrow.up.to.line", action: top)
-                                    Button("Now", systemImage: "clock", action: goToNow)
-                                }
-                            } else {
-                                channelContent(
-                                    slotID: slot.id,
-                                    elapsedWidth: timelineWidth * now.timeIntervalSince(slot.start) / viewportSeconds
-                                )
-                                    .frame(width: cellWidth(slot))
+                                    .buttonStyle(PrototypeButtonStyle(
+                                        selected: selectedTarget == programFocus(program.id),
+                                        padded: false, surface: .program,
+                                        focusChanged: { focusChanged(programFocus(program.id), $0) }
+                                    ))
+                                    .focusEffectDisabled()
+                                    .padding(.vertical, PrototypeLayout.programInset)
                                     .padding(.trailing, min(PrototypeLayout.cellGap, slotWidth(slot) / 4))
                                     .frame(width: slotWidth(slot), height: rowHeight)
                                     .clipped()
+                                    .focused(focus, equals: programFocus(program.id))
+                                    .disabled(isFocusDisabled(programFocus(program.id)))
+                                    .contextMenu {
+                                        Button("Program details", systemImage: "info.circle") { details(program) }
+                                        PrototypeChannelActions(
+                                            favorite: favorite, play: tune, toggleFavorite: toggleFavorite, hide: hide,
+                                            primaryTitle: selectionAction ?? "Play channel", isSelection: selectionAction != nil,
+                                            libraryItem: channel.source == .plozz ? program.libraryItem : nil,
+                                            openLibraryItem: openLibraryItem)
+                                        Button("Search channels", systemImage: "magnifyingglass", action: controls)
+                                        Button("Sources", systemImage: "antenna.radiowaves.left.and.right", action: sources)
+                                        Button("Guide time", systemImage: "calendar", action: guideTime)
+                                        Button("Back to top", systemImage: "arrow.up.to.line", action: top)
+                                        Button("Now", systemImage: "clock", action: goToNow)
+                                    }
+                                } else {
+                                    channelContent(
+                                        slotID: slot.id,
+                                        elapsedWidth: timelineWidth * now.timeIntervalSince(slot.start) / viewportSeconds
+                                    )
+                                        .frame(width: cellWidth(slot))
+                                        .padding(.trailing, min(PrototypeLayout.cellGap, slotWidth(slot) / 4))
+                                        .frame(width: slotWidth(slot), height: rowHeight)
+                                        .clipped()
+                                }
+                            } else {
+                                Color.clear.frame(width: item.width, height: rowHeight)
                             }
                         }
                     }
-                    .frame(width: PrototypeLayout.timelineContentWidth(for: width), height: rowHeight)
+                    .frame(width: PrototypeLayout.timelineContentWidth(for: width, span: span), height: rowHeight)
                 }
                 .frame(width: timelineWidth, height: rowHeight)
             }
@@ -922,11 +1022,49 @@ struct PrototypeGuideRow: View {
         .channel(channel.id, section: section)
     }
 
+    private struct TimelineItem: Identifiable {
+        let id: String
+        let slot: LiveTVGuideSlot?
+        let width: CGFloat
+    }
+
+    /// The row's slots within a screen either side of the visible one, with
+    /// the rest collapsed into spacers. The window moves a screen at a time,
+    /// so scrolling rebuilds rows only when it crosses into the next screen.
+    private var timelineItems: [TimelineItem] {
+        let slots = LiveTVGuideTimeline.slots(programs: programs, from: start, to: start.addingTimeInterval(span))
+        guard timeline.pageWidth > 0 else {
+            return slots.map { TimelineItem(id: $0.id, slot: $0, width: slotWidth($0)) }
+        }
+        let windowStart = start.addingTimeInterval(Double(timeline.page - 1) * viewportSeconds)
+        let windowEnd = start.addingTimeInterval(Double(timeline.page + 3) * viewportSeconds)
+        var items: [TimelineItem] = []
+        var skipped: CGFloat = 0
+        for slot in slots {
+            let nearby = slot.end > windowStart && slot.start < windowEnd
+            // The current programme is where vertical moves and restoration land.
+            let current = slot.start <= now && now < slot.end
+            if nearby || current {
+                if skipped > 0 {
+                    items.append(TimelineItem(id: "skipped-before-\(slot.id)", slot: nil, width: skipped))
+                    skipped = 0
+                }
+                items.append(TimelineItem(id: slot.id, slot: slot, width: slotWidth(slot)))
+            } else {
+                skipped += slotWidth(slot)
+            }
+        }
+        if skipped > 0 { items.append(TimelineItem(id: "skipped-end", slot: nil, width: skipped)) }
+        return items
+    }
+
     private func programFocus(_ id: String) -> PrototypeBrowseFocus {
         .program(channelID: channel.id, programID: id, section: section)
     }
 
-    private func channelContent(slotID: String? = nil, elapsedWidth: CGFloat = 0) -> some View {
+    private func channelContent(
+        slotID: String? = nil, elapsedWidth: CGFloat = 0, followsTimeline: Bool = false
+    ) -> some View {
         let target = PrototypeBrowseFocus.channelContent(channel.id, slotID: slotID, section: section)
         return Button {
             #if os(iOS)
@@ -941,7 +1079,13 @@ struct PrototypeGuideRow: View {
             )
                 .frame(maxWidth: .infinity)
                 .background {
-                    PrototypeElapsedProgramFill(elapsedWidth: elapsedWidth)
+                    if followsTimeline {
+                        PrototypeTimelineReader(timeline: timeline) {
+                            PrototypeElapsedProgramFill(elapsedWidth: elapsedWidth - $0)
+                        }
+                    } else {
+                        PrototypeElapsedProgramFill(elapsedWidth: elapsedWidth)
+                    }
                 }
                 .contentShape(Rectangle())
         }
@@ -1168,64 +1312,146 @@ struct PrototypeGuideGap: View {
     }
 }
 
+/// The guide's live horizontal position. Rows and the ruler observe it
+/// directly, so a scroll frame reaches only them instead of re-rendering the
+/// whole guide; the owner's binding is committed once scrolling settles.
+@MainActor
+@Observable
+final class PrototypeTimelineScroll {
+    var offset: CGFloat { didSet { updatePage() } }
+    /// Which screen-width of the timeline the leading edge is on. Rows build
+    /// their cells around it, so they rebuild per screen rather than per frame.
+    private(set) var page = 0
+    /// The visible timeline's width; zero builds every cell.
+    @ObservationIgnored var pageWidth: CGFloat = 0 { didSet { updatePage() } }
+    /// Programme time one page spans.
+    @ObservationIgnored var pageSeconds: TimeInterval = 0 { didSet { updatePage() } }
+    /// Which six-hour block the leading edge is in; guide listings load around it.
+    private(set) var block = 0
+    @ObservationIgnored var settled: ((CGFloat) -> Void)?
+    /// Called on every scroll a row makes, while it is still moving.
+    @ObservationIgnored var moved: ((CGFloat) -> Void)?
+    @ObservationIgnored private var commit: Task<Void, Never>?
+
+    init(offset: CGFloat = 0) {
+        self.offset = offset
+    }
+
+    private func updatePage() {
+        let next = pageWidth > 0 ? Int(max(0, offset) / pageWidth) : 0
+        if next != page { page = next }
+        let seconds = pageWidth > 0 ? Double(max(0, offset) / pageWidth) * pageSeconds : 0
+        let nextBlock = Int(seconds / PrototypeLayout.timelineSpanSeconds)
+        if nextBlock != block { block = nextBlock }
+    }
+
+    /// Records a scroll made in a row and commits it after the movement stops.
+    func scrolled(to value: CGFloat) {
+        offset = value
+        moved?(value)
+        commit?.cancel()
+        commit = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard let self, !Task.isCancelled else { return }
+            self.settled?(self.offset)
+        }
+    }
+}
+
+/// Reads the live offset in its own view, keeping the dependency out of the
+/// caller's body.
+struct PrototypeTimelineReader<Content: View>: View {
+    let timeline: PrototypeTimelineScroll
+    @ViewBuilder let content: (CGFloat) -> Content
+
+    var body: some View { content(timeline.offset) }
+}
+
 /// Each virtualized row keeps its station outside the horizontal scroller.
 /// Only the focused/dragged row publishes movement; followers never feed back.
+/// Per-frame values stay out of this view's body so scrolling never rebuilds
+/// the row's programmes.
 private struct PrototypeSynchronizedTimeline<Content: View>: View {
-    @Binding var offset: CGFloat
+    let timeline: PrototypeTimelineScroll
     let isFocusedRow: Bool
     let viewportWidth: CGFloat
     let maximumOffset: CGFloat
     let horizontalNavigation: () -> Void
     @ViewBuilder let content: () -> Content
     @State private var position = ScrollPosition(x: 0)
-    @State private var currentOffset: CGFloat = 0
-    @State private var synchronizationTarget: CGFloat?
+    @State private var tracking = Tracking()
     @State private var isDragging = false
+
+    private final class Tracking {
+        var current: CGFloat = 0
+        var synchronizationTarget: CGFloat?
+    }
 
     var body: some View {
         ScrollView(.horizontal) {
             content()
         }
         .scrollIndicators(.hidden)
-        .horizontalEdgeFadeMask(
-            fadeWidth: PrototypeLayout.horizontalFade,
-            leadingStrength: edgeFade.leading,
-            trailingStrength: edgeFade.trailing
-        )
+        .modifier(PrototypeTimelineEdgeFade(timeline: timeline, maximumOffset: maximumOffset))
         .scrollPosition($position)
         .onScrollPhaseChange { _, phase in
             isDragging = phase == .tracking || phase == .interacting || phase == .decelerating
-            if isDragging { synchronizationTarget = nil }
+            if isDragging { tracking.synchronizationTarget = nil }
         }
         .onScrollGeometryChange(for: CGFloat.self) {
             min(max(0, $0.contentOffset.x + $0.contentInsets.leading), maximumOffset)
         } action: { _, value in
-            currentOffset = value
-            if let target = synchronizationTarget {
-                if abs(target - value) < 1 { synchronizationTarget = nil }
+            tracking.current = value
+            if let target = tracking.synchronizationTarget {
+                if abs(target - value) < 1 { tracking.synchronizationTarget = nil }
                 return
             }
-            guard isFocusedRow || isDragging, abs(offset - value) >= 1 else { return }
+            guard isFocusedRow || isDragging, abs(timeline.offset - value) >= 1 else { return }
             if isDragging { horizontalNavigation() }
-            offset = value
+            timeline.scrolled(to: value)
         }
-        .onChange(of: offset) { _, value in synchronize(to: value) }
-        .onChange(of: viewportWidth) { _, _ in
-            synchronize(to: min(offset, maximumOffset))
-        }
-        .onAppear { synchronize(to: offset) }
+        .modifier(PrototypeTimelineFollower(
+            timeline: timeline, viewportWidth: viewportWidth, maximumOffset: maximumOffset,
+            synchronize: synchronize
+        ))
+        .onAppear { synchronize(to: timeline.offset) }
     }
 
     private func synchronize(to value: CGFloat) {
-        guard abs(currentOffset - value) >= 1 else { return }
-        synchronizationTarget = value
+        guard abs(tracking.current - value) >= 1 else { return }
+        tracking.synchronizationTarget = value
         position.scrollTo(x: value)
     }
+}
 
-    private var edgeFade: PrototypeScrollFade {
-        PrototypeScrollFade(
-            before: currentOffset, after: maximumOffset - currentOffset,
+private struct PrototypeTimelineFollower: ViewModifier {
+    let timeline: PrototypeTimelineScroll
+    let viewportWidth: CGFloat
+    let maximumOffset: CGFloat
+    let synchronize: (CGFloat) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: timeline.offset) { _, value in synchronize(value) }
+            .onChange(of: viewportWidth) { _, _ in
+                synchronize(min(timeline.offset, maximumOffset))
+            }
+    }
+}
+
+private struct PrototypeTimelineEdgeFade: ViewModifier {
+    let timeline: PrototypeTimelineScroll
+    let maximumOffset: CGFloat
+
+    func body(content: Content) -> some View {
+        let fade = PrototypeScrollFade(
+            before: timeline.offset, after: maximumOffset - timeline.offset,
             distance: PrototypeLayout.horizontalFade
+        )
+        content.horizontalEdgeFadeMask(
+            fadeWidth: PrototypeLayout.horizontalFade,
+            leadingStrength: fade.leading,
+            trailingStrength: fade.trailing
         )
     }
 }

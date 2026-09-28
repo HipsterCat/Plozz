@@ -134,20 +134,27 @@ enum PrototypeLayout {
         isCompact(width) ? 3_600 : 7_200
     }
 
-    /// The scrollable guide holds six hours whatever the viewport.
+    /// The scrollable guide starts with six hours whatever the viewport, and
+    /// grows by the same step as the viewer nears its end.
     static let timelineSpanSeconds: TimeInterval = 21_600
+    /// A week, matching how far ahead the guide cache keeps listings.
+    static let maximumTimelineSpanSeconds: TimeInterval = 7 * 86_400
 
     /// Horizontal distance for a stretch of programme time.
     static func timelineX(_ seconds: TimeInterval, for width: CGFloat) -> CGFloat {
         timelineWidth(for: width) * seconds / viewportSeconds(for: width)
     }
 
-    static func timelineContentWidth(for width: CGFloat) -> CGFloat {
-        timelineX(timelineSpanSeconds, for: width)
+    static func timelineContentWidth(
+        for width: CGFloat, span: TimeInterval = timelineSpanSeconds
+    ) -> CGFloat {
+        timelineX(span, for: width)
     }
 
-    static func maximumTimelineOffset(for width: CGFloat) -> CGFloat {
-        max(0, timelineContentWidth(for: width) - timelineWidth(for: width))
+    static func maximumTimelineOffset(
+        for width: CGFloat, span: TimeInterval = timelineSpanSeconds
+    ) -> CGFloat {
+        max(0, timelineContentWidth(for: width, span: span) - timelineWidth(for: width))
     }
 
     static func programHeight(in rowHeight: CGFloat) -> CGFloat {
