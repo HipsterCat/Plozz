@@ -86,8 +86,8 @@ enum SeriesHeroRevealTransition {
     /// part inherits it — a per-view `.animation` overrides the transaction and
     /// desyncs that part from the rest.
     // A spring's logical completion leaves a visible tail on this 588pt travel.
-    // Finish the whole composition at the declared endpoint before releasing it.
-    static var ambient: Animation { .easeInOut(duration: 0.9) }
+    // Slow earlier for a gentle landing, while still ending at the declared time.
+    static var ambient: Animation { .timingCurve(0.4, 0, 0.2, 1, duration: 0.9) }
 
     /// The one deliberate exception: the receded logo leaves faster than it
     /// arrives, so it is out of the way before the hero lands rather than
