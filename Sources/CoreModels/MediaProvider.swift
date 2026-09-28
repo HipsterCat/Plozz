@@ -350,6 +350,10 @@ public enum MediaProviderURLIdentity {
               let urlHost = url.host,
               let baseScheme = baseURL.scheme,
               let baseHost = baseURL.host,
+              // Nearly every call compares against a base on another host.
+              // Hosts that differ this way can't normalize to the same origin,
+              // so that's settled without building and validating either one.
+              Self.hostsMayMatch(urlHost, baseHost),
               let urlOrigin = try? NetworkOrigin(
                   scheme: urlScheme,
                   host: urlHost,
@@ -377,6 +381,20 @@ public enum MediaProviderURLIdentity {
         }
         let relative = String(path.dropFirst(basePath.count))
         return relative.isEmpty ? "/" : relative
+    }
+
+    /// False only when two hosts cannot normalize alike: ``NetworkOrigin``
+    /// trims whitespace, drops IPv6 brackets and lowercases, so hosts that
+    /// still differ ignoring case and brackets never share an origin.
+    static func hostsMayMatch(_ lhs: String, _ rhs: String) -> Bool {
+        func bare(_ host: String) -> Substring {
+            host.hasPrefix("[") && host.hasSuffix("]") && host.count >= 2
+                ? host.dropFirst().dropLast()
+                : host[...]
+        }
+        if bare(lhs).lowercased() == bare(rhs).lowercased() { return true }
+        // Whitespace is trimmed before comparison; leave those to the full check.
+        return lhs.contains(where: \.isWhitespace) || rhs.contains(where: \.isWhitespace)
     }
 
     public static func isPlexArtworkResourcePath(_ path: String) -> Bool {
