@@ -169,6 +169,9 @@ final class NativeSubtitlePresentationTests: XCTestCase {
             XCTAssertTrue(cues.active(at: start + 3 + offset + 1.0 / 600, offset: offset).isEmpty)
         }
         try assertOnlySuppressedOutput(engine)
+        let item = try XCTUnwrap(engine.underlyingPlayer?.currentItem)
+        let loadedGroup = try await item.asset.loadMediaSelectionGroup(for: .legible)
+        let group = try XCTUnwrap(loadedGroup)
 
         await engine.seek(to: 2.5)
         engine.selectSubtitleTrack(alternate)
@@ -183,7 +186,9 @@ final class NativeSubtitlePresentationTests: XCTestCase {
         engine.selectSubtitleTrack(full)
         try await waitUntil(
             detail: "After reselecting Full: visible=\(model.primary.compactMap(\.text)), "
-                + "decoded=\(cues.compactMap(\.text))"
+                + "decoded=\(cues.compactMap(\.text)), "
+                + "selected=\(String(describing: item.currentMediaSelection.selectedMediaOption(in: group))), "
+                + "suppressed=\(item.outputs.compactMap { $0 as? AVPlayerItemLegibleOutput }.map(\.suppressesPlayerRendering))"
         ) {
             return model.primary.compactMap(\.text) == ["Alpha", "Bravo"]
         }
@@ -236,6 +241,9 @@ final class NativeSubtitlePresentationTests: XCTestCase {
                 && item.currentMediaSelection.selectedMediaOption(in: group) == selected
         }
         XCTAssertTrue(cues.isEmpty, "System presentation must not double-draw the in-app overlay")
+        // The selected HLS rendition can disappear while AVFoundation changes renderers.
+        item.select(nil, in: group)
+        XCTAssertNil(item.currentMediaSelection.selectedMediaOption(in: group))
         engine.setNativeSubtitlesActive(false)
         try await waitUntil(
             detail: "After restoring the overlay: visible=\(model.primary.compactMap(\.text)), "
@@ -248,6 +256,20 @@ final class NativeSubtitlePresentationTests: XCTestCase {
         }
         XCTAssertTrue(engine.isPaused)
         XCTAssertEqual(item.currentMediaSelection.selectedMediaOption(in: group), selected)
+        engine.selectSubtitleTrack(nil)
+        try await waitUntil {
+            item.currentMediaSelection.selectedMediaOption(in: group) == nil && cues.isEmpty
+        }
+        engine.setNativeSubtitlesActive(true)
+        try await waitUntil {
+            item.outputs.compactMap { $0 as? AVPlayerItemLegibleOutput }.contains { !$0.suppressesPlayerRendering }
+                && item.currentMediaSelection.selectedMediaOption(in: group) == nil
+        }
+        engine.setNativeSubtitlesActive(false)
+        try await waitUntil {
+            item.outputs.compactMap { $0 as? AVPlayerItemLegibleOutput }.contains { $0.suppressesPlayerRendering }
+                && item.currentMediaSelection.selectedMediaOption(in: group) == nil && cues.isEmpty
+        }
     }
 
     private func assertOnlySuppressedOutput(_ engine: NativeVideoEngine) throws {

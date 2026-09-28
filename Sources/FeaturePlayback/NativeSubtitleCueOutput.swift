@@ -150,6 +150,7 @@ public final class NativeSubtitleCueOutput: NSObject, AVPlayerItemLegibleOutputP
     private var timeline = NativeSubtitleTimeline()
     private let onCues: @MainActor ([SubtitleCue]) -> Void
     private var selectionEnabled = false
+    private var selectedOption: AVMediaSelectionOption?
     private var systemPresentation = false
     private var externalPlayback = false
     private var routeObservation: NSKeyValueObservation?
@@ -186,6 +187,7 @@ public final class NativeSubtitleCueOutput: NSObject, AVPlayerItemLegibleOutputP
         renderingTask?.cancel()
         renderingTask = nil
         selectionEnabled = enabled
+        selectedOption = nil
         replaceOutput()
     }
 
@@ -210,6 +212,7 @@ public final class NativeSubtitleCueOutput: NSObject, AVPlayerItemLegibleOutputP
         output = nil
         item = nil
         player = nil
+        selectedOption = nil
         timeline.reset()
         onCues([])
     }
@@ -249,7 +252,9 @@ public final class NativeSubtitleCueOutput: NSObject, AVPlayerItemLegibleOutputP
             }
             guard let group, !Task.isCancelled,
                   self.renderingGeneration == generation, self.item === item else { return }
-            let selected = item.currentMediaSelection.selectedMediaOption(in: group)
+            let current = item.currentMediaSelection.selectedMediaOption(in: group)
+            if let current { self.selectedOption = current }
+            let selected = self.selectionEnabled ? (current ?? self.selectedOption) : nil
             item.select(nil, in: group)
             // Clear the old native line before changing drawing ownership.
             await Task.yield()

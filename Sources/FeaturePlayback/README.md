@@ -166,7 +166,9 @@ timestamp guessed from the source file. Successive states close the preceding
 intervals, including overlapping lines. Selection replaces the output to fence
 old callbacks; seeks flush its state; teardown detaches it. In-app drawing is
 suppressed at the native output, with an explicit selected-rendition handoff
-for external presentation. The Plozzigen remote-HLS bypass uses the same bridge
+for external presentation. The handoff restores the current item's last selected
+rendition if AVFoundation temporarily clears it; an explicit Off or track change
+discards that fallback. The Plozzigen remote-HLS bypass uses the same bridge
 for tracks it identifies as natively rendered; its decoded tracks keep their
 existing cue pipeline.
 
