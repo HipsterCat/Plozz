@@ -75,4 +75,25 @@ final class AutoPlayNextEpisodeSettingsTests: XCTestCase {
         XCTAssertFalse(guest.load().autoPlayNextEpisode, "Guest profile is OFF")
         XCTAssertTrue(primary.load().autoPlayNextEpisode, "Primary profile is unaffected")
     }
+
+    func testPlaylistAutoplayDefaultsOnAndIsIndependentPerProfile() throws {
+        let (defaults, _) = makeDefaults()
+        let primary = PlaybackSettingsStore(defaults: defaults)
+        let guest = PlaybackSettingsStore(defaults: defaults, namespace: "playlist-guest")
+
+        XCTAssertTrue(primary.load().autoPlayNextPlaylistItem)
+        var guestSettings = guest.load()
+        guestSettings.autoPlayNextPlaylistItem = false
+        guestSettings.autoPlayNextEpisode = true
+        guest.save(guestSettings)
+
+        XCTAssertFalse(guest.load().autoPlayNextPlaylistItem)
+        XCTAssertTrue(guest.load().autoPlayNextEpisode)
+        XCTAssertTrue(primary.load().autoPlayNextPlaylistItem)
+
+        let legacy = try JSONSerialization.data(withJSONObject: ["autoPlayNextEpisode": false])
+        defaults.set(legacy, forKey: SettingsKey.scoped("com.plozz.playbackSettings", namespace: nil))
+        XCTAssertTrue(primary.load().autoPlayNextPlaylistItem)
+        XCTAssertFalse(primary.load().autoPlayNextEpisode)
+    }
 }

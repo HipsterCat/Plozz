@@ -190,6 +190,7 @@ public struct RootView: View {
     /// diagnostics pattern.
     private func reconcileCrashReporting() {
         let forced = ProcessInfo.processInfo.environment["PLOZZ_FORCE_CRASH_REPORTING"] == "1"
+        crashReporting.setScreen(CrashReportScreen(context: MainThreadStallProbe.context))
         crashReporting.apply(
             enabled: appState.crashReportingModel.settings.isEnabled || forced,
             context: makeCrashContext()
@@ -834,6 +835,9 @@ public struct RootView: View {
             // maintainer marker changes the reporter's environment, and that only
             // takes effect on a restart the controller performs from here.
             reconcileCrashReporting()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: MainThreadStallProbe.contextDidChange)) { _ in
+            crashReporting.setScreen(CrashReportScreen(context: MainThreadStallProbe.context))
         }
         // Scene-phase side effects live in a zero-size child, NOT here.
         //

@@ -233,11 +233,7 @@ struct PlozziOSLibraryGridView: View {
                 } else {
                     ScrollViewReader { proxy in
                         ScrollView {
-                            if viewModel.supportsCollections {
-                                PlozziOSLibraryContentModeControl(viewModel: viewModel)
-                                    .padding(.horizontal)
-                                    .padding(.vertical, 8)
-                            }
+                            browseControls
                             scanBanner
                             LazyVGrid(
                                 columns: settings.density.density.iOSPosterGridColumns(
@@ -251,6 +247,7 @@ struct PlozziOSLibraryGridView: View {
                                         index: index,
                                         generation: generation,
                                         provider: provider,
+                                        playlistOrigin: { viewModel.playlistOrigin(at: index) },
                                         onAppear: { await viewModel.itemAppeared(at: index, generation: generation) },
                                         onDisappear: { viewModel.itemDisappeared(at: index, generation: generation) }
                                     )
@@ -280,11 +277,9 @@ struct PlozziOSLibraryGridView: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .top, spacing: 0) {
-            if viewModel.supportsCollections,
+            if (viewModel.availableContentModes.count > 1 || !viewModel.availableSortFields.isEmpty),
                viewModel.state.value == nil || viewModel.state.value == 0 {
-                PlozziOSLibraryContentModeControl(viewModel: viewModel)
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
+                browseControls
                     .background(.bar)
             }
         }
@@ -324,11 +319,6 @@ struct PlozziOSLibraryGridView: View {
                     }
                 }
             }
-            if !viewModel.availableSortFields.isEmpty {
-                ToolbarItem(placement: .primaryAction) {
-                    sortControl
-                }
-            }
         }
         .task { await viewModel.loadFirstPageIfNeeded() }
         .background {
@@ -350,6 +340,23 @@ struct PlozziOSLibraryGridView: View {
             if let mutation = MediaItemMutation.from(note) {
                 viewModel.applyWatchedState(mutation)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var browseControls: some View {
+        if viewModel.availableContentModes.count > 1 || !viewModel.availableSortFields.isEmpty {
+            HStack {
+                if viewModel.availableContentModes.count > 1 {
+                    PlozziOSLibraryContentModeControl(viewModel: viewModel)
+                }
+                Spacer(minLength: 12)
+                if !viewModel.availableSortFields.isEmpty {
+                    sortControl
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
         }
     }
 
@@ -400,6 +407,8 @@ struct PlozziOSLibraryGridView: View {
                 "Sort: \(viewModel.sort.field.displayName)",
                 systemImage: "arrow.up.arrow.down"
             )
+            .labelStyle(.iconOnly)
+            .frame(minWidth: 44, minHeight: 44)
         }
     }
 
@@ -444,7 +453,7 @@ private struct PlozziOSLibraryContentModeControl: View {
             get: { viewModel.contentMode },
             set: { mode in Task { await viewModel.setContentMode(mode) } }
         )) {
-            ForEach(LibraryContentMode.allCases, id: \.self) { mode in
+            ForEach(viewModel.availableContentModes, id: \.self) { mode in
                 Text(mode.displayName).tag(mode)
             }
         }
@@ -459,6 +468,7 @@ private struct PlozziOSLibraryItemCell: View {
     let index: Int
     let generation: Int
     let provider: any MediaProvider
+    let playlistOrigin: () -> VideoPlaylistPlaybackOrigin?
     let onAppear: () async -> Void
     let onDisappear: () -> Void
 
@@ -491,7 +501,8 @@ private struct PlozziOSLibraryItemCell: View {
                             appModel: appModel,
                             provider: provider,
                             item: item,
-                            originSourceAccountID: item.sourceAccountID
+                            originSourceAccountID: item.sourceAccountID,
+                            playlistOrigin: playlistOrigin()
                         )
                     } label: {
                         card

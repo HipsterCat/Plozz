@@ -62,7 +62,7 @@ public extension MediaLibrary {
         case .movie: return .movies
         case .series, .season, .episode: return .tvShows
         case .video: return .photos
-        case .folder, .collection, .unknown: return .mixed
+        case .folder, .collection, .playlist, .unknown: return .mixed
         }
     }
 

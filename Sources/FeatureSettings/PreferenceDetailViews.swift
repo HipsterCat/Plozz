@@ -772,6 +772,7 @@ struct PlaybackDetailView: View {
             ) {
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle("Autoplay next episode", isOn: $playback.settings.autoPlayNextEpisode)
+                    Toggle("Autoplay next playlist item", isOn: $playback.settings.autoPlayNextPlaylistItem)
                     Text(playback.settings.autoPlayNextEpisode
                          ? "The next episode starts when one finishes."
                          : "The player closes when an episode finishes.")

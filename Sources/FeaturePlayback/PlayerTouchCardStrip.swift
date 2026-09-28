@@ -20,6 +20,7 @@ import CoreUI
 @available(tvOS, unavailable, message: "tvOS drives this from PlayerControls, which owns the focus choreography")
 public struct PlayerTouchCardStrip: View {
     private let model: PlayerControlsModel
+    private let player: PlayerViewModel?
     private let onRestart: () -> Void
     private let onNextEpisode: () -> Void
     private let onPreviousEpisode: () -> Void
@@ -60,11 +61,13 @@ public struct PlayerTouchCardStrip: View {
         model: PlayerControlsModel,
         availableSize: CGSize,
         isCardOpen: Binding<Bool>,
+        player: PlayerViewModel? = nil,
         onRestart: @escaping () -> Void,
         onNextEpisode: @escaping () -> Void,
         onPreviousEpisode: @escaping () -> Void
     ) {
         self.model = model
+        self.player = player
         self.availableSize = availableSize
         self._isCardOpen = isCardOpen
         self.onRestart = onRestart
@@ -145,6 +148,12 @@ public struct PlayerTouchCardStrip: View {
             if !model.infoCard.cast.isEmpty {
                 tab(.cast, title: Text(PlayerControls.Category.cast.title))
             }
+            if player?.episodeBrowser != nil {
+                tab(.episodes, title: Text(PlayerControls.Category.episodes.title))
+            }
+            if player?.playlistContext != nil {
+                tab(.playlist, title: Text(PlayerControls.Category.playlist.title))
+            }
             Spacer(minLength: 20)
         }
     }
@@ -184,6 +193,14 @@ public struct PlayerTouchCardStrip: View {
                     isCardOpen: true,
                     revealClock: .easeInOut(duration: 0.24)
                 )
+            case .episodes, .playlist:
+                if let player {
+                    PlayerSequencePanel(
+                        player: player,
+                        source: category == .playlist ? .playlist : .episodes,
+                        focus: $focus
+                    )
+                }
             default:
                 InfoPanelView(
                     model: model,

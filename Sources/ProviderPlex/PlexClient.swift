@@ -963,6 +963,28 @@ public struct PlexClient: Sendable {
             .MediaContainer.Metadata ?? []
     }
 
+    func videoPlaylists() async throws -> [PlexMetadata] {
+        let endpoint = Endpoint(
+            path: "/playlists",
+            queryItems: [URLQueryItem(name: "playlistType", value: "video")],
+            headers: headers
+        )
+        return try await decode(PlexMediaContainerResponse.self, endpoint)
+            .MediaContainer.Metadata ?? []
+    }
+
+    func videoPlaylistItems(ratingKey: String, start: Int, size: Int) async throws -> PlexMediaContainer {
+        let endpoint = Endpoint(
+            path: "/playlists/\(ratingKey)/items",
+            queryItems: [
+                URLQueryItem(name: "X-Plex-Container-Start", value: String(start)),
+                URLQueryItem(name: "X-Plex-Container-Size", value: String(size))
+            ],
+            headers: headers
+        )
+        return try await decode(PlexMediaContainerResponse.self, endpoint).MediaContainer
+    }
+
     /// `GET /playlists/{id}/items` — a playlist's tracks, in playlist order.
     func playlistItems(ratingKey: String) async throws -> [PlexMetadata] {
         let endpoint = Endpoint(path: "/playlists/\(ratingKey)/items", headers: headers)

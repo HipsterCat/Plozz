@@ -733,6 +733,23 @@ public struct JellyfinClient: Sendable {
         return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
     }
 
+    func videoPlaylistCandidates(userID: String, start: Int, limit: Int) async throws -> ItemsResponse {
+        let endpoint = Endpoint(
+            path: "/Users/\(userID)/Items",
+            queryItems: [
+                URLQueryItem(name: "IncludeItemTypes", value: "Playlist"),
+                URLQueryItem(name: "Recursive", value: "true"),
+                URLQueryItem(name: "StartIndex", value: String(start)),
+                URLQueryItem(name: "Limit", value: String(limit)),
+                URLQueryItem(name: "SortBy", value: "SortName"),
+                URLQueryItem(name: "SortOrder", value: "Ascending"),
+                URLQueryItem(name: "EnableTotalRecordCount", value: "true")
+            ],
+            headers: authHeaders
+        )
+        return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)
+    }
+
     func collectionScopeItems(
         userID: String, parentID: String, recursive: Bool, start: Int, limit: Int
     ) async throws -> ItemsResponse {
@@ -1396,14 +1413,19 @@ public struct JellyfinClient: Sendable {
     }
 
     /// `GET /Playlists/{id}/Items` — a playlist's tracks in playlist order.
-    func playlistItems(userID: String, playlistID: String) async throws -> ItemsResponse {
+    func playlistItems(
+        userID: String, playlistID: String, start: Int? = nil, limit: Int? = nil
+    ) async throws -> ItemsResponse {
+        var query = [
+            URLQueryItem(name: "UserId", value: userID),
+            URLQueryItem(name: "Fields", value: "Genres,PrimaryImageAspectRatio"),
+            URLQueryItem(name: "EnableTotalRecordCount", value: "true")
+        ]
+        if let start { query.append(URLQueryItem(name: "StartIndex", value: String(start))) }
+        if let limit { query.append(URLQueryItem(name: "Limit", value: String(limit))) }
         let endpoint = Endpoint(
             path: "/Playlists/\(playlistID)/Items",
-            queryItems: [
-                URLQueryItem(name: "UserId", value: userID),
-                URLQueryItem(name: "Fields", value: "Genres,PrimaryImageAspectRatio"),
-                URLQueryItem(name: "EnableTotalRecordCount", value: "true")
-            ],
+            queryItems: query,
             headers: authHeaders
         )
         return try await http.decode(ItemsResponse.self, from: endpoint, baseURL: baseURL)

@@ -136,6 +136,220 @@ final class PlayerViewModelEOFTests: XCTestCase {
         await viewModel.stop()
     }
 
+    func testPlaylistOrderOverridesEpisodeAutoplayAtNaturalEnd() async {
+        let first = MediaItem(id: "first", title: "First", kind: .episode, seriesID: "series", seasonID: "season")
+        let second = MediaItem(id: "second", title: "Second", kind: .movie)
+        let request = PlaybackRequest(
+            item: first, streamURL: URL(string: "https://example.test/first.m3u8")!
+        )
+        let provider = RecordingPlaybackProvider(request: request, playlistMembers: [first, second])
+        let origin = VideoPlaylistPlaybackOrigin(
+            playlistID: "playlist", accountID: "account", index: 0, totalCount: 2,
+            item: first.taggingSource("account")
+        )
+        let context = VideoPlaylistPlaybackContext(origin: origin, provider: provider)
+        let engine = SpyVideoEngine()
+        let viewModel = PlayerViewModel(
+            provider: provider, itemID: first.id, episodeItem: first,
+            playbackSettings: .init(autoPlayNextEpisode: false, autoPlayNextPlaylistItem: true),
+            engineFactory: EngineFactory(makeNative: { _ in engine }),
+            neighborResolver: { (nil, second) },
+            playlistContext: context
+        )
+        await viewModel.load()
+        engine.onEnded?()
+        for _ in 0..<100 where viewModel.pendingPlaylistSelection == nil {
+            await Task.yield()
+        }
+        XCTAssertEqual(viewModel.pendingPlaylistSelection?.index, 1)
+        XCTAssertEqual(viewModel.pendingPlaylistSelection?.item.id, second.id)
+        XCTAssertEqual(viewModel.pendingPlaylistSelection?.item.sourceAccountID, "account")
+        XCTAssertNil(viewModel.pendingNextEpisode)
+        XCTAssertFalse(viewModel.shouldDismiss)
+        await viewModel.stop()
+    }
+
+    func testPlaylistAutoplayOffDoesNotFallThroughToEpisodeAutoplay() async {
+        let first = MediaItem(id: "first", title: "First", kind: .episode, seriesID: "series", seasonID: "season")
+        let next = MediaItem(id: "second", title: "Second", kind: .episode)
+        let request = PlaybackRequest(
+            item: first, streamURL: URL(string: "https://example.test/first.m3u8")!
+        )
+        let provider = RecordingPlaybackProvider(request: request, playlistMembers: [first, next])
+        let context = VideoPlaylistPlaybackContext(
+            origin: .init(playlistID: "playlist", accountID: "account", index: 0, totalCount: 2,
+                          item: first.taggingSource("account")),
+            provider: provider
+        )
+        let engine = SpyVideoEngine()
+        let viewModel = PlayerViewModel(
+            provider: provider, itemID: first.id, episodeItem: first,
+            playbackSettings: .init(autoPlayNextEpisode: true, autoPlayNextPlaylistItem: false),
+            engineFactory: EngineFactory(makeNative: { _ in engine }),
+            neighborResolver: { (nil, next) },
+            playlistContext: context
+        )
+        await viewModel.load()
+        engine.onEnded?()
+        XCTAssertTrue(viewModel.shouldDismiss)
+        XCTAssertNil(viewModel.pendingNextEpisode)
+        XCTAssertNil(viewModel.pendingPlaylistSelection)
+        await viewModel.stop()
+    }
+
+    func testPlaylistContextPagesByIndexSoRepeatedMembersKeepTheirPositions() async throws {
+        let repeated = MediaItem(id: "repeat", title: "Repeated", kind: .movie)
+        let entries = (0..<50).map { index in
+            index == 24 || index == 25
+                ? repeated
+                : MediaItem(id: "\(index)", title: "Movie \(index)", kind: .movie)
+        }
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: repeated, streamURL: URL(string: "https://example.test/repeat.m3u8")!
+            ),
+            playlistMembers: entries
+        )
+        let context = VideoPlaylistPlaybackContext(
+            origin: .init(
+                playlistID: "playlist", accountID: "account", index: 0,
+                totalCount: entries.count, item: entries[0].taggingSource("account")
+            ),
+            provider: provider
+        )
+        let seeded = try await context.item(at: 0)
+        let initialRequests = await provider.playlistMemberRequests
+        let firstRepeat = try await context.item(at: 24)
+        let secondRepeat = try await context.item(at: 25)
+        let pageRequests = await provider.playlistMemberRequests
+        XCTAssertEqual(seeded?.id, "0")
+        XCTAssertEqual(initialRequests, 0)
+        XCTAssertEqual(firstRepeat?.id, "repeat")
+        XCTAssertEqual(secondRepeat?.id, "repeat")
+        XCTAssertEqual(pageRequests, 1)
+        XCTAssertEqual(context.items[24]?.sourceAccountID, "account")
+        context.advance(to: 25)
+        XCTAssertEqual(context.currentIndex, 25)
+        let last = try await context.item(at: 49)
+        let finalRequests = await provider.playlistMemberRequests
+        XCTAssertEqual(last?.id, "49")
+        XCTAssertEqual(finalRequests, 2)
+    }
+
+    func testPlaylistContextFillsShortServerPagesWithoutReordering() async throws {
+        let entries = (0..<28).map {
+            MediaItem(id: "\($0)", title: "Movie \($0)", kind: .movie)
+        }
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: entries[0], streamURL: URL(string: "https://example.test/movie.m3u8")!
+            ),
+            playlistMembers: entries,
+            playlistPageLimit: 7
+        )
+        let context = VideoPlaylistPlaybackContext(
+            origin: .init(
+                playlistID: "playlist", accountID: "account", index: 0,
+                totalCount: entries.count, item: entries[0].taggingSource("account")
+            ),
+            provider: provider
+        )
+        let nearEnd = try await context.item(at: 23)
+        let last = try await context.item(at: 27)
+        let requests = await provider.playlistMemberRequests
+        XCTAssertEqual(nearEnd?.id, "23")
+        XCTAssertEqual(last?.id, "27")
+        XCTAssertEqual(requests, 5)
+        XCTAssertEqual(context.items[27]?.sourceAccountID, "account")
+    }
+
+    func testEpisodeBrowserShowsLooseEpisodesAndAvoidsRepeatedDiscovery() async {
+        let episode = MediaItem(
+            id: "loose", title: "Special", kind: .episode,
+            seriesID: "series", seasonID: nil
+        ).taggingSource("account")
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: episode, streamURL: URL(string: "https://example.test/special.m3u8")!
+            ),
+            childrenByParent: ["series": [episode]]
+        )
+        let browser = PlayerEpisodeBrowser(item: episode, provider: provider)
+        await browser.loadIfNeeded()
+        await browser.loadIfNeeded()
+        XCTAssertTrue(browser.seasons.isEmpty)
+        XCTAssertEqual(browser.episodes.map(\.id), ["loose"])
+        XCTAssertEqual(browser.episodes.first?.sourceAccountID, "account")
+        let requests = await provider.childRequests
+        XCTAssertEqual(requests, 1)
+    }
+
+    func testPlaylistPageFailureCanRetryWithoutLosingSeededSelection() async throws {
+        let first = MediaItem(id: "first", title: "First", kind: .movie)
+        let second = MediaItem(id: "second", title: "Second", kind: .movie)
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: first, streamURL: URL(string: "https://example.test/first.m3u8")!
+            ),
+            playlistMembers: [first, second]
+        )
+        let context = VideoPlaylistPlaybackContext(
+            origin: .init(
+                playlistID: "playlist", accountID: "account", index: 0,
+                totalCount: 2, item: first.taggingSource("account")
+            ),
+            provider: provider
+        )
+        await provider.setPlaylistMemberError(.serverUnreachable)
+        do {
+            _ = try await context.item(at: 1)
+            XCTFail("A failed page must not look like the end of the playlist")
+        } catch {
+            XCTAssertEqual(error as? AppError, .serverUnreachable)
+        }
+        XCTAssertEqual(context.loadError, .serverUnreachable)
+        XCTAssertEqual(context.items[0]?.id, "first")
+        await provider.setPlaylistMemberError(nil)
+        context.retry()
+        let recovered = try await context.item(at: 1)
+        let requestCount = await provider.playlistMemberRequests
+        XCTAssertEqual(recovered?.id, second.id)
+        XCTAssertNil(context.loadError)
+        XCTAssertEqual(requestCount, 2)
+    }
+
+    func testPlaylistAutoplayFailureDismissesEndedPlayerInsteadOfFreezing() async {
+        let first = MediaItem(id: "first", title: "First", kind: .movie)
+        let request = PlaybackRequest(
+            item: first, streamURL: URL(string: "https://example.test/first.m3u8")!
+        )
+        let provider = RecordingPlaybackProvider(request: request)
+        await provider.setPlaylistMemberError(.serverUnreachable)
+        let context = VideoPlaylistPlaybackContext(
+            origin: .init(
+                playlistID: "playlist", accountID: "account", index: 0,
+                totalCount: 2, item: first.taggingSource("account")
+            ),
+            provider: provider
+        )
+        let engine = SpyVideoEngine()
+        let viewModel = PlayerViewModel(
+            provider: provider, itemID: first.id,
+            playbackSettings: .init(autoPlayNextPlaylistItem: true),
+            engineFactory: EngineFactory(makeNative: { _ in engine }),
+            playlistContext: context
+        )
+        await viewModel.load()
+        engine.onEnded?()
+        for _ in 0..<100 where !viewModel.shouldDismiss {
+            await Task.yield()
+        }
+        XCTAssertTrue(viewModel.shouldDismiss)
+        XCTAssertEqual(context.loadError, .serverUnreachable)
+        XCTAssertNil(viewModel.pendingNextEpisode)
+        await viewModel.stop()
+    }
+
     func testBackgroundAudioPreferenceReachesEngineAndPreservesPlatformDefault() async {
         let publisher = VideoNowPlayingPublisherSpy()
         let (viewModel, engine, _) = makeViewModel(
@@ -1238,6 +1452,12 @@ private actor RecordingPlaybackProvider: MediaProvider {
 
     private let request: PlaybackRequest
     private let requestsByItemID: [String: PlaybackRequest]
+    private let playlistMembers: [MediaItem]
+    private let playlistPageLimit: Int?
+    private let childrenByParent: [String: [MediaItem]]
+    private var playlistMemberError: AppError?
+    private(set) var playlistMemberRequests = 0
+    private(set) var childRequests = 0
     private(set) var reports: [Report] = []
     private(set) var playbackInfoCallCount = 0
     private(set) var itemCallCount = 0
@@ -1245,11 +1465,17 @@ private actor RecordingPlaybackProvider: MediaProvider {
     init(
         request: PlaybackRequest,
         kind: ProviderKind = .jellyfin,
-        requestsByItemID: [String: PlaybackRequest] = [:]
+        requestsByItemID: [String: PlaybackRequest] = [:],
+        playlistMembers: [MediaItem] = [],
+        playlistPageLimit: Int? = nil,
+        childrenByParent: [String: [MediaItem]] = [:]
     ) {
         self.request = request
         self.kind = kind
         self.requestsByItemID = requestsByItemID
+        self.playlistMembers = playlistMembers
+        self.playlistPageLimit = playlistPageLimit
+        self.childrenByParent = childrenByParent
     }
 
     func libraries() async throws -> [MediaLibrary] { [] }
@@ -1259,10 +1485,25 @@ private actor RecordingPlaybackProvider: MediaProvider {
         itemCallCount += 1
         return requestsByItemID[id]?.item ?? request.item
     }
-    func children(of itemID: String) async throws -> [MediaItem] { [] }
+    func children(of itemID: String) async throws -> [MediaItem] {
+        childRequests += 1
+        return childrenByParent[itemID] ?? []
+    }
     func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
         MediaPage(items: [], startIndex: page.startIndex, totalCount: 0)
     }
+    func videoPlaylistMembers(of playlistID: String, page: PageRequest) async throws -> MediaPage {
+        playlistMemberRequests += 1
+        if let playlistMemberError { throw playlistMemberError }
+        return MediaPage(
+            items: Array(
+                playlistMembers.dropFirst(page.startIndex)
+                    .prefix(min(page.limit, playlistPageLimit ?? page.limit))
+            ),
+            startIndex: page.startIndex, totalCount: playlistMembers.count
+        )
+    }
+    func setPlaylistMemberError(_ error: AppError?) { playlistMemberError = error }
     func search(query: String, limit: Int) async throws -> [MediaItem] { [] }
     func playbackInfo(for itemID: String) async throws -> PlaybackRequest {
         playbackInfoCallCount += 1

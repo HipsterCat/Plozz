@@ -53,6 +53,47 @@ final class LibraryCollectionModeTests: XCTestCase {
         }
     }
 
+    func testVideoPlaylistModeIsCapabilityGatedAndKeepsAccountAndSortSeparate() async {
+        let unsupported = model(LibraryModeProvider(supportsPlaylists: false))
+        XCTAssertEqual(unsupported.availableContentModes, [.titles, .collections])
+        await unsupported.setContentMode(.playlists)
+        XCTAssertEqual(unsupported.contentMode, .titles)
+
+        let provider = LibraryModeProvider(supportsPlaylists: true)
+        let model = model(provider)
+        XCTAssertEqual(model.availableContentModes, [.titles, .collections, .playlists])
+        await model.setContentMode(.playlists)
+        XCTAssertEqual(model.item(at: 0)?.kind, .playlist)
+        XCTAssertEqual(model.item(at: 0)?.sourceAccountID, "owning-account")
+        XCTAssertEqual(model.availableSortFields, [.name])
+        XCTAssertEqual(CollectionBrowseRoute(item: model.item(at: 0)!)?.kind, .playlist)
+        let requests = await provider.requests
+        XCTAssertEqual(requests.map(\.mode), [.playlists])
+        XCTAssertEqual(requests.map(\.containerID), ["real-library"])
+        await model.setContentMode(.titles)
+        XCTAssertEqual(model.item(at: 0)?.kind, .movie)
+    }
+
+    func testPlaylistMemberGridPreservesOrderAcrossShortPagesAndHidesSort() async {
+        let provider = LibraryModeProvider(supportsPlaylists: true)
+        let model = LibraryBrowseViewModel(
+            provider: provider, containerID: "playlist-0", containerKind: .playlist,
+            pageSize: 2, defaults: defaults, sourceAccountID: "owning-account",
+            browseScope: .playlistMembers
+        )
+        XCTAssertEqual(model.availableContentModes, [.titles])
+        XCTAssertTrue(model.availableSortFields.isEmpty)
+        await model.loadFirstPage()
+        XCTAssertEqual(model.totalCount, 3)
+        XCTAssertEqual(model.item(at: 0)?.id, "first")
+        XCTAssertEqual(model.item(at: 1)?.id, "second")
+        XCTAssertEqual(model.item(at: 1)?.sourceAccountID, "owning-account")
+        await model.itemAppeared(at: 2)
+        XCTAssertEqual(model.item(at: 2)?.id, "third")
+        await model.setContentMode(.playlists)
+        XCTAssertEqual(model.contentMode, .titles)
+    }
+
     func testNativeCollectionRootKeepsExistingItemsBrowseAndNeverAddsAnotherMode() async {
         let provider = LibraryModeProvider()
         let model = model(provider, kind: .collection)
@@ -339,6 +380,7 @@ private actor LibraryModeProvider: MediaProvider, CapabilityReporting {
     nonisolated let capabilities: ProviderCapability
     private let titleCount: Int
     private let collectionCount: Int
+    private let supportsPlaylists: Bool
     private var holds: Set<Key> = []
     private var held: [Key: CheckedContinuation<Void, Never>] = [:]
     private var heldObservers: [Key: CheckedContinuation<Void, Never>] = [:]
@@ -350,13 +392,16 @@ private actor LibraryModeProvider: MediaProvider, CapabilityReporting {
         kind: ProviderKind = .jellyfin,
         accountID: String = "server",
         supportsCollections: Bool = true,
+        supportsPlaylists: Bool = false,
         titleCount: Int = 40,
         collectionCount: Int = 12
     ) {
         self.kind = kind
         self.titleCount = titleCount
         self.collectionCount = collectionCount
-        capabilities = supportsCollections ? [.video, .libraryCollections] : [.video]
+        self.supportsPlaylists = supportsPlaylists
+        let base: ProviderCapability = supportsCollections ? [.video, .libraryCollections] : [.video]
+        capabilities = supportsPlaylists ? base.union(.videoPlaylists) : base
         session = UserSession(
             server: MediaServer(
                 id: accountID, name: "Server",
@@ -390,6 +435,21 @@ private actor LibraryModeProvider: MediaProvider, CapabilityReporting {
         try await response(.collections, containerID: libraryID, kind: .collection, page: page)
     }
 
+    func videoPlaylists(in libraryID: String, page: PageRequest) async throws -> MediaPage {
+        try await response(.playlists, containerID: libraryID, kind: .playlist, page: page)
+    }
+
+    func videoPlaylistMembers(of playlistID: String, page: PageRequest) async throws -> MediaPage {
+        let ids = ["first", "second", "third"]
+        let index = min(page.startIndex, ids.count)
+        return MediaPage(
+            items: Array(ids.dropFirst(index).prefix(1)).map {
+                MediaItem(id: $0, title: $0, kind: .movie)
+            },
+            startIndex: page.startIndex, totalCount: ids.count
+        )
+    }
+
     func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
         try await response(.titles, containerID: containerID, kind: kind, page: page)
     }
@@ -409,8 +469,8 @@ private actor LibraryModeProvider: MediaProvider, CapabilityReporting {
             }
         }
         if fails { throw AppError.serverUnreachable }
-        let total = mode == .collections ? collectionCount : titleCount
-        let prefix = mode == .collections ? "collection" : "title"
+        let total = mode == .collections ? collectionCount : mode == .playlists ? 3 : titleCount
+        let prefix = mode == .collections ? "collection" : mode == .playlists ? "playlist" : "title"
         let start = min(page.startIndex, total)
         let end = min(start + page.limit, total)
         return MediaPage(

@@ -695,6 +695,7 @@ private struct PlozziOSPlayerTransport: View {
                 model: viewModel.controls,
                 availableSize: availableSize,
                 isCardOpen: $isCardOpen,
+                player: viewModel,
                 onRestart: { viewModel.requestSeek(to: 0, origin: "restart") },
                 onNextEpisode: { viewModel.playNextEpisode() },
                 onPreviousEpisode: {

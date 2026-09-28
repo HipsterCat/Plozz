@@ -96,6 +96,41 @@ final class AggregatedLibraryCollectionTests: XCTestCase {
         XCTAssertTrue(requests.isEmpty)
     }
 
+    func testVideoPlaylistsFromSupportedSourcesKeepAccountIdentityAndDoNotMergeTitles() async throws {
+        let playlist = MediaItem(id: "12", title: "Watch in order", kind: .playlist)
+        let first = CollectionSourceFixture(collections: [], playlists: [playlist])
+        let second = CollectionSourceFixture(collections: [], playlists: [playlist])
+        let aggregate = aggregate(first, second)
+        XCTAssertTrue(aggregate.capabilities.contains(.videoPlaylists))
+        let page = try await aggregate.videoPlaylists(in: "merged", page: PageRequest(limit: 1))
+        let next = try await aggregate.videoPlaylists(
+            in: "merged", page: PageRequest(startIndex: 1, limit: 1)
+        )
+        XCTAssertEqual(page.totalCount, 2)
+        XCTAssertEqual(page.items.map(\.sourceAccountID), ["first"])
+        XCTAssertEqual(next.items.map(\.sourceAccountID), ["second"])
+        let firstRequests = await first.playlistRequests
+        let secondRequests = await second.playlistRequests
+        XCTAssertEqual(firstRequests.map(\.libraryID), ["first-library"])
+        XCTAssertEqual(secondRequests.map(\.libraryID), ["second-library"])
+    }
+
+    func testMixedCapabilitySkipsUnsupportedSourceAndDeduplicatesSameAccountLibrary() async throws {
+        let playlist = MediaItem(id: "12", title: "Watch in order", kind: .playlist)
+        let source = CollectionSourceFixture(collections: [], playlists: [playlist])
+        let unsupported = CollectionSourceFixture(collections: [])
+        let aggregate = AggregatedLibraryProvider(sources: [
+            .init(accountID: "owner", containerID: "movies", provider: source),
+            .init(accountID: "owner", containerID: "shows", provider: source),
+            .init(accountID: "other", containerID: "other", provider: unsupported)
+        ])
+        let page = try await aggregate.videoPlaylists(in: "merged", page: PageRequest())
+        XCTAssertEqual(page.items.map(\.id), ["12"])
+        XCTAssertEqual(page.items.first?.sourceAccountID, "owner")
+        let unsupportedRequests = await unsupported.playlistRequests
+        XCTAssertEqual(unsupportedRequests.count, 0)
+    }
+
     @MainActor
     func testMergedMovieLibraryOffersModeButAllLibrariesDoesNot() {
         let provider = aggregate(CollectionSourceFixture(collections: []))
@@ -126,13 +161,17 @@ private actor CollectionSourceFixture: MediaProvider, CapabilityReporting {
         userID: "viewer", userName: "Viewer", deviceID: "device", accessToken: "fixture"
     )
     private var collectionItems: [MediaItem]
+    private let playlistItems: [MediaItem]
     private var failure: AppError?
     private(set) var collectionRequests: [(libraryID: String, page: PageRequest)] = []
+    private(set) var playlistRequests: [(libraryID: String, page: PageRequest)] = []
     private(set) var titleRequests = 0
 
-    init(collections: [MediaItem], supportsCollections: Bool = true) {
+    init(collections: [MediaItem], supportsCollections: Bool = true, playlists: [MediaItem]? = nil) {
         collectionItems = collections
-        capabilities = supportsCollections ? [.libraryCollections] : []
+        playlistItems = playlists ?? []
+        let collectionCapability: ProviderCapability = supportsCollections ? [.libraryCollections] : []
+        capabilities = playlists == nil ? collectionCapability : collectionCapability.union(.videoPlaylists)
     }
 
     func replaceCollections(_ items: [MediaItem]) { collectionItems = items }
@@ -144,6 +183,15 @@ private actor CollectionSourceFixture: MediaProvider, CapabilityReporting {
         return MediaPage(
             items: Array(collectionItems.dropFirst(page.startIndex).prefix(page.limit)),
             startIndex: page.startIndex, totalCount: collectionItems.count
+        )
+    }
+
+    func videoPlaylists(in libraryID: String, page: PageRequest) async throws -> MediaPage {
+        playlistRequests.append((libraryID, page))
+        if let failure { throw failure }
+        return MediaPage(
+            items: Array(playlistItems.dropFirst(page.startIndex).prefix(page.limit)),
+            startIndex: page.startIndex, totalCount: playlistItems.count
         )
     }
 

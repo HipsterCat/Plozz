@@ -14,6 +14,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
     public let credentialRevision: CredentialRevision
     let client: JellyfinClient
     let collectionLibraryCache = MediaBrowserCollectionLibraryCache()
+    let videoPlaylistCache = VideoPlaylistSnapshotCache()
     let liveTVLeases = JellyfinLiveTVLeaseStore()
     let themeArchiveResolver: @Sendable (String?) async -> URL?
     private let authenticatedStreamProber: (any AuthenticatedHTTPStreamProbing)?
@@ -797,6 +798,139 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
             startIndex: page.startIndex,
             totalCount: response.TotalRecordCount
                 ?? (page.startIndex + count + (count == page.limit && count > 0 ? 1 : 0))
+        )
+    }
+
+    public func videoPlaylists(in libraryID: String, page: PageRequest) async throws -> MediaPage {
+        guard !libraryID.isEmpty, page.startIndex >= 0, page.limit > 0 else {
+            throw AppError.invalidResponse
+        }
+        let key = "\(libraryID)#\(page.sort.direction.rawValue)"
+        let snapshot = try await videoPlaylistCache.snapshot(
+            key: key, refresh: page.startIndex == 0
+        ) {
+            let batchSize = 200
+            var candidates: [BaseItemDto] = []
+            var start = 0
+            var seenCandidates = Set<String>()
+            repeat {
+                try Task.checkCancellation()
+                let response = try await self.client.videoPlaylistCandidates(
+                    userID: self.session.userID, start: start, limit: batchSize
+                )
+                guard response.Items.allSatisfy({ $0.Type == "Playlist" }),
+                      response.Items.allSatisfy({ !$0.Id.isEmpty && seenCandidates.insert($0.Id).inserted }),
+                      !response.Items.isEmpty
+                        || response.TotalRecordCount.map({ start >= $0 }) != false
+                else { throw AppError.invalidResponse }
+                candidates += response.Items.filter { $0.MediaType?.caseInsensitiveCompare("Audio") != .orderedSame }
+                start += response.Items.count
+                if response.Items.isEmpty || response.TotalRecordCount.map({ start >= $0 }) == true {
+                    break
+                }
+            } while true
+            guard !candidates.isEmpty else { return [] }
+
+            var libraryIDs = Set<String>()
+            start = 0
+            repeat {
+                try Task.checkCancellation()
+                let response = try await self.client.collectionScopeItems(
+                    userID: self.session.userID, parentID: libraryID,
+                    recursive: true, start: start, limit: batchSize
+                )
+                guard response.Items.allSatisfy({ !$0.Id.isEmpty && libraryIDs.insert($0.Id).inserted }),
+                      !response.Items.isEmpty
+                        || response.TotalRecordCount.map({ start >= $0 }) != false
+                else { throw AppError.invalidResponse }
+                start += response.Items.count
+                if response.Items.isEmpty || response.TotalRecordCount.map({ start >= $0 }) == true {
+                    break
+                }
+            } while true
+            guard !libraryIDs.isEmpty else { return [] }
+
+            let client = self.client
+            let userID = self.session.userID
+            let memberIDs = libraryIDs
+            let matches = try await withThrowingTaskGroup(of: (Int, Bool).self) { group in
+                var nextIndex = min(4, candidates.count)
+                for index in 0..<nextIndex {
+                    let id = candidates[index].Id
+                    group.addTask {
+                        (index, try await Self.playlist(
+                            id: id, containsAny: memberIDs, client: client, userID: userID
+                        ))
+                    }
+                }
+                var found = Set<Int>()
+                for try await (index, matching) in group {
+                    if matching { found.insert(index) }
+                    if nextIndex < candidates.count {
+                        let index = nextIndex
+                        let id = candidates[index].Id
+                        nextIndex += 1
+                        group.addTask {
+                            (index, try await Self.playlist(
+                                id: id, containsAny: memberIDs, client: client, userID: userID
+                            ))
+                        }
+                    }
+                }
+                return found
+            }
+            let scoped = candidates.enumerated().compactMap { index, dto in
+                matches.contains(index) ? self.map(item: dto).taggingLibrary(libraryID) : nil
+            }
+            return scoped.sorted {
+                let comparison = $0.title.localizedStandardCompare($1.title)
+                return page.sort.direction == .ascending
+                    ? comparison == .orderedAscending : comparison == .orderedDescending
+            }
+        }
+        return MediaPage(
+            items: Array(snapshot.dropFirst(page.startIndex).prefix(page.limit)),
+            startIndex: page.startIndex, totalCount: snapshot.count
+        )
+    }
+
+    private static func playlist(
+        id: String, containsAny libraryIDs: Set<String>, client: JellyfinClient, userID: String
+    ) async throws -> Bool {
+        guard !id.isEmpty else { throw AppError.invalidResponse }
+        var start = 0
+        var previousIDs: [String]?
+        while true {
+            try Task.checkCancellation()
+            let response = try await client.playlistItems(
+                userID: userID, playlistID: id, start: start, limit: 100
+            )
+            if response.Items.contains(where: { libraryIDs.contains($0.Id) }) { return true }
+            let ids = response.Items.map(\.Id)
+            guard ids.allSatisfy({ !$0.isEmpty }),
+                  (response.TotalRecordCount != nil || ids != previousIDs),
+                  !response.Items.isEmpty || response.TotalRecordCount.map({ start >= $0 }) != false
+            else { throw AppError.invalidResponse }
+            previousIDs = ids
+            start += response.Items.count
+            if response.Items.isEmpty || response.TotalRecordCount.map({ start >= $0 }) == true { return false }
+        }
+    }
+
+    public func videoPlaylistMembers(of playlistID: String, page: PageRequest) async throws -> MediaPage {
+        guard !playlistID.isEmpty, page.startIndex >= 0, page.limit > 0 else {
+            throw AppError.invalidResponse
+        }
+        let response = try await client.playlistItems(
+            userID: session.userID, playlistID: playlistID,
+            start: page.startIndex, limit: page.limit
+        )
+        return MediaPage(
+            items: response.Items.map(map(item:)),
+            startIndex: page.startIndex,
+            totalCount: response.TotalRecordCount
+                ?? (page.startIndex + response.Items.count
+                    + (response.Items.count == page.limit && !response.Items.isEmpty ? 1 : 0))
         )
     }
 
@@ -2360,6 +2494,7 @@ public struct JellyfinProvider: MediaProvider, SeriesResumeProviding, SeriesIden
         case "Video", "Trailer", "Audio": return .video
         case "CollectionFolder", "Folder": return .folder
         case "BoxSet": return .collection
+        case "Playlist": return .playlist
         default: return .unknown
         }
     }

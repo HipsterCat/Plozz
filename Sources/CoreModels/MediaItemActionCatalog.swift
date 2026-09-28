@@ -209,7 +209,7 @@ public enum MediaItemActionCatalog {
         switch item.kind {
         case .movie, .episode, .video:
             return (item.resumePosition ?? 0) > 0
-        case .season, .series, .folder, .collection, .unknown:
+        case .season, .series, .folder, .collection, .playlist, .unknown:
             return false
         }
     }
@@ -217,7 +217,7 @@ public enum MediaItemActionCatalog {
     private static func isWatchStateEligible(_ item: MediaItem) -> Bool {
         switch item.kind {
         case .movie, .episode, .video, .season, .series: return true
-        case .folder, .collection, .unknown: return false
+        case .folder, .collection, .playlist, .unknown: return false
         }
     }
 
@@ -228,7 +228,7 @@ public enum MediaItemActionCatalog {
     private static func isWatchlistEligible(_ item: MediaItem) -> Bool {
         switch item.kind {
         case .movie, .series: return true
-        case .video, .episode, .season, .folder, .collection, .unknown:
+        case .video, .episode, .season, .folder, .collection, .playlist, .unknown:
             return false
         }
     }

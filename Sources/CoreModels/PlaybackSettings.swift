@@ -75,6 +75,11 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
     /// disturbing the other.
     public var autoPlayNextEpisode: Bool
 
+    /// Whether a natural end advances to the next entry in the active video
+    /// playlist. Independent of episode autoplay; playlist order takes priority
+    /// when the viewer launched playback from a playlist.
+    public var autoPlayNextPlaylistItem: Bool
+
     /// Whether the "Up Next" card is offered during an episode's closing credits
     /// when a next episode is queued. ON (default) shows a spoiler-safe card with
     /// the next episode's thumbnail so you can advance with one press (and it
@@ -139,6 +144,7 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
         syncWatchAcrossServers: Bool = true,
         seekWithoutPausing: Bool = true,
         autoPlayNextEpisode: Bool = true,
+        autoPlayNextPlaylistItem: Bool = true,
         showUpNextCard: Bool = true,
         upNextLeadSeconds: Int = 30,
         audioLanguagePreference: AudioLanguagePreference = .original,
@@ -158,6 +164,7 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
         self.syncWatchAcrossServers = syncWatchAcrossServers
         self.seekWithoutPausing = seekWithoutPausing
         self.autoPlayNextEpisode = autoPlayNextEpisode
+        self.autoPlayNextPlaylistItem = autoPlayNextPlaylistItem
         self.showUpNextCard = showUpNextCard
         self.upNextLeadSeconds = upNextLeadSeconds
         self.audioLanguagePreference = audioLanguagePreference
@@ -197,6 +204,7 @@ public extension PlaybackSettings {
         case syncWatchAcrossServers
         case seekWithoutPausing
         case autoPlayNextEpisode
+        case autoPlayNextPlaylistItem
         case showUpNextCard
         case upNextLeadSeconds
         case audioLanguagePreference
@@ -266,6 +274,9 @@ public extension PlaybackSettings {
         self.autoPlayNextEpisode =
             (try? container.decodeIfPresent(Bool.self, forKey: .autoPlayNextEpisode))
             .flatMap { $0 } ?? defaults.autoPlayNextEpisode
+        self.autoPlayNextPlaylistItem =
+            (try? container.decodeIfPresent(Bool.self, forKey: .autoPlayNextPlaylistItem))
+            .flatMap { $0 } ?? defaults.autoPlayNextPlaylistItem
         self.showUpNextCard =
             (try? container.decodeIfPresent(Bool.self, forKey: .showUpNextCard))
             .flatMap { $0 } ?? defaults.showUpNextCard
@@ -318,6 +329,7 @@ public extension PlaybackSettings {
         try container.encode(syncWatchAcrossServers, forKey: .syncWatchAcrossServers)
         try container.encode(seekWithoutPausing, forKey: .seekWithoutPausing)
         try container.encode(autoPlayNextEpisode, forKey: .autoPlayNextEpisode)
+        try container.encode(autoPlayNextPlaylistItem, forKey: .autoPlayNextPlaylistItem)
         try container.encode(showUpNextCard, forKey: .showUpNextCard)
         try container.encode(upNextLeadSeconds, forKey: .upNextLeadSeconds)
         try container.encode(audioLanguagePreference, forKey: .audioLanguagePreference)

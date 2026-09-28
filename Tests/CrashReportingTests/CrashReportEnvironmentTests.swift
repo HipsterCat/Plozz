@@ -30,6 +30,13 @@ final class CrashReportEnvironmentTests: XCTestCase {
         XCTAssertEqual(context.build, "3322")
     }
 
+    func testScreenCategoryNeverIncludesLibraryIdentityOrFreeFormContext() {
+        XCTAssertEqual(CrashReportScreen(context: "library:server-id#Movies"), .library)
+        XCTAssertEqual(CrashReportScreen(context: "allLibraries"), .library)
+        XCTAssertEqual(CrashReportScreen(context: "detail"), .detail)
+        XCTAssertEqual(CrashReportScreen(context: "Watching a private title"), .unknown)
+    }
+
     // MARK: - Reporter lifecycle
 
     @MainActor
@@ -37,6 +44,7 @@ final class CrashReportEnvironmentTests: XCTestCase {
         var isActive = false
         var starts: [String] = []
         var updates: [String] = []
+        var screens: [CrashReportScreen] = []
         var stops = 0
 
         func start(context: CrashReportContext) {
@@ -44,6 +52,7 @@ final class CrashReportEnvironmentTests: XCTestCase {
             starts.append(context.environment)
         }
         func update(context: CrashReportContext) { updates.append(context.environment) }
+        func setScreen(_ screen: CrashReportScreen) { screens.append(screen) }
         func stop() {
             isActive = false
             stops += 1
@@ -74,6 +83,7 @@ final class CrashReportEnvironmentTests: XCTestCase {
         XCTAssertEqual(spy.starts, ["testflight"])
         XCTAssertEqual(spy.updates, ["testflight"])
         XCTAssertEqual(spy.stops, 0)
+        XCTAssertEqual(spy.screens, [.startup])
     }
 
     @MainActor
@@ -87,6 +97,7 @@ final class CrashReportEnvironmentTests: XCTestCase {
 
         controller.apply(enabled: true, context: context("production"))
         XCTAssertEqual(spy.starts, ["production", "production"])
+        XCTAssertEqual(spy.screens, [.startup, .startup])
     }
 
     /// A build with no DSN must stay inert no matter what consent says.
@@ -97,5 +108,24 @@ final class CrashReportEnvironmentTests: XCTestCase {
         controller.apply(enabled: true, context: context("production"))
         XCTAssertTrue(spy.starts.isEmpty)
         XCTAssertFalse(spy.isActive)
+        XCTAssertTrue(spy.screens.isEmpty)
+    }
+
+    @MainActor
+    func testScreenChangesAreOptInAndLatestCategoryIsRestoredOnRestart() {
+        let spy = SpyReporter()
+        let controller = CrashReportingController(reporter: spy, isConfigured: true)
+
+        controller.setScreen(.home)
+        controller.apply(enabled: false, context: context("testflight"))
+        XCTAssertTrue(spy.screens.isEmpty)
+        controller.apply(enabled: true, context: context("testflight"))
+        controller.setScreen(.library)
+        controller.setScreen(.library)
+        controller.apply(enabled: false, context: context("testflight"))
+        controller.setScreen(.detail)
+        controller.apply(enabled: true, context: context("testflight"))
+
+        XCTAssertEqual(spy.screens, [.home, .library, .detail])
     }
 }

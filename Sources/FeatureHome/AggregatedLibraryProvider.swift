@@ -65,11 +65,17 @@ public final class AggregatedLibraryProvider: MediaProvider, CapabilityReporting
     private let sources: [AggregatedLibrarySource]
     private let cache: Cache
     private let collectionCache: Cache
+    private let videoPlaylistCache = VideoPlaylistSnapshotCache()
 
     public var capabilities: ProviderCapability {
-        sources.allSatisfy {
+        var result: ProviderCapability = []
+        if sources.allSatisfy({
             ($0.provider as? any CapabilityReporting)?.capabilities.contains(.libraryCollections) == true
-        } ? [.libraryCollections] : []
+        }) { result.insert(.libraryCollections) }
+        if sources.contains(where: {
+            ($0.provider as? any CapabilityReporting)?.capabilities.contains(.videoPlaylists) == true
+        }) { result.insert(.videoPlaylists) }
+        return result
     }
 
     private enum BrowseContent: Equatable, Sendable {
@@ -485,6 +491,58 @@ public final class AggregatedLibraryProvider: MediaProvider, CapabilityReporting
         guard capabilities.contains(.libraryCollections) else { throw AppError.notFound }
         guard page.startIndex >= 0, page.limit > 0 else { throw AppError.invalidResponse }
         return try await loadPage(kind: .collection, page: page, content: .collections, cache: collectionCache)
+    }
+
+    public func videoPlaylists(in libraryID: String, page: PageRequest) async throws -> MediaPage {
+        guard page.startIndex >= 0, page.limit > 0, capabilities.contains(.videoPlaylists) else {
+            throw AppError.invalidResponse
+        }
+        let key = "\(libraryID)#\(page.sort.direction.rawValue)"
+        let snapshot = try await videoPlaylistCache.snapshot(
+            key: key, refresh: page.startIndex == 0
+        ) {
+            let eligible = self.sources.filter {
+                ($0.provider as? any CapabilityReporting)?.capabilities.contains(.videoPlaylists) == true
+            }
+            let grouped = try await withThrowingTaskGroup(of: (Int, [MediaItem]).self) { group in
+                for (index, source) in eligible.enumerated() {
+                    group.addTask {
+                        var start = 0
+                        var items: [MediaItem] = []
+                        while true {
+                            try Task.checkCancellation()
+                            let page = try await source.provider.videoPlaylists(
+                                in: source.containerID,
+                                page: PageRequest(startIndex: start, limit: 100, sort: page.sort)
+                            )
+                            guard page.startIndex == start,
+                                  !page.items.isEmpty || start >= page.totalCount else {
+                                throw AppError.invalidResponse
+                            }
+                            items += page.items.map { $0.taggingSource(source.accountID) }
+                            start += page.items.count
+                            if start >= page.totalCount { break }
+                        }
+                        return (index, items)
+                    }
+                }
+                var results: [(Int, [MediaItem])] = []
+                for try await result in group { results.append(result) }
+                return results.sorted { $0.0 < $1.0 }
+            }
+            var seen = Set<String>()
+            return grouped.flatMap(\.1).filter {
+                seen.insert("\($0.sourceAccountID ?? "")#\($0.id)").inserted
+            }.sorted {
+                let comparison = $0.title.localizedStandardCompare($1.title)
+                return page.sort.direction == .ascending
+                    ? comparison == .orderedAscending : comparison == .orderedDescending
+            }
+        }
+        return MediaPage(
+            items: Array(snapshot.dropFirst(page.startIndex).prefix(page.limit)),
+            startIndex: page.startIndex, totalCount: snapshot.count
+        )
     }
 
     private func loadPage(
