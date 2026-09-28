@@ -22,6 +22,10 @@ fallback when the user's server has no attached trailer.
   The compact logo above Seasons fits wholly inside its 200pt slot, including
   tall wordmarks; it does not use the full hero's flexible height allowance.
   This changes only artwork sizing, not season/episode focus geometry.
+  When pinned navigation hides on detail pages, horizontal rows draw through
+  the empty side gutter to the screen edge, including focused episode artwork.
+  The sidebar's mask changes without replacing the scroll view, preserving
+  browse position and restoring the normal feather when navigation returns.
 - **Library browsing** — `LibraryBrowseView` + `LibraryBrowseViewModel`
   for the per-library grid behind a Home row. Video libraries can switch
   among Browse, Collections, and Playlists when their provider advertises

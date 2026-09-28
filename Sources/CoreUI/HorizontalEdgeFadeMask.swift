@@ -151,11 +151,18 @@ public struct PinnedSidebarLeadingFade<Content: View>: View {
                 // card and its shadow stay whole while cards scrolling out still
                 // dissolve smoothly before they pass under the sidebar.
                 .mask {
-                    // The mask starts at the screen's safe area, and the first
-                    // card opens the gutter's width past it.
-                    PinnedSidebarFeather(start: inset)
-                        .padding(.vertical, -verticalOverhang)
-                        .padding(.trailing, -verticalOverhang)
+                    Group {
+                        if inset > 0 {
+                            PinnedSidebarFeather(start: inset)
+                        } else {
+                            // Detail pages have no sidebar to cover. Keep the
+                            // scroll view intact, but let its artwork reach the
+                            // screen edge instead of clipping at the safe area.
+                            Color.black.ignoresSafeArea(.container, edges: .horizontal)
+                        }
+                    }
+                    .padding(.vertical, -verticalOverhang)
+                    .padding(.trailing, -verticalOverhang)
                 }
         } else {
             content
