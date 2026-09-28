@@ -50,6 +50,11 @@ fallback when the user's server has no attached trailer.
   handle the TMDb → YouTube fallback when the server has no attached
   trailer, by routing through `ProviderTrailers.YouTubeTrailerProvider`
   to surface a real `PlaybackRequest`.
+  Background hero trailers use one shared player. Detail departure stops its
+  trailer unless the router is returning directly to a rendered, unreceded Home
+  hero showing the same title with trailers enabled. Library, Watchlist, pushed
+  grids, and covered detail pages cannot retain background audio. A cancelled
+  or no-longer-frontmost detail resolver cannot start a trailer after departure.
 
 ## Showcase
 

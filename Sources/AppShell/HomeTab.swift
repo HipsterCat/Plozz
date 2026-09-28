@@ -195,6 +195,13 @@ struct HomeTab: View {
         }
     }
 
+    private func preservesHeroTrailerOnReturn(itemID: String) -> Bool {
+        guard case .home = root else { return false }
+        return isActiveTab && path.isEmpty && playRequest == nil && resumePrompt == nil
+            && heroBackground.settings.homeTrailerEnabled
+            && heroRuntime.trailerReturnItemID == itemID
+    }
+
     /// The stack's root screen, chosen by ``root``. Home, Watchlist, one library's
     /// grid, or the combined grid over every library all sit under the same set of
     /// pushed destinations below.
@@ -538,7 +545,7 @@ struct HomeTab: View {
                     },
                     stackDepth: detailStackDepth,
                     heroTrailerResolver: makeHeroTrailerResolver(),
-                    preservesHeroTrailerOnDisappear: true,
+                    preservesHeroTrailerOnDisappear: preservesHeroTrailerOnReturn,
                     initialEpisode: route.episode,
                     seerConnected: seer.isConfigured,
                     requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
@@ -573,7 +580,7 @@ struct HomeTab: View {
                     },
                     stackDepth: detailStackDepth,
                     heroTrailerResolver: makeHeroTrailerResolver(),
-                    preservesHeroTrailerOnDisappear: true,
+                    preservesHeroTrailerOnDisappear: preservesHeroTrailerOnReturn,
                     initialSeasonID: route.season.id,
                     seerConnected: seer.isConfigured,
                     requestAvailabilityRefresh: { await seer.requestAvailability(for: $0) },
@@ -1142,7 +1149,7 @@ struct HomeTab: View {
             },
             stackDepth: detailStackDepth,
             heroTrailerResolver: makeHeroTrailerResolver(),
-            preservesHeroTrailerOnDisappear: true,
+            preservesHeroTrailerOnDisappear: preservesHeroTrailerOnReturn,
             initialSeasonID: item.seasonID,
             seerConnected: seer.isConfigured,
             onRequest: { item in

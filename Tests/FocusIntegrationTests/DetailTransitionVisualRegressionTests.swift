@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreModels
 @testable import CoreUI
 @testable import FeatureHome
@@ -10,6 +11,133 @@ import XCTest
 
 @MainActor
 final class DetailTransitionVisualRegressionTests: XCTestCase {
+    func testProductionDetailStopsTrailerAfterReturningToNonHeroRoot() async throws {
+        try await withTrailerFixture { model, video in
+            model.path.append(1)
+            try await waitUntil { model.detail.state.value?.childrenLoaded == true }
+            try await Task.sleep(for: .milliseconds(500))
+            model.trailer.play(itemID: model.provider.show.id, resolvedURL: video, muted: false)
+            try await waitUntil { model.trailer.isPlaying && model.trailer.player.rate == 1 }
+            model.path.removeAll()
+            try await Task.sleep(for: .seconds(1))
+            XCTAssertNil(model.trailer.currentItemID, "A library/Watchlist root has no hero to receive the trailer.")
+            XCTAssertNil(model.trailer.player.currentItem)
+            XCTAssertEqual(model.trailer.player.rate, 0)
+        }
+    }
+
+    func testProductionDetailPreservesSamePlayerOnlyForMatchingHomeReturn() async throws {
+        try await withTrailerFixture { model, video in
+            model.path.append(1)
+            try await waitUntil { model.detail.state.value?.childrenLoaded == true }
+            try await Task.sleep(for: .milliseconds(500))
+            model.trailer.play(itemID: model.provider.show.id, resolvedURL: video, muted: false)
+            try await waitUntil { model.trailer.isPlaying && model.trailer.player.rate == 1 }
+            let original = try XCTUnwrap(model.trailer.player.currentItem)
+            // Change eligibility after the detail was constructed.
+            model.trailerReturnItemID = model.provider.show.id
+            model.path.removeAll()
+            try await Task.sleep(for: .seconds(1))
+            XCTAssertTrue(model.trailer.player.currentItem === original)
+            XCTAssertEqual(model.trailer.currentItemID, model.provider.show.id)
+            XCTAssertEqual(model.trailer.player.rate, 1)
+        }
+    }
+
+    func testProductionDetailRejectsLateTrailerAfterExitOrCover() async throws {
+        for cover in [false, true] {
+            try await withTrailerFixture { model, video in
+                let pending = PendingDetailTrailer()
+                defer { pending.complete(nil) }
+                model.background.settings.detailMode = .trailer
+                model.resolveTrailer = { _ in await pending.resolve() }
+                model.path.append(1)
+                try await waitUntil { pending.started }
+                if cover {
+                    model.path.append(2)
+                    try await waitUntil { model.stackDepth.depth == 2 }
+                } else {
+                    model.path.removeAll()
+                    try await waitUntil { model.stackDepth.depth == 0 }
+                }
+                pending.complete(HeroTrailerSource(
+                    ownerItemID: model.provider.show.id, trailerItemID: "local-trailer",
+                    url: video, duration: 30
+                ))
+                try await Task.sleep(for: .milliseconds(500))
+                XCTAssertNil(model.trailer.currentItemID, "Late resolution must not play behind another page.")
+                XCTAssertNil(model.trailer.player.currentItem)
+            }
+        }
+    }
+
+    func testProductionDetailCleanupDoesNotStopNewerTitleTrailer() async throws {
+        try await withTrailerFixture { model, video in
+            model.path.append(1)
+            try await waitUntil { model.detail.state.value?.childrenLoaded == true }
+            try await Task.sleep(for: .milliseconds(500))
+            model.trailer.play(itemID: "new-title", resolvedURL: video, muted: false)
+            try await waitUntil { model.trailer.isPlaying }
+            let replacement = try XCTUnwrap(model.trailer.player.currentItem)
+            model.path.removeAll()
+            try await Task.sleep(for: .seconds(1))
+            XCTAssertTrue(model.trailer.player.currentItem === replacement)
+            XCTAssertEqual(model.trailer.currentItemID, "new-title")
+        }
+    }
+
+    func testHomeTrailerReturnEligibilityTracksActualHeroVisibility() async throws {
+        let scene = try await activeScene()
+        let model = TransitionShowModel(provider: TransitionShowProvider(artwork: try await seedArtwork()))
+        model.background.settings.homeTrailerEnabled = true
+        let host = UIHostingController(rootView: TrailerReturnHomeRoot(model: model))
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            model.trailer.stop()
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        try await waitUntil { model.trailerReturnItemID == model.provider.show.id }
+        model.path.append(1)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(model.trailerReturnItemID, model.provider.show.id, "Covering Home retains the return receiver.")
+        model.homeRecede.isReceded = true
+        try await waitUntil { model.trailerReturnItemID == nil }
+        model.homeRecede.isReceded = false
+        try await waitUntil { model.trailerReturnItemID == model.provider.show.id }
+        model.background.settings.homeTrailerEnabled = false
+        try await waitUntil { model.trailerReturnItemID == nil }
+        model.background.settings.homeTrailerEnabled = true
+        try await waitUntil { model.trailerReturnItemID == model.provider.show.id }
+        model.showsHomeHero = false
+        try await waitUntil { model.trailerReturnItemID == nil }
+    }
+
+    private func withTrailerFixture(
+        _ run: (TransitionShowModel, URL) async throws -> Void
+    ) async throws {
+        let scene = try await activeScene()
+        let provider = TransitionShowProvider(artwork: try await seedArtwork())
+        let model = TransitionShowModel(provider: provider)
+        let host = UIHostingController(rootView: TransitionShowRoot(model: model))
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            model.trailer.stop()
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        let video = try await makeTrailerVideo()
+        try await run(model, video)
+    }
+
     func testThumbnailIsGoneBeforeLandingWhileDestinationArtworkExpands() async throws {
         let scene = try await activeScene()
         let fixture = FocusReturnFixture(scene: scene)
@@ -689,6 +817,42 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
             .first { $0.activationState == .foregroundActive })
     }
 
+    private func makeTrailerVideo() async throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("detail-trailer-\(UUID()).mov")
+        addTeardownBlock { try FileManager.default.removeItem(at: url) }
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: 160, AVVideoHeightKey: 96
+        ])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: 160,
+            kCVPixelBufferHeightKey as String: 96
+        ])
+        writer.add(input)
+        XCTAssertTrue(writer.startWriting())
+        writer.startSession(atSourceTime: .zero)
+        var buffer: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(
+            kCFAllocatorDefault, 160, 96, kCVPixelFormatType_32BGRA, nil, &buffer
+        ), kCVReturnSuccess)
+        let pixels = try XCTUnwrap(buffer)
+        CVPixelBufferLockBaseAddress(pixels, [])
+        if let address = CVPixelBufferGetBaseAddress(pixels) {
+            memset(address, 0x80, CVPixelBufferGetDataSize(pixels))
+        }
+        CVPixelBufferUnlockBaseAddress(pixels, [])
+        for frame in 0..<30 {
+            try await waitUntil { input.isReadyForMoreMediaData || writer.status == .failed }
+            XCTAssertTrue(adaptor.append(pixels, withPresentationTime: CMTime(value: Int64(frame), timescale: 1)))
+        }
+        input.markAsFinished()
+        await writer.finishWriting()
+        XCTAssertEqual(writer.status, .completed)
+        return url
+    }
+
     private func verticalScroll(in view: UIView) -> UIScrollView? {
         if let scroll = view as? UIScrollView,
            scroll.bounds.height > 700 {
@@ -834,11 +998,34 @@ private struct RealPosterReturnPage: View {
     }
 }
 
+@MainActor
+private final class PendingDetailTrailer {
+    private(set) var started = false
+    private var continuation: CheckedContinuation<HeroTrailerSource?, Never>?
+
+    func resolve() async -> HeroTrailerSource? {
+        await withCheckedContinuation {
+            continuation = $0
+            started = true
+        }
+    }
+
+    func complete(_ source: HeroTrailerSource?) {
+        continuation?.resume(returning: source)
+        continuation = nil
+    }
+}
+
 @MainActor @Observable
 private final class TransitionShowModel {
     let provider: TransitionShowProvider
     let detail: ItemDetailViewModel
     let trailer = HeroTrailerController()
+    var trailerReturnItemID: String?
+    let stackDepth = DetailStackDepth()
+    let homeRecede = HomeHeroRecedeModel()
+    var showsHomeHero = true
+    @ObservationIgnored var resolveTrailer: HeroTrailerResolving = { _ in nil }
     let background = HeroBackgroundSettingsModel(store: InMemoryHeroBackgroundSettingsStore(
         HeroBackgroundSettings(homeTrailerEnabled: false, detailMode: .off)
     ))
@@ -861,6 +1048,28 @@ private final class TransitionShowModel {
     }
 }
 
+private struct TrailerReturnHomeRoot: View {
+    @Bindable var model: TransitionShowModel
+    @Namespace private var focusScope
+
+    var body: some View {
+        if model.showsHomeHero {
+            HomeHeroView(
+                items: [model.provider.show], settings: .default,
+                backgroundSettings: model.background.settings,
+                trailerController: model.trailer, trailerResolver: { _ in nil },
+                isFrontmost: model.path.isEmpty, spoilerSettings: .default,
+                navigationStyle: .rail, focusScope: focusScope,
+                onSelect: { _ in }, onPlay: { _ in },
+                onTrailerReturnItemChanged: { model.trailerReturnItemID = $0 },
+                recedeModel: model.homeRecede
+            )
+        } else {
+            Color.clear
+        }
+    }
+}
+
 private struct TransitionShowRoot: View {
     @Bindable var model: TransitionShowModel
     var focusStyle: CardFocusStyle = .system
@@ -871,16 +1080,27 @@ private struct TransitionShowRoot: View {
             Tab("Home", systemImage: "house") {
                 NavigationStack(path: $model.path) {
                     Button("Open show") { model.path.append(1) }
-                        .navigationDestination(for: Int.self) { _ in
-                            ItemDetailView(
-                                viewModel: model.detail, onPlay: { _ in }, onSelectChild: { _ in },
-                                initialEpisode: directEntry ? model.provider.episode : nil
-                            )
+                        .navigationDestination(for: Int.self) { destination in
+                            if destination == 2 {
+                                Button("Covered detail") {}
+                                    .onAppear { model.stackDepth.pageAppeared() }
+                                    .onDisappear { model.stackDepth.pageDismissed() }
+                            } else {
+                                ItemDetailView(
+                                    viewModel: model.detail, onPlay: { _ in }, onSelectChild: { _ in },
+                                    stackDepth: model.stackDepth,
+                                    heroTrailerResolver: model.resolveTrailer,
+                                    preservesHeroTrailerOnDisappear: {
+                                        model.path.isEmpty && model.trailerReturnItemID == $0
+                                    },
+                                    initialEpisode: directEntry ? model.provider.episode : nil
+                                )
                                 .environment(model.trailer)
                                 .environment(model.background)
                                 .environment(\.plozzCardFocusStyle, focusStyle)
                                 .environment(\.plozzPinnedSidebarActive, true)
                                 .environment(\.plozzNavigationContentInset, 0)
+                            }
                         }
                 }
             }
