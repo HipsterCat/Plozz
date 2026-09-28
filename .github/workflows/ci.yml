@@ -195,6 +195,8 @@ jobs:
           lane: hosted-focus
 
       - name: Run app-hosted episode focus tests
+        env:
+          PLOZZ_FOCUS_TEST_TIMEOUT: '2400'
         run: tools/run-focus-tests.sh
 
       - name: Save successful trusted caches
