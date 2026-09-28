@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreModels
 import XCTest
 @testable import FeaturePlayback
 
@@ -93,6 +94,65 @@ final class SubtitleOverlayGeometryTests: XCTestCase {
         let controls = CGRect(x: 60, y: 840, width: 1800, height: 240)
         let lift = SubtitleOverlayGeometry.upwardOffset(for: subtitle, avoiding: controls, in: bounds, clearance: 24)
         XCTAssertEqual(subtitle.maxY + lift, controls.minY - 24, accuracy: 0.001)
+    }
+
+    func testAnchoredCuePinsTheCornerItsAlignmentNames() {
+        let video = CGRect(x: 0, y: 100, width: 1000, height: 500)
+        let text = CGSize(width: 200, height: 40)
+        func origin(_ alignment: SubtitleAlignment) -> CGPoint {
+            SubtitleOverlayGeometry.anchoredOrigin(
+                anchor: CGPoint(x: 0.73, y: 0.1), alignment: alignment,
+                contentSize: text, videoRect: video, limits: video
+            )
+        }
+        XCTAssertEqual(origin(.topLeft), CGPoint(x: 730, y: 150))
+        XCTAssertEqual(origin(.topCenter), CGPoint(x: 630, y: 150))
+        XCTAssertEqual(origin(.topRight), CGPoint(x: 530, y: 150))
+        XCTAssertEqual(origin(.bottomCenter), CGPoint(x: 630, y: 110))
+    }
+
+    func testAnchoredCueStaysInsideTheLimits() {
+        let video = CGRect(x: 0, y: 0, width: 1000, height: 500)
+        let limits = video.insetBy(dx: 50, dy: 25)
+        let origin = SubtitleOverlayGeometry.anchoredOrigin(
+            anchor: CGPoint(x: 0.95, y: 0.95), alignment: .topLeft,
+            contentSize: CGSize(width: 200, height: 80), videoRect: video, limits: limits
+        )
+        XCTAssertEqual(origin, CGPoint(x: 750, y: 395))
+    }
+
+    func testLeftPinnedRollUpRowsWrapBeforeTheSafeEdgeSoTheLeftEdgeNeverMoves() {
+        let video = CGRect(x: 0, y: 0, width: 1000, height: 500)
+        let limits = video.insetBy(dx: 50, dy: 25)
+        let anchor = CGPoint(x: 0.1, y: 0.1)
+        let wrap = SubtitleOverlayGeometry.anchoredWrapWidth(
+            anchor: anchor, alignment: .topLeft, preferred: 900,
+            videoRect: video, limits: limits, minimum: 250
+        )
+        XCTAssertEqual(wrap, 850)
+        // A short first row and the longest row the wrap allows start at the same x.
+        for width in [CGFloat(200), wrap] {
+            let origin = SubtitleOverlayGeometry.anchoredOrigin(
+                anchor: anchor, alignment: .topLeft,
+                contentSize: CGSize(width: width, height: 80), videoRect: video, limits: limits
+            )
+            XCTAssertEqual(origin.x, 100)
+        }
+    }
+
+    func testCentredCueWrapsToTwiceItsRoomAndRightPinnedToItsLeftRoom() {
+        let video = CGRect(x: 0, y: 0, width: 1000, height: 500)
+        let limits = video.insetBy(dx: 50, dy: 25)
+        func wrap(_ x: CGFloat, _ alignment: SubtitleAlignment) -> CGFloat {
+            SubtitleOverlayGeometry.anchoredWrapWidth(
+                anchor: CGPoint(x: x, y: 0.1), alignment: alignment, preferred: 920,
+                videoRect: video, limits: limits, minimum: 250
+            )
+        }
+        XCTAssertEqual(wrap(0.73, .topCenter), 440)
+        XCTAssertEqual(wrap(0.73, .topRight), 680)
+        // Too close to the edge for readable text: keep the minimum and clamp instead.
+        XCTAssertEqual(wrap(0.97, .topLeft), 250)
     }
 
     func testAspectFitVideoRectUsesFullPortraitWidth() throws {
