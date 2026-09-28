@@ -116,6 +116,32 @@ final class ShowcaseNavigationTests: XCTestCase {
         XCTAssertEqual(app.staticTexts["Recently Added"].frame.minY, secondHeading.minY, accuracy: 0.5)
     }
 
+    func testEnteringFromSidebarPinsTheRowWhereReturningDoes() throws {
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = ["--production-home-fixture", "--pinned-home", "--immersive-home"]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        let heading = app.staticTexts["Continue Watching"]
+        XCTAssertTrue(heading.waitForExistence(timeout: 20))
+        let resting = heading.frame.minY
+        if focusedCard(in: app).elementType == .button { XCUIRemote.shared.press(.left) }
+        XCUIRemote.shared.press(.right)
+        Thread.sleep(forTimeInterval: 1)
+        let entered = heading.frame.minY
+        XCUIRemote.shared.press(.down)
+        Thread.sleep(forTimeInterval: 1)
+        XCUIRemote.shared.press(.up)
+        Thread.sleep(forTimeInterval: 1)
+        let returned = heading.frame.minY
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "showcase-entered-from-sidebar"
+        shot.lifetime = .keepAlways
+        add(shot)
+        XCTAssertEqual(entered, returned, accuracy: 0.5, "resting=\(resting) entered=\(entered) returned=\(returned)")
+        XCTAssertEqual(resting, returned, accuracy: 0.5, "resting=\(resting) entered=\(entered) returned=\(returned)")
+    }
+
     func testHorizontalNavigationHitches() throws {
         try measureNavigation(vertical: false)
     }

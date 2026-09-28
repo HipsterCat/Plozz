@@ -545,6 +545,11 @@ struct FocusHeroNativeScrollPosition: UIViewRepresentable {
         private var wasScrollEnabled = true
         private var rowID: String?
         private var y: CGFloat = 0
+        private var offsetObservation: NSKeyValueObservation?
+        /// Set while this view's own animated move is under way, so its
+        /// in-between offsets are not mistaken for drift.
+        private var settling = false
+        private var settleGeneration = 0
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
@@ -563,15 +568,34 @@ struct FocusHeroNativeScrollPosition: UIViewRepresentable {
             self.y = y
             bindScrollView()
             guard changed else { return }
-            scroller?.setContentOffset(
-                CGPoint(x: 0, y: y),
-                animated: animated && !UIAccessibility.isReduceMotionEnabled
-            )
+            let animates = animated && !UIAccessibility.isReduceMotionEnabled
+            settling = animates
+            settleGeneration += 1
+            if animates {
+                let generation = settleGeneration
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                    guard let self, self.settleGeneration == generation else { return }
+                    self.settling = false
+                    self.holdOffset()
+                }
+            }
+            scroller?.setContentOffset(CGPoint(x: 0, y: y), animated: animates)
         }
 
         func stop() {
+            offsetObservation = nil
             scroller?.isScrollEnabled = wasScrollEnabled
             scroller = nil
+        }
+
+        /// The focus engine scrolls a focused card into view even with scrolling
+        /// disabled. Entering the pinned row from the sidebar leaves the pinned
+        /// row unchanged, so nothing else would put the rows back.
+        private func holdOffset() {
+            guard !settling, let scroller else { return }
+            let target = CGPoint(x: 0, y: y)
+            guard abs(scroller.contentOffset.y - target.y) > 0.5 || scroller.contentOffset.x != 0 else { return }
+            scroller.setContentOffset(target, animated: false)
         }
 
         private func bindScrollView() {
@@ -590,6 +614,18 @@ struct FocusHeroNativeScrollPosition: UIViewRepresentable {
                         // owns scrolling. Do not disable the nested horizontal rails.
                         scrollView.isScrollEnabled = false
                         scrollView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+                        offsetObservation = scrollView.observe(\.contentOffset) { [weak self] _, _ in
+                            MainActor.assumeIsolated {
+                                guard let self else { return }
+                                if self.settling {
+                                    if abs((self.scroller?.contentOffset.y ?? 0) - self.y) <= 0.5 {
+                                        self.settling = false
+                                    }
+                                    return
+                                }
+                                self.holdOffset()
+                            }
+                        }
                     } else {
                         scrollView.isScrollEnabled = false
                     }
