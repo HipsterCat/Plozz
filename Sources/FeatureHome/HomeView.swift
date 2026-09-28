@@ -1470,7 +1470,7 @@ public struct HomeView: View {
                     showsSeriesArtwork: visibility.continueWatchingShowsSeriesArtwork,
                     onFocusEntered: reporter.entered,
                     onFocusChange: onFocusChange,
-                    onCardFocused: { _ in reporter.entered() },
+                    onCardFocused: reporter.cardFocused,
                     playsOnSelect: true,
                     onSelect: onPlayItem
                 )
@@ -1482,7 +1482,7 @@ public struct HomeView: View {
                     spoilerSettings: spoilerSettings,
                     onFocusEntered: reporter.entered,
                     onFocusChange: onFocusChange,
-                    onCardFocused: { _ in reporter.entered() },
+                    onCardFocused: reporter.cardFocused,
                     pendingRemovalIDs: pendingWatchlistRemovalIDs(
                         for: row.items,
                         revision: watchlistIntentRevision
@@ -1499,7 +1499,7 @@ public struct HomeView: View {
                     spoilerSettings: spoilerSettings,
                     onFocusEntered: reporter.entered,
                     onFocusChange: onFocusChange,
-                    onCardFocused: { _ in reporter.entered() },
+                    onCardFocused: reporter.cardFocused,
                     onSelect: onSelectItem
                 )
             case .libraries:
@@ -1522,7 +1522,7 @@ public struct HomeView: View {
                 spoilerSettings: spoilerSettings,
                 onFocusEntered: reporter.entered,
                 onFocusChange: onFocusChange,
-                onCardFocused: { _ in reporter.entered() },
+                onCardFocused: reporter.cardFocused,
                 onSelect: onSelectItem
             )
         case .section(let section):
@@ -1533,7 +1533,7 @@ public struct HomeView: View {
                 spoilerSettings: spoilerSettings,
                 onFocusEntered: reporter.entered,
                 onFocusChange: onFocusChange,
-                onCardFocused: { _ in reporter.entered() },
+                onCardFocused: reporter.cardFocused,
                 playsOnSelect: section.style == .landscape,
                 onSelect: section.style == .landscape ? onPlayItem : onSelectItem
             )

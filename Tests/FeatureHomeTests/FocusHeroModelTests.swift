@@ -63,6 +63,14 @@ final class FocusHeroModelTests: XCTestCase {
             "The details end above the pinned row, not a taller one elsewhere"
         )
         model.activate(watchlist, in: rows)
+        XCTAssertEqual(
+            model.slotTop(in: rows, rowSpacing: 28),
+            max(FocusHeroLayout.lowestSlotTop, bottom - 406),
+            "The details leave with the rows, not ahead of them"
+        )
+        model.advanceRows(to: 0.5)
+        XCTAssertEqual(model.slotTop(in: rows, rowSpacing: 28), max(FocusHeroLayout.lowestSlotTop, bottom - 473))
+        model.advanceRows(to: 1)
         XCTAssertEqual(model.slotTop(in: rows, rowSpacing: 28), max(FocusHeroLayout.lowestSlotTop, bottom - 540))
     }
 
@@ -97,14 +105,16 @@ final class FocusHeroModelTests: XCTestCase {
         XCTAssertTrue(horizontal.isScrollEnabled, "Pinning must not disable native horizontal navigation.")
 
         position.move(to: 840, rowID: "posters")
-        XCTAssertEqual(viewport.requests.last?.point.y, 840)
-        XCTAssertEqual(viewport.requests.last?.animated, !UIAccessibility.isReduceMotionEnabled)
-        let count = viewport.requests.count
         position.move(to: 840, rowID: "posters")
-        XCTAssertEqual(viewport.requests.count, count, "Environment updates must not cancel an in-flight scroll.")
+        settle(viewport, at: 840)
+        if !UIAccessibility.isReduceMotionEnabled {
+            XCTAssertGreaterThan(viewport.steps.count, 3, "Row changes move a frame at a time on the rows' spring.")
+            XCTAssertEqual(viewport.steps, viewport.steps.sorted(), "An unchanged destination does not restart the move.")
+        }
 
         position.move(to: 340, rowID: "continue")
-        XCTAssertEqual(viewport.requests.last?.point.y, 340, "Reversals retarget the same native viewport.")
+        settle(viewport, at: 340)
+        XCTAssertEqual(viewport.contentOffset.y, 340, "Reversals retarget the same native viewport.")
         position.move(to: 356, rowID: "continue")
         XCTAssertEqual(viewport.contentOffset.y, 356)
         XCTAssertEqual(viewport.requests.last?.animated, false, "New measurements preserve the settled anchor.")
@@ -112,8 +122,21 @@ final class FocusHeroModelTests: XCTestCase {
         XCTAssertTrue(viewport.isScrollEnabled, "Teardown restores the viewport's original policy.")
     }
 
+    private func settle(_ viewport: UIScrollView, at y: CGFloat) {
+        // Long enough for the spring to finish, past the last sub-pixel steps
+        // the viewport rounds away.
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(viewport.contentOffset.y, y)
+    }
+
     private final class ScrollRecorder: UIScrollView {
         var requests: [(point: CGPoint, animated: Bool)] = []
+        /// Offsets set directly, as the row spring does a frame at a time.
+        var steps: [CGFloat] = []
+
+        override var contentOffset: CGPoint {
+            didSet { steps.append(contentOffset.y) }
+        }
 
         override func setContentOffset(_ contentOffset: CGPoint, animated: Bool) {
             requests.append((contentOffset, animated))

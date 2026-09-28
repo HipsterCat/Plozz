@@ -30,6 +30,9 @@ struct FocusHeroRow: Identifiable {
 struct FocusHeroRowReporter {
     /// Focus reached the row. Synchronous, so the row pins without waiting.
     let entered: () -> Void
+    /// Focus landed on a card. Synchronous, so a row change updates the hero
+    /// with the row instead of after the settle delay.
+    let cardFocused: (MediaItem) -> Void
     let focusedItem: (MediaItem) -> Void
     let focusedLibrary: (AggregatedLibrary) -> Void
 }
@@ -58,9 +61,15 @@ enum FocusHeroLayout {
     static let activeTitleLift: CGFloat = 20
     /// How much of the screen's width the art takes.
     static let artWidthFraction: CGFloat = 2.0 / 3.0
-    /// The outgoing row fades through a broad band; its own mask removes any
-    /// remaining edge once the newly focused row has settled.
-    static let fadeBand: CGFloat = 64
+    /// The soft edge above the pinned row's title that a leaving row slides
+    /// under. Narrow, so that edge stays clear of the hero's details above it.
+    static let fadeBand: CGFloat = 24
+    /// The extra rise that carries a row above the pinned one clear of the
+    /// stack mask's edge: from its resting bottom, beside the pinned title,
+    /// past the fade band above it.
+    static let rowTuck: CGFloat = 110
+    /// Over how much of its own climb a leaving row gains that extra rise.
+    static let rowTuckRamp: CGFloat = 300
     /// Ignores sub-point measurement noise so a row settling can't re-lay itself out.
     static let measurementTolerance: CGFloat = 0.5
     /// Clear space between the hero's last line and the pinned row's title.
@@ -77,7 +86,11 @@ enum FocusHeroLayout {
     static let columnTopUnderTabBar: CGFloat = 150
     static let columnWidth: CGFloat = 900
     /// The heading, mask and hero settle independently of the native scroll animation.
-    static let rowAnimation = Animation.smooth(duration: 0.2)
+    static let rowSpringDuration: TimeInterval = 0.4
+    /// Row changes closer together than this are passing through: the hero
+    /// waits for the row focus stops on.
+    static let rowPassInterval: TimeInterval = 0.3
+    static let rowAnimation = Animation.smooth(duration: rowSpringDuration)
     /// Quick enough to read as immediate as focus moves card to card, but not a cut.
     static let foregroundAnimation = Animation.easeOut(duration: 0.15)
 
@@ -125,12 +138,29 @@ final class FocusHeroModel {
     /// The picture the focused card shows, which the backdrop avoids.
     private(set) var shownArtwork: [ArtworkReference] = []
     private(set) var movingForward = true
+    /// What the details block shows: the subject, except that it swaps outright
+    /// when the title changes with the row. The block slides with the row then,
+    /// and crossfading as it slides would show both titles at different heights.
+    private(set) var details: FocusHeroSubject?
+    private(set) var detailsSwapWithRow = false
     /// Row heights, the only thing measured. Positions are derived from them, so
     /// moving the rows can never change what was measured.
     private(set) var rowHeights: [String: CGFloat] = [:]
     /// Until the viewer focuses a title the hero stands in with the first row's
     /// first, and has to follow it as Home swaps cached rows for live ones.
     @ObservationIgnored private var hasFocusedTitle = false
+    /// When the pinned row last changed, and whether that change came hard on
+    /// the heels of another: moving quickly through rows, the hero holds its
+    /// title until the viewer stops, instead of rebuilding for every row passed.
+    @ObservationIgnored private var lastRowChange = -CFTimeInterval.infinity
+    @ObservationIgnored private var passingThrough = false
+    @ObservationIgnored private var pendingShow: DispatchWorkItem?
+    /// How far the rows have come on their way to the pinned row, 0...1, and
+    /// the pinned height they set out from. The edge above the pinned row and
+    /// the hero's details follow this rather than timing their own animation,
+    /// so they stay exactly in step with the rows.
+    private(set) var rowProgress: CGFloat = 1
+    @ObservationIgnored private var departureHeight: CGFloat = 0
 
     func activate(_ row: FocusHeroRow, in rows: [FocusHeroRow]) {
         // Compared with the recorded row, not the resolved one: before anything is
@@ -140,23 +170,52 @@ final class FocusHeroModel {
         let from = rows.firstIndex { $0.id == resolvedActiveRowID(in: rows) } ?? 0
         let to = rows.firstIndex { $0.id == row.id } ?? 0
         movingForward = to >= from
+        departureHeight = displayedHeight(in: rows)
+        rowProgress = UIAccessibility.isReduceMotionEnabled ? 1 : 0
+        let now = CACurrentMediaTime()
+        passingThrough = now - lastRowChange < FocusHeroLayout.rowPassInterval
+        lastRowChange = now
         withAnimation(FocusHeroLayout.rowAnimation) {
             activeRowID = row.id
         }
         HeroFocusDiagnostics.emit("FHOME activate \(from)->\(to) row=\(row.id)")
     }
 
-    func show(_ next: FocusHeroSubject, in row: FocusHeroRow) {
+    func show(_ next: FocusHeroSubject, in row: FocusHeroRow, withRow: Bool = false) {
         hasFocusedTitle = true
+        pendingShow?.cancel()
+        pendingShow = nil
+        let sinceRowChange = CACurrentMediaTime() - lastRowChange
+        if passingThrough, sinceRowChange < FocusHeroLayout.rowPassInterval {
+            // Shown once focus stops, outright, as a title that arrives with its row.
+            let work = DispatchWorkItem { [weak self] in
+                self?.pendingShow = nil
+                self?.apply(next, in: row, withRow: true)
+            }
+            pendingShow = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + FocusHeroLayout.rowPassInterval - sinceRowChange,
+                execute: work
+            )
+            return
+        }
+        apply(next, in: row, withRow: withRow)
+    }
+
+    private func apply(_ next: FocusHeroSubject, in row: FocusHeroRow, withRow: Bool) {
         guard next != subject else { return }
         if let item = next.item, let current = subject?.item,
            let from = row.itemIDs.firstIndex(of: current.stablePresentationID),
            let to = row.itemIDs.firstIndex(of: item.stablePresentationID) {
             movingForward = to >= from
         }
-        withAnimation(FocusHeroLayout.foregroundAnimation) {
+        // With a row change everything moves on the row's own timing, so the
+        // details keep pace with the rows and the edge they slide under.
+        withAnimation(withRow ? FocusHeroLayout.rowAnimation : FocusHeroLayout.foregroundAnimation) {
             shownArtwork = next.item.map(row.shownArtwork(for:)) ?? []
             subject = next
+            detailsSwapWithRow = withRow
+            details = next
         }
     }
 
@@ -170,6 +229,7 @@ final class FocusHeroModel {
                    $0.stablePresentationID == item.stablePresentationID
                }) {
                 subject = .item(current)
+                details = subject
                 shownArtwork = row.shownArtwork(for: current)
                 return
             }
@@ -178,6 +238,7 @@ final class FocusHeroModel {
         let row = rows.first { $0.id == resolvedActiveRowID(in: rows) } ?? rows.first
         shownArtwork = row.flatMap { row in row.leadItem.map(row.shownArtwork(for:)) } ?? []
         subject = row?.leadItem.map(FocusHeroSubject.item)
+        details = subject
     }
 
     func record(height: CGFloat, for rowID: String) {
@@ -202,6 +263,20 @@ final class FocusHeroModel {
         return rows.indices.contains(index) ? rowHeights[rows[index].id] ?? 0 : 0
     }
 
+    /// The pinned height as the rows show it right now: between the row left
+    /// and the row arriving, as far as the rows have come.
+    func displayedHeight(in rows: [FocusHeroRow]) -> CGFloat {
+        let arriving = activeHeight(in: rows)
+        guard rowProgress < 1 else { return arriving }
+        return departureHeight + (arriving - departureHeight) * rowProgress
+    }
+
+    func advanceRows(to progress: CGFloat) {
+        let clamped = min(1, max(0, progress))
+        guard clamped != rowProgress else { return }
+        rowProgress = clamped
+    }
+
     /// A row's top edge within the stack, from the heights above it.
     func top(ofRowAt index: Int, in rows: [FocusHeroRow], rowSpacing: CGFloat) -> CGFloat {
         rows.prefix(index).reduce(0) { total, row in
@@ -215,7 +290,7 @@ final class FocusHeroModel {
     func slotTop(in rows: [FocusHeroRow], rowSpacing: CGFloat) -> CGFloat {
         max(
             FocusHeroLayout.lowestSlotTop,
-            FocusHeroLayout.rowsBottom(rowSpacing: rowSpacing) - activeHeight(in: rows)
+            FocusHeroLayout.rowsBottom(rowSpacing: rowSpacing) - displayedHeight(in: rows)
         )
     }
 }
@@ -429,7 +504,7 @@ private struct FocusHeroRowStack<RowContent: View>: View {
                         model.resolvedActiveRowID(in: rows) == row.id ? -FocusHeroLayout.activeTitleLift : 0
                     })
                     .padding(.bottom, -FocusHeroLayout.rowBottomTightening)
-                    .modifier(FocusHeroPreviousRowMask(index: index, model: model, rows: rows))
+                    .modifier(FocusHeroRowFade(model: model, rows: rows))
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
                         model.record(height: height, for: row.id)
                     }
@@ -445,6 +520,13 @@ private struct FocusHeroRowStack<RowContent: View>: View {
         let model = model
         return FocusHeroRowReporter(
             entered: { model.activate(row, in: rows) },
+            // Along a row the hero waits for focus to settle; a new row has
+            // no card to settle past, so its title shows as the row moves.
+            cardFocused: { item in
+                let changedRow = model.resolvedActiveRowID(in: rows) != row.id
+                model.activate(row, in: rows)
+                if changedRow { model.show(.item(item), in: row, withRow: true) }
+            },
             // Also pins here: a row reports entry only the first time focus
             // arrives, but reports every card it settles on.
             focusedItem: { item in
@@ -459,30 +541,22 @@ private struct FocusHeroRowStack<RowContent: View>: View {
     }
 }
 
-/// Keep earlier rows available to native Up navigation without drawing their
-/// bottom edges in the extra clearance reserved for the active row's heading.
-private struct FocusHeroPreviousRowMask: ViewModifier {
-    let index: Int
+/// Rows above the pinned one leave by moving, not fading: a row rising away
+/// from the pinned place travels a little further than its layout, blended into
+/// its own motion, so it slides wholly behind the stack mask's edge above the
+/// pinned row's title, bottom included. Driven by where the row is, so it moves
+/// with the scroll however fast or slow; never faded, so it stays focusable.
+private struct FocusHeroRowFade: ViewModifier {
     let model: FocusHeroModel
     let rows: [FocusHeroRow]
 
     func body(content: Content) -> some View {
-        let isAboveActiveRow = index < model.activeIndex(in: rows)
-        content.mask {
-            GeometryReader { geometry in
-                let overhang = FocusHeroLayout.maskHorizontalOverhang
-                let bottomTrim = isAboveActiveRow
-                    ? FocusHeroLayout.activeTitleLift + 6 + FocusHeroLayout.fadeBand
-                    : -overhang
-                // A fully transparent per-row mask removes native Up eligibility.
-                // Trim only the bottom edge; the stack mask hides the rest.
-                Rectangle()
-                    .fill(Color.black)
-                    .frame(width: geometry.size.width + 2 * overhang,
-                           height: max(0, geometry.size.height + overhang - bottomTrim))
-                    .offset(x: -overhang, y: -overhang)
-                    .animation(.easeOut(duration: 0.18), value: isAboveActiveRow)
-            }
+        let pinnedTop = FocusHeroLayout.rowsBottom(rowSpacing: FocusHeroLayout.rowSpacing)
+            - model.activeHeight(in: rows)
+        content.visualEffect { effect, proxy in
+            let risen = pinnedTop - proxy.frame(in: .global).minY
+            let progress = min(1, max(0, risen / FocusHeroLayout.rowTuckRamp))
+            return effect.offset(y: -FocusHeroLayout.rowTuck * progress)
         }
     }
 }
@@ -517,7 +591,8 @@ private struct FocusHeroScrollPosition: View {
         let index = model.activeIndex(in: rows)
         FocusHeroNativeScrollPosition(
             rowID: model.resolvedActiveRowID(in: rows),
-            y: model.top(ofRowAt: index, in: rows, rowSpacing: spacing) + model.activeHeight(in: rows)
+            y: model.top(ofRowAt: index, in: rows, rowSpacing: spacing) + model.activeHeight(in: rows),
+            onProgress: { [model] in model.advanceRows(to: $0) }
         )
     }
 }
@@ -525,6 +600,7 @@ private struct FocusHeroScrollPosition: View {
 struct FocusHeroNativeScrollPosition: UIViewRepresentable {
     let rowID: String?
     let y: CGFloat
+    var onProgress: ((CGFloat) -> Void)? = nil
 
     func makeUIView(context: Context) -> PositionView {
         let view = PositionView()
@@ -533,6 +609,7 @@ struct FocusHeroNativeScrollPosition: UIViewRepresentable {
     }
 
     func updateUIView(_ view: PositionView, context: Context) {
+        view.onProgress = onProgress
         view.move(to: y, rowID: rowID)
     }
 
@@ -546,10 +623,21 @@ struct FocusHeroNativeScrollPosition: UIViewRepresentable {
         private var rowID: String?
         private var y: CGFloat = 0
         private var offsetObservation: NSKeyValueObservation?
-        /// Set while this view's own animated move is under way, so its
-        /// in-between offsets are not mistaken for drift.
-        private var settling = false
-        private var settleGeneration = 0
+        /// The row spring, stepped a frame at a time so SwiftUI sees every
+        /// offset on the way (the rows fade by where they are) and a new press
+        /// picks up the speed already under way.
+        private var spring: CADisplayLink?
+        private var velocity: CGFloat = 0
+        /// The spring's own position: the viewport rounds offsets to whole
+        /// pixels, and a spring reading that back stalls a pixel short.
+        private var position: CGFloat = 0
+        private var lastStep: CFTimeInterval = 0
+        private var isStepping = false
+        /// How far the rows have come, reported every frame they move.
+        var onProgress: ((CGFloat) -> Void)?
+        private var departure: CGFloat = 0
+        private var frameGaps: [CFTimeInterval] = []
+        private var springStart: CFTimeInterval = 0
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
@@ -567,22 +655,74 @@ struct FocusHeroNativeScrollPosition: UIViewRepresentable {
             self.rowID = rowID
             self.y = y
             bindScrollView()
-            guard changed else { return }
-            let animates = animated && !UIAccessibility.isReduceMotionEnabled
-            settling = animates
-            settleGeneration += 1
-            if animates {
-                let generation = settleGeneration
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-                    guard let self, self.settleGeneration == generation else { return }
-                    self.settling = false
-                    self.holdOffset()
+            guard changed, let scroller else { return }
+            guard animated && !UIAccessibility.isReduceMotionEnabled else {
+                if spring == nil {
+                    scroller.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+                    onProgress?(1)
                 }
+                return
             }
-            scroller?.setContentOffset(CGPoint(x: 0, y: y), animated: animates)
+            // A new row: progress is measured from wherever the rows are now,
+            // mid-flight included, as the model measures its heights.
+            departure = spring == nil ? scroller.contentOffset.y : position
+            guard spring == nil else { return }
+            velocity = 0
+            position = scroller.contentOffset.y
+            lastStep = CACurrentMediaTime()
+            springStart = lastStep
+            frameGaps = []
+            let link = CADisplayLink(target: self, selector: #selector(step(_:)))
+            link.add(to: .main, forMode: .common)
+            spring = link
+        }
+
+        /// A critically damped spring with the same response as the row mask,
+        /// lifted title and hero, so they all move in step.
+        @objc private func step(_ link: CADisplayLink) {
+            guard let scroller else { return endSpring() }
+            let now = CACurrentMediaTime()
+            frameGaps.append(now - lastStep)
+            let dt = min(max(now - lastStep, 0), 1.0 / 30)
+            lastStep = now
+            let omega = 2 * .pi / FocusHeroLayout.rowSpringDuration
+            let displacement = position - y
+            let decay = exp(-omega * dt)
+            let carried = velocity + omega * displacement
+            let next = (displacement + carried * dt) * decay
+            velocity = (velocity - omega * carried * dt) * decay
+            if abs(next) < 0.5 && abs(velocity) < 10 {
+                endSpring()
+                return
+            }
+            position = y + next
+            let journey = departure - y
+            onProgress?(abs(journey) < 0.5 ? 1 : 1 - (position - y) / journey)
+            isStepping = true
+            scroller.contentOffset = CGPoint(x: 0, y: position)
+            isStepping = false
+        }
+
+        private func endSpring() {
+            if spring != nil, HeroFocusDiagnostics.isEnabled {
+                let ms = frameGaps.map { Int(($0 * 1000).rounded()) }
+                let late = ms.filter { $0 > 20 }.count
+                HeroFocusDiagnostics.emit(
+                    "FHOME spring \(Int(((CACurrentMediaTime() - springStart) * 1000).rounded()))ms frames=\(ms.count) late=\(late) max=\(ms.max() ?? 0) gaps=\(ms)"
+                )
+            }
+            spring?.invalidate()
+            spring = nil
+            velocity = 0
+            onProgress?(1)
+            if let scroller, scroller.contentOffset != CGPoint(x: 0, y: y) {
+                scroller.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+            }
         }
 
         func stop() {
+            spring?.invalidate()
+            spring = nil
             offsetObservation = nil
             scroller?.isScrollEnabled = wasScrollEnabled
             scroller = nil
@@ -592,7 +732,7 @@ struct FocusHeroNativeScrollPosition: UIViewRepresentable {
         /// disabled. Entering the pinned row from the sidebar leaves the pinned
         /// row unchanged, so nothing else would put the rows back.
         private func holdOffset() {
-            guard !settling, let scroller else { return }
+            guard !isStepping, spring == nil, let scroller else { return }
             let target = CGPoint(x: 0, y: y)
             guard abs(scroller.contentOffset.y - target.y) > 0.5 || scroller.contentOffset.x != 0 else { return }
             scroller.setContentOffset(target, animated: false)
@@ -615,16 +755,7 @@ struct FocusHeroNativeScrollPosition: UIViewRepresentable {
                         scrollView.isScrollEnabled = false
                         scrollView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
                         offsetObservation = scrollView.observe(\.contentOffset) { [weak self] _, _ in
-                            MainActor.assumeIsolated {
-                                guard let self else { return }
-                                if self.settling {
-                                    if abs((self.scroller?.contentOffset.y ?? 0) - self.y) <= 0.5 {
-                                        self.settling = false
-                                    }
-                                    return
-                                }
-                                self.holdOffset()
-                            }
+                            MainActor.assumeIsolated { self?.holdOffset() }
                         }
                     } else {
                         scrollView.isScrollEnabled = false
@@ -646,7 +777,7 @@ private struct FocusHeroRowMask: ViewModifier {
     func body(content: Content) -> some View {
         let height = FocusHeroLayout.screenHeight
         let bottom = FocusHeroLayout.rowsBottom(rowSpacing: FocusHeroLayout.rowSpacing)
-        let top = max(0, bottom - model.activeHeight(in: rows) - FocusHeroLayout.activeTitleLift - 6)
+        let top = max(0, bottom - model.displayedHeight(in: rows) - FocusHeroLayout.activeTitleLift - 6)
         let fadeTop = max(0, top - FocusHeroLayout.fadeBand)
         content.mask(
             LinearGradient(
@@ -726,6 +857,7 @@ private struct FocusHeroColumn: View {
     var body: some View {
         let top = FocusHeroLayout.columnTop(for: navigationStyle)
         let slotTop = model.slotTop(in: rows, rowSpacing: FocusHeroLayout.rowSpacing)
+        let reference = FocusHeroLayout.lowestSlotTop
         // A block of fixed height just above the pinned row, its content pinned
         // to the block's top: the logo holds one place from title to title, and a
         // longer description only reaches further down.
@@ -734,17 +866,25 @@ private struct FocusHeroColumn: View {
         FocusHeroDetailsFootprint()
             .hidden()
             .overlay(alignment: .topLeading) {
-                if let subject = model.subject {
+                if let subject = model.details {
                     content(for: subject)
                         .id(subject.id)
                         .transition(.opacity)
                 }
             }
+            .transaction(value: model.details?.id) { transaction in
+                if model.detailsSwapWithRow { transaction.animation = nil }
+            }
         .frame(width: FocusHeroLayout.columnWidth, alignment: .topLeading)
-        .frame(height: max(0, slotTop - FocusHeroLayout.columnGap - top), alignment: .bottomLeading)
+        .frame(height: max(0, reference - FocusHeroLayout.columnGap - top), alignment: .bottomLeading)
         .padding(.top, top)
         // The TV's safe area and the rail's inset, exactly as the classic hero.
         .padding(.leading, PlozzTheme.Metrics.heroLeadingPadding + navigationContentInset)
+        // One unit, so a title swapped in with a row change slides with that
+        // row rather than landing where the block will end up.
+        .geometryGroup()
+        // Follows the rows frame by frame (see ``FocusHeroModel/rowProgress``).
+        .offset(y: slotTop - reference)
         .allowsHitTesting(false)
         .task(id: model.subject?.item.map(FocusHeroMetadata.Key.init)) {
             guard let enrich, let item = model.subject?.item else { return }
