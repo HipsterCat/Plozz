@@ -114,15 +114,28 @@ final class SubtitleControlAvoidanceHostedTests: XCTestCase {
 
     #if os(tvOS)
     func testSubtitleMenuKeepsTheNormalTitleClearanceWhenItsTitleFades() async throws {
-        let normal = try await captionPosition(with: nil)
-        let menu = try await captionPosition(with: .subtitleTracks)
+        let scene = try await activeScene()
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: AnyView(EmptyView()))
+        host.safeAreaRegions = []
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            PlayerScreenshotHook.pendingPanel = nil
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        let normal = try await captionPosition(with: nil, in: window, host: host)
+        let menu = try await captionPosition(with: .subtitleTracks, in: window, host: host)
         XCTAssertEqual(menu.minY, normal.minY, accuracy: 1)
         XCTAssertEqual(menu.size, normal.size)
     }
 
-    private func captionPosition(with panel: PlayerScreenshotHook.Panel?) async throws -> CGRect {
-        let scene = try await activeScene()
-        let previous = scene.windows.first(where: \.isKeyWindow)
+    private func captionPosition(
+        with panel: PlayerScreenshotHook.Panel?, in window: UIWindow, host: UIHostingController<AnyView>
+    ) async throws -> CGRect {
         let subtitles = LiveSubtitleModel()
         subtitles.style.fontFamily = .system
         subtitles.style.followsSystemStyle = false
@@ -136,23 +149,13 @@ final class SubtitleControlAvoidanceHostedTests: XCTestCase {
             .init(id: 1, title: Text("English"), isSelected: true)
         ]
         PlayerScreenshotHook.pendingPanel = panel
-        let window = UIWindow(windowScene: scene)
-        let host = UIHostingController(rootView: ZStack {
+        host.rootView = AnyView(ZStack {
             LiveSubtitleOverlay(model: subtitles, controls: model)
             PlayerControls(model: model, palette: .dark, actions: PlayerOptionsActions(), onExitToSurface: {})
         }.transaction {
             $0.disablesAnimations = true
             $0.animation = nil
-        })
-        host.safeAreaRegions = []
-        window.rootViewController = host
-        window.makeKeyAndVisible()
-        defer {
-            PlayerScreenshotHook.pendingPanel = nil
-            window.isHidden = true
-            window.rootViewController = nil
-            previous?.makeKeyAndVisible()
-        }
+        }.id(UUID()))
         try await waitUntil {
             window.layoutIfNeeded()
             return model.subtitleLayout.frame(for: .title) != nil
