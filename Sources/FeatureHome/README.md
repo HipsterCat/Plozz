@@ -28,6 +28,10 @@ fallback when the user's server has no attached trailer.
   reveal finishes or is cancelled. Season pills, resting episode artwork,
   loading cards, and About share the same leading keyline; card spacing stays
   on the trailing side rather than indenting the artwork.
+  The shared hero/browser motion uses a finite 0.9-second ease-in/ease-out,
+  including logo and backdrop parallax. A spring's logical completion leaves
+  several points of upward travel after the apparent landing, even when the
+  outer page never scrolls.
   When pinned navigation hides on detail pages, horizontal rows draw through
   the empty side gutter to the screen edge, including focused episode artwork.
   The sidebar's mask changes without replacing the scroll view, preserving

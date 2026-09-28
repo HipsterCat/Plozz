@@ -568,6 +568,9 @@ must be restored afterward. Pixel checks compare the season pill's outer edge,
 resting episode artwork, and About's leading keyline. Coverage includes all
 card focus styles, explicit episode entry, and scroll-guard
 removal without disabling nested rails or overriding an existing entrance gate.
+The same production test samples the rail's presented position after completion:
+it must stay within one point of its final position. Checking page offset alone
+misses the spring's measured 7–8.5pt post-completion movement of the whole browser.
 
 `NativePosterComparisonTests` is an opt-in, simulator-only comparison, enabled by
 `TEST_RUNNER_PLOZZ_NATIVE_POSTER_COMPARISON=1` on `PlozzHomeRemoteTests`. It captures

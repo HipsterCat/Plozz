@@ -248,11 +248,6 @@ struct SeriesDetailView: View {
     /// focus is inside the browser.
     private static let extrasAnchorID = "series-extras-top"
     private static let loadingSeasonID = "series-seasons-loading"
-    /// One duration for the entire hero↔browser transition, matching Home. Every
-    /// moving part inherits this ambient transaction instead of carrying its own
-    /// `.animation`, so the return scroll and the hero/backdrop transforms can
-    /// never run at different speeds.
-    private static let recedeAnimationDuration: CGFloat = 0.9
 
     /// Named coordinate space anchored to the season bar's scroll viewport. In it the
     /// visible region is exactly `0...seasonBarViewportWidth`, so each chip's frame
@@ -757,7 +752,7 @@ struct SeriesDetailView: View {
         browserPresentationGeneration &+= 1
         let generation = browserPresentationGeneration
         withAnimation(
-            reduceMotion ? nil : .smooth(duration: Self.recedeAnimationDuration),
+            reduceMotion ? nil : SeriesHeroRevealTransition.ambient,
             completionCriteria: .logicallyComplete
         ) {
             recedeModel.isReceded = true
@@ -784,7 +779,7 @@ struct SeriesDetailView: View {
         seasonBarEngaged = false
         browserHoldsFocus = false
         suppressesDuplicateHeroFocus = true
-        withAnimation(.smooth(duration: Self.recedeAnimationDuration)) {
+        withAnimation(reduceMotion ? nil : SeriesHeroRevealTransition.ambient) {
             recedeModel.isReceded = false
             proxy.scrollTo(Self.topAnchorID, anchor: .top)
         }

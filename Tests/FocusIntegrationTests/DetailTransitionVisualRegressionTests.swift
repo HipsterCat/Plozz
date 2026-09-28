@@ -159,17 +159,14 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
             }
             try await Task.sleep(for: .seconds(3))
             let page = try XCTUnwrap(verticalScroll(in: host.view))
+            let episodeRail = try XCTUnwrap(episodeScroll(in: page))
             let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
-            host.target = try XCTUnwrap(episodeFocusTarget(in: page))
+            let entryTarget = try XCTUnwrap(episodeFocusTarget(in: page))
+            host.target = entryTarget
             system.requestFocusUpdate(to: host)
             system.updateFocusIfNeeded()
             try await waitUntil {
-                guard let focused = system.focusedItem,
-                      let owner = TVNavigationExitProtectionFocus.containingView(of: focused) else { return false }
-                return owner.isDescendant(of: page)
-                    && (300...700).contains(focused.frame.width)
-                    && (200...600).contains(focused.frame.height)
-                    && !String(describing: type(of: focused)).contains("Filler")
+                system.focusedItem.map(ObjectIdentifier.init) == ObjectIdentifier(entryTarget)
             }
             host.target = nil
             var offsets: [CGFloat] = []
@@ -177,6 +174,8 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
             var browsedDuringReveal = false
             var nextEpisode: (any UIFocusItem)?
             var focusedNextEpisode = false
+            var completedRailPositions: [CGFloat] = []
+            let started = CACurrentMediaTime()
             let deadline = ContinuousClock.now + .seconds(3)
             while ContinuousClock.now < deadline {
                 if !browsedDuringReveal, offsets.count >= 3,
@@ -196,7 +195,10 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
                 }
                 let offset = page.contentOffset.y + page.adjustedContentInset.top
                 offsets.append(offset)
-                measurements.append("offset=\(offset), height=\(page.contentSize.height), focused=\(String(describing: system.focusedItem))")
+                let railLayer = episodeRail.layer.presentation() ?? episodeRail.layer
+                let presented = railLayer.convert(railLayer.bounds, to: window.layer.presentation() ?? window.layer)
+                if page.isScrollEnabled { completedRailPositions.append(presented.minY) }
+                measurements.append("t=\(CACurrentMediaTime() - started), offset=\(offset), railY=\(presented.minY), enabled=\(page.isScrollEnabled), height=\(page.contentSize.height)")
                 try await Task.sleep(for: .milliseconds(25))
             }
             let shot = XCTAttachment(image: DetailTransitionSnapshot.image(of: window))
@@ -210,6 +212,9 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
             XCTAssertTrue(browsedDuringReveal)
             XCTAssertTrue(focusedNextEpisode, "Horizontal browsing must remain available during the reveal.")
             XCTAssertTrue(page.isScrollEnabled, "Lower detail sections must remain scrollable after the reveal.")
+            let settledY = try XCTUnwrap(completedRailPositions.last)
+            XCTAssertLessThanOrEqual(completedRailPositions.map { abs($0 - settledY) }.max() ?? .infinity, 1,
+                                     "The browser must be visually settled when its animation completes, without a second upward drift.")
             XCTAssertLessThanOrEqual(offsets.map(abs).max() ?? .infinity, 1,
                                      "The page must not scroll when lower details mount after episode entry: \(style).")
             let bounds = try redArtworkBounds(in: window)
