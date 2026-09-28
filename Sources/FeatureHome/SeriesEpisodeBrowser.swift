@@ -379,7 +379,8 @@ private struct SeriesRecededLogo: View {
             asyncFallbackURL: logoFallback,
             backgroundSample: backgroundSample,
             maxWidth: 620,
-            maxHeight: 200,
+            maxHeight: SeriesEpisodeBrowserLayout.recededLogoHeight,
+            constrainsToBounds: true,
             alignment: .center
         ) {
             Text(series.title)
@@ -389,7 +390,7 @@ private struct SeriesRecededLogo: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 1200, alignment: .center)
         }
-        .frame(width: 620, height: 200, alignment: .center)
+        .frame(width: 620, height: SeriesEpisodeBrowserLayout.recededLogoHeight, alignment: .center)
         .opacity(revealed ? 1 : 0)
         .offset(y: revealed || reduceMotion ? 0 : SeriesEpisodeBrowserLayout.logoParallaxDrop)
         // Arriving restates the ambient animation exactly, so the logo still

@@ -19,6 +19,9 @@ fallback when the user's server has no attached trailer.
 - **Series** — `SeriesDetailView` + `SeriesResume` provide one stable
   series backdrop with focus-driven season tabs and an episode rail; the
   hero text updates as focus moves without distracting backdrop swaps.
+  The compact logo above Seasons fits wholly inside its 200pt slot, including
+  tall wordmarks; it does not use the full hero's flexible height allowance.
+  This changes only artwork sizing, not season/episode focus geometry.
 - **Library browsing** — `LibraryBrowseView` + `LibraryBrowseViewModel`
   for the per-library grid behind a Home row. Video libraries can switch
   among Browse, Collections, and Playlists when their provider advertises
