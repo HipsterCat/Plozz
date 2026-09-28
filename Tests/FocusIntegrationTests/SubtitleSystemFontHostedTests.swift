@@ -20,7 +20,8 @@ final class SubtitleSystemFontHostedTests: XCTestCase {
         state.model.subtitleStyle.systemFont = .caption(.smallCapitals)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
-        window.rootViewController = UIHostingController(rootView: SubtitleFontFixture(state: state))
+        let host = UIHostingController(rootView: SubtitleFontFixture(state: state))
+        window.rootViewController = host
         window.makeKeyAndVisible()
         defer {
             window.isHidden = true
@@ -29,11 +30,25 @@ final class SubtitleSystemFontHostedTests: XCTestCase {
         }
         XCTAssertEqual(PlayerControls.SubtitleScreen.styleSystemFont.parent, .styleFont)
         XCTAssertTrue(PlayerControls.SubtitleScreen.styleSystemFont.isStyleFamily)
+        let focusSystem = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+        // The initial SwiftUI focus request can precede native focus activation.
+        try await waitUntil(detail: "The font fixture did not acquire native focus.") {
+            window.layoutIfNeeded()
+            focusSystem.requestFocusUpdate(to: host)
+            focusSystem.updateFocusIfNeeded()
+            return self.focusFrame(in: window) != nil
+        }
         var previousInputScope: UIViewController?
         for (screen, title) in [(PlayerControls.SubtitleScreen.styleFont, "System Fonts"),
                                 (.styleSystemFont, "Small Capitals")] {
             state.screen = screen
-            try await waitUntil {
+            state.focusRequestID = UUID()
+            try await waitUntil(
+                detail: "screen=\(screen), requested=\(state.requestedRow), "
+                    + "focusState=\(String(describing: state.focusedRow)), "
+                    + "nativeItem=\(focusSystem.focusedItem != nil)"
+            ) {
+                window.layoutIfNeeded()
                 guard let frame = self.focusFrame(in: window) else { return false }
                 return state.focusedRow == state.requestedRow && frame.width > 500
                     && window.bounds.contains(frame)
@@ -52,16 +67,18 @@ final class SubtitleSystemFontHostedTests: XCTestCase {
                 $0.topCandidates(1).first?.string.localizedCaseInsensitiveContains(title) == true
             }
             let focused = try XCTUnwrap(focusFrame(in: window))
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "Subtitle font - \(title)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
             XCTAssertTrue(matches.contains { match in
                 let text = match.boundingBox
                 let center = CGPoint(x: text.midX * window.bounds.width, y: (1 - text.midY) * window.bounds.height)
                 return focused.contains(center)
             },
-                          "The actual focused row must display \(title).")
-            let attachment = XCTAttachment(image: image)
-            attachment.name = "Subtitle font - \(title)"
-            attachment.lifetime = .keepAlways
-            add(attachment)
+                          "The actual focused row must display \(title); "
+                              + "recognized=\((request.results ?? []).compactMap { $0.topCandidates(1).first?.string }), "
+                              + "frame=\(focused), focusState=\(String(describing: state.focusedRow)).")
         }
     }
 
@@ -82,10 +99,10 @@ final class SubtitleSystemFontHostedTests: XCTestCase {
         return nil
     }
 
-    private func waitUntil(_ condition: () -> Bool) async throws {
+    private func waitUntil(detail: @autoclosure () -> String = "", _ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
-        XCTAssertTrue(condition(), "The caption font row must receive native focus.")
+        XCTAssertTrue(condition(), "The caption font row must receive native focus. \(detail())")
     }
 }
 
@@ -93,6 +110,7 @@ final class SubtitleSystemFontHostedTests: XCTestCase {
 private final class SubtitleFontFixtureState {
     let model = PlayerControlsModel()
     var screen = PlayerControls.SubtitleScreen.styleFont
+    var focusRequestID = UUID()
     var focusedRow: Int?
     var requestedRow: Int {
         screen == .styleFont ? SubtitleFontFamily.allCases.count
@@ -109,7 +127,10 @@ private struct SubtitleFontFixture: View {
             SubtitleStylePanel(
                 screen: state.screen, model: state.model, palette: .dark,
                 actions: PlayerOptionsActions(), focus: $focus,
-                openScreen: { state.screen = $0 }
+                openScreen: {
+                    state.screen = $0
+                    state.focusRequestID = UUID()
+                }
             )
         }
         .frame(width: 760, height: 720)
@@ -117,7 +138,7 @@ private struct SubtitleFontFixture: View {
         .background(.black)
         .environment(\.themePalette, .dark)
         .environment(\.colorScheme, .dark)
-        .task(id: state.screen) {
+        .task(id: state.focusRequestID) {
             focus = nil
             await Task.yield()
             focus = .row(state.requestedRow)
