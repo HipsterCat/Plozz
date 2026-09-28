@@ -139,10 +139,86 @@ final class NativeSubtitleCueOutputTests: XCTestCase {
         XCTAssertTrue(decoded.isBold)
         XCTAssertTrue(decoded.isItalic)
         XCTAssertEqual(decoded.layout?.anchor, CGPoint(x: 0.4, y: 0.1))
+        XCTAssertEqual(decoded.layout?.alignment, .topCenter)
         let runs = try XCTUnwrap(decoded.runs)
         XCTAssertEqual(runs.map(\.text), ["Red ", "white"])
         XCTAssertEqual(runs.first?.color, SubtitleColor(red: 1, green: 0, blue: 0))
         XCTAssertEqual(runs.last?.color, .white)
+    }
+
+    /// Attribute values AVFoundation reported for each WebVTT cue setting in a
+    /// probe of a real HLS rendition.
+    private func webVTTLayout(position: Double, line: Double?, size: Double = 100,
+                              alignment: CFString = kCMTextMarkupAlignmentType_Middle) -> SubtitleCueLayout? {
+        var attributes: [NSAttributedString.Key: Any] = [
+            .init(kCMTextMarkupAttribute_TextPositionPercentageRelativeToWritingDirection as String): position,
+            .init(kCMTextMarkupAttribute_WritingDirectionSizePercentage as String): size,
+            .init(kCMTextMarkupAttribute_Alignment as String): alignment
+        ]
+        if let line {
+            attributes[.init(kCMTextMarkupAttribute_OrthogonalLinePositionPercentageRelativeToWritingDirection as String)] = line
+        }
+        return NativeSubtitleText.layout(attributes)
+    }
+
+    func testWebVTTLinePercentagePinsTheTopOfTheBoxAndPositionPinsTheCentre() throws {
+        // line:10% position:73%
+        let layout = try XCTUnwrap(webVTTLayout(position: 73, line: 10))
+        XCTAssertEqual(layout.alignment, .topCenter)
+        XCTAssertEqual(layout.anchor, CGPoint(x: 0.73, y: 0.1))
+        // A centred box at 73% can only be as wide as twice its distance to the edge.
+        XCTAssertEqual(try XCTUnwrap(layout.boxWidth), 0.54, accuracy: 0.0001)
+    }
+
+    func testWebVTTStartAlignmentPinsTheLeftEdgeAndLimitsSizeToTheRoomLeft() throws {
+        // line:10% position:73% size:40% align:start
+        let layout = try XCTUnwrap(webVTTLayout(position: 73, line: 10, size: 40,
+                                                alignment: kCMTextMarkupAlignmentType_Start))
+        XCTAssertEqual(layout.alignment, .topLeft)
+        XCTAssertEqual(layout.anchor, CGPoint(x: 0.73, y: 0.1))
+        XCTAssertEqual(try XCTUnwrap(layout.boxWidth), 0.27, accuracy: 0.0001)
+    }
+
+    func testWebVTTEndAndLeftAlignmentsPinTheirOwnEdges() throws {
+        // line:90% align:end, and line:50% align:left (AVFoundation reports position 0)
+        XCTAssertEqual(webVTTLayout(position: 50, line: 90, alignment: kCMTextMarkupAlignmentType_End)?.alignment,
+                       .topRight)
+        let left = try XCTUnwrap(webVTTLayout(position: 0, line: 50, alignment: kCMTextMarkupAlignmentType_Left))
+        XCTAssertEqual(left.alignment, .topLeft)
+        XCTAssertEqual(left.anchor, CGPoint(x: 0, y: 0.5))
+        XCTAssertEqual(left.boxWidth, 1)
+    }
+
+    func testElementalRollUpCueIsOneLeftPinnedYellowBlock() throws {
+        // `position:10% line:70.83% size:90% align:start` with <c.yellow> rows, as a
+        // live broadcast encoder emits 608 roll-up; AVFoundation delivers one block.
+        let yellow: [Double] = [1, 1, 1, 0]
+        let text = NSAttributedString(
+            string: "season after last year is shrinking \nby the minute. And I fear for ",
+            attributes: [
+                .init(kCMTextMarkupAttribute_TextPositionPercentageRelativeToWritingDirection as String): 10,
+                .init(kCMTextMarkupAttribute_OrthogonalLinePositionPercentageRelativeToWritingDirection as String): 70.83,
+                .init(kCMTextMarkupAttribute_WritingDirectionSizePercentage as String): 90,
+                .init(kCMTextMarkupAttribute_Alignment as String): kCMTextMarkupAlignmentType_Start,
+                .init(kCMTextMarkupAttribute_ForegroundColorARGB as String): yellow
+            ]
+        )
+        let decoded = NativeSubtitleText.decode(text)
+        let layout = try XCTUnwrap(decoded.layout)
+        XCTAssertEqual(layout.alignment, .topLeft)
+        XCTAssertEqual(layout.anchor?.x ?? 0, 0.1, accuracy: 0.0001)
+        XCTAssertEqual(layout.anchor?.y ?? 0, 0.7083, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(layout.boxWidth), 0.9, accuracy: 0.0001)
+        XCTAssertEqual(decoded.runs?.first?.color, SubtitleColor(red: 1, green: 1, blue: 0))
+    }
+
+    func testWebVTTPositionWithoutALineStaysOnTheBottomLine() throws {
+        // position:20% alone; AVFoundation reports the automatic line as 100.
+        let layout = try XCTUnwrap(webVTTLayout(position: 20, line: 100))
+        XCTAssertEqual(layout.alignment, .bottomCenter)
+        XCTAssertEqual(layout.anchor, CGPoint(x: 0.2, y: 1))
+        // line:0 / line:-1 arrive with no line at all and keep the user's lane.
+        XCTAssertNil(webVTTLayout(position: 50, line: nil))
     }
 
     func testOldTrackAndDetachedOutputsCannotPublishOrClearNewCues() throws {

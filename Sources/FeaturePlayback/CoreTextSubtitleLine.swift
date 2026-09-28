@@ -341,7 +341,15 @@ final class SubtitleLineView: UIView {
         guard !ink.isNull else {
             return Layout(path: rawPath, spanFills: [], totalSize: .zero, colorGlyphs: [], background: nil)
         }
-        let backgroundBounds = glyphBackgrounds.reduce(ink) { $0.union($1) }
+        var backgroundBounds = glyphBackgrounds.reduce(ink) { $0.union($1) }
+        if c.background != nil, let band = Self.referenceBand(frame: frame, font: font) {
+            // Size the box's height from the font's tallest ascender and deepest
+            // descender, not the letters on screen, so a `g` or `y` arriving in a
+            // rolling caption doesn't make the box jump. Width still hugs the text.
+            backgroundBounds = backgroundBounds.union(
+                CGRect(x: backgroundBounds.minX, y: band.lowerBound,
+                       width: backgroundBounds.width, height: band.upperBound - band.lowerBound))
+        }
 
         // Grow the ink by the per-side reach to get the full drawn rect, union in
         // the optional background box (which hugs the text box at the user's
@@ -382,6 +390,29 @@ final class SubtitleLineView: UIView {
                       background: background,
                       glyphBackgrounds: glyphBackgrounds.map { $0.offsetBy(dx: -drawn.minX, dy: -drawn.minY) },
                       defaultFillPath: rawDefaultFill.copy(using: &shift) ?? rawDefaultFill)
+    }
+
+    /// Reference letters for a line's full height: ascenders and descenders
+    /// every Latin caption can contain.
+    private static let referenceGlyphText = "bdfhklHgjpqy" as NSString
+
+    /// Vertical extent, in frame coordinates, that the reference letters would
+    /// cover from the first line's top to the last line's bottom.
+    static func referenceBand(frame: CTFrame, font: CTFont) -> ClosedRange<CGFloat>? {
+        let lines = CTFrameGetLines(frame) as? [CTLine] ?? []
+        guard !lines.isEmpty else { return nil }
+        var origins = [CGPoint](repeating: .zero, count: lines.count)
+        CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &origins)
+        var characters = (0..<referenceGlyphText.length).map { referenceGlyphText.character(at: $0) }
+        var glyphs = [CGGlyph](repeating: 0, count: characters.count)
+        CTFontGetGlyphsForCharacters(font, &characters, &glyphs, characters.count)
+        glyphs.removeAll { $0 == 0 }
+        guard !glyphs.isEmpty else { return nil }
+        let bounds = CTFontGetBoundingRectsForGlyphs(font, .default, &glyphs, nil, glyphs.count)
+        guard !bounds.isNull, bounds.height > 0 else { return nil }
+        let top = origins.map(\.y).max()! + bounds.maxY
+        let bottom = origins.map(\.y).min()! + bounds.minY
+        return bottom...top
     }
 
     static func lineBackgroundRects(frame: CTFrame) -> [CGRect] {
