@@ -13,7 +13,8 @@ final class PlayerViewModelEOFTests: XCTestCase {
     func testSequenceCardsFillThePlayerBandWithRoomForArtworkAndTitles() {
         for metrics in [PlayerCardMetrics.tv, .horizontalWide, .horizontalNarrow] {
             let layout = PlayerSequenceLayout(
-                metrics: metrics, cardMetrics: .standard, hasSeasons: false, hasError: false
+                metrics: metrics, cardMetrics: .standard, contained: false,
+                seasonCount: 0, hasError: false
             )
             XCTAssertEqual(layout.rowHeight, metrics.cardHeight)
             XCTAssertGreaterThan(layout.cardWidth, metrics.castCardWidth)
@@ -30,16 +31,46 @@ final class PlayerViewModelEOFTests: XCTestCase {
             )
 
             let seasons = PlayerSequenceLayout(
-                metrics: metrics, cardMetrics: .standard, hasSeasons: true, hasError: false
+                metrics: metrics, cardMetrics: .standard, contained: true,
+                seasonCount: 30, hasError: false
             )
-            XCTAssertEqual(seasons.rowHeight + seasons.seasonHeight + seasons.gap, metrics.cardHeight)
-            XCTAssertGreaterThan(seasons.imageHeight, 0)
+            XCTAssertTrue(seasons.hasSideSeasons)
+            XCTAssertEqual(
+                seasons.rowHeight + seasons.containerVerticalInset * 2,
+                metrics.cardHeight
+            )
+            XCTAssertEqual(
+                seasons.columnSpacing,
+                metrics.columnSpacing + metrics.contentPadding / 2
+            )
+            XCTAssertGreaterThan(seasons.imageHeight, metrics.castHeadshot * 0.85)
             XCTAssertGreaterThan(seasons.titleHeight, 0)
         }
+        let portrait = PlayerSequenceLayout(
+            metrics: .verticalNarrow, cardMetrics: .standard, contained: true,
+            seasonCount: 2, hasError: false
+        )
+        XCTAssertTrue(portrait.hasTopSeasons)
+        XCTAssertEqual(
+            portrait.rowHeight + portrait.seasonHeight + portrait.gap
+                + portrait.containerVerticalInset * 2,
+            portrait.metrics.cardHeight
+        )
         let tv = PlayerSequenceLayout(
-            metrics: .tv, cardMetrics: .standard, hasSeasons: false, hasError: false
+            metrics: .tv, cardMetrics: .standard, contained: false,
+            seasonCount: 0, hasError: false
         )
         XCTAssertGreaterThan(tv.imageHeight, 175)
+        let singleSeason = PlayerSequenceLayout(
+            metrics: .tv, cardMetrics: .standard, contained: true,
+            seasonCount: 1, hasError: false
+        )
+        XCTAssertFalse(singleSeason.hasSideSeasons)
+        XCTAssertFalse(singleSeason.hasTopSeasons)
+        XCTAssertEqual(
+            singleSeason.rowHeight + singleSeason.containerVerticalInset * 2,
+            singleSeason.metrics.cardHeight
+        )
     }
 
     func testMobileWakeIntentCoversStartupAndBufferingButRespectsPause() async {
