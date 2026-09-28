@@ -136,6 +136,20 @@ struct PlayerPresentation: View {
                 prefetched: prefetched, preserveDisplayMode: preserveDisplay
             )
         }
+        .onChange(of: viewModel?.pendingPlaylistSelection?.index) { _, index in
+            guard handoffTask == nil, let index,
+                  let outgoing = viewModel,
+                  let next = outgoing.pendingPlaylistSelection?.item,
+                  let playlist = activeRequest.playlist else { return }
+            triedAccountIDs = []
+            replacePlayback(
+                with: PlayRequest(
+                    item: next, startPosition: 0,
+                    versionPreferences: versionPreferences, playlist: playlist
+                ),
+                playlistIndex: index
+            )
+        }
         .onChange(of: viewModel?.phase) { _, phase in
             // Playback failed to start on the routed server. Silently retarget to
             // the next-best untried source (a dead/unreachable copy falls through to
@@ -193,7 +207,9 @@ struct PlayerPresentation: View {
         replacePlayback(
             with: PlayRequest(
                 item: incoming, startPosition: continuation.position,
-                versionPreferences: versionPreferences
+                versionPreferences: versionPreferences,
+                playlist: incoming.sourceAccountID == activeRequest.playlist?.accountID
+                    ? activeRequest.playlist : nil
             ),
             continuation: continuation
         )
@@ -203,7 +219,8 @@ struct PlayerPresentation: View {
         with request: PlayRequest,
         prefetched: PlayerViewModel.PrefetchedPlayback? = nil,
         preserveDisplayMode: Bool = false,
-        continuation: PlaybackContinuation? = nil
+        continuation: PlaybackContinuation? = nil,
+        playlistIndex: Int? = nil
     ) {
         guard let outgoing = viewModel, handoffTask == nil, isPresented else { return }
         outgoing.controls.versions.options = []
@@ -214,6 +231,7 @@ struct PlayerPresentation: View {
                 handoffTask = nil
                 return
             }
+            if let playlistIndex { request.playlist?.advance(to: playlistIndex) }
             let incoming = make(request, prefetched, continuation)
             activeRequest = request
             viewModel = incoming

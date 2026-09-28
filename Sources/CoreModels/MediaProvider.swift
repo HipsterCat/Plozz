@@ -105,6 +105,14 @@ public protocol MediaProvider: Sendable {
     /// `page.sort` is deliberately ignored. Do not filter members to collections.
     func collectionMembers(of collectionID: String, page: PageRequest) async throws -> MediaPage
 
+    /// Video playlists with at least one member in this library. A playlist
+    /// spanning libraries appears in each matching library.
+    func videoPlaylists(in libraryID: String, page: PageRequest) async throws -> MediaPage
+
+    /// Full playlist in the server's authored order, including other libraries.
+    /// `page.sort` is ignored. Music playlists use `MusicProvider` instead.
+    func videoPlaylistMembers(of playlistID: String, page: PageRequest) async throws -> MediaPage
+
     /// The alphabet fast-scroll index for a container browsed by **name**: for
     /// each present letter, the 0-based index of its first item in the current
     /// sort. Powers the trailing A–Z rail on the library grid.
@@ -406,6 +414,14 @@ public extension MediaProvider {
             startIndex: page.startIndex,
             totalCount: members.count
         )
+    }
+
+    func videoPlaylists(in libraryID: String, page: PageRequest) async throws -> MediaPage {
+        throw AppError.notFound
+    }
+
+    func videoPlaylistMembers(of playlistID: String, page: PageRequest) async throws -> MediaPage {
+        throw AppError.notFound
     }
 
     func reauthenticatedImageURL(

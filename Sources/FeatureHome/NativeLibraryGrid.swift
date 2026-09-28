@@ -26,7 +26,7 @@ struct NativeLibraryGrid<Header: View>: UIViewControllerRepresentable {
     let scrollTarget: NativeLibraryScrollTarget
     let hidesScrollIndicator: Bool
     let header: Header
-    let onSelect: (MediaItem) -> Void
+    let onSelect: (MediaItem, Int) -> Void
     let onLoaded: (Int) -> Void
 
     func makeUIViewController(context: Context) -> NativeLibraryGridController {
@@ -63,7 +63,7 @@ final class NativeLibraryGridController: UIViewController, UICollectionViewDataS
     private var spoilerSettings = SpoilerSettings.default
     private var leadingInset: CGFloat = 0
     private var trailingInset: CGFloat = 0
-    private var onSelect: ((MediaItem) -> Void)?
+    private var onSelect: ((MediaItem, Int) -> Void)?
     private var onLoaded: ((Int) -> Void)?
     private var bindings: [ObjectIdentifier: CellBinding] = [:]
     private var pendingNavigation: MediaItem?
@@ -111,7 +111,7 @@ final class NativeLibraryGridController: UIViewController, UICollectionViewDataS
         model: LibraryBrowseViewModel, total: Int, generation: Int, spoilerSettings: SpoilerSettings,
         environment: EnvironmentValues, leadingInset: CGFloat, trailingInset: CGFloat,
         header: AnyView, hidesScrollIndicator: Bool,
-        onSelect: @escaping (MediaItem) -> Void, onLoaded: @escaping (Int) -> Void
+        onSelect: @escaping (MediaItem, Int) -> Void, onLoaded: @escaping (Int) -> Void
     ) {
         let reset = self.model !== model || self.generation != generation
         let previousCount = self.total
@@ -368,7 +368,7 @@ final class NativeLibraryGridController: UIViewController, UICollectionViewDataS
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         guard let item = model?.item(at: indexPath.item), environment.isEnabled else { return }
         (collectionView.cellForItem(at: indexPath) as? NativeTVLibraryCell)?.prepareForSelection()
-        onSelect?(item)
+        onSelect?(item, indexPath.item)
     }
 
     func collectionView(

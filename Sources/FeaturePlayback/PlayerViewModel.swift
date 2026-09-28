@@ -474,6 +474,16 @@ public final class PlayerViewModel {
     /// ``PlayerPresentation`` observes this and swaps the VM in-place so the
     /// full-screen cover never dismisses (no series-page flash).
     public var pendingNextEpisode: MediaItem?
+    public let playlistContext: VideoPlaylistPlaybackContext?
+    public let episodeBrowser: PlayerEpisodeBrowser?
+    /// The member requested for an in-place playlist handoff. Index, not ID,
+    /// distinguishes repeated entries in a saved playlist.
+    public struct PlaylistSelection: Equatable {
+        public let index: Int
+        public let item: MediaItem
+    }
+    public private(set) var pendingPlaylistSelection: PlaylistSelection?
+    @ObservationIgnored private var playlistAdvanceTask: Task<Void, Never>?
 
     /// Durable cross-server convergence hook, called once on `stop()` with the final
     /// position and watched percentage. The AppShell wires this to enqueue a
@@ -542,6 +552,7 @@ public final class PlayerViewModel {
         itemID: String,
         mediaSourceID: String? = nil,
         offlineItem: MediaItem? = nil,
+        episodeItem: MediaItem? = nil,
         continuation: PlaybackContinuation? = nil,
         offlinePlaybackResolver: (any OfflinePlaybackResolving)? = nil,
         behavior: SubtitleBehavior = .default,
@@ -563,6 +574,7 @@ public final class PlayerViewModel {
         preferencesStore: PlaybackPreferencesStoring = PlaybackPreferencesStore(),
         autoDismissOnEnd: Bool = false,
         neighborResolver: (@Sendable () async -> (previous: MediaItem?, next: MediaItem?))? = nil,
+        playlistContext: VideoPlaylistPlaybackContext? = nil,
         seriesIDResolver: (@Sendable () async -> [String: String]?)? = nil,
         onPlaybackStopped: @escaping @Sendable (_ position: TimeInterval, _ watchedPercent: Double) -> Void = { _, _ in },
         onPlaybackStarted: @escaping @Sendable () -> Void = {},
@@ -598,6 +610,13 @@ public final class PlayerViewModel {
         self.preferencesStore = preferencesStore
         self.autoDismissOnEnd = autoDismissOnEnd
         self.neighborResolver = neighborResolver
+        self.playlistContext = playlistContext
+        let browserItem = episodeItem ?? offlineItem
+        if let browserItem, browserItem.kind == .episode, browserItem.seriesID != nil {
+            self.episodeBrowser = PlayerEpisodeBrowser(item: browserItem, provider: provider)
+        } else {
+            self.episodeBrowser = nil
+        }
         self.seriesIDResolver = seriesIDResolver
         self.onPlaybackStopped = onPlaybackStopped
         self.onPlaybackStarted = onPlaybackStarted
@@ -823,10 +842,39 @@ public final class PlayerViewModel {
         PlaybackTrace.note("handlePlaybackEnded curr=\(String(format: "%.2f", engine.currentTime)) furthest=\(String(format: "%.2f", engine.furthestObservedPosition)) dur=\(String(format: "%.2f", engine.duration)) hasNext=\(nextEpisode != nil) autoPlay=\(playbackSettings.autoPlayNextEpisode) isSeeking=\(controls.isSeeking) isScrubbing=\(controls.isScrubbing) intendsPlayback=\(intendsPlayback)")
         didReachNaturalEnd = true
         nowPlaying?.end()
+        if let playlistContext {
+            guard playbackSettings.autoPlayNextPlaylistItem,
+                  playlistContext.currentIndex + 1 < playlistContext.totalCount else {
+                shouldDismiss = true
+                return
+            }
+            playlistAdvanceTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.playPlaylistItem(at: playlistContext.currentIndex + 1)
+            }
+            return
+        }
         if let next = nextEpisode, playbackSettings.autoPlayNextEpisode {
             pendingNextEpisode = next
         } else {
             shouldDismiss = true
+        }
+    }
+
+    public func playPlaylistItem(at index: Int) async {
+        guard let playlistContext, !didStop else { return }
+        do {
+            guard let item = try await playlistContext.item(at: index) else {
+                if didReachNaturalEnd { shouldDismiss = true }
+                return
+            }
+            guard !didStop, pendingPlaylistSelection == nil else { return }
+            pendingPlaylistSelection = PlaylistSelection(index: index, item: item)
+        } catch is CancellationError {
+            return
+        } catch {
+            PlozzLog.playback.error("Unable to load a playlist item.")
+            if didReachNaturalEnd { shouldDismiss = true }
         }
     }
 
@@ -848,13 +896,13 @@ public final class PlayerViewModel {
         controls.infoCard.hasPreviousEpisode = prev != nil
         controls.infoCard.hasNextEpisode = next != nil
         nowPlaying?.refresh()
-        nextEpisodeCoordinator.updateUpNextCard()
+        if playlistContext == nil { nextEpisodeCoordinator.updateUpNextCard() }
         // Eagerly prefetch the next episode's resolved stream when the provider's
         // `playbackInfo` is idempotent (Plex, SMB share) — safe to resolve the
         // moment it's known, for a near-instant hand-off. Jellyfin (a
         // session-minting POST) defers to the hand-off window instead; see
         // ``NextEpisodeCoordinator/maybeStartWindowedNextPrefetch(trigger:)``.
-        if next != nil {
+        if next != nil, playlistContext == nil {
             if provider.kind.playbackInfoIsIdempotent {
                 nextEpisodeCoordinator.startNextEpisodePrefetch(trigger: "eager")
             } else {
@@ -2059,6 +2107,8 @@ public final class PlayerViewModel {
         // shows happening on iOS.
         PlaybackTrace.note("stop() teardown curr=\(String(format: "%.2f", engine.currentTime)) shouldDismiss=\(shouldDismiss) pendingNext=\(pendingNextEpisode != nil) isSeeking=\(controls.isSeeking)")
         didStop = true
+        playlistAdvanceTask?.cancel()
+        playlistAdvanceTask = nil
         streamingLoadGeneration += 1
         streamingSwitchTask?.cancel()
         streamingInitialLoad?.cancel()
@@ -2412,7 +2462,9 @@ extension PlayerViewModel: WatchProgressReporterHost {
 }
 
 extension PlayerViewModel: NextEpisodeCoordinatorHost {
-    var nextEpisodeCandidate: MediaItem? { nextEpisode }
+    var nextEpisodeCandidate: MediaItem? {
+        playlistContext == nil ? nextEpisode : nil
+    }
     var upNextEngine: any VideoEngine { engine }
     var upNextProvider: any MediaProvider { provider }
     var upNextAuthoritativeRange: SourceDynamicRange? {

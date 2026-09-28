@@ -14,6 +14,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
     public let credentialRevision: CredentialRevision
     let client: PlexClient
     let liveTVLeases = PlexLiveTVLeaseStore()
+    private let videoPlaylistCache = VideoPlaylistSnapshotCache()
     let themeArchiveResolver: @Sendable (String?) async -> URL?
     private let artworkOriginHistoryKey: String
 
@@ -671,6 +672,90 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
             totalCount: container.totalSize
                 ?? (page.startIndex + items.count
                     + (items.count == page.limit && !items.isEmpty ? 1 : 0))
+        )
+    }
+
+    public func videoPlaylists(in libraryID: String, page: PageRequest) async throws -> MediaPage {
+        guard !libraryID.isEmpty, page.startIndex >= 0, page.limit > 0 else {
+            throw AppError.invalidResponse
+        }
+        let key = "\(libraryID)#\(page.sort.direction.rawValue)"
+        let snapshot = try await videoPlaylistCache.snapshot(
+            key: key, refresh: page.startIndex == 0
+        ) {
+            let playlists = try await self.client.videoPlaylists()
+            let client = self.client
+            let matches = try await withThrowingTaskGroup(of: (Int, Bool).self) { group in
+                var nextIndex = min(4, playlists.count)
+                for index in 0..<nextIndex {
+                    let id = playlists[index].ratingKey
+                    group.addTask {
+                        (index, try await Self.playlist(id: id, contains: libraryID, client: client))
+                    }
+                }
+                var found = Set<Int>()
+                for try await (index, matching) in group {
+                    if matching { found.insert(index) }
+                    if nextIndex < playlists.count {
+                        let index = nextIndex
+                        let id = playlists[index].ratingKey
+                        nextIndex += 1
+                        group.addTask {
+                            (index, try await Self.playlist(id: id, contains: libraryID, client: client))
+                        }
+                    }
+                }
+                return found
+            }
+            let scoped = playlists.enumerated().compactMap { index, dto in
+                matches.contains(index) ? self.map(metadata: dto).taggingLibrary(libraryID) : nil
+            }
+            return scoped.sorted {
+                let comparison = $0.title.localizedStandardCompare($1.title)
+                return page.sort.direction == .ascending
+                    ? comparison == .orderedAscending : comparison == .orderedDescending
+            }
+        }
+        return MediaPage(
+            items: Array(snapshot.dropFirst(page.startIndex).prefix(page.limit)),
+            startIndex: page.startIndex, totalCount: snapshot.count
+        )
+    }
+
+    private static func playlist(id: String?, contains libraryID: String, client: PlexClient) async throws -> Bool {
+        guard let id, !id.isEmpty else { throw AppError.invalidResponse }
+        var start = 0
+        var previousIDs: [String]?
+        while true {
+            try Task.checkCancellation()
+            let response = try await client.videoPlaylistItems(ratingKey: id, start: start, size: 100)
+            let entries = response.Metadata ?? []
+            if entries.contains(where: { $0.librarySectionID.map(String.init) == libraryID }) { return true }
+            let ids = entries.compactMap(\.ratingKey)
+            guard ids.count == entries.count, ids.allSatisfy({ !$0.isEmpty }),
+                  (response.totalSize != nil || ids != previousIDs),
+                  !entries.isEmpty || response.totalSize.map({ start >= $0 }) != false else {
+                throw AppError.invalidResponse
+            }
+            previousIDs = ids
+            start += entries.count
+            if entries.isEmpty || response.totalSize.map({ start >= $0 }) == true { return false }
+        }
+    }
+
+    public func videoPlaylistMembers(of playlistID: String, page: PageRequest) async throws -> MediaPage {
+        guard !playlistID.isEmpty, page.startIndex >= 0, page.limit > 0 else {
+            throw AppError.invalidResponse
+        }
+        let response = try await client.videoPlaylistItems(
+            ratingKey: playlistID, start: page.startIndex, size: page.limit
+        )
+        let items = (response.Metadata ?? []).map(map(metadata:))
+        return MediaPage(
+            items: items,
+            startIndex: page.startIndex,
+            totalCount: response.totalSize
+                ?? (page.startIndex + items.count + (items.count == page.limit && !items.isEmpty ? 1 : 0))
         )
     }
 
@@ -1668,7 +1753,8 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
         // the show here meant an episode never exposed its still at all — every
         // surface asking for `.episodeThumbnail` got series art instead. Jellyfin
         // maps this the same way (own primary image, series poster separately).
-        let posterPath = isEpisode ? (dto.thumb ?? dto.grandparentThumb) : dto.thumb
+        let posterPath = isEpisode ? (dto.thumb ?? dto.grandparentThumb)
+            : (kind == .playlist ? (dto.composite ?? dto.thumb) : dto.thumb)
         let viewCount = dto.viewCount ?? 0
         let viewedLeafCount = dto.viewedLeafCount ?? 0
         let leafCount = dto.leafCount ?? 0
@@ -2406,6 +2492,7 @@ public struct PlexProvider: MediaProvider, AuthenticatedHTTPOriginProviding {
         case "episode": return .episode
         case "clip", "video": return .video
         case "collection": return .collection
+        case "playlist": return .playlist
         default: return .unknown
         }
     }

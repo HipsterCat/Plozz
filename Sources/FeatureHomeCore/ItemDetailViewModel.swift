@@ -2367,7 +2367,7 @@ public final class ItemDetailViewModel {
         guard item.overview?.isEmpty ?? true else { return }
         switch item.kind {
         case .movie, .series, .season, .episode, .video: break
-        case .folder, .collection, .unknown: return
+        case .folder, .collection, .playlist, .unknown: return
         }
         let text = await OverviewRouter.shared.overview(for: item)
         guard !Task.isCancelled,

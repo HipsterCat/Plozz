@@ -2468,7 +2468,7 @@ private struct PlozziOSHeroMetadata: View {
     /// own are excluded rather than searched for one that cannot exist.
     static func tmdbLogoFallback(for item: MediaItem) -> (@Sendable () async -> URL?)? {
         switch item.kind {
-        case .folder, .collection, .unknown:
+        case .folder, .collection, .playlist, .unknown:
             return nil
         default:
             return { await ArtworkRouter.shared.artworkURL(.logo, for: item) }

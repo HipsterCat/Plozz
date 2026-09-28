@@ -42,6 +42,35 @@ final class MediaBrowserScopedCollectionTests: XCTestCase {
         }
     }
 
+    func testVideoPlaylistsAreScopedByMembersOnBothServersAndPageInAuthoredOrder() async throws {
+        for kind: ProviderKind in [.jellyfin, .emby] {
+            let http = ScopedCollectionsHTTPClient()
+            let provider = provider(kind, http: http)
+            XCTAssertTrue(provider.capabilities.contains(.videoPlaylists))
+            let movies = try await provider.videoPlaylists(in: "movies", page: PageRequest(limit: 1))
+            XCTAssertEqual(movies.items.map(\.id), ["mixed"])
+            XCTAssertEqual(movies.items.first?.kind, .playlist)
+            XCTAssertEqual(movies.totalCount, 1)
+            let requestCount = await http.queries.count
+            let next = try await provider.videoPlaylists(
+                in: "movies", page: PageRequest(startIndex: 1, limit: 1)
+            )
+            XCTAssertEqual(next.totalCount, 1)
+            let afterPage = await http.queries.count
+            XCTAssertEqual(requestCount, afterPage)
+            let shows = try await provider.videoPlaylists(in: "shows", page: PageRequest())
+            XCTAssertEqual(shows.items.map(\.id), ["mixed", "shows-only"])
+            let members = try await provider.videoPlaylistMembers(
+                of: "mixed", page: PageRequest(startIndex: 1, limit: 2)
+            )
+            XCTAssertEqual(members.items.map(\.id), ["nested-movie", "episode"])
+            XCTAssertEqual(members.totalCount, 3)
+            let queries = await http.queries
+            XCTAssertTrue(queries.contains { $0["IncludeItemTypes"] == "Playlist" && $0["ParentId"] == nil })
+            XCTAssertTrue(queries.contains { $0["StartIndex"] == "1" && $0["Limit"] == "2" })
+        }
+    }
+
     func testGridPagesShareScopedSnapshotWithoutPerPosterMembershipRequests() async throws {
         let http = ScopedCollectionsHTTPClient()
         let provider = provider(.emby, http: http)
@@ -179,7 +208,26 @@ private actor ScopedCollectionsHTTPClient: HTTPClient {
         if let parent, parent == failingParent { throw AppError.unauthorized }
 
         let rows: [[String: Any]]
-        if query["IncludeItemTypes"] == "BoxSet" {
+        if endpoint.path.hasPrefix("/Playlists/") {
+            switch endpoint.path {
+            case "/Playlists/mixed/Items":
+                rows = [
+                    ["Id": "episode", "Name": "One", "Type": "Episode"],
+                    ["Id": "nested-movie", "Name": "Two", "Type": "Movie"],
+                    ["Id": "episode", "Name": "Three", "Type": "Episode"]
+                ]
+            case "/Playlists/shows-only/Items":
+                rows = [["Id": "episode", "Name": "Show", "Type": "Episode"]]
+            default: throw AppError.notFound
+            }
+        } else if query["IncludeItemTypes"] == "Playlist" {
+            guard parent == nil else { throw AppError.invalidResponse }
+            rows = [
+                ["Id": "mixed", "Name": "Mixed", "Type": "Playlist", "MediaType": "Video"],
+                ["Id": "shows-only", "Name": "Shows only", "Type": "Playlist", "MediaType": "Video"],
+                ["Id": "music", "Name": "Music", "Type": "Playlist", "MediaType": "Audio"]
+            ]
+        } else if query["IncludeItemTypes"] == "BoxSet" {
             guard parent == nil else { throw AppError.invalidResponse }
             rows = [
                 ["Id": "in-a", "Name": "Z collection", "Type": "BoxSet", "ParentId": "global-boxsets"],
@@ -212,7 +260,10 @@ private actor ScopedCollectionsHTTPClient: HTTPClient {
         }
         let start = parent == repeatingParent && parent != nil
             ? 0 : Int(query["StartIndex"] ?? "0") ?? 0
-        var envelope: [String: Any] = ["Items": Array(rows.dropFirst(start).prefix(1))]
+        let limit = Int(query["Limit"] ?? "1") ?? 1
+        var envelope: [String: Any] = ["Items": Array(rows.dropFirst(start).prefix(
+            endpoint.path.hasPrefix("/Playlists/") ? limit : 1
+        ))]
         if includesTotals { envelope["TotalRecordCount"] = rows.count }
         return (
             try JSONSerialization.data(withJSONObject: envelope),

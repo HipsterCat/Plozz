@@ -20,7 +20,14 @@ fallback when the user's server has no attached trailer.
   series backdrop with focus-driven season tabs and an episode rail; the
   hero text updates as focus moves without distracting backdrop swaps.
 - **Library browsing** — `LibraryBrowseView` + `LibraryBrowseViewModel`
-  for the per-library grid behind a Home row.
+  for the per-library grid behind a Home row. Video libraries can switch
+  among Browse, Collections, and Playlists when their provider advertises
+  those capabilities. Plex, Jellyfin, and Emby discover existing video
+  playlists by actual member/library intersection; a mixed playlist appears
+  in each matching library but opens with its full authored order. Music
+  playlists remain in `MusicProvider`. Unsupported sources (including Silo)
+  do not advertise a video-playlist mode. Snapshots are bound to the provider
+  account and refreshed on the first page, not during poster scrolling.
 - **Trailers** — `OnlineTrailerSource` and `TrailerResolutionCache`
   handle the TMDb → YouTube fallback when the server has no attached
   trailer, by routing through `ProviderTrailers.YouTubeTrailerProvider`

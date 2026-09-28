@@ -475,6 +475,7 @@ struct MainTabView: View {
     /// user backed all the way out to Home. HomeTab/SearchTab write these bindings.
     @State private var playRequest: PlayRequest?
     @State private var resumePrompt: MediaItem?
+    @State private var pendingPlaylistOrigin: VideoPlaylistPlaybackOrigin?
     @Environment(\.colorScheme) private var systemColorScheme
 
     /// The selected root tab, persisted so it survives MainTabView being torn
@@ -1113,6 +1114,7 @@ struct MainTabView: View {
                 onSubtitleStyleChanged: { subtitleStyleModel.style = $0 },
                 playRequest: $playRequest,
                 resumePrompt: $resumePrompt,
+                pendingPlaylistOrigin: $pendingPlaylistOrigin,
                 pendingPersonRoute: $pendingPersonRoute,
                 pendingTitleRoute: $pendingTitleRoute,
                 isActiveTab: isActive ?? isActiveTab(.home),
@@ -1683,6 +1685,7 @@ struct MainTabView: View {
         .playerHost(
             playRequest: $playRequest,
             resumePrompt: $resumePrompt,
+            pendingPlaylistOrigin: $pendingPlaylistOrigin,
             accounts: accounts,
             networkFileResolver: networkFileResolver,
             authenticatedHTTPResolver: authenticatedHTTPResolver,

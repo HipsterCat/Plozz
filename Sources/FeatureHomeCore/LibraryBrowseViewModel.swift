@@ -6,11 +6,13 @@ import CoreNetworking
 public enum LibraryContentMode: String, CaseIterable, Sendable {
     case titles
     case collections
+    case playlists
 
     public var displayName: LocalizedStringResource {
         switch self {
-        case .titles: "Titles"
+        case .titles: "Browse"
         case .collections: "Collections"
+        case .playlists: "Playlists"
         }
     }
 }
@@ -18,6 +20,7 @@ public enum LibraryContentMode: String, CaseIterable, Sendable {
 public enum LibraryBrowseScope: String, Hashable, Sendable {
     case library
     case collectionMembers
+    case playlistMembers
 }
 
 /// Drives a *sparse* library grid: it loads the first page to learn the
@@ -61,19 +64,44 @@ public final class LibraryBrowseViewModel {
             && (provider as? any CapabilityReporting)?.capabilities.contains(.libraryCollections) == true
     }
 
+    public var supportsPlaylists: Bool {
+        browseScope == .library && (containerKind == .movie || containerKind == .series)
+            && (provider as? any CapabilityReporting)?.capabilities.contains(.videoPlaylists) == true
+    }
+
+    public var availableContentModes: [LibraryContentMode] {
+        [.titles] + (supportsCollections ? [.collections] : [])
+            + (supportsPlaylists ? [.playlists] : [])
+    }
+
     /// Invalidates cells only when replacing the browsing destination/order.
     /// Background catalog refreshes retain this generation and existing slots.
     public private(set) var contentGeneration = 0
 
     public var emptyMessage: LocalizedStringResource {
         if browseScope == .collectionMembers { return "This collection is empty." }
-        return contentMode == .collections ? "No collections in this library." : "This library is empty."
+        if browseScope == .playlistMembers { return "This playlist is empty." }
+        switch contentMode {
+        case .titles: return "This library is empty."
+        case .collections: return "No collections in this library."
+        case .playlists: return "No playlists in this library."
+        }
     }
 
     private let provider: any MediaProvider
     private let containerID: String
     private let containerKind: MediaItemKind
     public let browseScope: LibraryBrowseScope
+    /// Only playlist-member grids expose a playback origin. The sort is ignored
+    /// by their provider, so the index is the server's authored position.
+    public func playlistOrigin(at index: Int) -> VideoPlaylistPlaybackOrigin? {
+        guard browseScope == .playlistMembers, let item = item(at: index),
+              let accountID = sourceAccountID ?? item.sourceAccountID else { return nil }
+        return VideoPlaylistPlaybackOrigin(
+            playlistID: containerID, accountID: accountID,
+            index: index, totalCount: totalCount, item: item.taggingSource(accountID)
+        )
+    }
     private let firstPageSize: Int
     private let subsequentPageSize: Int
     private let defaults: UserDefaults
@@ -102,19 +130,24 @@ public final class LibraryBrowseViewModel {
     public var sourceServerID: String { provider.session.server.id }
 
     public var availableSortFields: [SortField] {
-        if browseScope == .collectionMembers { return [] }
+        if browseScope != .library { return [] }
         if browseKind == .collection { return [.name, .dateAdded] }
+        if browseKind == .playlist { return [.name] }
         return (provider as? any MediaSortFieldProviding)?
             .supportedSortFields(in: containerID, kind: containerKind)
             ?? SortField.allCases
     }
 
     private var browseKind: MediaItemKind {
-        contentMode == .collections ? .collection : containerKind
+        switch contentMode {
+        case .titles: containerKind
+        case .collections: .collection
+        case .playlists: .playlist
+        }
     }
 
     private var currentSortKeySuffix: String? {
-        contentMode == .collections ? nil : sortKeySuffix
+        contentMode == .titles ? sortKeySuffix : nil
     }
 
     public var fileBrowserLibrary: MediaLibrary? {
@@ -197,7 +230,7 @@ public final class LibraryBrowseViewModel {
         self.defaults = defaults
         self.sortKeySuffix = sortKeySuffix
         self.sourceAccountID = sourceAccountID
-        self.sort = browseScope == .collectionMembers
+        self.sort = browseScope != .library
             ? .default
             : Self.loadSort(for: containerKind, suffix: sortKeySuffix, from: defaults)
         if !availableSortFields.contains(sort.field) {
@@ -666,7 +699,7 @@ public final class LibraryBrowseViewModel {
     /// Mode belongs to this destination, not a global preference. Returning from
     /// detail keeps it; opening another library/account always starts with titles.
     public func setContentMode(_ newMode: LibraryContentMode) async {
-        guard newMode != contentMode, newMode == .titles || supportsCollections else { return }
+        guard newMode != contentMode, availableContentModes.contains(newMode) else { return }
         contentMode = newMode
         let restoredSort = Self.loadSort(for: browseKind, suffix: currentSortKeySuffix, from: defaults)
         let field = availableSortFields.first ?? .name
@@ -898,8 +931,16 @@ public final class LibraryBrowseViewModel {
                     provider: provider, collectionID: containerID, request: request
                 )
             }
+            if browseScope == .playlistMembers {
+                return try await fetchPlaylistMembers(
+                    provider: provider, playlistID: containerID, request: request
+                )
+            }
             if contentMode == .collections {
                 return try await provider.collections(in: containerID, page: request)
+            }
+            if contentMode == .playlists {
+                return try await provider.videoPlaylists(in: containerID, page: request)
             }
             return try await provider.items(in: containerID, kind: containerKind, page: request)
         }
@@ -924,6 +965,32 @@ public final class LibraryBrowseViewModel {
             if let totalCount, start >= totalCount { break }
             let page = try await provider.collectionMembers(
                 of: collectionID,
+                page: PageRequest(startIndex: start, limit: request.limit - items.count)
+            )
+            guard page.startIndex == start, page.totalCount >= 0,
+                  page.items.count <= request.limit - items.count,
+                  !page.items.isEmpty || start >= page.totalCount else {
+                throw AppError.invalidResponse
+            }
+
+            totalCount = page.totalCount
+            items.append(contentsOf: page.items)
+            if page.items.isEmpty { break }
+        }
+        return MediaPage(items: items, startIndex: request.startIndex, totalCount: totalCount ?? 0)
+    }
+
+    private nonisolated static func fetchPlaylistMembers(
+        provider: any MediaProvider, playlistID: String, request: PageRequest
+    ) async throws -> MediaPage {
+        var items: [MediaItem] = []
+        var totalCount: Int?
+        while items.count < request.limit {
+            try Task.checkCancellation()
+            let start = request.startIndex + items.count
+            if let totalCount, start >= totalCount { break }
+            let page = try await provider.videoPlaylistMembers(
+                of: playlistID,
                 page: PageRequest(startIndex: start, limit: request.limit - items.count)
             )
             guard page.startIndex == start, page.totalCount >= 0,

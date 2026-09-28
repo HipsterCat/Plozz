@@ -40,7 +40,7 @@ public enum ContentClassifier {
             return .movie
         case .series, .season, .episode:
             return .tvShow
-        case .folder, .collection, .unknown:
+        case .folder, .collection, .playlist, .unknown:
             return .unknown
         }
     }

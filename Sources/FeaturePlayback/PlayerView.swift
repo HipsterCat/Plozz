@@ -362,6 +362,7 @@ public struct PlayerView: View {
                 makeControls: { model, actions, onExitToSurface in
                     AnyView(PlayerControls(
                         model: model,
+                        player: viewModel,
                         palette: themePalette,
                         actions: actions,
                         onExitToSurface: onExitToSurface

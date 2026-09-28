@@ -27,6 +27,8 @@ public struct ProviderCapability: OptionSet, Codable, Hashable, Sendable {
     public static let remoteSubtitles = ProviderCapability(rawValue: 1 << 2)
     /// Discover server-defined collections within a video library.
     public static let libraryCollections = ProviderCapability(rawValue: 1 << 3)
+    /// Browse server video playlists in their matching libraries.
+    public static let videoPlaylists = ProviderCapability(rawValue: 1 << 4)
 
     /// The baseline every provider supports today.
     public static let videoOnly: ProviderCapability = [.video]

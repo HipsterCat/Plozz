@@ -40,6 +40,10 @@ enum HomeTabRoot {
     case allLibraries([AggregatedLibrary])
 }
 
+private struct PlaylistDetailRoute: Hashable {
+    let origin: VideoPlaylistPlaybackOrigin
+}
+
 /// Home tab with its own navigation stack: Home → Library (paged) → Detail and
 /// full-screen player presentation. Every destination resolves its provider from
 /// the tapped item/library's `sourceAccountID`.
@@ -134,6 +138,7 @@ struct HomeTab: View {
     /// Home). These bindings drive that root-level host.
     @Binding var playRequest: PlayRequest?
     @Binding var resumePrompt: MediaItem?
+    @Binding var pendingPlaylistOrigin: VideoPlaylistPlaybackOrigin?
     /// A person page raised by the in-player Cast card, to push once the player
     /// has closed. Non-nil only while THIS tab is the one on screen, so the two
     /// tabs that observe it can never both push the same page.
@@ -507,6 +512,12 @@ struct HomeTab: View {
                 // Opened from a library tile: default detail + playback to THAT
                 // library's server (the picker still lets the user switch).
                 itemDetail(for: route.item, libraryOrigin: route.originAccountID)
+            }
+            .navigationDestination(for: PlaylistDetailRoute.self) { route in
+                titleDetail(
+                    for: route.origin.item, libraryOrigin: route.origin.accountID,
+                    playlistOrigin: route.origin
+                )
             }
             .navigationDestination(for: EpisodeContextRoute.self) { route in
                 ItemDetailView(
@@ -1077,13 +1088,20 @@ struct HomeTab: View {
                 viewModel: LibraryBrowseViewModel(
                     provider: resolveProvider(route.accountID, in: accounts),
                     containerID: route.collectionID,
-                    containerKind: .collection,
+                    containerKind: route.kind,
                     sourceAccountID: route.accountID,
-                    browseScope: .collectionMembers
+                    browseScope: route.kind == .playlist ? .playlistMembers : .collectionMembers
                 ),
                 title: Text(verbatim: route.title),
                 spoilerSettings: spoilerSettings,
-                onSelect: { navigate($0, libraryOrigin: route.accountID) }
+                onSelect: { navigate($0, libraryOrigin: route.accountID) },
+                onSelectAtIndex: { item, origin in
+                    if let origin {
+                        path.append(PlaylistDetailRoute(origin: origin))
+                    } else {
+                        navigate(item, libraryOrigin: route.accountID)
+                    }
+                }
             )
         } else if let library = MediaFolderNavigation.library(
             for: item,
@@ -1101,7 +1119,10 @@ struct HomeTab: View {
         }
     }
 
-    private func titleDetail(for item: MediaItem, libraryOrigin: String?) -> some View {
+    private func titleDetail(
+        for item: MediaItem, libraryOrigin: String?,
+        playlistOrigin: VideoPlaylistPlaybackOrigin? = nil
+    ) -> some View {
         // A discovery (Seerr) title that isn't in the library — e.g. a "More Info"
         // tap on a *not-owned* featured hero slide — routes to the request-focused
         // discovery detail page instead of a doomed library fetch. Owned featured
@@ -1113,7 +1134,7 @@ struct HomeTab: View {
                 detailEnvironment.makeViewModel(for: item, libraryOrigin: libraryOrigin)
             },
             spoilerSettings: spoilerSettings,
-            onPlay: { requestPlay($0) },
+            onPlay: { requestPlay($0, playlistOrigin: playlistOrigin) },
             onSelectChild: { navigate($0, libraryOrigin: libraryOrigin) },
             onNavigate: { navigate($0, asOwnSubject: $0.kind == .episode) },
             onSelectPerson: { person, accountID in
@@ -1145,8 +1166,13 @@ struct HomeTab: View {
     /// In-progress items prompt "Resume vs Start Over"; fully-unwatched items
     /// play immediately from the start.
 
-    private func requestPlay(_ item: MediaItem) {
-        let target = bestSourcePlayItem(item, accounts: accounts, identitySources: identitySources)
+    private func requestPlay(
+        _ item: MediaItem, playlistOrigin: VideoPlaylistPlaybackOrigin? = nil
+    ) {
+        let origin = playlistOrigin?.containsSelection(item) == true ? playlistOrigin : nil
+        let target = origin == nil
+            ? bestSourcePlayItem(item, accounts: accounts, identitySources: identitySources)
+            : item
         // A series OR season can't be direct-played (the container has no media,
         // so `playbackInfo` for its ratingKey returns notFound). Resolve the
         // next-up / resume EPISODE and play that — matching Apple TV's hero Play.
@@ -1168,19 +1194,27 @@ struct HomeTab: View {
             }
             return
         }
-        presentPlay(target)
+        presentPlay(target, playlistOrigin: origin)
     }
 
     /// Presents the player for an already-resolved, directly-playable `target`
     /// (movie or episode), prompting Resume vs Start Over when it has progress.
-    private func presentPlay(_ target: MediaItem) {
+    private func presentPlay(
+        _ target: MediaItem, playlistOrigin: VideoPlaylistPlaybackOrigin? = nil
+    ) {
+        pendingPlaylistOrigin = playlistOrigin
         if let resume = target.resumePosition, resume > 1 {
             HandoffDiagnostics.emit(
                 "tap RESUME_PROMPT item=\(target.id) provider=\(target.sourceAccountID ?? "nil")"
             )
             resumePrompt = target
         } else {
-            let request = PlayRequest(item: target, startPosition: 0)
+            let playlist = playlistOrigin.map {
+                VideoPlaylistPlaybackContext(
+                    origin: $0, provider: resolveProvider($0.accountID, in: accounts)
+                )
+            }
+            let request = PlayRequest(item: target, startPosition: 0, playlist: playlist)
             HandoffDiagnostics.emit(
                 "tap PLAY trace=\(request.traceID.uuidString.prefix(8)) item=\(target.id) "
                     + "provider=\(target.sourceAccountID ?? "nil")"

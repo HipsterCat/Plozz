@@ -3,6 +3,7 @@ import SwiftUI
 import CoreModels
 import CoreUI
 import FeatureHomeCore
+import FeaturePlayback
 import FeatureHome
 import FeatureMusic
 import FeaturePlayback
@@ -27,6 +28,7 @@ struct PlayRequest: Identifiable, Equatable {
     let startPosition: TimeInterval
     let traceID: UUID
     let requestedAt: Date
+    let playlist: VideoPlaylistPlaybackContext?
 
     /// Resolves the show's remembered version HERE, so no play path can skip it.
     ///
@@ -40,7 +42,8 @@ struct PlayRequest: Identifiable, Equatable {
         traceID: UUID = UUID(),
         requestedAt: Date = Date(),
         versionPreferences: any VersionPreferenceStoring = VersionPreferenceStore(),
-        capabilities: MediaCapabilities = .detected()
+        capabilities: MediaCapabilities = .detected(),
+        playlist: VideoPlaylistPlaybackContext? = nil
     ) {
         self.item = DetailPlaybackSelection.playbackReady(
             item,
@@ -50,8 +53,14 @@ struct PlayRequest: Identifiable, Equatable {
         self.startPosition = startPosition
         self.traceID = traceID
         self.requestedAt = requestedAt
+        self.playlist = playlist
     }
 
     var id: String { item.id }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.traceID == rhs.traceID && lhs.item == rhs.item
+            && lhs.startPosition == rhs.startPosition
+    }
 }
 #endif
