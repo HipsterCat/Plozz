@@ -71,18 +71,20 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
         }
     }
 
-    func testProductionDetailCleanupDoesNotStopNewerTitleTrailer() async throws {
+    func testProductionDetailCleanupDoesNotDiscardNewerPendingTrailer() async throws {
         try await withTrailerFixture { model, video in
             model.path.append(1)
             try await waitUntil { model.detail.state.value?.childrenLoaded == true }
             try await Task.sleep(for: .milliseconds(500))
-            model.trailer.play(itemID: "new-title", resolvedURL: video, muted: false)
-            try await waitUntil { model.trailer.isPlaying }
+            model.trailer.prepare(itemID: "new-title", resolvedURL: video, muted: false)
             let replacement = try XCTUnwrap(model.trailer.player.currentItem)
+            XCTAssertEqual(model.trailer.currentItemID, "new-title")
+            XCTAssertFalse(model.trailer.isPlaying)
             model.path.removeAll()
             try await Task.sleep(for: .seconds(1))
             XCTAssertTrue(model.trailer.player.currentItem === replacement)
             XCTAssertEqual(model.trailer.currentItemID, "new-title")
+            XCTAssertFalse(model.trailer.isPlaying, "Departure must neither discard nor start the replacement.")
         }
     }
 
