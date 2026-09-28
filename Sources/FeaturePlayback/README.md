@@ -453,16 +453,14 @@ Its synthetic harness checks and real-server results are separate; neither a
 missing provider/configuration nor a skipped XCTest is a successful live run.
 
 The player's Playlist tab uses standalone, full-height media cards spaced like
-Cast. Episodes groups its season selector and episode row in one Info-style
-panel; the episode tiles have rounded stills and captions but no second surface
-at rest. Focus lifts only the artwork, leaving titles and neighboring tiles in
-place, with extra space between episodes. Horizontal layouts put multiple
-seasons in a scrollable left rail so episode artwork can fill the panel's
-height; a single-season show uses the full width without a redundant selector.
-Portrait layouts keep tabs above vertical episode rows. Season selection uses
-the same focus-safe tabs as the series page, and numbered episodes show their
-season/episode code on the still. Playlist entries retain server order and load
-only as they become visible.
+Cast. Episodes uses one continuous row across seasons in an Info-style panel,
+without season tabs or a width-limited season rail. Each numbered episode shows
+its season/episode code on the rounded still. Only the current season loads on
+entry; adjacent seasons load as browsing reaches the row's edges. Empty seasons
+are skipped, and a failed adjacent load exposes a retry at that edge. Focus
+lifts only episode artwork, leaving titles and neighboring tiles in place.
+Portrait layouts use vertical episode rows. Playlist entries retain server
+order and load only as they become visible.
 
 ## Siri Remote input
 

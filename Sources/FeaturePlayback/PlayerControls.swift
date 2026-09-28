@@ -138,6 +138,7 @@ struct PlayerControls: View {
         /// One face in the Cast card, by position in the row.
         case castMember(Int)
         case sequenceItem(Int)
+        case episodeItem(PlayerEpisodeEntry.ID)
         /// Back out of a cast member's details to the row.
         case castBack
         /// One title in a cast member's credits row, by position.

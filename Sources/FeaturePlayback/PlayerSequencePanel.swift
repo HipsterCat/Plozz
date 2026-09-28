@@ -7,27 +7,16 @@ struct PlayerSequenceLayout {
     let metrics: PlayerCardMetrics
     let cardMetrics: PlozzMetrics
     let contained: Bool
-    let seasonCount: Int
     let hasError: Bool
 
     var compact: Bool { metrics.contentHeight < 160 }
-    var hasSeasons: Bool { seasonCount > 1 }
-    var seasonHeight: CGFloat { compact ? 28 : 44 }
-    var hasSideSeasons: Bool { contained && hasSeasons && !metrics.isVertical }
-    var hasTopSeasons: Bool { hasSeasons && !hasSideSeasons }
-    var seasonColumnWidth: CGFloat {
-        max(100, metrics.castHeadshot + metrics.contentPadding)
-    }
-    var gap: CGFloat {
-        contained ? (compact ? 8 : 16) : (compact ? 6 : 10)
-    }
+    var gap: CGFloat { compact ? 6 : 10 }
     var columnSpacing: CGFloat {
         metrics.columnSpacing + (contained ? metrics.contentPadding / 2 : 0)
     }
     var containerVerticalInset: CGFloat { contained ? metrics.contentPadding / 2 : 0 }
     var rowHeight: CGFloat {
         metrics.cardHeight - containerVerticalInset * 2
-            - (hasTopSeasons ? seasonHeight + gap : 0)
             - (hasError ? 36 + gap : 0)
     }
     var titleHeight: CGFloat {
@@ -59,7 +48,6 @@ struct PlayerSequencePanel: View {
             metrics: metrics,
             cardMetrics: cardMetrics,
             contained: source == .episodes,
-            seasonCount: source == .episodes ? (player.episodeBrowser?.seasons.count ?? 0) : 0,
             hasError: source == .playlist && player.playlistContext?.loadError != nil
         )
     }
@@ -86,58 +74,7 @@ struct PlayerSequencePanel: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: layout.gap) {
             if source == .episodes, let browser = player.episodeBrowser {
-                if layout.hasSideSeasons {
-                    ScrollViewReader { proxy in
-                        HStack(alignment: .top, spacing: layout.gap) {
-                            ScrollView(.vertical, showsIndicators: false) {
-                                LazyVStack(alignment: .leading, spacing: layout.gap) {
-                                    ForEach(browser.seasons, id: \.id) { season in
-                                        seasonButton(season, in: browser)
-                                            .id(season.id)
-                                    }
-                                }
-                            }
-                            .frame(width: layout.seasonColumnWidth, height: layout.rowHeight)
-                            episodeContent(browser)
-                        }
-                        .onAppear {
-                            if let id = browser.selectedSeasonID {
-                                proxy.scrollTo(id, anchor: .center)
-                            }
-                        }
-                        .onChange(of: browser.selectedSeasonID) { _, id in
-                            if let id {
-                                proxy.scrollTo(id, anchor: .center)
-                            }
-                        }
-                    }
-                } else {
-                    if layout.hasTopSeasons {
-                        ScrollViewReader { proxy in
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                LazyHStack(spacing: 8) {
-                                    ForEach(browser.seasons, id: \.id) { season in
-                                        seasonButton(season, in: browser)
-                                            .id(season.id)
-                                    }
-                                }
-                            }
-                            .frame(height: layout.seasonHeight)
-                            .scrollClipDisabled()
-                            .onAppear {
-                                if let id = browser.selectedSeasonID {
-                                    proxy.scrollTo(id, anchor: .center)
-                                }
-                            }
-                            .onChange(of: browser.selectedSeasonID) { _, id in
-                                if let id {
-                                    proxy.scrollTo(id, anchor: .center)
-                                }
-                            }
-                        }
-                    }
-                    episodeContent(browser)
-                }
+                episodeContent(browser)
             } else if source == .playlist, let playlist = player.playlistContext {
                 if playlist.totalCount == 0 {
                     emptyRow("This playlist is empty.")
@@ -154,13 +91,7 @@ struct PlayerSequencePanel: View {
     @ViewBuilder
     private func episodeContent(_ browser: PlayerEpisodeBrowser) -> some View {
         if let error = browser.loadError {
-            errorRow(error) {
-                if let id = browser.selectedSeasonID {
-                    Task { await browser.selectSeason(id) }
-                } else {
-                    Task { await browser.loadIfNeeded() }
-                }
-            }
+            errorRow(error) { Task { await browser.loadIfNeeded() } }
         } else if browser.isLoading {
             ProgressView("Loading episodes…")
         } else if browser.episodes.isEmpty {
@@ -200,43 +131,76 @@ struct PlayerSequencePanel: View {
         }
     }
 
-    @ViewBuilder
-    private func seasonButton(_ season: MediaItem, in browser: PlayerEpisodeBrowser) -> some View {
-        let button = Button {
-            Task { await browser.selectSeason(season.id) }
-        } label: {
-            Text(verbatim: season.title)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+    private func episodeRetry(
+        _ error: AppError, title: LocalizedStringKey, retry: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(metrics.castNameFont)
+            Text(error.userMessage)
+                .font(.caption)
+                .lineLimit(2)
+            Button("Try Again", action: retry)
+                .font(.caption)
         }
-        if layout.compact {
-            button
-                .font(.caption2.weight(.semibold))
-                .buttonStyle(.bordered)
-                .tint(browser.selectedSeasonID == season.id ? .white : .gray)
-        } else {
-            button
-                .buttonStyle(PlozzSeasonTabStyle(
-                    isSelected: browser.selectedSeasonID == season.id
-                ))
-                .focusEffectDisabled()
-        }
+        .padding(metrics.contentPadding)
+        .frame(
+            width: metrics.isVertical ? nil : layout.cardWidth,
+            height: metrics.isVertical ? max(120, metrics.castRowHeight) : layout.rowHeight,
+            alignment: .leading
+        )
+        .background(.white.opacity(0.08), in: RoundedRectangle(
+            cornerRadius: cardMetrics.landscapeCardCornerRadius,
+            style: .continuous
+        ))
     }
 
     private func episodeRow(_ browser: PlayerEpisodeBrowser) -> some View {
-        sequenceScroll {
-            ForEach(Self.episodeEntries(from: browser), id: \.offset) { index, episode in
-                card(episode, index: index, selected: false) {
-                    player.playEpisode(episode)
+        ScrollViewReader { proxy in
+            sequenceScroll {
+                if let error = browser.previousLoadError {
+                    episodeRetry(error, title: "Earlier episodes") {
+                        Task { await browser.retryPrevious() }
+                    }
+                }
+                ForEach(Self.episodeEntries(from: browser)) { entry in
+                    card(
+                        entry.item, focusSlot: .episodeItem(entry.id),
+                        selected: false, episodeBadge: entry.badge
+                    ) {
+                        player.playEpisode(entry.item)
+                    }
+                    .id(entry.id)
+                    .task(id: browser.previousSeasonIndex) {
+                        guard entry.id == browser.episodes.first?.id else { return }
+                        await browser.loadPrevious()
+                    }
+                    .task(id: browser.nextSeasonIndex) {
+                        guard entry.id == browser.episodes.last?.id else { return }
+                        await browser.loadNext()
+                    }
+                }
+                if let error = browser.nextLoadError {
+                    episodeRetry(error, title: "Later episodes") {
+                        Task { await browser.retryNext() }
+                    }
+                }
+            }
+            .onAppear {
+                if let id = browser.initialEntryID {
+                    proxy.scrollTo(id, anchor: metrics.isVertical ? .top : .leading)
+                }
+            }
+            .onChange(of: browser.prependAnchorID) { _, id in
+                if let id {
+                    proxy.scrollTo(id, anchor: metrics.isVertical ? .top : .leading)
                 }
             }
         }
     }
 
-    static func episodeEntries(
-        from browser: PlayerEpisodeBrowser
-    ) -> [(offset: Int, element: MediaItem)] {
-        Array(browser.episodes.enumerated())
+    static func episodeEntries(from browser: PlayerEpisodeBrowser) -> [PlayerEpisodeEntry] {
+        browser.episodes
     }
 
     private func playlistRow(_ playlist: VideoPlaylistPlaybackContext) -> some View {
@@ -245,7 +209,10 @@ struct PlayerSequencePanel: View {
                 ForEach(0..<playlist.totalCount, id: \.self) { index in
                     Group {
                         if let item = playlist.items[index] {
-                            card(item, index: index, selected: index == playlist.currentIndex) {
+                            card(
+                                item, focusSlot: .sequenceItem(index),
+                                selected: index == playlist.currentIndex
+                            ) {
                                 Task { await player.playPlaylistItem(at: index) }
                             }
                         } else {
@@ -300,10 +267,11 @@ struct PlayerSequencePanel: View {
     }
 
     private func card(
-        _ item: MediaItem, index: Int, selected: Bool,
+        _ item: MediaItem, focusSlot: PlayerControls.FocusSlot, selected: Bool,
+        episodeBadge: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
-        let isFocused = focus == .sequenceItem(index)
+        let isFocused = focus == focusSlot
         return Button(action: action) {
             Group {
                 if metrics.isVertical {
@@ -314,9 +282,16 @@ struct PlayerSequencePanel: View {
                                 height: metrics.castRowHeight - 12
                             )
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        Text(verbatim: item.title)
-                            .font(metrics.castNameFont)
-                            .lineLimit(2)
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let episodeBadge {
+                                Text(verbatim: episodeBadge)
+                                    .font(metrics.castRoleFont)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(verbatim: item.title)
+                                .font(metrics.castNameFont)
+                                .lineLimit(2)
+                        }
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 12)
@@ -333,9 +308,8 @@ struct PlayerSequencePanel: View {
                                 cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius
                             )
                             .overlay(alignment: .bottomLeading) {
-                                if source == .episodes, item.episodeNumber != nil,
-                                   let subtitle = item.subtitle {
-                                    Text(verbatim: subtitle)
+                                if source == .episodes, let episodeBadge {
+                                    Text(verbatim: episodeBadge)
                                         .font(metrics.castRoleFont.weight(.semibold))
                                         .foregroundStyle(.white)
                                         .padding(.horizontal, 10)
@@ -377,8 +351,9 @@ struct PlayerSequencePanel: View {
             focusScale: metrics.isVertical ? 1 : 1.10
         ))
         .focusEffectDisabled(source == .episodes)
-        .focused($focus, equals: .sequenceItem(index))
-        .accessibilityLabel(Text(verbatim: item.title))
+        .focused($focus, equals: focusSlot)
+        .accessibilityLabel(Text(verbatim: [episodeBadge, item.title]
+            .compactMap { $0 }.joined(separator: " · ")))
         .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 

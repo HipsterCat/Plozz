@@ -14,7 +14,7 @@ final class PlayerViewModelEOFTests: XCTestCase {
         for metrics in [PlayerCardMetrics.tv, .horizontalWide, .horizontalNarrow] {
             let layout = PlayerSequenceLayout(
                 metrics: metrics, cardMetrics: .standard, contained: false,
-                seasonCount: 0, hasError: false
+                hasError: false
             )
             XCTAssertEqual(layout.rowHeight, metrics.cardHeight)
             XCTAssertGreaterThan(layout.cardWidth, metrics.castCardWidth)
@@ -30,47 +30,34 @@ final class PlayerViewModelEOFTests: XCTestCase {
                 layout.rowHeight
             )
 
-            let seasons = PlayerSequenceLayout(
+            let episodes = PlayerSequenceLayout(
                 metrics: metrics, cardMetrics: .standard, contained: true,
-                seasonCount: 30, hasError: false
+                hasError: false
             )
-            XCTAssertTrue(seasons.hasSideSeasons)
             XCTAssertEqual(
-                seasons.rowHeight + seasons.containerVerticalInset * 2,
+                episodes.rowHeight + episodes.containerVerticalInset * 2,
                 metrics.cardHeight
             )
             XCTAssertEqual(
-                seasons.columnSpacing,
+                episodes.columnSpacing,
                 metrics.columnSpacing + metrics.contentPadding / 2
             )
-            XCTAssertGreaterThan(seasons.imageHeight, metrics.castHeadshot * 0.85)
-            XCTAssertGreaterThan(seasons.titleHeight, 0)
+            XCTAssertGreaterThan(episodes.imageHeight, metrics.castHeadshot * 0.85)
+            XCTAssertGreaterThan(episodes.titleHeight, 0)
         }
         let portrait = PlayerSequenceLayout(
             metrics: .verticalNarrow, cardMetrics: .standard, contained: true,
-            seasonCount: 2, hasError: false
+            hasError: false
         )
-        XCTAssertTrue(portrait.hasTopSeasons)
         XCTAssertEqual(
-            portrait.rowHeight + portrait.seasonHeight + portrait.gap
-                + portrait.containerVerticalInset * 2,
+            portrait.rowHeight + portrait.containerVerticalInset * 2,
             portrait.metrics.cardHeight
         )
         let tv = PlayerSequenceLayout(
             metrics: .tv, cardMetrics: .standard, contained: false,
-            seasonCount: 0, hasError: false
+            hasError: false
         )
         XCTAssertGreaterThan(tv.imageHeight, 175)
-        let singleSeason = PlayerSequenceLayout(
-            metrics: .tv, cardMetrics: .standard, contained: true,
-            seasonCount: 1, hasError: false
-        )
-        XCTAssertFalse(singleSeason.hasSideSeasons)
-        XCTAssertFalse(singleSeason.hasTopSeasons)
-        XCTAssertEqual(
-            singleSeason.rowHeight + singleSeason.containerVerticalInset * 2,
-            singleSeason.metrics.cardHeight
-        )
     }
 
     func testMobileWakeIntentCoversStartupAndBufferingButRespectsPause() async {
@@ -341,13 +328,39 @@ final class PlayerViewModelEOFTests: XCTestCase {
         await browser.loadIfNeeded()
         await browser.loadIfNeeded()
         XCTAssertTrue(browser.seasons.isEmpty)
-        XCTAssertEqual(browser.episodes.map(\.id), ["loose"])
-        XCTAssertEqual(browser.episodes.first?.sourceAccountID, "account")
+        XCTAssertEqual(browser.episodes.map(\.item.id), ["loose"])
+        XCTAssertEqual(browser.episodes.first?.item.sourceAccountID, "account")
         let requests = await provider.childRequests
         XCTAssertEqual(requests, 1)
     }
 
-    func testSwitchingToShorterSeasonKeepsRenderedEpisodeValuesStable() async {
+    func testOneSeasonBrowserShowsEpisodesWithoutLoadingOtherSeasons() async {
+        let season = MediaItem(
+            id: "only-season", title: "Book One: A Very Long Season Name",
+            kind: .season, seasonNumber: 1
+        )
+        let episode = MediaItem(
+            id: "first", title: "Opening", kind: .episode,
+            episodeNumber: 1, seriesID: "series", seasonID: season.id
+        )
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: episode, streamURL: URL(string: "https://example.test/episode.m3u8")!
+            ),
+            childrenByParent: ["series": [season], season.id: [episode]]
+        )
+        let browser = PlayerEpisodeBrowser(item: episode, provider: provider)
+        await browser.loadIfNeeded()
+        await browser.loadPrevious()
+        await browser.loadNext()
+        XCTAssertEqual(browser.episodes.map(\.badge), ["S1 · E1"])
+        XCTAssertNil(browser.previousSeasonIndex)
+        XCTAssertNil(browser.nextSeasonIndex)
+        let requests = await provider.requestedChildIDs()
+        XCTAssertEqual(requests, ["series", "only-season"])
+    }
+
+    func testLoadingEarlierSeasonKeepsRenderedEpisodeValuesAndFocusStable() async {
         let seasonOne = MediaItem(id: "season-one", title: "Season 1", kind: .season)
         let seasonTwo = MediaItem(id: "season-two", title: "Season 2", kind: .season)
         let episode = MediaItem(
@@ -369,13 +382,110 @@ final class PlayerViewModelEOFTests: XCTestCase {
         let browser = PlayerEpisodeBrowser(item: episode, provider: provider)
         await browser.loadIfNeeded()
         let visibleEntries = PlayerSequencePanel.episodeEntries(from: browser)
-        XCTAssertEqual(visibleEntries.map(\.element.id), ["two-1", "two-2", "two-3"])
+        let initialID = browser.initialEntryID
+        XCTAssertEqual(visibleEntries.map(\.item.id), ["two-1", "two-2", "two-3"])
 
-        await browser.selectSeason(seasonOne.id)
-        XCTAssertEqual(browser.episodes.map(\.id), ["one-1"])
-        XCTAssertEqual(visibleEntries[2].element.id, "two-3",
-                       "An in-flight SwiftUI row must not index the changed browser array")
-        XCTAssertEqual(PlayerSequencePanel.episodeEntries(from: browser).map(\.element.id), ["one-1"])
+        await browser.loadPrevious()
+        XCTAssertEqual(browser.episodes.map(\.item.id), ["one-1", "two-1", "two-2", "two-3"])
+        XCTAssertEqual(visibleEntries[2].item.id, "two-3",
+                       "An in-flight SwiftUI row must keep captured values after prepending")
+        XCTAssertEqual(browser.initialEntryID, initialID)
+        XCTAssertEqual(browser.prependAnchorID, visibleEntries.first?.id)
+        XCTAssertEqual(browser.previousSeasonIndex, nil)
+        XCTAssertEqual(browser.nextSeasonIndex, nil)
+    }
+
+    func testLongRunningShowLoadsOnlyAdjacentSeasonsAndKeepsNumberedCardsDistinct() async {
+        let seasons = (1...30).map { (number: Int) in
+            MediaItem(
+                id: "season-\(number)", title: "Book \(number): A Very Long Season Name",
+                kind: .season, seasonNumber: number
+            )
+        }
+        let playing = MediaItem(
+            id: "shared-episode", title: "Chapter", kind: .episode,
+            episodeNumber: 1, seriesID: "series", seasonID: seasons[14].id
+        )
+        var children: [String: [MediaItem]] = ["series": seasons]
+        for season in seasons {
+            children[season.id] = [
+                MediaItem(
+                    id: "shared-episode", title: "Chapter", kind: .episode,
+                    episodeNumber: 1, seriesID: "series", seasonID: season.id
+                )
+            ]
+        }
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: playing, streamURL: URL(string: "https://example.test/episode.m3u8")!
+            ),
+            childrenByParent: children
+        )
+        let browser = PlayerEpisodeBrowser(item: playing, provider: provider)
+        await browser.loadIfNeeded()
+        XCTAssertEqual(browser.episodes.map(\.badge), ["S15 · E1"])
+        let initialRequests = await provider.requestedChildIDs()
+        XCTAssertEqual(initialRequests, ["series", "season-15"])
+
+        let initialID = browser.initialEntryID
+        await browser.loadPrevious()
+        await browser.loadNext()
+        XCTAssertEqual(browser.episodes.map(\.badge), ["S14 · E1", "S15 · E1", "S16 · E1"])
+        XCTAssertEqual(Set(browser.episodes.map(\.id)).count, 3)
+        XCTAssertEqual(browser.initialEntryID, initialID)
+        let requests = await provider.requestedChildIDs()
+        XCTAssertEqual(
+            requests,
+            ["series", "season-15", "season-14", "season-16"]
+        )
+
+        for _ in 17...30 { await browser.loadNext() }
+        for _ in 1...13 { await browser.loadPrevious() }
+        XCTAssertEqual(browser.episodes.map(\.badge),
+                       (1...30).map { "S\($0) · E1" })
+        XCTAssertNil(browser.previousSeasonIndex)
+        XCTAssertNil(browser.nextSeasonIndex)
+        let allRequests = await provider.requestedChildIDs()
+        XCTAssertEqual(allRequests.count, 31)
+    }
+
+    func testEpisodeBrowserSkipsEmptySeasonsAndRetriesFailedNeighbor() async {
+        let seasons = (1...4).map {
+            MediaItem(id: "season-\($0)", title: "Season \($0)", kind: .season)
+        }
+        let episode = MediaItem(
+            id: "first", title: "First", kind: .episode,
+            seriesID: "series", seasonID: seasons[0].id
+        )
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: episode, streamURL: URL(string: "https://example.test/episode.m3u8")!
+            ),
+            childrenByParent: [
+                "series": seasons,
+                seasons[1].id: [episode],
+                seasons[3].id: [MediaItem(id: "last", title: "Last", kind: .episode)]
+            ]
+        )
+        let browser = PlayerEpisodeBrowser(item: episode, provider: provider)
+        await browser.loadIfNeeded()
+        XCTAssertEqual(browser.episodes.map(\.item.id), ["first"])
+        XCTAssertEqual(browser.nextSeasonIndex, 2)
+
+        await provider.setChildError(.serverUnreachable, for: seasons[2].id)
+        await browser.loadNext()
+        XCTAssertEqual(browser.nextLoadError, .serverUnreachable)
+        XCTAssertEqual(browser.nextSeasonIndex, 2)
+        await provider.setChildError(nil, for: seasons[2].id)
+        await browser.retryNext()
+        XCTAssertNil(browser.nextLoadError)
+        XCTAssertEqual(browser.episodes.map(\.item.id), ["first", "last"])
+        XCTAssertNil(browser.nextSeasonIndex)
+        let requests = await provider.requestedChildIDs()
+        XCTAssertEqual(
+            requests,
+            ["series", "season-1", "season-2", "season-3", "season-3", "season-4"]
+        )
     }
 
     func testPlaylistPageFailureCanRetryWithoutLosingSeededSelection() async throws {
@@ -1549,6 +1659,8 @@ private actor RecordingPlaybackProvider: MediaProvider {
     private let playlistMembers: [MediaItem]
     private let playlistPageLimit: Int?
     private let childrenByParent: [String: [MediaItem]]
+    private var childErrors: [String: AppError] = [:]
+    private var childIDs: [String] = []
     private var playlistMemberError: AppError?
     private(set) var playlistMemberRequests = 0
     private(set) var childRequests = 0
@@ -1581,8 +1693,12 @@ private actor RecordingPlaybackProvider: MediaProvider {
     }
     func children(of itemID: String) async throws -> [MediaItem] {
         childRequests += 1
+        childIDs.append(itemID)
+        if let error = childErrors[itemID] { throw error }
         return childrenByParent[itemID] ?? []
     }
+    func requestedChildIDs() -> [String] { childIDs }
+    func setChildError(_ error: AppError?, for id: String) { childErrors[id] = error }
     func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
         MediaPage(items: [], startIndex: page.startIndex, totalCount: 0)
     }
