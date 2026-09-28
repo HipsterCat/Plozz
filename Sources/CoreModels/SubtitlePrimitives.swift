@@ -30,7 +30,6 @@ public struct SubtitleColor: Codable, Equatable, Sendable, Hashable {
     public static let cyan = SubtitleColor(red: 0.25, green: 0.85, blue: 1)
     public static let pink = SubtitleColor(red: 1, green: 0.55, blue: 0.75)
     public static let orange = SubtitleColor(red: 1, green: 0.6, blue: 0.15)
-    /// Broadcast (CEA-608) caption green, shared by the preset and markup colours.
     public static let green = SubtitleColor(red: 0, green: 1, blue: 0)
     public static let clear = SubtitleColor(red: 0, green: 0, blue: 0, alpha: 0)
 

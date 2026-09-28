@@ -45,10 +45,16 @@ final class SubtitleMarkupTests: XCTestCase {
         XCTAssertNil(t.runs?.last?.color)
     }
 
-    func testWebVTTGreenClassIsBrightCaptionGreen() throws {
-        let t = try text("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<c.green>Caller</c>: hi\n")
-        XCTAssertEqual(t.runs?.first?.color, SubtitleColor(red: 0, green: 1, blue: 0))
-        XCTAssertEqual(t.runs?.first?.color, .green, "markup and the Green preset must match")
+    func testNamedMarkupGreensRemainIndependentOfGreenAppearancePreset() throws {
+        let srt = try text("1\n00:00:01,000 --> 00:00:02,000\n<font color=green>Caller</font>\n")
+        XCTAssertEqual(srt.runs?.first?.color, SubtitleColor(red: 0, green: 0.5, blue: 0))
+
+        let vtt = try text("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<c.green>Caller</c> <c.lime>Friend</c>\n")
+        XCTAssertEqual(vtt.runs?.compactMap(\.color), [
+            SubtitleColor(red: 0, green: 0.5, blue: 0),
+            SubtitleColor(red: 0, green: 1, blue: 0)
+        ])
+        XCTAssertEqual(SubtitleColor.green, SubtitleColor(red: 0, green: 1, blue: 0))
     }
 
     func testEntitiesDecodeInsideRuns() throws {
