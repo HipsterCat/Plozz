@@ -190,6 +190,8 @@ separate `PlozzFocusHost` app. It uses the same package code but supplies a real
 foreground window scene, which package logic tests cannot provide. The suite
 exercises native focus on a loading episode slot and its handoff to an episode
 near the end of a 1,000-item row. It uses local fixture artwork, not media servers.
+Its 40-minute xcodebuild bound includes cold CI compilation as well as XCTest;
+the CI job retains its separate 60-minute outer bound.
 
 Pass `PLOZZ_SIM_ID` to select a simulator. Run `tools/generate-project.sh` after
 changing the host or test target. Results are retained under
