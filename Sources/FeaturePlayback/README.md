@@ -457,8 +457,12 @@ Cast. Episodes uses one continuous row across seasons in an Info-style panel,
 without season tabs or a width-limited season rail. Each numbered episode shows
 its season/episode code on the rounded still. Only the current season loads on
 entry; adjacent seasons load as browsing reaches the row's edges. Empty seasons
-are skipped, and a failed adjacent load exposes a retry at that edge. Focus
-lifts only episode artwork, leaving titles and neighboring tiles in place.
+are skipped, and a failed adjacent load exposes a retry at that edge. Adjacent
+loads belong to the row and follow visible edges, not the lifecycle of lazy
+cards; task and transport cancellations do not become retry errors. On tvOS,
+the shared native poster owns artwork focus, leaving titles and neighboring
+tiles in place. The panel clips scrolling content and focus projection at its
+rounded boundary.
 Portrait layouts use vertical episode rows. Playlist entries retain server
 order and load only as they become visible.
 

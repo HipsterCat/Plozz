@@ -63,7 +63,7 @@ public final class PlayerEpisodeBrowser {
     }
 
     public func loadIfNeeded() async {
-        guard !didLoad, !isLoading else { return }
+        guard !Task.isCancelled, !didLoad, !isLoading else { return }
         isLoading = true
         loadError = nil
         do {
@@ -86,7 +86,7 @@ public final class PlayerEpisodeBrowser {
             }
             didLoad = true
             isLoading = false
-        } catch is CancellationError {
+        } catch where Self.isCancellation(error) {
             isLoading = false
         } catch {
             loadError = error as? AppError ?? .invalidResponse
@@ -95,7 +95,7 @@ public final class PlayerEpisodeBrowser {
     }
 
     public func loadPrevious() async {
-        guard didLoad, let start = previousSeasonIndex,
+        guard !Task.isCancelled, didLoad, let start = previousSeasonIndex,
               !isLoadingPrevious, previousLoadError == nil else { return }
         isLoadingPrevious = true
         do {
@@ -111,7 +111,7 @@ public final class PlayerEpisodeBrowser {
                 }
             }
             isLoadingPrevious = false
-        } catch is CancellationError {
+        } catch where Self.isCancellation(error) {
             isLoadingPrevious = false
         } catch {
             previousLoadError = error as? AppError ?? .invalidResponse
@@ -120,7 +120,7 @@ public final class PlayerEpisodeBrowser {
     }
 
     public func loadNext() async {
-        guard didLoad, let start = nextSeasonIndex,
+        guard !Task.isCancelled, didLoad, let start = nextSeasonIndex,
               !isLoadingNext, nextLoadError == nil else { return }
         isLoadingNext = true
         do {
@@ -134,7 +134,7 @@ public final class PlayerEpisodeBrowser {
                 }
             }
             isLoadingNext = false
-        } catch is CancellationError {
+        } catch where Self.isCancellation(error) {
             isLoadingNext = false
         } catch {
             nextLoadError = error as? AppError ?? .invalidResponse
@@ -150,6 +150,11 @@ public final class PlayerEpisodeBrowser {
     public func retryNext() async {
         nextLoadError = nil
         await loadNext()
+    }
+
+    private static func isCancellation(_ error: any Error) -> Bool {
+        Task.isCancelled || error is CancellationError || error as? AppError == .cancelled
+            || (error as? URLError)?.code == .cancelled
     }
 
     private func findFirstEpisodes() async throws {
