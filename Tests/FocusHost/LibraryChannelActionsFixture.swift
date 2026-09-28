@@ -68,7 +68,7 @@ struct LibraryChannelActionsFixture: View {
                 libraryItem: Self.item
             )],
             start: now.addingTimeInterval(-60), now: now, width: 1_600,
-            timelineOffset: .constant(0), focus: $guideFocus, railActive: false, returnTarget: nil,
+            timeline: PrototypeTimelineScroll(), focus: $guideFocus, railActive: false, returnTarget: nil,
             favorite: false, playing: false, toggleFavorite: {}, tune: {}, details: { _ in },
             controls: {}, top: {}, goToNow: {},
             openLibraryItem: { opened = $0.navigationSubject }

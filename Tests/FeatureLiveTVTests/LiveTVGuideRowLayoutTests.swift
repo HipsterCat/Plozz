@@ -760,7 +760,7 @@ private struct GuideRowFixture: View {
         PrototypeGuideRow(
             channel: channel, programs: programs, start: start,
             now: start.addingTimeInterval(nowOffset), width: width,
-            timelineOffset: .constant(timelineOffset), focus: $focus, railActive: false,
+            timeline: PrototypeTimelineScroll(offset: timelineOffset), focus: $focus, railActive: false,
             returnTarget: nil, favorite: false, playing: false,
             toggleFavorite: {}, tune: {}, details: { _ in },
             controls: {}, top: {}, goToNow: {}
