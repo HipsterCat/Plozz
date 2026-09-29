@@ -36,12 +36,13 @@ public struct ItemDetailView: View {
     private let stackDepth: DetailStackDepth?
     /// This page's own level on the stack, recorded once it has appeared.
     @State private var ownStackDepth: Int?
+    @State private var isPageVisible = false
     /// Fast/local trailer resolver. A nil result leaves the static detail hero;
     /// online YouTube autoplay remains deliberately out of the first version.
     private let heroTrailerResolver: HeroTrailerResolving
-    /// Home-pushed details return to a hero that may reclaim the same shared
-    /// player. Other entry points (Search, library-only flows) stop on disappear.
-    private let preservesHeroTrailerOnDisappear: Bool
+    /// Evaluated on exit, when the router knows which surface is receiving the
+    /// player. Merely belonging to Home's navigation stack is not a handoff.
+    private let preservesHeroTrailerOnDisappear: @MainActor (String) -> Bool
     /// Whether the opened item is a not-in-library **discovery** (Seerr) title.
     /// When `true` the page renders a request-focused hero (no children rail,
     /// server/version pickers, watchlist/watched actions) instead of the library
@@ -147,7 +148,7 @@ public struct ItemDetailView: View {
         onSelectPerson: ((MediaPerson, String?) -> Void)? = nil,
         stackDepth: DetailStackDepth? = nil,
         heroTrailerResolver: @escaping HeroTrailerResolving = { _ in nil },
-        preservesHeroTrailerOnDisappear: Bool = false,
+        preservesHeroTrailerOnDisappear: @escaping @MainActor (String) -> Bool = { _ in false },
         initialSeasonID: String? = nil,
         initialEpisode: MediaItem? = nil,
         seerConnected: Bool = false,
@@ -275,16 +276,18 @@ public struct ItemDetailView: View {
         // button. load() guards against flashing `.loading` over a seeded hero.
         .task { await viewModel.load() }
         .onDisappear {
+            isPageVisible = false
             viewModel.suspendEnrichment()
             let itemID = viewModel.state.value?.item.id
             if let itemID {
                 heroTrailerController.clearEndHandler(ownerID: "detail-\(itemID)")
-                if !preservesHeroTrailerOnDisappear {
+                if !preservesHeroTrailerOnDisappear(itemID) {
                     heroTrailerController.stop(ifShowing: itemID)
                 }
             }
         }
         .onAppear {
+            isPageVisible = true
             MainThreadStallProbe.context = "detail"
             viewModel.resumeEnrichmentIfNeeded()
         }
@@ -299,8 +302,12 @@ public struct ItemDetailView: View {
             await refreshVisibleSeasonRequests()
         }
         .task(id: heroTrailerTaskID) {
-            guard heroBackground.settings.detailMode == .trailer,
-                  let item = viewModel.state.value?.item else { return }
+            guard isPageVisible, let item = viewModel.state.value?.item else { return }
+            guard heroBackground.settings.detailMode == .trailer, !hasChildOnTop else {
+                heroTrailerController.clearEndHandler(ownerID: "detail-\(item.id)")
+                heroTrailerController.stop(ifShowing: item.id)
+                return
+            }
             if let currentID = heroTrailerController.currentItemID,
                currentID != item.id {
                 heroTrailerController.stop()
@@ -322,6 +329,8 @@ public struct ItemDetailView: View {
             guard !Task.isCancelled else { return }
             guard let source = await heroTrailerResolver(item),
                   !Task.isCancelled,
+                  isPageVisible, !hasChildOnTop,
+                  heroBackground.settings.detailMode == .trailer,
                   viewModel.state.value?.item.id == item.id else { return }
             heroTrailerController.play(
                 itemID: item.id,
@@ -400,7 +409,7 @@ public struct ItemDetailView: View {
 
     private var heroTrailerTaskID: String {
         let itemID = viewModel.state.value?.item.id ?? "-"
-        return "\(itemID)|\(heroBackground.settings.detailMode.rawValue)"
+        return "\(itemID)|\(heroBackground.settings.detailMode.rawValue)|\(isPageVisible)|\(hasChildOnTop)"
     }
 
     /// Layout for non-series detail: a hero plus, for seasons/folders/collections,

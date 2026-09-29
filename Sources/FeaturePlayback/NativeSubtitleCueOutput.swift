@@ -80,27 +80,54 @@ enum NativeSubtitleText {
             runs = runs.map { .init($0.text) }
         }
         let attributes = string.length > 0 ? string.attributes(at: 0, effectiveRange: nil) : [:]
-        let x = number(attributes, kCMTextMarkupAttribute_TextPositionPercentageRelativeToWritingDirection)
-        let y = number(attributes, kCMTextMarkupAttribute_OrthogonalLinePositionPercentageRelativeToWritingDirection)
+        return SubtitleText(runs: runs, isItalic: italic, isBold: bold, layout: layout(attributes))
+    }
+
+    /// WebVTT cue settings as AVFoundation reports them. It passes `line:` and
+    /// `position:` percentages through unchanged but drops line numbers and the
+    /// `line`/`position` alignment keywords, and reports an unpositioned cue as
+    /// line 100, position 50. So a `line:` percentage takes WebVTT's default line
+    /// alignment (the box's top edge sits on the line), and `position:` pins the
+    /// edge `align:` implies: left for start/left, right for end/right, the
+    /// centre otherwise. `size:` is limited to what fits beside that anchor, as
+    /// WebVTT does.
+    static func layout(_ attributes: [NSAttributedString.Key: Any]) -> SubtitleCueLayout? {
+        let position = number(attributes, kCMTextMarkupAttribute_TextPositionPercentageRelativeToWritingDirection)
+        let line = number(attributes, kCMTextMarkupAttribute_OrthogonalLinePositionPercentageRelativeToWritingDirection)
+            .flatMap { $0 == 100 ? nil : $0 }
+        let size = number(attributes, kCMTextMarkupAttribute_WritingDirectionSizePercentage)
         let alignment = attributes[.init(kCMTextMarkupAttribute_Alignment as String)] as? String
         let horizontal: SubtitleAlignment.Horizontal
-        if alignment == kCMTextMarkupAlignmentType_Start as String {
+        if alignment == kCMTextMarkupAlignmentType_Start as String || alignment == kCMTextMarkupAlignmentType_Left as String {
             horizontal = .leading
-        } else if alignment == kCMTextMarkupAlignmentType_End as String {
+        } else if alignment == kCMTextMarkupAlignmentType_End as String
+                    || alignment == kCMTextMarkupAlignmentType_Right as String {
             horizontal = .trailing
         } else {
             horizontal = .center
         }
-        let positioned = (x != nil && x != 50) || (y != nil && y != 100) || horizontal != .center
-        let layout: SubtitleCueLayout?
-        if positioned {
-            let anchor = CGPoint(x: min(1, max(0, (x ?? 50) / 100)), y: min(1, max(0, (y ?? 100) / 100)))
-            let plane: SubtitleAlignment = horizontal == .leading ? .bottomLeft : horizontal == .trailing ? .bottomRight : .bottomCenter
-            layout = SubtitleCueLayout(alignment: plane, anchor: anchor)
-        } else {
-            layout = nil
+        guard line != nil || (position != nil && position != 50) || horizontal != .center else { return nil }
+
+        let x = min(100, max(0, position ?? 50))
+        let room = switch horizontal {
+        case .leading: 100 - x
+        case .trailing: x
+        case .center: 2 * min(x, 100 - x)
         }
-        return SubtitleText(runs: runs, isItalic: italic, isBold: bold, layout: layout)
+        let width = min(size ?? 100, room)
+        let plane: SubtitleAlignment = switch (line != nil, horizontal) {
+        case (true, .leading): .topLeft
+        case (true, .center): .topCenter
+        case (true, .trailing): .topRight
+        case (false, .leading): .bottomLeft
+        case (false, .center): .bottomCenter
+        case (false, .trailing): .bottomRight
+        }
+        return SubtitleCueLayout(
+            alignment: plane,
+            anchor: CGPoint(x: x / 100, y: line.map { min(100, max(0, $0)) / 100 } ?? 1),
+            boxWidth: width > 0 ? width / 100 : nil
+        )
     }
 
     private static func bool(_ attributes: [NSAttributedString.Key: Any], _ key: CFString) -> Bool {
@@ -123,6 +150,7 @@ public final class NativeSubtitleCueOutput: NSObject, AVPlayerItemLegibleOutputP
     private var timeline = NativeSubtitleTimeline()
     private let onCues: @MainActor ([SubtitleCue]) -> Void
     private var selectionEnabled = false
+    private var selectedOption: AVMediaSelectionOption?
     private var systemPresentation = false
     private var externalPlayback = false
     private var routeObservation: NSKeyValueObservation?
@@ -159,6 +187,7 @@ public final class NativeSubtitleCueOutput: NSObject, AVPlayerItemLegibleOutputP
         renderingTask?.cancel()
         renderingTask = nil
         selectionEnabled = enabled
+        selectedOption = nil
         replaceOutput()
     }
 
@@ -183,6 +212,7 @@ public final class NativeSubtitleCueOutput: NSObject, AVPlayerItemLegibleOutputP
         output = nil
         item = nil
         player = nil
+        selectedOption = nil
         timeline.reset()
         onCues([])
     }
@@ -222,7 +252,9 @@ public final class NativeSubtitleCueOutput: NSObject, AVPlayerItemLegibleOutputP
             }
             guard let group, !Task.isCancelled,
                   self.renderingGeneration == generation, self.item === item else { return }
-            let selected = item.currentMediaSelection.selectedMediaOption(in: group)
+            let current = item.currentMediaSelection.selectedMediaOption(in: group)
+            if let current { self.selectedOption = current }
+            let selected = self.selectionEnabled ? (current ?? self.selectedOption) : nil
             item.select(nil, in: group)
             // Clear the old native line before changing drawing ownership.
             await Task.yield()

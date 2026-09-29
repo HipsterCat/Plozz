@@ -90,8 +90,10 @@ final class HeroWatchlistDisplayEligibilityTests: XCTestCase {
         let a = item("a")
         let runtime = HomeHeroRuntimeState()
         runtime.sourceEligibility = HeroSourceEligibility(settings: settings, removedFromWatchlist: [a])
+        runtime.trailerReturnItemID = a.id
         XCTAssertFalse(runtime.sourceEligibility.allows(a))
         runtime.resetForSourceScopeChange()
         XCTAssertTrue(runtime.sourceEligibility.allows(a))
+        XCTAssertNil(runtime.trailerReturnItemID)
     }
 }

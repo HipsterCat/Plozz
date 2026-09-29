@@ -263,11 +263,17 @@ public struct SubtitleCueLayout: Sendable, Equatable {
     /// An explicit normalized anchor point in `[0, 1]` against the *video rect*
     /// (ASS `\pos`, WebVTT `position`/`line` percentages). When set it wins over
     /// the `alignment` plane for *placement*; `alignment` still governs text
-    /// justification and which point of the box sits on the anchor. `nil` = place
-    /// by plane + `margins` only.
+    /// justification and which point of the box sits on the anchor (`.topLeft`
+    /// pins the box's top-left corner, as ASS `\an7` and WebVTT `line-left` /
+    /// `line:` start do). `nil` = place by plane + `margins` only.
     public var anchor: CGPoint?
     /// Per-edge insets applied on top of the plane (ASS `MarginL/R/V`, VTT region).
     public var margins: SubtitleEdgeInsets
+    /// Width of the cue box as a fraction of the video width (WebVTT `size`),
+    /// already limited so the box fits the frame. The box's `alignment` edge
+    /// sits on `anchor`, and the text is justified inside it. `nil` sizes the
+    /// box to its text.
+    public var boxWidth: Double?
     /// `true` when the *source* explicitly placed this cue (a sign/caption), vs.
     /// the renderer choosing the default lane. The renderer keeps source-placed
     /// cues pinned to their plane while letting the user move dialogue, so a top
@@ -278,11 +284,13 @@ public struct SubtitleCueLayout: Sendable, Equatable {
         alignment: SubtitleAlignment = .bottomCenter,
         anchor: CGPoint? = nil,
         margins: SubtitleEdgeInsets = .zero,
+        boxWidth: Double? = nil,
         isSourcePositioned: Bool = true
     ) {
         self.alignment = alignment
         self.anchor = anchor
         self.margins = margins
+        self.boxWidth = boxWidth
         self.isSourcePositioned = isSourcePositioned
     }
 }

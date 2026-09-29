@@ -19,6 +19,24 @@ fallback when the user's server has no attached trailer.
 - **Series** — `SeriesDetailView` + `SeriesResume` provide one stable
   series backdrop with focus-driven season tabs and an episode rail; the
   hero text updates as focus moves without distracting backdrop swaps.
+  The compact logo above Seasons fits wholly inside its 200pt slot, including
+  tall wordmarks; it does not use the full hero's flexible height allowance.
+  This changes only artwork sizing, not season/episode focus geometry.
+  While the browser reveals, only the outer page's native scrolling is held:
+  horizontal episode focus stays live without provoking a second vertical
+  scroll that lifts the logo. The page restores normal scrolling when the
+  reveal finishes or is cancelled. Season pills, resting episode artwork,
+  loading cards, and About share the same leading keyline; card spacing stays
+  on the trailing side rather than indenting the artwork.
+  The shared hero/browser motion uses a finite 0.9-second curve with an earlier
+  slowdown and gentle landing, including logo and backdrop parallax.
+  A spring's logical completion leaves
+  several points of upward travel after the apparent landing, even when the
+  outer page never scrolls.
+  When pinned navigation hides on detail pages, horizontal rows draw through
+  the empty side gutter to the screen edge, including focused episode artwork.
+  The sidebar's mask changes without replacing the scroll view, preserving
+  browse position and restoring the normal feather when navigation returns.
 - **Library browsing** — `LibraryBrowseView` + `LibraryBrowseViewModel`
   for the per-library grid behind a Home row. Video libraries can switch
   among Browse, Collections, and Playlists when their provider advertises
@@ -32,6 +50,11 @@ fallback when the user's server has no attached trailer.
   handle the TMDb → YouTube fallback when the server has no attached
   trailer, by routing through `ProviderTrailers.YouTubeTrailerProvider`
   to surface a real `PlaybackRequest`.
+  Background hero trailers use one shared player. Detail departure stops its
+  trailer unless the router is returning directly to a rendered, unreceded Home
+  hero showing the same title with trailers enabled. Library, Watchlist, pushed
+  grids, and covered detail pages cannot retain background audio. A cancelled
+  or no-longer-frontmost detail resolver cannot start a trailer after departure.
 
 ## Showcase
 
@@ -93,6 +116,10 @@ simulator timing or passing navigation assertions alone.
 - **Server art first.** External art (`MetadataKit`) is used as a
   fallback via `CoreUI.FallbackAsyncImage`, never as the default — the
   server's own backdrop/logo is always tried first.
+  Shared logo views pair fallback lookups with the source item/account and
+  metadata query. Memoized logos and in-flight tasks also distinguish artwork
+  preference, so a missing server logo never gives unrelated titles a shared
+  cache entry. A reused view rejects the previous title's image immediately.
 - **`LoadState` everywhere.** Loading / empty / failure rendering uses
   `CoreUI.ContentStateView` so all surfaces feel identical.
 - **No tokens in logs.** Provider calls log only opaque ids — never

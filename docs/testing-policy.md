@@ -190,6 +190,8 @@ separate `PlozzFocusHost` app. It uses the same package code but supplies a real
 foreground window scene, which package logic tests cannot provide. The suite
 exercises native focus on a loading episode slot and its handoff to an episode
 near the end of a 1,000-item row. It uses local fixture artwork, not media servers.
+Its 40-minute xcodebuild bound includes cold CI compilation as well as XCTest;
+the CI job retains its separate 60-minute outer bound.
 
 Pass `PLOZZ_SIM_ID` to select a simulator. Run `tools/generate-project.sh` after
 changing the host or test target. Results are retained under
@@ -559,6 +561,16 @@ Explicit episode entry keeps its immediate browser behavior; Reduce Motion uses
 an immediate completion. Once revealed, lower content remains mounted so later
 navigation preserves its state. No extra hosting controller divides native
 button focus from the original page tree.
+`DetailTransitionVisualRegressionTests` also moves horizontally between real
+episodes during the production browser reveal. The outer page must remain at
+zero, the compact logo must retain its 72pt top clearance, and normal scrolling
+must be restored afterward. Pixel checks compare the season pill's outer edge,
+resting episode artwork, and About's leading keyline. Coverage includes all
+card focus styles, explicit episode entry, and scroll-guard
+removal without disabling nested rails or overriding an existing entrance gate.
+The same production test samples the rail's presented position after completion:
+it must stay within one point of its final position. Checking page offset alone
+misses the spring's measured 7–8.5pt post-completion movement of the whole browser.
 
 `NativePosterComparisonTests` is an opt-in, simulator-only comparison, enabled by
 `TEST_RUNNER_PLOZZ_NATIVE_POSTER_COMPARISON=1` on `PlozzHomeRemoteTests`. It captures

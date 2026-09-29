@@ -36,6 +36,27 @@ final class GuideVerticalNavigationRemoteTests: XCTestCase {
         assertSelected("Current 1", in: app)
     }
 
+    func testHorizontalBrowsingExtendsPastTheFirstSixHours() {
+        // Reaches 28 hours in: past the first six hours and past a day.
+        let app = launchGuide()
+        defer { app.terminate() }
+        for title in ["Future 0.1", "Future 0.2", "Future 0.3"] {
+            XCUIRemote.shared.press(.right)
+            assertSelected(title, in: app)
+        }
+        // Each step lands on the next hour, well beyond the initial window.
+        for hour in 1...22 {
+            XCUIRemote.shared.press(.right)
+            assertSelected("Later 0.\(hour)", in: app)
+        }
+        XCUIRemote.shared.press(.down)
+        assertSelected("Later 1.22", in: app)
+        XCUIRemote.shared.press(.left)
+        assertSelected("Later 1.21", in: app)
+        XCUIRemote.shared.press(.up)
+        assertSelected("Later 0.21", in: app)
+    }
+
     private func launchGuide() -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")

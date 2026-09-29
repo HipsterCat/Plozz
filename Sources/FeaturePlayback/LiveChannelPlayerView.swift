@@ -475,7 +475,33 @@ public struct LiveChannelPlayerView: View {
         }
     }
 
+    // Split in two so the modifier chain type-checks in reasonable time.
     public var body: some View {
+        presentationObservedRoot
+            .onChange(of: isExpanded) { _, expanded in
+                expansionChanged(expanded)
+            }
+            .onChange(of: playPauseRequest) { _, _ in
+                guard !isExpanded else { return }
+                model?.togglePlayPause()
+            }
+            .onChange(of: source, initial: true) { _, _ in updateSource() }
+            .onChange(of: reportingID) { _, _ in
+                updateSource()
+                onVideoAspectRatioChange(model?.engine.videoAspectRatio)
+            }
+            .onChange(of: isAudible) { _, audible in model?.setAudible(audible) }
+            .onChange(of: allowsDisplayMatching) { _, allowed in model?.setDisplayMatchingAllowed(allowed) }
+            .onChange(of: countsAsWatching) { _, watching in
+                model?.setWatching(watching)
+                reportPlaybackStartedIfNeeded()
+            }
+            .onChange(of: permitsExternalPresentation) { _, allowed in
+                model?.setPermitsExternalPresentation(allowed)
+            }
+    }
+
+    private var presentationObservedRoot: some View {
         ZStack {
             Color.black
             if !fullscreenOwnsSurface {
@@ -537,27 +563,6 @@ public struct LiveChannelPlayerView: View {
             }
         }
         #endif
-        .onChange(of: isExpanded) { _, expanded in
-            expansionChanged(expanded)
-        }
-        .onChange(of: playPauseRequest) { _, _ in
-            guard !isExpanded else { return }
-            model?.togglePlayPause()
-        }
-        .onChange(of: source, initial: true) { _, _ in updateSource() }
-        .onChange(of: reportingID) { _, _ in
-            updateSource()
-            onVideoAspectRatioChange(model?.engine.videoAspectRatio)
-        }
-        .onChange(of: isAudible) { _, audible in model?.setAudible(audible) }
-        .onChange(of: allowsDisplayMatching) { _, allowed in model?.setDisplayMatchingAllowed(allowed) }
-        .onChange(of: countsAsWatching) { _, watching in
-            model?.setWatching(watching)
-            reportPlaybackStartedIfNeeded()
-        }
-        .onChange(of: permitsExternalPresentation) { _, allowed in
-            model?.setPermitsExternalPresentation(allowed)
-        }
     }
 
     private func playbackPhaseChanged(_ phase: LiveChannelPlaybackPhase?) {

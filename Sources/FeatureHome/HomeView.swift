@@ -42,6 +42,9 @@ public final class HomeHeroRuntimeState {
     /// Deliberately unobserved: it changes on every page and nothing renders from
     /// it, so observing it would invalidate Home for no reason.
     @ObservationIgnored var pinnedItemIDs: Set<String> = []
+    /// Only the rendered, unreceded hero can receive its own trailer on return.
+    /// Kept while detail covers Home; cleared when that hero leaves the tree.
+    @ObservationIgnored public internal(set) var trailerReturnItemID: String?
     /// How many consecutive curations have failed to offer each retained title, so
     /// a deleted or un-watchlisted one eventually leaves rather than haunting the
     /// carousel. See ``HeroLiveMerge``. Unobserved: only the fold reads it.
@@ -70,6 +73,7 @@ public final class HomeHeroRuntimeState {
         hasHydratedCache = false
         freshnessRefresh = HeroFreshnessRefreshDriver()
         pinnedItemIDs = []
+        trailerReturnItemID = nil
         retainedMisses = [:]
         candidatePool = .empty
         sourceEligibility = .unrestricted
@@ -563,6 +567,7 @@ public struct HomeView: View {
                                             }
                                         },
                                         onPinnedItemsChanged: { heroRuntime.pinnedItemIDs = $0 },
+                                        onTrailerReturnItemChanged: { heroRuntime.trailerReturnItemID = $0 },
                                         onItemExposed: { viewModel.recordHeroExposure($0) },
                                         exposureScopeID: ObjectIdentifier(viewModel),
                                         recedeModel: heroRecedeModel
@@ -1470,7 +1475,7 @@ public struct HomeView: View {
                     showsSeriesArtwork: visibility.continueWatchingShowsSeriesArtwork,
                     onFocusEntered: reporter.entered,
                     onFocusChange: onFocusChange,
-                    onCardFocused: { _ in reporter.entered() },
+                    onCardFocused: reporter.cardFocused,
                     playsOnSelect: true,
                     onSelect: onPlayItem
                 )
@@ -1482,7 +1487,7 @@ public struct HomeView: View {
                     spoilerSettings: spoilerSettings,
                     onFocusEntered: reporter.entered,
                     onFocusChange: onFocusChange,
-                    onCardFocused: { _ in reporter.entered() },
+                    onCardFocused: reporter.cardFocused,
                     pendingRemovalIDs: pendingWatchlistRemovalIDs(
                         for: row.items,
                         revision: watchlistIntentRevision
@@ -1499,7 +1504,7 @@ public struct HomeView: View {
                     spoilerSettings: spoilerSettings,
                     onFocusEntered: reporter.entered,
                     onFocusChange: onFocusChange,
-                    onCardFocused: { _ in reporter.entered() },
+                    onCardFocused: reporter.cardFocused,
                     onSelect: onSelectItem
                 )
             case .libraries:
@@ -1522,7 +1527,7 @@ public struct HomeView: View {
                 spoilerSettings: spoilerSettings,
                 onFocusEntered: reporter.entered,
                 onFocusChange: onFocusChange,
-                onCardFocused: { _ in reporter.entered() },
+                onCardFocused: reporter.cardFocused,
                 onSelect: onSelectItem
             )
         case .section(let section):
@@ -1533,7 +1538,7 @@ public struct HomeView: View {
                 spoilerSettings: spoilerSettings,
                 onFocusEntered: reporter.entered,
                 onFocusChange: onFocusChange,
-                onCardFocused: { _ in reporter.entered() },
+                onCardFocused: reporter.cardFocused,
                 playsOnSelect: section.style == .landscape,
                 onSelect: section.style == .landscape ? onPlayItem : onSelectItem
             )

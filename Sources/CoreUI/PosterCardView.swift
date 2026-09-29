@@ -1235,10 +1235,10 @@ public struct PosterCardView: View {
     /// Router-resolved logo, for the many libraries whose server carries none.
     /// Bounded by the shared resolve limiter so a scrolling row can't fire one
     /// lookup per card at once.
-    private var seriesLogoFallback: (@Sendable () async -> URL?)? {
+    private var seriesLogoFallback: HeroLogoFallback? {
         guard enablesAsyncArtworkFallback else { return nil }
         let target = item.kind == .episode ? Self.seriesArtworkItem(for: item) : item
-        return {
+        return HeroLogoFallback(for: target) {
             await ArtworkSession.artworkResolveLimiter.run {
                 if Task.isCancelled { return nil }
                 return await ArtworkRouter.shared.artworkURL(.logo, for: target)
@@ -1271,7 +1271,7 @@ struct ContinueWatchingSeriesLogo: View {
     let logoReferences: [ArtworkReference]
     let artworkReferences: [ArtworkReference]
     let artworkVariant: ArtworkImageVariant
-    let asyncFallbackURL: (@Sendable () async -> URL?)?
+    let asyncFallbackURL: HeroLogoFallback?
 
     @Environment(\.plozzMetrics) private var metrics
     @State private var logoTone: ResolvedLogoTone?

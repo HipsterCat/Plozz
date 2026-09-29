@@ -41,7 +41,7 @@ public enum SubtitleCueParser {
     ) -> SubtitleCueStream {
         let unified = normalizeLineEndings(text)
         let format = detectFormat(unified)
-        let cues = format.isASSFamily ? parseASSCues(unified) : parseCuesNormalized(unified)
+        let cues = format.isASSFamily ? parseASSCues(unified) : parseCuesNormalized(unified, format: format)
         let metadata = SubtitleStreamMetadata(
             format: format,
             language: language,
@@ -57,9 +57,10 @@ public enum SubtitleCueParser {
     /// (the preview harness, tests, quick checks).
     public static func parseCues(_ text: String) -> [SubtitleCue] {
         let unified = normalizeLineEndings(text)
-        return detectFormat(unified).isASSFamily
+        let format = detectFormat(unified)
+        return format.isASSFamily
             ? parseASSCues(unified)
-            : parseCuesNormalized(unified)
+            : parseCuesNormalized(unified, format: format)
     }
 
     // MARK: - Byte decoding
@@ -153,31 +154,44 @@ public enum SubtitleCueParser {
 
     /// Splits the (line-ending-normalized) document into blank-line-separated
     /// blocks, parses each timing block into a cue, and returns them sorted by
-    /// start with monotonic ids. Non-cue blocks (the `WEBVTT` header, `NOTE`,
-    /// `STYLE`, `REGION`) are ignored.
-    private static func parseCuesNormalized(_ unified: String) -> [SubtitleCue] {
+    /// start with monotonic ids. Header STYLE blocks supply foreground colors;
+    /// structural blocks themselves never become cues.
+    private static func parseCuesNormalized(_ unified: String, format: SubtitleFormat) -> [SubtitleCue] {
         let blocks = unified
             .replacingOccurrences(of: "\u{FEFF}", with: "")
             .components(separatedBy: "\n\n")
 
         var parsed: [(start: Double, end: Double, text: SubtitleText)] = []
+        var styles = format == .webVTT ? WebVTTColorStyles() : nil
+        var sawCue = false
+        var readingStyle = false
 
         for block in blocks {
             let lines = block.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-            guard let timingIndex = lines.firstIndex(where: { $0.contains("-->") }) else { continue }
-
             // Skip WebVTT structural blocks even if they somehow contain "-->".
             let firstWord = lines.first?.trimmingCharacters(in: .whitespaces).uppercased() ?? ""
             if firstWord.hasPrefix("NOTE") || firstWord.hasPrefix("STYLE") || firstWord.hasPrefix("REGION") {
+                readingStyle = firstWord == "STYLE" && !sawCue && styles != nil
+                if readingStyle {
+                    styles?.append(lines.dropFirst().joined(separator: "\n"))
+                }
                 continue
             }
+            if readingStyle, !block.contains("-->") {
+                // CCExtractor also emits a blank line immediately after STYLE.
+                styles?.append(block)
+                continue
+            }
+            guard let timingIndex = lines.firstIndex(where: { $0.contains("-->") }) else { continue }
+            sawCue = true
+            readingStyle = false
 
             guard let timing = parseTimingLine(lines[timingIndex]) else { continue }
             guard timing.end > timing.start else { continue }
 
             let textLines = lines[(timingIndex + 1)...]
             let raw = textLines.joined(separator: "\n")
-            let cleaned = cleanText(raw)
+            let cleaned = SubtitleMarkup.parseSubRip(raw, webVTTStyles: styles)
             guard !cleaned.string.isEmpty else { continue }
 
             var body = cleaned
@@ -306,15 +320,6 @@ public enum SubtitleCueParser {
         // percentage form, so a bare integer line is treated as unknown.
         guard value.hasSuffix("%"), let pct = Double(trimmed) else { return nil }
         return min(max(pct, 0), 100)
-    }
-
-    // MARK: - Text cleanup
-
-    /// Strips markup to display text, keeping the formatting the renderer can
-    /// honour: `<font color>`/WebVTT colour classes as runs, whole-cue
-    /// `<i>`/`<b>` emphasis, and an SRT `{\an8}` plane (see ``SubtitleMarkup``).
-    private static func cleanText(_ raw: String) -> SubtitleText {
-        SubtitleMarkup.parseSubRip(raw)
     }
 
     // MARK: - ASS / SSA events

@@ -174,8 +174,9 @@ final class PosterCaptionRemoteTests: XCTestCase {
         ).integral
         let crop = try XCTUnwrap(image.cropping(to: region))
         let bytes = try pixels(crop)
-        let luminance = stride(from: 0, to: bytes.count, by: 4).map {
-            (Double(bytes[$0]) + Double(bytes[$0 + 1]) + Double(bytes[$0 + 2])) / (3 * 255)
+        let luminance = stride(from: 0, to: bytes.count, by: 4).map { (index: Int) -> Double in
+            let sum: Double = Double(bytes[index]) + Double(bytes[index + 1]) + Double(bytes[index + 2])
+            return sum / (3 * 255)
         }.sorted()
         return luminance[min(luminance.count - 1, Int(Double(luminance.count) * 0.98))]
     }

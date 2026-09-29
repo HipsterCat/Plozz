@@ -169,16 +169,27 @@ final class NativeSubtitlePresentationTests: XCTestCase {
             XCTAssertTrue(cues.active(at: start + 3 + offset + 1.0 / 600, offset: offset).isEmpty)
         }
         try assertOnlySuppressedOutput(engine)
+        let item = try XCTUnwrap(engine.underlyingPlayer?.currentItem)
+        let loadedGroup = try await item.asset.loadMediaSelectionGroup(for: .legible)
+        let group = try XCTUnwrap(loadedGroup)
 
         await engine.seek(to: 2.5)
         engine.selectSubtitleTrack(alternate)
-        try await waitUntil {
+        try await waitUntil(
+            detail: "After selecting Alternate: visible=\(model.primary.compactMap(\.text)), "
+                + "decoded=\(cues.compactMap(\.text))"
+        ) {
             return model.primary.map(\.text) == ["Alternate"]
         }
         XCTAssertTrue(engine.isPaused)
         XCTAssertFalse(cues.contains { $0.text == "Alpha" || $0.text == "Bravo" })
         engine.selectSubtitleTrack(full)
-        try await waitUntil {
+        try await waitUntil(
+            detail: "After reselecting Full: visible=\(model.primary.compactMap(\.text)), "
+                + "decoded=\(cues.compactMap(\.text)), "
+                + "selected=\(String(describing: item.currentMediaSelection.selectedMediaOption(in: group))), "
+                + "suppressed=\(item.outputs.compactMap { $0 as? AVPlayerItemLegibleOutput }.map(\.suppressesPlayerRendering))"
+        ) {
             return model.primary.compactMap(\.text) == ["Alpha", "Bravo"]
         }
         await engine.seek(to: 7.5)
@@ -230,13 +241,35 @@ final class NativeSubtitlePresentationTests: XCTestCase {
                 && item.currentMediaSelection.selectedMediaOption(in: group) == selected
         }
         XCTAssertTrue(cues.isEmpty, "System presentation must not double-draw the in-app overlay")
+        // The selected HLS rendition can disappear while AVFoundation changes renderers.
+        item.select(nil, in: group)
+        XCTAssertNil(item.currentMediaSelection.selectedMediaOption(in: group))
         engine.setNativeSubtitlesActive(false)
-        try await waitUntil {
+        try await waitUntil(
+            detail: "After restoring the overlay: visible=\(model.primary.compactMap(\.text)), "
+                + "decoded=\(cues.compactMap(\.text)), "
+                + "selected=\(String(describing: item.currentMediaSelection.selectedMediaOption(in: group))), "
+                + "suppressed=\(item.outputs.compactMap { $0 as? AVPlayerItemLegibleOutput }.map(\.suppressesPlayerRendering))"
+        ) {
             return model.primary.compactMap(\.text) == ["Alpha", "Bravo"]
                 && item.outputs.compactMap { $0 as? AVPlayerItemLegibleOutput }.contains { $0.suppressesPlayerRendering }
         }
         XCTAssertTrue(engine.isPaused)
         XCTAssertEqual(item.currentMediaSelection.selectedMediaOption(in: group), selected)
+        engine.selectSubtitleTrack(nil)
+        try await waitUntil {
+            item.currentMediaSelection.selectedMediaOption(in: group) == nil && cues.isEmpty
+        }
+        engine.setNativeSubtitlesActive(true)
+        try await waitUntil {
+            item.outputs.compactMap { $0 as? AVPlayerItemLegibleOutput }.contains { !$0.suppressesPlayerRendering }
+                && item.currentMediaSelection.selectedMediaOption(in: group) == nil
+        }
+        engine.setNativeSubtitlesActive(false)
+        try await waitUntil {
+            item.outputs.compactMap { $0 as? AVPlayerItemLegibleOutput }.contains { $0.suppressesPlayerRendering }
+                && item.currentMediaSelection.selectedMediaOption(in: group) == nil && cues.isEmpty
+        }
     }
 
     private func assertOnlySuppressedOutput(_ engine: NativeVideoEngine) throws {
@@ -310,14 +343,15 @@ final class NativeSubtitlePresentationTests: XCTestCase {
     }
 
     private func waitUntil(
-        timeout: Double = 12, file: StaticString = #filePath, line: UInt = #line,
+        timeout: Double = 12, detail: @autoclosure () -> String = "",
+        file: StaticString = #filePath, line: UInt = #line,
         _ condition: () -> Bool
     ) async throws {
         let deadline = ContinuousClock.now + .seconds(timeout)
         while !condition(), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(5))
         }
-        XCTAssertTrue(condition(), "Native subtitle presentation did not settle", file: file, line: line)
+        XCTAssertTrue(condition(), "Native subtitle presentation did not settle. \(detail())", file: file, line: line)
     }
 }
 
