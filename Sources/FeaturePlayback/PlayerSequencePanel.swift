@@ -33,7 +33,7 @@ struct PlayerSequenceLayout {
         return (metrics.castNameSize * (compact ? 1.4 : 2.45)).rounded(.up)
     }
     var bottomInset: CGFloat { cardMetrics.cardInset + (contained ? 0 : cardMetrics.landscapeCaptionInset) }
-    var captionFocusTravel: CGFloat { cardMetrics.focusCaptionPush(for: .system) }
+    var captionFocusTravel: CGFloat { cardMetrics.focusCaptionPush(for: .system) / 2 }
     var imageHeight: CGFloat {
         rowHeight - cardMetrics.cardInset - bottomInset
             - cardMetrics.landscapeCaptionTopSpacing - titleHeight

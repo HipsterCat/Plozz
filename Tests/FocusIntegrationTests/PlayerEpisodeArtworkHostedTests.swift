@@ -361,7 +361,7 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
         XCTAssertEqual(label.numberOfLines, 1)
         XCTAssertEqual(caption.bounds.height, caption.lineHeight, accuracy: 0.1)
         XCTAssertGreaterThan(media.bounds.height, 205)
-        let travel = PlozzMetrics.standard.focusCaptionPush(for: .system)
+        let travel: CGFloat = 8
         XCTAssertEqual(caption.transform.ty, travel, accuracy: 0.1)
         XCTAssertEqual(media.frame.minY, focused.bounds.maxY - caption.frame.maxY + travel, accuracy: 0.1,
                        "Resting insets remain balanced; focus only moves the caption down.")

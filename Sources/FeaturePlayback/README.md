@@ -479,7 +479,8 @@ captions stay outside that projection and neighboring tiles keep their layout. E
 giving the reclaimed height to larger 16:9 stills, with matching top and bottom
 insets. Long tvOS titles use the same native marquee as Home posters: only the
 focused title scrolls, it resets on blur/reuse, and Reduce Motion disables it.
-Focused episode captions move down slightly without changing the row layout.
+Focused episode captions move down by half the Home caption travel (8 points at
+standard metrics) without changing the row layout.
 Overflowing native captions fade at both edges, with inset resting endpoints
 that keep the beginning and end readable.
 Touch layouts truncate long titles. The shared scrim and episode
