@@ -9,6 +9,47 @@ import XCTest
 
 @MainActor
 final class PlayerEpisodeArtworkHostedTests: XCTestCase {
+    func testLeavingCollectionReplacesArtworkButHorizontalMovesPreserveIt() async throws {
+        let playing = EpisodeRowProvider.episode(season: 2, number: 2)
+        let player = PlayerViewModel(provider: EpisodeRowProvider(), itemID: playing.id, episodeItem: playing)
+        let browser = try XCTUnwrap(player.episodeBrowser)
+        await browser.loadIfNeeded()
+        try await withProductionPanel(player) { model, window in
+            try await self.waitUntil { model.observedFocus == .button(.episodes) }
+            let entry = try XCTUnwrap(browser.initialEntryID)
+            model.target = entry
+            try await self.waitUntil {
+                (UIFocusSystem.focusSystem(for: window)?.focusedItem as? PlayerEpisodeNativeCell)?
+                    .accessibilityLabel == playing.title
+            }
+            let cell = try XCTUnwrap(self.nativePosters(in: window).first(where: \.isFocused))
+            let artwork = try XCTUnwrap(cell.contentView as? TVMediaItemContentView)
+            let configuration = try XCTUnwrap(artwork.configuration as? TVMediaItemContentConfiguration)
+            let next = try XCTUnwrap(browser.episodes.first { $0.item.id == "2-3" })
+            try self.focusEpisode(next.id, in: window)
+            try await self.waitUntil { !cell.isFocused }
+            XCTAssertTrue(cell.contentView === artwork, "Horizontal browsing must not recreate artwork.")
+            try self.focusEpisode(entry, in: window)
+            try await self.waitUntil { cell.isFocused }
+            let collection = try XCTUnwrap(self.scrollView(in: window) as? UICollectionView)
+            let coordinator = try XCTUnwrap(collection.delegate as? PlayerEpisodeNativeRow.Coordinator)
+            try await self.waitUntil {
+                coordinator.focusAnimations == 0 && !browser.isLoadingPrevious && !browser.isLoadingNext
+            }
+            model.target = nil
+            try await self.waitUntil { model.observedFocus == .button(.episodes) && !cell.isFocused }
+            XCTAssertTrue(self.nativePosters(in: window).contains { $0 === cell })
+            XCTAssertFalse(cell.contentView === artwork,
+                           "Leaving for a SwiftUI tab must actually replace the native projection owner.")
+            let replacement = try XCTUnwrap(cell.contentView as? TVMediaItemContentView)
+            let replacementConfiguration = try XCTUnwrap(
+                replacement.configuration as? TVMediaItemContentConfiguration
+            )
+            XCTAssertTrue(replacementConfiguration.image === configuration.image,
+                          "Resetting focus must reuse the prepared artwork bitmap.")
+        }
+    }
+
     func testDisablingFocusedArtworkClearsPresentationBeforeUIKitMovesFocus() async throws {
         let provider = EpisodeRowProvider()
         let playing = EpisodeRowProvider.episode(season: 2, number: 2)
@@ -609,7 +650,7 @@ private struct ProductionEpisodeFixture: View {
         .environment(\.plozzCardFocusStyle, .system)
         .onAppear { focus = .button(.episodes) }
         .onChange(of: model.target) { _, id in
-            if let id { focus = .episodeItem(id) }
+            focus = id.map(PlayerControls.FocusSlot.episodeItem) ?? .button(.episodes)
         }
         .onChange(of: focus) { _, value in model.observedFocus = value }
     }

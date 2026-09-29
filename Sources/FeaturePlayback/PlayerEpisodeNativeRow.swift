@@ -375,8 +375,7 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
         if enabledChanged {
             // Closing can precede UIKit's focus departure; never park its live projection.
             UIView.performWithoutAnimation {
-                contentConfiguration = nil
-                updateConfiguration(using: configurationState)
+                resetArtworkContent()
                 caption.layer.removeAllAnimations()
                 caption.transform = CGAffineTransform(
                     translationX: 0, y: enabled && isFocused ? layout.captionFocusTravel : 0
@@ -413,6 +412,10 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
+        if context.previouslyFocusedView === self, !(context.nextFocusedView is PlayerEpisodeNativeCell) {
+            // SwiftUI tabs focus the hosting ancestor; TVUIKit can retain the old projection.
+            UIView.performWithoutAnimation { resetArtworkContent() }
+        }
         updateCaption()
         let moveCaption = {
             self.caption.transform = CGAffineTransform(
@@ -424,6 +427,15 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
         } else {
             coordinator.addCoordinatedAnimations(moveCaption, completion: nil)
         }
+    }
+
+    private func resetArtworkContent() {
+        contentConfiguration = nil
+        // Commit removal before reinstalling, or UIKit coalesces this onto the old content view.
+        setNeedsLayout()
+        layoutIfNeeded()
+        updateConfiguration(using: configurationState)
+        setNeedsLayout()
     }
 
     private func updateCaption() {

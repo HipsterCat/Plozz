@@ -3,6 +3,34 @@ import XCTest
 
 @MainActor
 final class PlayerEpisodeRowRemoteTests: XCTestCase {
+    func testUpUpDownKeepsEpisodeArtworkUnfocusedUntilRowEntry() throws {
+        let app = launch(arguments: ["--long-season", "--production-player-input", "--capture-artwork"])
+        defer { app.terminate() }
+        XCUIRemote.shared.press(.down)
+        XCTAssertTrue(app.buttons["Episodes"].waitForExistence(timeout: 5))
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(app.collectionViews.firstMatch.waitForExistence(timeout: 5))
+        for pausesOnTab in [true, false, false] {
+            XCUIRemote.shared.press(.down)
+            _ = try focusedEpisode(in: app)
+            XCUIRemote.shared.press(.right)
+            assertInAppArtworkIsClean(in: app)
+            XCUIRemote.shared.press(.up)
+            if pausesOnTab { assertInAppArtworkIsClean(in: app) }
+            XCUIRemote.shared.press(.up)
+            let surface = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "label == 'Playback'"),
+                object: app.staticTexts["episode-row-focus-owner"]
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [surface], timeout: 3), .completed)
+            XCUIRemote.shared.press(.down)
+            XCTAssertEqual(app.staticTexts["episode-row-focus-owner"].label, "Controls")
+            XCTAssertEqual(app.collectionViews.firstMatch.cells.matching(NSPredicate(format: "hasFocus == true")).count, 0,
+                           "Reentering the Episodes tab must not also focus an episode.")
+            assertInAppArtworkIsClean(in: app)
+        }
+    }
+
     func testUpFromEpisodesTabReturnsToSeekSurfaceLikeInfo() throws {
         continueAfterFailure = false
         let app = launch(arguments: ["--production-player-input"])

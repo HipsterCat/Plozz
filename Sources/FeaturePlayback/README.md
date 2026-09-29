@@ -469,8 +469,11 @@ including during native focus transitions and in RTL. Native scroll targets use
 complete card slots constrained to fully reveal the focused cell. First-card
 entry and return share the same gutter, with no idle realignment. Mobile SwiftUI
 rows defer leading insertions until scrolling settles.
-Closing or reopening a tvOS row recreates its artwork content views without
-replacing the cells or their viewport. Disabled cells immediately clear their
+tvOS resets artwork content when the row changes enabled state and when focus
+leaves the collection for a tab, without replacing cells or their viewport.
+The empty content configuration must complete a layout pass before reinstalling;
+otherwise UIKit keeps the old content view and its ancestor-focus projection.
+Horizontal episode moves retain their artwork views. Disabled cells immediately clear their
 native focus projection, caption offset and marquee, even before UIKit finishes
 moving focus out of the closing drawer. Episode activation does not leave a
 persistent collection selection. Episode browsing auto-hides after 15 seconds
