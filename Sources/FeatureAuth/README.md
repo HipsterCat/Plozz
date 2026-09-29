@@ -51,8 +51,10 @@ opens the last successfully used profile without the profile picker or PIN.
 This is the only startup control. When disabled, households with multiple
 profiles see the picker and protected profiles require their PIN as usual.
 The retired ask-on-startup preference is ignored, not converted into consent
-to bypass a PIN. PIN help appears only when the active profile has a local lock
-or a protected Plex Home binding.
+to bypass a PIN. The toggle has no helper text; only errors appear beneath it.
+Automatic sign-in applies to Plozz profiles regardless of their providers,
+including profiles without server accounts. Plex Home token restoration is the
+provider-specific part, not a restriction on who can use the setting.
 
 `AppRuntime.AutomaticSignInStore` retains one session in a non-synchronizable,
 ThisDeviceOnly Keychain item (per Apple TV system user). It stores authenticated

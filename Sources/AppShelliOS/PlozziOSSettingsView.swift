@@ -1259,8 +1259,6 @@ private struct PlozziOSProfilesView: View {
                 get: { appModel.plexHomeUsers.automaticallySignIn },
                 set: { appModel.setAutomaticallySignIn($0) }
             ),
-            profile: appModel.profiles.activeProfile,
-            accounts: appModel.accounts,
             error: appModel.plexHomeUsers.automaticSignInError
         )
     }
@@ -1277,7 +1275,7 @@ private struct PlozziOSProfilesView: View {
             SettingsSectionGroup {
                 AutomaticSignInToggle(settings: automaticSignIn)
             } footer: {
-                AutomaticSignInDescription(settings: automaticSignIn)
+                AutomaticSignInErrorMessage(settings: automaticSignIn)
             }
             SettingsSectionGroup(isEditingProfiles ? "Edit Profiles" : "Who’s watching?") {
                 // Tapping a row switches; in editing mode it opens that

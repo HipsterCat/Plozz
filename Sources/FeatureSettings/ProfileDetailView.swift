@@ -59,7 +59,7 @@ struct ProfileDetailView: View {
             VStack(alignment: .leading, spacing: 12) {
                 AutomaticSignInToggle(settings: context.automaticSignIn)
                     .toggleStyle(SettingsSwitchToggleStyle())
-                AutomaticSignInDescription(settings: context.automaticSignIn)
+                AutomaticSignInErrorMessage(settings: context.automaticSignIn)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 PlozzDivider()

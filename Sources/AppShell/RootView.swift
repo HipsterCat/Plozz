@@ -482,8 +482,6 @@ public struct RootView: View {
                                 get: { appState.plexHomeUsers.automaticallySignIn },
                                 set: { appState.profileFlow.setAutomaticallySignIn($0) }
                             ),
-                            profile: appState.profilesModel.activeProfile,
-                            accounts: appState.accountsProviders.accounts,
                             error: appState.plexHomeUsers.automaticSignInError
                         ),
                         homeRuntime: HomeTabRuntime(

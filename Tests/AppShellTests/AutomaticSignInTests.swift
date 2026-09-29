@@ -462,49 +462,48 @@ final class AutomaticSignInTests: XCTestCase {
         XCTAssertFalse(disabled.flow.isProfileSelectionCancelable)
     }
 
-    func testSettingsOmitPINExplanationForUnlockedProfiles() throws {
-        let house = try household()
-        let env = launch(house)
-        let settings = AutomaticSignInSettings(
-            isEnabled: .constant(false), profile: env.profiles.activeProfile,
-            accounts: env.hub.accounts
-        )
-        XCTAssertNil(settings.explanation)
+    func testSettingsHaveNoMessageWithoutAnError() {
+        let settings = AutomaticSignInSettings(isEnabled: .constant(false))
         XCTAssertNil(settings.error)
     }
 
-    func testSettingsExplainStartupPINBypassForLocalAndPlexLocks() throws {
-        let house = try household()
-        let env = launch(house)
-        var locallyLocked = env.profiles.activeProfile
-        locallyLocked.replaceLock(with: ProfileLock.make(pin: "1357", iterations: 1))
-        let plexLocked = env.profiles.activeProfile.settingHomeUserBinding(
-            .init(homeUserID: "parent", name: "Parent", requiresPIN: true),
-            forPlexAccount: "account"
+    func testSettingsStillSurfaceErrorsWithoutHelpText() {
+        let settings = AutomaticSignInSettings(
+            isEnabled: .constant(false),
+            error: "Couldn’t update automatic sign-in on this device. Try again."
         )
-        for profile in [locallyLocked, plexLocked] {
-            let settings = AutomaticSignInSettings(
-                isEnabled: .constant(false), profile: profile,
-                accounts: env.hub.accounts
-            )
-            XCTAssertEqual(
-                String(localized: try XCTUnwrap(settings.explanation)),
-                "Skip the PIN at startup on this device."
-            )
-        }
-        let removedAccount = AutomaticSignInSettings(
-            isEnabled: .constant(false), profile: plexLocked, accounts: []
-        )
-        XCTAssertNil(removedAccount.explanation)
+        XCTAssertNotNil(settings.error)
     }
 
-    func testSettingsStillSurfaceErrorsWithoutPINHelp() throws {
-        let env = launch(try household(provider: .jellyfin))
-        let settings = AutomaticSignInSettings(
-            isEnabled: .constant(false), profile: env.profiles.activeProfile,
-            accounts: env.hub.accounts, error: "Couldn’t update automatic sign-in on this device. Try again."
-        )
-        XCTAssertNil(settings.explanation)
-        XCTAssertNotNil(settings.error)
+    func testLocalProfileStartupIsProviderIndependent() throws {
+        for provider in [ProviderKind.jellyfin, .emby, .silo] {
+            let house = try household(provider: provider)
+            let env = launch(house)
+            var profile = env.profiles.activeProfile
+            profile.replaceLock(with: ProfileLock.make(pin: "1357", iterations: 1))
+            env.profiles.update(profile)
+            env.flow.switchProfile(to: profile.id)
+            XCTAssertTrue(env.flow.submitProfileLockPIN("1357"))
+            env.flow.setAutomaticallySignIn(true)
+            let next = launch(house)
+            next.flow.prepareLaunchPicker()
+            XCTAssertFalse(next.flow.isChoosingProfile, provider.rawValue)
+            XCTAssertFalse(next.flow.activeProfileAwaitsUnlock, provider.rawValue)
+            XCTAssertEqual(next.profiles.activeProfileID, profile.id)
+        }
+    }
+
+    func testStandaloneProfilesRestoreWithoutServerAccounts() throws {
+        let house = try household()
+        try house.accounts.clearAll()
+        let env = launch(house)
+        let other = env.profiles.add(name: "Other", avatarSymbol: "person", colorIndex: 1)
+        env.flow.switchProfile(to: other.id)
+        env.flow.setAutomaticallySignIn(true)
+        let next = launch(house)
+        next.flow.prepareLaunchPicker()
+        XCTAssertTrue(next.hub.accounts.isEmpty)
+        XCTAssertFalse(next.flow.isChoosingProfile)
+        XCTAssertEqual(next.profiles.activeProfileID, other.id)
     }
 }
