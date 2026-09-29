@@ -97,6 +97,8 @@ struct PlayerEpisodeNativeRow: UIViewRepresentable {
                 || self.environment.layoutDirection != environment.layoutDirection
                 || self.environment.dynamicTypeSize != environment.dynamicTypeSize
                 || self.environment.isEnabled != environment.isEnabled
+                || self.environment.accessibilityReduceMotion != environment.accessibilityReduceMotion
+                || self.environment.themePalette != environment.themePalette
                 || configuration?.layout.cardWidth != value.layout.cardWidth
                 || configuration?.layout.imageHeight != value.layout.imageHeight
                 || configuration?.layout.metrics.castNameFont != value.layout.metrics.castNameFont
@@ -292,7 +294,7 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
     private var references: [ArtworkReference] = []
     private var imageTask: Task<Void, Never>?
     private var revision = UUID()
-    private var caption: (UIView & UIContentView)?
+    private let caption = NativePosterCaptionLine()
     private var enabled = true
     private var environment = EnvironmentValues()
 
@@ -321,22 +323,12 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
         case .episode(let entry):
             accessibilityLabel = entry.item.title
             accessibilityValue = entry.badge
-            let captionConfiguration = UIHostingConfiguration {
-                Text(verbatim: entry.item.title)
-                    .font(layout.metrics.castNameFont)
-                    .lineLimit(layout.compact ? 1 : 2)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                    .environment(\.self, environment)
-            }.margins(.all, 0)
-            if let caption {
-                caption.configuration = captionConfiguration
-            } else {
-                let caption = captionConfiguration.makeContentView()
+            if caption.superview == nil {
                 caption.isUserInteractionEnabled = false
                 caption.accessibilityElementsHidden = true
-                self.caption = caption
                 addSubview(caption)
             }
+            updateCaption()
             let references = entry.item.artworkReferences(for: .episodeThumbnail)
             if references != self.references {
                 imageTask?.cancel()
@@ -364,8 +356,7 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
             retry.locale = environment.locale
             accessibilityLabel = String(localized: title) + ". " + String(localized: message) // l10n:content — localized UIKit accessibility text
             accessibilityValue = String(localized: retry) // l10n:content — localized UIKit accessibility text
-            caption?.removeFromSuperview()
-            caption = nil
+            caption.removeFromSuperview()
         }
         if needsArtworkUpdate { prepareArtwork() }
         setNeedsUpdateConfiguration()
@@ -396,13 +387,35 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
         contentConfiguration = configuration.updated(for: state)
     }
 
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        updateCaption()
+    }
+
+    private func updateCaption() {
+        guard case .episode(let entry) = element, let layout else { return }
+        let direction: UISemanticContentAttribute = environment.layoutDirection == .rightToLeft
+            ? .forceRightToLeft : .forceLeftToRight
+        if caption.semanticContentAttribute != direction {
+            caption.semanticContentAttribute = direction
+            caption.setNeedsLayout()
+        }
+        caption.configure(
+            text: entry.item.title,
+            font: .systemFont(ofSize: layout.metrics.castNameSize, weight: .semibold),
+            color: UIColor(isFocused ? environment.themePalette.primaryText : environment.themePalette.secondaryText),
+            scrolls: isFocused && !environment.accessibilityReduceMotion,
+            centersShortText: false
+        )
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         guard let layout else { return }
         let inset = layout.cardMetrics.cardInset
         contentView.frame = CGRect(x: inset, y: inset, width: layout.imageWidth, height: layout.imageHeight)
         contentView.layoutIfNeeded()
-        caption?.frame = CGRect(
+        caption.frame = CGRect(
             x: inset + layout.cardMetrics.landscapeCaptionInset,
             y: contentView.frame.maxY + layout.cardMetrics.landscapeCaptionTopSpacing,
             width: layout.imageWidth - layout.cardMetrics.landscapeCaptionInset * 2,
@@ -426,8 +439,7 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
         element = nil
         accessibilityLabel = nil
         accessibilityValue = nil
-        caption?.removeFromSuperview()
-        caption = nil
+        caption.removeFromSuperview()
     }
 
     private struct NativeEpisodeCellArtwork: View {

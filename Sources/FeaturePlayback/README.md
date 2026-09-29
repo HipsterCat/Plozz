@@ -472,7 +472,11 @@ rows defer leading insertions until scrolling settles.
 Initial loading
 uses nonfocusable artwork/caption skeletons with the loaded cards' dimensions,
 not a spinner or visible loading message. TVUIKit projects only the artwork,
-leaving captions and neighboring tiles in place. The shared scrim and episode
+leaving captions and neighboring tiles in place. Episode titles occupy one line,
+giving the reclaimed height to larger 16:9 stills, with matching top and bottom
+insets. Long tvOS titles use the same native marquee as Home posters: only the
+focused title scrolls, it resets on blur/reuse, and Reduce Motion disables it.
+Touch layouts truncate long titles. The shared scrim and episode
 text are rendered into that image at display scale so TVUIKit retains them on
 focus; this work is cached across focus changes. Panel glass is a separate
 background, not a compositor around the native row, so it cannot hide the

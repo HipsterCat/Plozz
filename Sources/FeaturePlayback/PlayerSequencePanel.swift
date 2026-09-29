@@ -2,6 +2,9 @@
 import CoreModels
 import CoreUI
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct PlayerSequenceLayout {
     let metrics: PlayerCardMetrics
@@ -20,10 +23,18 @@ struct PlayerSequenceLayout {
             - (hasError ? 36 + gap : 0)
     }
     var titleHeight: CGFloat {
-        (metrics.castNameSize * (compact ? 1.4 : 2.45)).rounded(.up)
+        if contained {
+            #if canImport(UIKit)
+            return ceil(UIFont.systemFont(ofSize: metrics.castNameSize, weight: .semibold).lineHeight)
+            #else
+            return (metrics.castNameSize * 1.4).rounded(.up)
+            #endif
+        }
+        return (metrics.castNameSize * (compact ? 1.4 : 2.45)).rounded(.up)
     }
+    var bottomInset: CGFloat { cardMetrics.cardInset + (contained ? 0 : cardMetrics.landscapeCaptionInset) }
     var imageHeight: CGFloat {
-        rowHeight - cardMetrics.cardInset * 2 - cardMetrics.landscapeCaptionInset
+        rowHeight - cardMetrics.cardInset - bottomInset
             - cardMetrics.landscapeCaptionTopSpacing - titleHeight
     }
     var imageWidth: CGFloat { (imageHeight * 16 / 9).rounded() }
@@ -406,7 +417,7 @@ struct PlayerSequencePanel: View {
                             }
                             Text(verbatim: item.title)
                                 .font(metrics.castNameFont)
-                                .lineLimit(2)
+                                .lineLimit(source == .episodes ? 1 : 2)
                         }
                         Spacer(minLength: 0)
                     }
@@ -428,17 +439,26 @@ struct PlayerSequencePanel: View {
                                     PlayerEpisodeArtworkOverlay(badge: episodeBadge, layout: layout)
                                 }
                             }
-                        Text(verbatim: item.title)
-                            .font(metrics.castNameFont)
-                            .fontWeight(selected ? .bold : .semibold)
-                            .lineLimit(layout.compact ? 1 : 2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .frame(height: layout.titleHeight, alignment: .center)
-                            .padding(.horizontal, cardMetrics.landscapeCaptionInset)
-                            .padding(.top, cardMetrics.landscapeCaptionTopSpacing)
+                        Group {
+                            if source == .episodes {
+                                PlozzMarqueeText(
+                                    text: Text(verbatim: item.title), font: metrics.castNameFont,
+                                    color: .primary, inset: 0, isFocused: isFocused
+                                )
+                            } else {
+                                Text(verbatim: item.title)
+                                    .font(metrics.castNameFont)
+                                    .fontWeight(selected ? .bold : .semibold)
+                                    .lineLimit(layout.compact ? 1 : 2)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(height: layout.titleHeight, alignment: .center)
+                        .padding(.horizontal, cardMetrics.landscapeCaptionInset)
+                        .padding(.top, cardMetrics.landscapeCaptionTopSpacing)
                     }
                     .padding([.top, .horizontal], cardMetrics.cardInset)
-                    .padding(.bottom, cardMetrics.cardInset + cardMetrics.landscapeCaptionInset)
+                    .padding(.bottom, layout.bottomInset)
                     .frame(width: layout.cardWidth, height: layout.rowHeight, alignment: .topLeading)
                 }
             }
@@ -523,7 +543,7 @@ struct PlayerEpisodeLoadingCard: View {
                         .padding(.top, layout.cardMetrics.landscapeCaptionTopSpacing)
                 }
                 .padding([.top, .horizontal], layout.cardMetrics.cardInset)
-                .padding(.bottom, layout.cardMetrics.cardInset + layout.cardMetrics.landscapeCaptionInset)
+                .padding(.bottom, layout.bottomInset)
                 .frame(width: layout.cardWidth, height: layout.rowHeight, alignment: .topLeading)
             }
         }

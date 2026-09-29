@@ -9,6 +9,31 @@ import XCTest
 
 @MainActor
 final class PlayerEpisodeArtworkHostedTests: XCTestCase {
+    func testSingleLineEpisodeCaptionFollowsLeadingEdgeWhenDirectionChanges() throws {
+        let layout = PlayerSequenceLayout(metrics: .tv, cardMetrics: .standard, contained: true, hasError: false)
+        let cell = PlayerEpisodeNativeCell(frame: CGRect(x: 0, y: 0, width: layout.cardWidth, height: layout.rowHeight))
+        let entry = PlayerEpisodeEntry(
+            item: MediaItem(id: "episode", title: "A short title", kind: .episode),
+            seasonID: "season", seasonNumber: 1
+        )
+        var environment = EnvironmentValues()
+        for direction in [LayoutDirection.leftToRight, .rightToLeft, .leftToRight] {
+            environment.layoutDirection = direction
+            cell.configure(.episode(entry), layout: layout, environment: environment)
+            cell.updateConfiguration(using: cell.configurationState)
+            cell.layoutIfNeeded()
+            let caption = try XCTUnwrap(views(in: cell, of: NativePosterCaptionLine.self).first)
+            caption.layoutIfNeeded()
+            let label = try XCTUnwrap(views(in: caption, of: UILabel.self).first)
+            XCTAssertEqual(label.numberOfLines, 1)
+            XCTAssertEqual(
+                label.frame.minX, direction == .rightToLeft ? caption.bounds.width - label.frame.width : 0,
+                accuracy: 0.1
+            )
+            XCTAssertNil(label.layer.animation(forKey: "captionMarquee"))
+        }
+    }
+
     func testPrependingEpisodesPreservesNativeFocusAndExactViewport() async throws {
         try await assertStablePrepend(direction: .leftToRight)
         try await assertStablePrepend(direction: .rightToLeft)
@@ -233,7 +258,10 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
         let entries = (1...6).map { (number: Int) in
             PlayerEpisodeEntry(
                 item: MediaItem(
-                    id: "episode-\(number)", title: "Episode \(number)",
+                    id: "episode-\(number)",
+                    title: number == 3
+                        ? "An episode with a long title that must scroll without widening the artwork or wrapping"
+                        : "Episode \(number)",
                     kind: .episode, episodeNumber: number
                 ),
                 seasonID: "season", seasonNumber: 2
@@ -278,6 +306,21 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
 
         let focused = try XCTUnwrap(nativePosters(in: window).first(where: \.isFocused))
         let media = try XCTUnwrap(views(in: focused, of: TVMediaItemContentView.self).first)
+        let caption = try XCTUnwrap(views(in: focused, of: NativePosterCaptionLine.self).first)
+        let label = try XCTUnwrap(views(in: caption, of: UILabel.self).first)
+        XCTAssertEqual(label.numberOfLines, 1)
+        XCTAssertEqual(caption.bounds.height, caption.lineHeight, accuracy: 0.1)
+        XCTAssertGreaterThan(media.bounds.height, 205)
+        XCTAssertEqual(media.frame.minY, focused.bounds.maxY - caption.frame.maxY, accuracy: 0.1,
+                       "The artwork's top and caption's bottom must have equal breathing room.")
+        XCTAssertLessThan(caption.bounds.width, media.bounds.width)
+        try await waitUntil { abs(label.layer.presentation()?.transform.m41 ?? 0) > 2 }
+        XCTAssertNotNil(label.layer.animation(forKey: "captionMarquee"))
+        for other in nativePosters(in: window) where other !== focused {
+            for title in views(in: other, of: NativePosterCaptionLine.self).flatMap({ views(in: $0, of: UILabel.self) }) {
+                XCTAssertNil(title.layer.animation(forKey: "captionMarquee"))
+            }
+        }
         let configuration = try XCTUnwrap(media.configuration as? TVMediaItemContentConfiguration)
         let projectedImage = try XCTUnwrap(configuration.image?.cgImage)
         var artworkPixels = [UInt8](repeating: 0, count: projectedImage.width * projectedImage.height * 4)
@@ -316,6 +359,12 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
         attachment.name = "Episode row native focus and clipped edges"
         attachment.lifetime = .keepAlways
         add(attachment)
+        try focusEpisode(entries[1].id, in: window)
+        try await waitUntil {
+            !focused.isFocused && label.layer.animation(forKey: "captionMarquee") == nil
+        }
+        XCTAssertEqual(label.layer.transform.m41, 0, accuracy: 0.1,
+                       "Leaving focus must restore the beginning of the title.")
     }
 
     private func focusEpisode(_ id: PlayerEpisodeEntry.ID, in window: UIWindow) throws {

@@ -125,7 +125,7 @@ final class PlayerEpisodeRowRemoteTests: XCTestCase {
         // interior, excluding the native focus rim and the caption below it.
         let region = CGRect(
             x: (cell.minX + 10 - appFrame.minX) * scale,
-            y: (cell.minY + cell.height * 0.5 - appFrame.minY) * scale,
+            y: (cell.minY + cell.height * 0.6 - appFrame.minY) * scale,
             width: cell.width * 0.35 * scale, height: cell.height * 0.22 * scale
         ).integral
         let crop = try XCTUnwrap(image.cropping(to: region))

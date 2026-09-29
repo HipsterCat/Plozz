@@ -43,7 +43,18 @@ final class PlayerViewModelEOFTests: XCTestCase {
                 metrics.columnSpacing + metrics.contentPadding / 2
             )
             XCTAssertGreaterThan(episodes.imageHeight, metrics.castHeadshot * 0.85)
-            XCTAssertGreaterThan(episodes.titleHeight, 0)
+            #if canImport(UIKit)
+            XCTAssertEqual(
+                episodes.titleHeight,
+                ceil(UIFont.systemFont(ofSize: metrics.castNameSize, weight: .semibold).lineHeight)
+            )
+            #endif
+            XCTAssertEqual(episodes.bottomInset, episodes.cardMetrics.cardInset)
+            XCTAssertEqual(
+                episodes.imageHeight + episodes.titleHeight + episodes.cardMetrics.landscapeCaptionTopSpacing
+                    + episodes.cardMetrics.cardInset + episodes.bottomInset,
+                episodes.rowHeight
+            )
         }
         let portrait = PlayerSequenceLayout(
             metrics: .verticalNarrow, cardMetrics: .standard, contained: true,
@@ -58,6 +69,11 @@ final class PlayerViewModelEOFTests: XCTestCase {
             hasError: false
         )
         XCTAssertGreaterThan(tv.imageHeight, 175)
+        let tvEpisodes = PlayerSequenceLayout(
+            metrics: .tv, cardMetrics: .standard, contained: true, hasError: false
+        )
+        XCTAssertGreaterThan(tvEpisodes.imageHeight, 205)
+        XCTAssertGreaterThan(tvEpisodes.imageWidth, 365)
     }
 
     func testMobileWakeIntentCoversStartupAndBufferingButRespectsPause() async {

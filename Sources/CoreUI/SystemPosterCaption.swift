@@ -46,8 +46,8 @@ struct SystemPosterCaption: UIViewRepresentable {
 
     class CaptionView: UIView {
         private let content = UIView()
-        let title = CaptionLine()
-        let subtitle = CaptionLine()
+        let title = NativePosterCaptionLine()
+        let subtitle = NativePosterCaptionLine()
         private var focusTravel: CGFloat = 0
         private var captionFocused = false
         private static let focusAnimationKey = "captionFocus"
@@ -117,140 +117,153 @@ struct SystemPosterCaption: UIViewRepresentable {
             if window == nil { content.layer.removeAnimation(forKey: Self.focusAnimationKey) }
         }
     }
+}
 
-    final class CaptionLine: UIView {
-        private let label = UILabel()
-        private let placeholder = UIView()
-        private let fade = CAGradientLayer()
-        private var scrolls = false
-        private var placeholderWidthFraction: CGFloat?
-        private var placeholderHeight: CGFloat = 0
-        private var motion: Motion?
-        private static let animationKey = "captionMarquee"
-        var lineHeight: CGFloat { ceil(label.font.lineHeight) }
+/// The single-line marquee shared by native posters and player episode cards.
+public final class NativePosterCaptionLine: UIView {
+    private let label = UILabel()
+    private let placeholder = UIView()
+    private let fade = CAGradientLayer()
+    private var scrolls = false
+    private var centersShortText = true
+    private var placeholderWidthFraction: CGFloat?
+    private var placeholderHeight: CGFloat = 0
+    private var motion: Motion?
+    private static let animationKey = "captionMarquee"
+    public var lineHeight: CGFloat { ceil(label.font.lineHeight) }
 
-        private struct Motion: Equatable {
-            let text: String
-            let font: UIFont
-            let width: CGFloat
-            let rightToLeft: Bool
-            let scrolls: Bool
-        }
+    private struct Motion: Equatable {
+        let text: String
+        let font: UIFont
+        let width: CGFloat
+        let rightToLeft: Bool
+        let scrolls: Bool
+        let centersShortText: Bool
+    }
 
-        init() {
-            super.init(frame: .zero)
-            clipsToBounds = true
-            isAccessibilityElement = false
-            label.isAccessibilityElement = false
-            label.numberOfLines = 1
-            addSubview(label)
-            placeholder.isHidden = true
-            placeholder.isUserInteractionEnabled = false
-            placeholder.isAccessibilityElement = false
-            addSubview(placeholder)
-            fade.startPoint = CGPoint(x: 0, y: 0.5)
-            fade.endPoint = CGPoint(x: 1, y: 0.5)
-        }
+    public init() {
+        super.init(frame: .zero)
+        clipsToBounds = true
+        isAccessibilityElement = false
+        label.isAccessibilityElement = false
+        label.numberOfLines = 1
+        addSubview(label)
+        placeholder.isHidden = true
+        placeholder.isUserInteractionEnabled = false
+        placeholder.isAccessibilityElement = false
+        addSubview(placeholder)
+        fade.startPoint = CGPoint(x: 0, y: 0.5)
+        fade.endPoint = CGPoint(x: 1, y: 0.5)
+    }
 
-        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-        func configure(text: String, font: UIFont, color: UIColor, scrolls: Bool) {
-            let changesLayout = placeholderWidthFraction != nil
-                || label.text != text || label.font != font || self.scrolls != scrolls
-            placeholderWidthFraction = nil
-            placeholder.isHidden = true
-            label.isHidden = false
-            if label.text != text { label.text = text }
-            if label.font != font { label.font = font }
-            if label.textColor != color { label.textColor = color }
-            self.scrolls = scrolls
-            if changesLayout { setNeedsLayout() }
-        }
+    public func configure(text: String, font: UIFont, color: UIColor, scrolls: Bool, centersShortText: Bool = true) {
+        let changesLayout =
+            placeholderWidthFraction != nil
+            || label.text != text || label.font != font || self.scrolls != scrolls
+            || self.centersShortText != centersShortText
+        placeholderWidthFraction = nil
+        placeholder.isHidden = true
+        label.isHidden = false
+        if label.text != text { label.text = text }
+        if label.font != font { label.font = font }
+        if label.textColor != color { label.textColor = color }
+        self.scrolls = scrolls
+        self.centersShortText = centersShortText
+        if changesLayout { setNeedsLayout() }
+    }
 
-        func configurePlaceholder(font: UIFont, color: UIColor, widthFraction: CGFloat, height: CGFloat) {
-            label.text = nil
-            label.font = font
-            label.isHidden = true
+    func configurePlaceholder(font: UIFont, color: UIColor, widthFraction: CGFloat, height: CGFloat) {
+        label.text = nil
+        label.font = font
+        label.isHidden = true
+        label.layer.removeAnimation(forKey: Self.animationKey)
+        motion = nil
+        scrolls = false
+        placeholderWidthFraction = widthFraction
+        placeholderHeight = height
+        placeholder.backgroundColor = color
+        placeholder.isHidden = false
+        setNeedsLayout()
+    }
+
+    public override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil {
             label.layer.removeAnimation(forKey: Self.animationKey)
             motion = nil
-            scrolls = false
-            placeholderWidthFraction = widthFraction
-            placeholderHeight = height
-            placeholder.backgroundColor = color
-            placeholder.isHidden = false
+        } else {
             setNeedsLayout()
         }
+    }
 
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            if window == nil {
-                label.layer.removeAnimation(forKey: Self.animationKey)
-                motion = nil
-            } else {
-                setNeedsLayout()
-            }
-        }
-
-        override func layoutSubviews() {
-            super.layoutSubviews()
-            if let fraction = placeholderWidthFraction {
-                let width = (bounds.width * fraction).rounded()
-                CATransaction.begin()
-                CATransaction.setDisableActions(true)
-                layer.mask = nil
-                placeholder.frame = CGRect(
-                    x: (bounds.width - width) / 2, y: (lineHeight - placeholderHeight) / 2,
-                    width: width, height: placeholderHeight
-                )
-                placeholder.layer.cornerRadius = placeholderHeight / 2
-                CATransaction.commit()
-                return
-            }
-            let rightToLeft = effectiveUserInterfaceLayoutDirection == .rightToLeft
-            let next = Motion(text: label.text ?? "", font: label.font, width: bounds.width,
-                              rightToLeft: rightToLeft, scrolls: scrolls && window != nil)
-            guard next != motion else { return }
-            motion = next
-            // The model stays at rest; removing this one animation restores it
-            // immediately, including when a long scroll is interrupted by focus.
-            label.layer.removeAnimation(forKey: Self.animationKey)
-            let width = label.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: lineHeight)).width
-            let overflows = width > bounds.width + 0.5
-            let x = overflows ? (rightToLeft ? bounds.width - width : 0) : (bounds.width - width) / 2
+    public override func layoutSubviews() {
+        super.layoutSubviews()
+        if let fraction = placeholderWidthFraction {
+            let width = (bounds.width * fraction).rounded()
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            label.frame = CGRect(x: x, y: 0, width: width, height: lineHeight)
-            fade.frame = bounds
-            let fadeWidth = min(12, bounds.width)
-            if overflows, bounds.width > 0 {
-                let edge = fadeWidth / bounds.width
-                fade.colors = rightToLeft
-                    ? [UIColor.clear.cgColor, UIColor.black.cgColor, UIColor.black.cgColor]
-                    : [UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor]
-                fade.locations = rightToLeft ? [0, NSNumber(value: edge), 1] : [0, NSNumber(value: 1 - edge), 1]
-                layer.mask = fade
-            } else {
-                layer.mask = nil
-            }
+            layer.mask = nil
+            placeholder.frame = CGRect(
+                x: (bounds.width - width) / 2, y: (lineHeight - placeholderHeight) / 2,
+                width: width, height: placeholderHeight
+            )
+            placeholder.layer.cornerRadius = placeholderHeight / 2
             CATransaction.commit()
-            guard next.scrolls, overflows, bounds.width > 0 else { return }
-            let distance = width - bounds.width + fadeWidth
-            let outward = Double(distance) / PlozzTheme.Metrics.marqueePointsPerSecond
-            let returning = Double(distance) / PlozzTheme.Metrics.marqueeReturnPointsPerSecond
-            let pause = PlozzTheme.Metrics.marqueeStartDelay
-            let end = pause + outward + PlozzTheme.Metrics.marqueeEndHold
-            let duration = end + returning + PlozzTheme.Metrics.marqueeRestHold
-            let offset = rightToLeft ? distance : -distance
-            let animation = CAKeyframeAnimation(keyPath: "transform.translation.x")
-            animation.values = [0, 0, offset, offset, 0, 0]
-            animation.keyTimes = [0, pause, pause + outward, end, end + returning, duration]
-                .map { NSNumber(value: $0 / duration) }
-            animation.timingFunctions = [.init(name: .linear), .init(name: .easeInEaseOut),
-                                         .init(name: .linear), .init(name: .easeInEaseOut), .init(name: .linear)]
-            animation.duration = duration
-            animation.repeatCount = .infinity
-            label.layer.add(animation, forKey: Self.animationKey)
+            return
         }
+        let rightToLeft = effectiveUserInterfaceLayoutDirection == .rightToLeft
+        let next = Motion(
+            text: label.text ?? "", font: label.font, width: bounds.width,
+            rightToLeft: rightToLeft, scrolls: scrolls && window != nil,
+            centersShortText: centersShortText)
+        guard next != motion else { return }
+        motion = next
+        // The model stays at rest; removing this one animation restores it
+        // immediately, including when a long scroll is interrupted by focus.
+        label.layer.removeAnimation(forKey: Self.animationKey)
+        let width = label.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: lineHeight)).width
+        let overflows = width > bounds.width + 0.5
+        let x =
+            overflows || !centersShortText
+            ? (rightToLeft ? bounds.width - width : 0) : (bounds.width - width) / 2
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        label.frame = CGRect(x: x, y: 0, width: width, height: lineHeight)
+        fade.frame = bounds
+        let fadeWidth = min(12, bounds.width)
+        if overflows, bounds.width > 0 {
+            let edge = fadeWidth / bounds.width
+            fade.colors =
+                rightToLeft
+                ? [UIColor.clear.cgColor, UIColor.black.cgColor, UIColor.black.cgColor]
+                : [UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor]
+            fade.locations = rightToLeft ? [0, NSNumber(value: edge), 1] : [0, NSNumber(value: 1 - edge), 1]
+            layer.mask = fade
+        } else {
+            layer.mask = nil
+        }
+        CATransaction.commit()
+        guard next.scrolls, overflows, bounds.width > 0 else { return }
+        let distance = width - bounds.width + fadeWidth
+        let outward = Double(distance) / PlozzTheme.Metrics.marqueePointsPerSecond
+        let returning = Double(distance) / PlozzTheme.Metrics.marqueeReturnPointsPerSecond
+        let pause = PlozzTheme.Metrics.marqueeStartDelay
+        let end = pause + outward + PlozzTheme.Metrics.marqueeEndHold
+        let duration = end + returning + PlozzTheme.Metrics.marqueeRestHold
+        let offset = rightToLeft ? distance : -distance
+        let animation = CAKeyframeAnimation(keyPath: "transform.translation.x")
+        animation.values = [0, 0, offset, offset, 0, 0]
+        animation.keyTimes = [0, pause, pause + outward, end, end + returning, duration]
+            .map { NSNumber(value: $0 / duration) }
+        animation.timingFunctions = [
+            .init(name: .linear), .init(name: .easeInEaseOut),
+            .init(name: .linear), .init(name: .easeInEaseOut), .init(name: .linear),
+        ]
+        animation.duration = duration
+        animation.repeatCount = .infinity
+        label.layer.add(animation, forKey: Self.animationKey)
     }
 }
 #endif
