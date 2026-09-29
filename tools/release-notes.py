@@ -70,7 +70,6 @@ def load_catalog(path: Path) -> dict[str, Any]:
     ids: set[str] = set()
     builds: set[int] = set()
     previous_build: int | None = None
-    display_versions: set[str] = set()
     previous_version: tuple[int, ...] | None = None
     previous_marketing_version: tuple[int, ...] | None = None
     for release in releases:
@@ -92,20 +91,15 @@ def load_catalog(path: Path) -> dict[str, Any]:
             fail(f"duplicate release build: {build}")
         if previous_build is not None and build >= previous_build:
             fail("releases must be sorted by descending build")
-        version_tuple = version_parts(version, (3, 4))
+        version_tuple = version_parts(version, (3,))
         apple_version = version_parts(marketing_version(release), (3,))
-        if len(version_tuple) == 4:
-            if "marketingVersion" not in release:
-                fail(f"{release_id} requires an explicit marketingVersion")
-            if version_tuple[3] < 1 or version != ".".join(map(str, version_tuple)):
-                fail(f"{release_id} has an invalid release revision")
+        if "marketingVersion" in release:
+            if version != ".".join(map(str, version_tuple)):
+                fail(f"{release_id} has an invalid release date version")
             if not 1 <= version_tuple[0] <= 9999:
                 fail(f"{release_id} has an invalid release year")
-            if date(*version_tuple[:3]).isoformat() != released_at:
+            if date(*version_tuple).isoformat() != released_at:
                 fail(f"{release_id} version date must match releasedAt")
-            if version in display_versions:
-                fail(f"duplicate release version: {version}")
-            display_versions.add(version)
         if previous_version is not None and version_tuple > previous_version:
             fail("release versions must be sorted newest first")
         if previous_marketing_version is not None and apple_version > previous_marketing_version:
@@ -186,15 +180,11 @@ def build_identity(
 
 
 def next_release_version(catalog: dict[str, Any], day: date) -> str:
-    prefix = (day.year, day.month, day.day)
-    revisions = []
+    version = (day.year, day.month, day.day)
     for release in catalog["releases"]:
-        parts = version_parts(release["version"], (3, 4))
-        if parts[:3] > prefix:
+        if version_parts(release["version"], (3,)) > version:
             fail("Release date precedes an existing release version")
-        if parts[:3] == prefix and len(parts) == 4:
-            revisions.append(parts[3])
-    return ".".join(map(str, (*prefix, max(revisions, default=0) + 1)))
+    return ".".join(map(str, version))
 
 
 def render(
@@ -213,7 +203,7 @@ def render(
         blocks.append(f"{section['category']}\n{items}")
     text = "\n\n".join(blocks) if blocks else empty_text or ""
     if text and "marketingVersion" in release:
-        return f"Plozz {release['version']}\n\n{text}"
+        return f"Plozz {release['version']} ({release['build']})\n\n{text}"
     return text
 
 

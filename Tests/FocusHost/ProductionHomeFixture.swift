@@ -147,7 +147,8 @@ private struct ProductionHomeContent: View {
                 heroRuntime: fixture.runtime,
                 heroArtworkProvider: { $0.backdropURL },
                 heroArtworkValidator: { _ in true },
-                navigationStyle: isPinned ? .rail : .default,
+                navigationStyle: isPinned ? .rail
+                    : (ProcessInfo.processInfo.arguments.contains("--native-sidebar-home") ? .sidebar : .default),
                 onSelectItem: { item in withCinematicDetailNavigation(for: item) { path.append(item) } },
                 onPlayItem: { _ in },
                 onSelectLibrary: { _ in }

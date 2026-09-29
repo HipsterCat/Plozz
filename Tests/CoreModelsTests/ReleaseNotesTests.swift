@@ -4,56 +4,73 @@ import XCTest
 @MainActor
 final class ReleaseNotesTests: XCTestCase {
     private func revisedRelease(
-        _ build: Int, version: String, marketingVersion: String? = "2026.9.25"
+        _ build: Int, version: String, marketingVersion: String? = "2026.9.25",
+        releasedAt: String = "2026-09-29"
     ) -> ReleaseNotesRelease {
         ReleaseNotesRelease(
             id: String(format: "release/%03d", build), version: version,
-            build: build, releasedAt: "2026-09-29",
-            sections: [ReleaseNotesSection(category: .new, items: ["New release"])],
+            build: build, releasedAt: releasedAt,
+            sections: [ReleaseNotesSection(category: .new, items: ["Release \(build)"])],
             marketingVersion: marketingVersion
         )
     }
 
     func testIndependentReleasesGroupAndAnnounceWithUnchangedAppleVersion() throws {
         let catalog = try ReleaseNotesCatalog(releases: [
-            revisedRelease(46, version: "2026.9.29.10"),
-            revisedRelease(45, version: "2026.9.29.9")
+            revisedRelease(46, version: "2026.9.29"),
+            revisedRelease(45, version: "2026.9.29")
         ])
         let decoded = try ReleaseNotesCatalog(data: JSONEncoder().encode(catalog))
         XCTAssertEqual(decoded, catalog)
         XCTAssertEqual(catalog.releases.map(\.appleVersion), ["2026.9.25", "2026.9.25"])
-        XCTAssertEqual(catalog.allGroups.map(\.version), ["2026.9.29.10", "2026.9.29.9"])
+        XCTAssertEqual(catalog.allGroups.map(\.version), ["2026.9.29"])
+        XCTAssertEqual(
+            catalog.allGroups[0].sections[0].items.map(\.text), ["Release 46", "Release 45"]
+        )
         let store = TestReleaseNotesStore(lastSeenReleaseID: "release/045")
         let model = ReleaseNotesModel(
             catalog: catalog, currentReleaseID: "release/046", store: store
         )
         model.prepareForStartup()
-        XCTAssertEqual(model.pendingVersionGroups.map(\.version), ["2026.9.29.10"])
+        XCTAssertEqual(model.pendingVersionGroups.map(\.version), ["2026.9.29"])
+        XCTAssertEqual(model.pendingReleases.map(\.build), [46])
+        XCTAssertEqual(model.pendingVersionGroups[0].sections[0].items.map(\.text), ["Release 46"])
+        model.dismissStartupNotes()
+        XCTAssertEqual(store.lastSeenReleaseID, "release/046")
     }
 
-    func testReleaseRevisionAndAppleVersionValidation() {
-        for version in ["2026.9.29.0", "2026.9.29.01", "2026.9.30.1", "2026.2.31.1"] {
+    func testReleaseDateAndAppleVersionValidation() {
+        for version in ["2026.9.29.1", "2026.09.29", "2026.9.30", "2026.2.31", "0.9.29"] {
             XCTAssertThrowsError(try ReleaseNotesCatalog(releases: [
                 revisedRelease(45, version: version)
             ]), version)
         }
-        for marketing in [nil, "2026.9.29.1"] as [String?] {
+        for marketing in ["", "2026.9.29.1"] {
             XCTAssertThrowsError(try ReleaseNotesCatalog(releases: [
-                revisedRelease(45, version: "2026.9.29.1", marketingVersion: marketing)
+                revisedRelease(45, version: "2026.9.29", marketingVersion: marketing)
             ]))
         }
         XCTAssertThrowsError(try ReleaseNotesCatalog(releases: [
-            revisedRelease(46, version: "2026.9.29.1"),
-            revisedRelease(45, version: "2026.9.29.1")
+            revisedRelease(45, version: "2026.9.29"),
+            revisedRelease(45, version: "2026.9.29")
         ]))
         XCTAssertThrowsError(try ReleaseNotesCatalog(releases: [
-            revisedRelease(46, version: "2026.9.29.9"),
-            revisedRelease(45, version: "2026.9.29.10")
+            revisedRelease(46, version: "2026.9.28", releasedAt: "2026-09-28"),
+            revisedRelease(45, version: "2026.9.29")
         ]))
         XCTAssertThrowsError(try ReleaseNotesCatalog(releases: [
-            revisedRelease(46, version: "2026.9.29.2", marketingVersion: "2026.9.24"),
-            revisedRelease(45, version: "2026.9.29.1")
+            revisedRelease(46, version: "2026.9.29", marketingVersion: "2026.9.24"),
+            revisedRelease(45, version: "2026.9.29")
         ]))
+    }
+
+    func testPublicDateOrderingAcrossMonthsAndLegacyReleaseDate() throws {
+        let catalog = try ReleaseNotesCatalog(releases: [
+            revisedRelease(46, version: "2026.10.1", releasedAt: "2026-10-01"),
+            revisedRelease(45, version: "2026.9.29"),
+            revisedRelease(44, version: "2026.9.25", marketingVersion: nil, releasedAt: "2026-09-27")
+        ])
+        XCTAssertEqual(catalog.allGroups.map(\.version), ["2026.10.1", "2026.9.29", "2026.9.25"])
     }
 
     func testCatalogDecodesAndGroupsSameVersionBuilds() throws {

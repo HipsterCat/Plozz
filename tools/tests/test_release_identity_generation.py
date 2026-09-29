@@ -29,7 +29,7 @@ class ReleaseIdentityGenerationTests(unittest.TestCase):
             )
             (root / "App/Resources/ReleaseNotes.json").write_text(json.dumps({
                 "schemaVersion": 1, "releases": [{
-                    "id": "release/045", "version": "2026.9.29.1",
+                    "id": "release/045", "version": "2026.9.29",
                     "marketingVersion": "2026.9.25", "build": 45,
                     "releasedAt": "2026-09-29",
                     "sections": [{"category": "New", "items": ["Fixture"]}],
@@ -79,7 +79,7 @@ EOF
             self.assertEqual(result.returncode, 0, result.stderr)
             project = root / "Plozz.xcodeproj/project.pbxproj"
             self.assertEqual(project.read_text().count("MARKETING_VERSION = 2026.9.25;"), 2)
-            self.assertIn('PLOZZ_RELEASE_VERSION = "2026.9.29.1";', project.read_text())
+            self.assertIn('PLOZZ_RELEASE_VERSION = "2026.9.29";', project.read_text())
             self.assertIn('PLOZZ_RELEASE_ID = "release/045";', project.read_text())
 
             result = bake(PLOZZ_BUILD_NUMBER="4001.2")

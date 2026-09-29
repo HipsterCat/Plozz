@@ -2,6 +2,62 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/045",
+      "version": "2026.9.29",
+      "marketingVersion": "2026.9.25",
+      "build": 45,
+      "releasedAt": "2026-09-29",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Playlists support",
+            "Browse episodes within the player"
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            "Smoother Live TV scrolling and up to seven days of guide listings, when available.",
+            {
+              "text": "Smoother Showcase navigation.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Improved series-page transitions and layout.",
+              "platforms": ["tvOS"]
+            },
+            "Brighter green subtitles and improved WebVTT color support.",
+            "The app shows the release date and build number independently of TestFlight's version."
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            {
+              "text": "Missing native sidebar button in Showcase.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Showcase rows shifting after sidebar navigation.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Clipped episode artwork on series pages.",
+              "platforms": ["tvOS"]
+            },
+            "Incorrect title logos.",
+            {
+              "text": "Hidden trailers continuing to play.",
+              "platforms": ["tvOS"]
+            },
+            "Subtitle positioning and jumping caption backgrounds.",
+            "Subtitles disappearing during renderer handoffs."
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/044",
       "version": "2026.9.25",
       "build": 44,

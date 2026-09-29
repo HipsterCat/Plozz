@@ -54,7 +54,7 @@ def harness.require_crash_reporting_dsn; end
 def harness.next_build_number; @events << "number"; 39; end
 def harness.marketing_version; "2026.9.17"; end
 def harness.release_notes_entry
-  { "id" => "release/039", "version" => "2026.9.29.2",
+  { "id" => "release/039", "version" => "2026.9.29",
     "marketingVersion" => "2026.9.17", "build" => 39, "sections" => [
     { "category" => "Updated", "items" => ["Shared", { "text" => "TV only", "platforms" => ["tvOS"] }] },
     { "category" => "Fixed", "items" => [{ "text" => "iOS only", "platforms" => ["iOS"] }] }
@@ -348,14 +348,14 @@ class FastlanePipelineTests(unittest.TestCase):
             result["events"], ["number", "gate", "Plozz", "PlozziOS", "validate IPAs", "upload both", "tag"]
         )
         tv, ios = [job["options"] for job in result["jobs"]]
-        self.assertEqual(tv["changelog"], "Plozz 2026.9.29.2\n\nUpdated\n• Shared\n• TV only")
-        self.assertEqual(ios["changelog"], "Plozz 2026.9.29.2\n\nUpdated\n• Shared\n\nFixed\n• iOS only")
+        self.assertEqual(tv["changelog"], "Plozz 2026.9.29 (39)\n\nUpdated\n• Shared\n• TV only")
+        self.assertEqual(ios["changelog"], "Plozz 2026.9.29 (39)\n\nUpdated\n• Shared\n\nFixed\n• iOS only")
         for job in result["jobs"]:
-            self.assertEqual(job["release_version"], "2026.9.29.2")
+            self.assertEqual(job["release_version"], "2026.9.29")
             self.assertEqual(job["release_id"], "release/039")
             self.assertNotIn("release_version", job["options"])
             self.assertNotIn("release_id", job["options"])
-        self.assertEqual(result["tag_arguments"][3], "2026.9.29.2")
+        self.assertEqual(result["tag_arguments"][3], "2026.9.29")
         for options in (tv, ios):
             self.assertEqual(options["app_version"], "2026.9.17")
             self.assertEqual(options["build_number"], "39")
@@ -396,7 +396,7 @@ puts JSON.generate(first: first, second: second,
 
     def test_empty_platform_fallback_retains_public_version(self) -> None:
         source = FASTFILE_HARNESS.split("module AppleBuildLease")[0] + r"""
-entry = { "version" => "2026.9.29.1", "marketingVersion" => "2026.9.25",
+entry = { "version" => "2026.9.29", "marketingVersion" => "2026.9.25", "build" => 45,
           "sections" => [{ "category" => "New",
             "items" => [{ "text" => "TV only", "platforms" => ["tvOS"] }] }] }
 puts JSON.generate(
@@ -408,7 +408,23 @@ puts JSON.generate(
         result = self.ruby(source)
         self.assertIsNone(result["authored"])
         self.assertEqual(result["fallback"],
-                         "Plozz 2026.9.29.1\n\nNo changes for this platform in this build.")
+                         "Plozz 2026.9.29 (45)\n\nNo changes for this platform in this build.")
+
+    def test_github_release_title_uses_public_date_and_build(self) -> None:
+        source = FASTFILE_HARNESS.split("module AppleBuildLease")[0] + r"""
+def harness.sh(command)
+  (@commands ||= []) << command
+  ""
+end
+def harness.marketing_version; "2026.9.25"; end
+harness.tag_github_release("45", "Approved notes", true, "2026.9.29")
+puts JSON.generate(commands: harness.instance_variable_get(:@commands).map { |c| Shellwords.split(c) })
+"""
+        result = self.ruby(source)
+        command = next(c for c in result["commands"] if ["gh", "release", "create"] == c[3:6])
+        self.assertEqual(command[command.index("--title") + 1], "2026.9.29 (45)")
+        self.assertIn("release/045", command)
+        self.assertIn("--prerelease", command)
 
     def test_failure_never_tags_or_blindly_retries(self) -> None:
         for scenario in ("gate_failure", "archive_failure", "upload_failure"):
@@ -714,7 +730,7 @@ def analyser.fetch_info_plist_file(_); JSON.parse(ENV.fetch("PLIST")); end
 job = PlozzTestflightPipeline.job(
   name: "tvOS", app_identifier: "com.thatcube.Plozz", platform: "appletvos",
   ipa: ENV.fetch("IPA"), version: "2026.9.25", build_number: "45",
-  release_version: "2026.9.29.1", release_id: "release/045",
+  release_version: "2026.9.29", release_id: "release/045",
   notes: "TV only", group: "Plozz External"
 )
 begin
@@ -725,9 +741,10 @@ end
 puts JSON.generate(error: error)
 """
         for plist, valid in (
-            ({"PlozzReleaseVersion": "2026.9.29.1", "PlozzReleaseID": "release/045"}, True),
-            ({"PlozzReleaseVersion": "2026.9.29.2", "PlozzReleaseID": "release/045"}, False),
-            ({"PlozzReleaseVersion": "2026.9.29.1", "PlozzReleaseID": "release/044"}, False),
+            ({"PlozzReleaseVersion": "2026.9.29", "PlozzReleaseID": "release/045"}, True),
+            ({"PlozzReleaseVersion": "2026.9.30", "PlozzReleaseID": "release/045"}, False),
+            ({"PlozzReleaseVersion": "2026.9.29", "PlozzReleaseID": "release/044"}, False),
+            ({"PlozzReleaseVersion": "2026.9.29.1", "PlozzReleaseID": "release/045"}, False),
             ({}, False), (None, False),
         ):
             with self.subTest(plist=plist):

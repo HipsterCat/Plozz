@@ -249,7 +249,7 @@ echo "Baked CFBundleVersion (CURRENT_PROJECT_VERSION) = ${build} (from ${src}) i
 
 # --- Apple version and independently displayed Plozz release ------------------
 # The catalog owns the stable Apple version. A selected release additionally
-# supplies its display version; local builds never allocate a release revision.
+# supplies its display date; local builds never allocate a public release.
 set -- identity
 if [ -n "$release_channel" ] && [ -z "$release_id" ]; then
   echo "error: distribution builds require PLOZZ_RELEASE_ID" >&2

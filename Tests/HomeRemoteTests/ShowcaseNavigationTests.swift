@@ -1,7 +1,90 @@
 import XCTest
+import UIKit
 
 @MainActor
 final class ShowcaseNavigationTests: XCTestCase {
+    func testNativeSidebarButtonRemainsVisibleWithCarousel() throws {
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = ["--production-home-fixture", "--native-sidebar-home"]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        let hero = app.buttons["home-hero-action-row"]
+        XCTAssertTrue(hero.waitForExistence(timeout: 15))
+        if !hero.hasFocus { XCUIRemote.shared.press(.select) }
+        try assertNativeSidebarButtonPainted(in: app, name: "carousel-native-sidebar")
+    }
+
+    func testNativeSidebarButtonRemainsVisibleInShowcase() throws {
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = [
+            "--production-home-fixture", "--native-sidebar-home", "--immersive-home",
+        ]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        try enterMediaRow(in: app)
+        try assertNativeSidebarButtonPainted(in: app, name: "showcase-native-sidebar-initial")
+        XCUIRemote.shared.press(.down)
+        try assertNativeSidebarButtonPainted(in: app, name: "showcase-native-sidebar-lower-row", visible: false)
+        XCUIRemote.shared.press(.up)
+        try assertNativeSidebarButtonPainted(in: app, name: "showcase-native-sidebar-back-at-top")
+        XCUIRemote.shared.press(.down)
+        XCUIRemote.shared.press(.select)
+        let detail = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Detail fixture")
+        ).firstMatch
+        XCTAssertTrue(detail.waitForExistence(timeout: 10))
+        XCUIRemote.shared.press(.menu)
+        try enterMediaRow(in: app)
+        XCUIRemote.shared.press(.up)
+        try assertNativeSidebarButtonPainted(in: app, name: "showcase-native-sidebar-after-detail")
+        XCUIRemote.shared.press(.left)
+        XCTAssertTrue(app.buttons["Home"].firstMatch.waitForExistence(timeout: 5))
+        XCUIRemote.shared.press(.select)
+        try enterMediaRow(in: app)
+        try assertNativeSidebarButtonPainted(in: app, name: "showcase-native-sidebar-return")
+    }
+
+    private func assertNativeSidebarButtonPainted(
+        in app: XCUIApplication, name: String, visible: Bool = true
+    ) throws {
+        Thread.sleep(forTimeInterval: 0.6)
+        let screenshot = app.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = "\(name)-hierarchy"
+        tree.lifetime = .keepAlways
+        add(tree)
+        let image = try XCTUnwrap(screenshot.image.cgImage)
+        let scale = CGFloat(image.width) / app.frame.width
+        let region = CGRect(x: 20 * scale, y: 20 * scale, width: 480 * scale, height: 140 * scale)
+        let crop = try XCTUnwrap(image.cropping(to: region))
+        var bytes = [UInt8](repeating: 0, count: crop.width * crop.height * 4)
+        let visiblePixels = try bytes.withUnsafeMutableBytes { buffer -> Int in
+            let context = try XCTUnwrap(CGContext(
+                data: buffer.baseAddress, width: crop.width, height: crop.height,
+                bitsPerComponent: 8, bytesPerRow: crop.width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+            ))
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
+            return stride(from: 0, to: buffer.count, by: 4).filter {
+                min(buffer[$0], buffer[$0 + 1], buffer[$0 + 2]) > 160
+            }.count
+        }
+        if visible {
+            XCTAssertGreaterThan(visiblePixels, 100,
+                                 "The native sidebar label must be visibly painted, not merely present in accessibility.")
+        } else {
+            XCTAssertLessThanOrEqual(visiblePixels, 100,
+                                     "Preserve native chrome auto-hiding when browsing below the first row.")
+        }
+    }
+
     func testScheduleBadgeClearsTallLogoDuringHorizontalNavigation() throws {
         let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
         app.launchArguments = [

@@ -81,6 +81,29 @@ final class FocusHeroModelTests: XCTestCase {
         XCTAssertEqual(model.rowHeights["watchlist"], 540)
     }
 
+    func testScrollOriginKeepsTheFirstRowAtZeroWithoutMovingRowAnchors() {
+        let model = FocusHeroModel()
+        let rows = [row("continue", ["one"]), row("recent", ["two"])]
+        XCTAssertEqual(model.scrollOrigin(in: rows), 0)
+        model.record(height: 340, for: rows[0].id)
+        model.record(height: 540, for: rows[1].id)
+        let spacing = FocusHeroLayout.rowSpacing
+        let bottom = FocusHeroLayout.rowsBottom(rowSpacing: spacing)
+        let origin = model.scrollOrigin(in: rows)
+        XCTAssertEqual(origin, 340)
+        XCTAssertEqual(model.activeHeight(in: rows) - origin, 0)
+        for index in rows.indices {
+            model.activate(rows[index], in: rows)
+            let rowTop = model.top(ofRowAt: index, in: rows, rowSpacing: spacing)
+            let destination = rowTop + model.activeHeight(in: rows) - origin
+            XCTAssertEqual(bottom - origin + rowTop - destination, bottom - model.activeHeight(in: rows))
+        }
+        XCTAssertEqual(model.scrollOrigin(in: Array(rows.reversed())), 540)
+        XCTAssertEqual(model.scrollOrigin(in: []), 0)
+        model.record(height: bottom + 100, for: rows[0].id)
+        XCTAssertEqual(model.scrollOrigin(in: rows), bottom, "The initial spacer cannot have negative height.")
+    }
+
     func testNativeScrollOwnsRowMovementWithoutRestartingAnUnchangedDestination() {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080))
         let controller = UIViewController()
