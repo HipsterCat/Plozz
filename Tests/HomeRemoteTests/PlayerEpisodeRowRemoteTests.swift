@@ -3,6 +3,80 @@ import XCTest
 
 @MainActor
 final class PlayerEpisodeRowRemoteTests: XCTestCase {
+    func testOnlyFocusedArtworkStaysEnlargedAfterRapidMovesAndInterruptedDrawer() throws {
+        let app = launch(arguments: ["--long-season", "--interrupt-focus", "--refresh-on-focus"])
+        defer { app.terminate() }
+        for _ in 0..<3 {
+            XCUIRemote.shared.press(.down)
+            Thread.sleep(forTimeInterval: 0.6)
+        }
+        XCUIRemote.shared.press(.down)
+        for _ in 0..<3 {
+            XCUIRemote.shared.press(.right, forDuration: 0.4)
+            XCUIRemote.shared.press(.left, forDuration: 0.4)
+        }
+        for _ in 0..<3 {
+            XCUIRemote.shared.press(.select)
+            XCUIRemote.shared.press(.right)
+        }
+        XCUIRemote.shared.press(.left)
+        Thread.sleep(forTimeInterval: 0.6)
+        try assertOnlyFocusedArtworkIsEnlarged(in: app)
+        XCUIRemote.shared.press(.right, forDuration: 8)
+        XCUIRemote.shared.press(.left, forDuration: 8)
+        Thread.sleep(forTimeInterval: 0.6)
+        try assertOnlyFocusedArtworkIsEnlarged(in: app)
+        XCUIRemote.shared.press(.playPause)
+        Thread.sleep(forTimeInterval: 0.4)
+        XCUIRemote.shared.press(.playPause)
+        Thread.sleep(forTimeInterval: 0.6)
+        XCUIRemote.shared.press(.down)
+        Thread.sleep(forTimeInterval: 0.4)
+        try assertOnlyFocusedArtworkIsEnlarged(in: app)
+    }
+
+    private func assertOnlyFocusedArtworkIsEnlarged(in app: XCUIApplication) throws {
+        let capture = XCUIScreen.main.screenshot()
+        let attachment = XCTAttachment(screenshot: capture)
+        attachment.name = "Episode artwork after interrupted focus"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        let image = try XCTUnwrap(capture.image.cgImage)
+        let scale = CGFloat(image.width) / app.frame.width
+        let collection = app.collectionViews.firstMatch
+        var measured = 0
+        for cell in collection.cells.allElementsBoundByIndex
+            where collection.frame.insetBy(dx: -1, dy: -1).contains(cell.frame) {
+            let frame = cell.frame
+            let crop = try XCTUnwrap(image.cropping(to: CGRect(
+                x: frame.midX * scale, y: (frame.minY - 4) * scale,
+                width: 1, height: 40 * scale
+            ).integral))
+            var pixels = [UInt8](repeating: 0, count: crop.width * crop.height * 4)
+            let top = try pixels.withUnsafeMutableBytes { bytes -> Int? in
+                let context = try XCTUnwrap(CGContext(
+                    data: bytes.baseAddress, width: crop.width, height: crop.height,
+                    bitsPerComponent: 8, bytesPerRow: crop.width * 4,
+                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ))
+                context.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
+                return (0..<crop.height).first {
+                    let offset = $0 * crop.width * 4
+                    return bytes[offset + 2] > 150 && Double(bytes[offset + 2]) > Double(bytes[offset]) * 1.5
+                }
+            }
+            let inset = CGFloat(try XCTUnwrap(top, "Artwork must be visible for \(cell.label)")) / scale - 4
+            if cell.hasFocus {
+                XCTAssertLessThan(inset, 4, "The actual focused artwork must enlarge.")
+            } else {
+                XCTAssertEqual(inset, 12, accuracy: 2,
+                               "Unfocused artwork must return to its resting size: \(cell.label)")
+            }
+            measured += 1
+        }
+        XCTAssertGreaterThanOrEqual(measured, 2)
+    }
+
     func testHeldDirectionsCrossViewportAndSeasonBoundaries() throws {
         try assertContinuousBrowsing()
     }

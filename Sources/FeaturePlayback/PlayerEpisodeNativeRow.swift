@@ -205,6 +205,8 @@ struct PlayerEpisodeNativeRow: UIViewRepresentable {
         }
 
         func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+            // Episode activation must not leave a persistent selection when the drawer closes.
+            collectionView.deselectItem(at: indexPath, animated: false)
             guard environment.isEnabled, displayed.indices.contains(indexPath.item) else { return }
             configuration?.onSelect(displayed[indexPath.item])
         }
@@ -313,6 +315,10 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
         self.element = element
         self.layout = layout
         self.environment = environment
+        if !enabled && environment.isEnabled {
+            // Reopening a parked drawer must not revive an interrupted TVUIKit focus projection.
+            contentConfiguration = nil
+        }
         enabled = environment.isEnabled
         clipsToBounds = false
         contentView.clipsToBounds = false
@@ -390,6 +396,13 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         updateCaption()
+        let offset = isFocused ? layout?.captionFocusTravel ?? 0 : 0
+        let moveCaption = { self.caption.transform = CGAffineTransform(translationX: 0, y: offset) }
+        if environment.accessibilityReduceMotion {
+            UIView.performWithoutAnimation(moveCaption)
+        } else {
+            coordinator.addCoordinatedAnimations(moveCaption, completion: nil)
+        }
     }
 
     private func updateCaption() {
@@ -405,7 +418,7 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
             font: .systemFont(ofSize: layout.metrics.castNameSize, weight: .semibold),
             color: UIColor(isFocused ? environment.themePalette.primaryText : environment.themePalette.secondaryText),
             scrolls: isFocused && !environment.accessibilityReduceMotion,
-            centersShortText: false
+            centersShortText: false, horizontalInset: layout.cardMetrics.landscapeCaptionInset
         )
     }
 
@@ -415,11 +428,10 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
         let inset = layout.cardMetrics.cardInset
         contentView.frame = CGRect(x: inset, y: inset, width: layout.imageWidth, height: layout.imageHeight)
         contentView.layoutIfNeeded()
-        caption.frame = CGRect(
-            x: inset + layout.cardMetrics.landscapeCaptionInset,
-            y: contentView.frame.maxY + layout.cardMetrics.landscapeCaptionTopSpacing,
-            width: layout.imageWidth - layout.cardMetrics.landscapeCaptionInset * 2,
-            height: layout.titleHeight
+        caption.bounds = CGRect(x: 0, y: 0, width: layout.imageWidth, height: layout.titleHeight)
+        caption.center = CGPoint(
+            x: inset + layout.imageWidth / 2,
+            y: contentView.frame.maxY + layout.cardMetrics.landscapeCaptionTopSpacing + layout.titleHeight / 2
         )
     }
 
@@ -437,9 +449,12 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
         artwork = nil
         preparedArtwork = nil
         element = nil
+        contentConfiguration = nil
         accessibilityLabel = nil
         accessibilityValue = nil
         caption.removeFromSuperview()
+        caption.layer.removeAllAnimations()
+        UIView.performWithoutAnimation { caption.transform = .identity }
     }
 
     private struct NativeEpisodeCellArtwork: View {

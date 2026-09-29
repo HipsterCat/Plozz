@@ -9,6 +9,51 @@ import XCTest
 
 @MainActor
 final class PlayerEpisodeArtworkHostedTests: XCTestCase {
+    func testNativeMarqueePaintFadesBothEdgesAndKeepsRestingTextInsideTheFade() throws {
+        for direction in [UISemanticContentAttribute.forceLeftToRight, .forceRightToLeft] {
+            let caption = NativePosterCaptionLine()
+            caption.semanticContentAttribute = direction
+            caption.frame = CGRect(x: 0, y: 0, width: 240, height: 26)
+            caption.configure(
+                text: "A long episode name that extends beyond the caption's readable area",
+                font: .systemFont(ofSize: 21), color: .white, scrolls: false,
+                centersShortText: false, horizontalInset: 12
+            )
+            caption.layoutIfNeeded()
+            let label = try XCTUnwrap(views(in: caption, of: UILabel.self).first)
+            if direction == .forceLeftToRight {
+                XCTAssertEqual(label.frame.minX, 12, accuracy: 0.1)
+            } else {
+                XCTAssertEqual(label.frame.maxX, 228, accuracy: 0.1)
+            }
+            // Solid test ink isolates the mask from individual glyph shapes.
+            let ink = UIView(frame: caption.bounds)
+            ink.backgroundColor = .white
+            caption.addSubview(ink)
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            format.opaque = false
+            let rendered = UIGraphicsImageRenderer(size: caption.bounds.size, format: format).image {
+                caption.layer.render(in: $0.cgContext)
+            }
+            let image = try XCTUnwrap(rendered.cgImage)
+            var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
+            try pixels.withUnsafeMutableBytes { bytes in
+                let context = try XCTUnwrap(CGContext(
+                    data: bytes.baseAddress, width: image.width, height: image.height,
+                    bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ))
+                context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+                let row = image.height / 2 * image.width
+                XCTAssertLessThan(bytes[(row + 1) * 4 + 3], 60)
+                XCTAssertGreaterThan(bytes[(row + 12) * 4 + 3], 245)
+                XCTAssertGreaterThan(bytes[(row + image.width - 13) * 4 + 3], 245)
+                XCTAssertLessThan(bytes[(row + image.width - 2) * 4 + 3], 60)
+            }
+        }
+    }
+
     func testSingleLineEpisodeCaptionFollowsLeadingEdgeWhenDirectionChanges() throws {
         let layout = PlayerSequenceLayout(metrics: .tv, cardMetrics: .standard, contained: true, hasError: false)
         let cell = PlayerEpisodeNativeCell(frame: CGRect(x: 0, y: 0, width: layout.cardWidth, height: layout.rowHeight))
@@ -26,12 +71,17 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
             caption.layoutIfNeeded()
             let label = try XCTUnwrap(views(in: caption, of: UILabel.self).first)
             XCTAssertEqual(label.numberOfLines, 1)
+            let inset = layout.cardMetrics.landscapeCaptionInset
             XCTAssertEqual(
-                label.frame.minX, direction == .rightToLeft ? caption.bounds.width - label.frame.width : 0,
+                label.frame.minX,
+                direction == .rightToLeft ? caption.bounds.width - inset - label.frame.width : inset,
                 accuracy: 0.1
             )
             XCTAssertNil(label.layer.animation(forKey: "captionMarquee"))
         }
+        cell.prepareForReuse()
+        XCTAssertNil(cell.contentConfiguration)
+        XCTAssertFalse(cell.canBecomeFocused)
     }
 
     func testPrependingEpisodesPreservesNativeFocusAndExactViewport() async throws {
@@ -311,9 +361,14 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
         XCTAssertEqual(label.numberOfLines, 1)
         XCTAssertEqual(caption.bounds.height, caption.lineHeight, accuracy: 0.1)
         XCTAssertGreaterThan(media.bounds.height, 205)
-        XCTAssertEqual(media.frame.minY, focused.bounds.maxY - caption.frame.maxY, accuracy: 0.1,
-                       "The artwork's top and caption's bottom must have equal breathing room.")
-        XCTAssertLessThan(caption.bounds.width, media.bounds.width)
+        let travel = PlozzMetrics.standard.focusCaptionPush(for: .system)
+        XCTAssertEqual(caption.transform.ty, travel, accuracy: 0.1)
+        XCTAssertEqual(media.frame.minY, focused.bounds.maxY - caption.frame.maxY + travel, accuracy: 0.1,
+                       "Resting insets remain balanced; focus only moves the caption down.")
+        XCTAssertEqual(caption.bounds.width, media.bounds.width)
+        let mask = try XCTUnwrap(caption.layer.mask as? CAGradientLayer)
+        let colors = try XCTUnwrap(mask.colors as? [CGColor])
+        XCTAssertEqual(colors.map(\.alpha), [0, 1, 1, 0])
         try await waitUntil { abs(label.layer.presentation()?.transform.m41 ?? 0) > 2 }
         XCTAssertNotNil(label.layer.animation(forKey: "captionMarquee"))
         for other in nativePosters(in: window) where other !== focused {
@@ -365,6 +420,10 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
         }
         XCTAssertEqual(label.layer.transform.m41, 0, accuracy: 0.1,
                        "Leaving focus must restore the beginning of the title.")
+        try await waitUntil {
+            abs(caption.layer.presentation()?.transform.m42 ?? caption.layer.transform.m42) < 0.1
+        }
+        XCTAssertEqual(caption.transform.ty, 0, accuracy: 0.1)
     }
 
     private func focusEpisode(_ id: PlayerEpisodeEntry.ID, in window: UIWindow) throws {

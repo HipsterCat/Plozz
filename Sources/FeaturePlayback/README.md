@@ -469,13 +469,19 @@ including during native focus transitions and in RTL. Native scroll targets use
 complete card slots constrained to fully reveal the focused cell. First-card
 entry and return share the same gutter, with no idle realignment. Mobile SwiftUI
 rows defer leading insertions until scrolling settles.
+Reopening a parked tvOS row recreates its artwork content views without replacing
+the cells or their viewport, clearing focus projections interrupted by drawer
+closure. Episode activation does not leave a persistent collection selection.
 Initial loading
 uses nonfocusable artwork/caption skeletons with the loaded cards' dimensions,
-not a spinner or visible loading message. TVUIKit projects only the artwork,
-leaving captions and neighboring tiles in place. Episode titles occupy one line,
+not a spinner or visible loading message. TVUIKit projects only the artwork;
+captions stay outside that projection and neighboring tiles keep their layout. Episode titles occupy one line,
 giving the reclaimed height to larger 16:9 stills, with matching top and bottom
 insets. Long tvOS titles use the same native marquee as Home posters: only the
 focused title scrolls, it resets on blur/reuse, and Reduce Motion disables it.
+Focused episode captions move down slightly without changing the row layout.
+Overflowing native captions fade at both edges, with inset resting endpoints
+that keep the beginning and end readable.
 Touch layouts truncate long titles. The shared scrim and episode
 text are rendered into that image at display scale so TVUIKit retains them on
 focus; this work is cached across focus changes. Panel glass is a separate

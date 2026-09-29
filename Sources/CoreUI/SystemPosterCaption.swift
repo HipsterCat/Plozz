@@ -126,6 +126,7 @@ public final class NativePosterCaptionLine: UIView {
     private let fade = CAGradientLayer()
     private var scrolls = false
     private var centersShortText = true
+    private var horizontalInset: CGFloat = 12
     private var placeholderWidthFraction: CGFloat?
     private var placeholderHeight: CGFloat = 0
     private var motion: Motion?
@@ -139,6 +140,7 @@ public final class NativePosterCaptionLine: UIView {
         let rightToLeft: Bool
         let scrolls: Bool
         let centersShortText: Bool
+        let horizontalInset: CGFloat
     }
 
     public init() {
@@ -158,11 +160,15 @@ public final class NativePosterCaptionLine: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    public func configure(text: String, font: UIFont, color: UIColor, scrolls: Bool, centersShortText: Bool = true) {
+    public func configure(
+        text: String, font: UIFont, color: UIColor, scrolls: Bool,
+        centersShortText: Bool = true, horizontalInset: CGFloat = 12
+    ) {
         let changesLayout =
             placeholderWidthFraction != nil
             || label.text != text || label.font != font || self.scrolls != scrolls
             || self.centersShortText != centersShortText
+            || self.horizontalInset != horizontalInset
         placeholderWidthFraction = nil
         placeholder.isHidden = true
         label.isHidden = false
@@ -171,6 +177,7 @@ public final class NativePosterCaptionLine: UIView {
         if label.textColor != color { label.textColor = color }
         self.scrolls = scrolls
         self.centersShortText = centersShortText
+        self.horizontalInset = horizontalInset
         if changesLayout { setNeedsLayout() }
     }
 
@@ -217,36 +224,34 @@ public final class NativePosterCaptionLine: UIView {
         let next = Motion(
             text: label.text ?? "", font: label.font, width: bounds.width,
             rightToLeft: rightToLeft, scrolls: scrolls && window != nil,
-            centersShortText: centersShortText)
+            centersShortText: centersShortText, horizontalInset: horizontalInset)
         guard next != motion else { return }
         motion = next
         // The model stays at rest; removing this one animation restores it
         // immediately, including when a long scroll is interrupted by focus.
         label.layer.removeAnimation(forKey: Self.animationKey)
         let width = label.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: lineHeight)).width
-        let overflows = width > bounds.width + 0.5
+        let inset = min(max(0, horizontalInset), bounds.width / 2)
+        let availableWidth = bounds.width - inset * 2
+        let overflows = width > availableWidth + 0.5
         let x =
             overflows || !centersShortText
-            ? (rightToLeft ? bounds.width - width : 0) : (bounds.width - width) / 2
+            ? (rightToLeft ? bounds.width - inset - width : inset) : (bounds.width - width) / 2
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         label.frame = CGRect(x: x, y: 0, width: width, height: lineHeight)
         fade.frame = bounds
-        let fadeWidth = min(12, bounds.width)
-        if overflows, bounds.width > 0 {
-            let edge = fadeWidth / bounds.width
-            fade.colors =
-                rightToLeft
-                ? [UIColor.clear.cgColor, UIColor.black.cgColor, UIColor.black.cgColor]
-                : [UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor]
-            fade.locations = rightToLeft ? [0, NSNumber(value: edge), 1] : [0, NSNumber(value: 1 - edge), 1]
+        if overflows, bounds.width > 0, inset > 0 {
+            let edge = inset / bounds.width
+            fade.colors = [UIColor.clear.cgColor, UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor]
+            fade.locations = [0, NSNumber(value: edge), NSNumber(value: 1 - edge), 1]
             layer.mask = fade
         } else {
             layer.mask = nil
         }
         CATransaction.commit()
-        guard next.scrolls, overflows, bounds.width > 0 else { return }
-        let distance = width - bounds.width + fadeWidth
+        guard next.scrolls, overflows, availableWidth > 0 else { return }
+        let distance = width - availableWidth
         let outward = Double(distance) / PlozzTheme.Metrics.marqueePointsPerSecond
         let returning = Double(distance) / PlozzTheme.Metrics.marqueeReturnPointsPerSecond
         let pause = PlozzTheme.Metrics.marqueeStartDelay

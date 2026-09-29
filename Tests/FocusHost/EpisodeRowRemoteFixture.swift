@@ -8,6 +8,8 @@ struct EpisodeRowRemoteFixture: View {
     @State private var player: PlayerViewModel
     @State private var focusTrace: [Int] = []
     @State private var peakCellCount = 0
+    @State private var drawerVisible = true
+    @State private var closeRequest = 0
     @FocusState private var focus: PlayerControls.FocusSlot?
 
     init() {
@@ -28,6 +30,12 @@ struct EpisodeRowRemoteFixture: View {
                 .focusSection()
             PlayerSequencePanel(player: player, source: .episodes, focus: $focus)
                 .frame(width: 1400)
+                .disabled(!drawerVisible)
+                .offset(y: drawerVisible ? 0 : 300)
+                .opacity(drawerVisible ? 1 : 0)
+                .animation(.easeInOut(duration: 0.25), value: drawerVisible)
+            Text(verbatim: drawerVisible ? "Open" : "Closed")
+                .accessibilityIdentifier("episode-row-drawer-state")
             Text(verbatim: player.episodeBrowser?.hasLoaded == true ? "Ready" : "Loading")
                 .accessibilityIdentifier("episode-row-ready")
             Text(verbatim: String(player.episodeBrowser?.episodes.count ?? 0))
@@ -43,6 +51,10 @@ struct EpisodeRowRemoteFixture: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black)
         .environment(\.plozzCardFocusStyle, .system)
+        .environment(\.locale, Locale(identifier:
+            ProcessInfo.processInfo.arguments.contains("--refresh-on-focus") && focusTrace.count.isMultiple(of: 2)
+                ? "en_GB" : "en_US"
+        ))
         .environment(\.layoutDirection, ProcessInfo.processInfo.arguments.contains("--rtl") ? .rightToLeft : .leftToRight)
         .onAppear { focus = .button(.episodes) }
         .onReceive(NotificationCenter.default.publisher(for: UIFocusSystem.didUpdateNotification)) { notification in
@@ -51,6 +63,24 @@ struct EpisodeRowRemoteFixture: View {
                   let title = cell.accessibilityLabel, title.hasPrefix("Episode "),
                   let episode = Int(title.dropFirst("Episode ".count)) else { return }
             if focusTrace.last != episode { focusTrace.append(episode) }
+            if ProcessInfo.processInfo.arguments.contains("--interrupt-focus"), closeRequest < 3 {
+                closeRequest += 1
+            }
+        }
+        .onPlayPauseCommand { drawerVisible.toggle() }
+        .task(id: closeRequest) {
+            guard closeRequest > 0 else { return }
+            do {
+                try await Task.sleep(for: .milliseconds(40))
+                drawerVisible = false
+                focus = .button(.episodes)
+                try await Task.sleep(for: .milliseconds(180))
+                drawerVisible = true
+            } catch is CancellationError {
+                return
+            } catch {
+                preconditionFailure("Fixture drawer transition failed: \(error)")
+            }
         }
         .task {
             await prepareArtwork()
