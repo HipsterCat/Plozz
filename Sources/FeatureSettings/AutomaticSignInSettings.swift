@@ -32,7 +32,7 @@ public struct AutomaticSignInDescription: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Open the last-used profile without a PIN when this app starts on this device. Switching users still requires the Plex Home PIN. Your PIN is not changed or removed.")
+            Text("Skip profile selection and PIN entry at startup on this device.")
             if let error = settings.error {
                 Text(error)
                     .foregroundStyle(.red)
