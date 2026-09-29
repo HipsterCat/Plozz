@@ -14,6 +14,7 @@ struct EpisodeRowRemoteFixture: View {
     @State private var subtitles = LiveSubtitleModel()
     @State private var artworkCapture = ""
     @State private var captureRun = UUID().uuidString
+    @State private var playbackSurfaceFocused = false
     @FocusState private var focus: PlayerControls.FocusSlot?
 
     init() {
@@ -44,8 +45,10 @@ struct EpisodeRowRemoteFixture: View {
         .environment(\.layoutDirection, ProcessInfo.processInfo.arguments.contains("--rtl") ? .rightToLeft : .leftToRight)
         .onAppear { focus = .button(.episodes) }
         .onReceive(NotificationCenter.default.publisher(for: UIFocusSystem.didUpdateNotification)) { notification in
-            guard let context = notification.userInfo?[UIFocusSystem.focusUpdateContextUserInfoKey] as? UIFocusUpdateContext,
-                  let cell = context.nextFocusedView as? PlayerEpisodeNativeCell,
+            guard let context = notification.userInfo?[UIFocusSystem.focusUpdateContextUserInfoKey]
+                as? UIFocusUpdateContext else { return }
+            playbackSurfaceFocused = context.nextFocusedView is PlayerInputView
+            guard let cell = context.nextFocusedView as? PlayerEpisodeNativeCell,
                   let title = cell.accessibilityLabel, title.hasPrefix("Episode "),
                   let episode = Int(title.dropFirst("Episode ".count)) else { return }
             if focusTrace.last != episode { focusTrace.append(episode) }
@@ -146,6 +149,8 @@ struct EpisodeRowRemoteFixture: View {
                     .accessibilityIdentifier("episode-row-activity")
                 Text(verbatim: artworkCapture)
                     .accessibilityIdentifier("episode-row-artwork-capture")
+                Text(verbatim: playbackSurfaceFocused ? "Playback" : "Controls")
+                    .accessibilityIdentifier("episode-row-focus-owner")
             }
             .allowsHitTesting(false)
         }

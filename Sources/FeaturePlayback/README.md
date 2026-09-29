@@ -479,8 +479,9 @@ their existing timeout.
 The playback focus surface and controls hosts are siblings under a nonfocusable
 root. TVUIKit also projects artwork when an ancestor is focused, so returning
 focus to a parent containing the drawer would highlight every parked episode,
-regardless of the cells' own focus state. Back exits every bottom card through
-the same drawer-close and playback-focus handoff as Info.
+regardless of the cells' own focus state. Up from every bottom tab, including
+Episodes and Playlist, uses the same seek-surface exit as Info and Cast. Back
+exits every bottom card through the same drawer-close and playback-focus handoff.
 Initial loading
 uses nonfocusable artwork/caption skeletons with the loaded cards' dimensions,
 not a spinner or visible loading message. TVUIKit projects only the artwork;

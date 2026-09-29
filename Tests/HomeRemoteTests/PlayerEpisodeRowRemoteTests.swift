@@ -3,6 +3,34 @@ import XCTest
 
 @MainActor
 final class PlayerEpisodeRowRemoteTests: XCTestCase {
+    func testUpFromEpisodesTabReturnsToSeekSurfaceLikeInfo() throws {
+        continueAfterFailure = false
+        let app = launch(arguments: ["--production-player-input"])
+        defer { app.terminate() }
+        for tab in ["Info", "Episodes"] {
+            XCUIRemote.shared.press(.down)
+            XCTAssertTrue(app.buttons["Info"].waitForExistence(timeout: 5))
+            let opened = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "label == 'Open'"),
+                object: app.staticTexts["episode-row-drawer-state"]
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 3), .completed)
+            if tab == "Episodes" {
+                XCUIRemote.shared.press(.right)
+                XCTAssertTrue(app.collectionViews.firstMatch.waitForExistence(timeout: 5))
+            }
+            XCTAssertEqual(app.staticTexts["episode-row-focus-owner"].label, "Controls")
+            XCUIRemote.shared.press(.up)
+            let surface = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "label == 'Playback'"),
+                object: app.staticTexts["episode-row-focus-owner"]
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [surface], timeout: 3), .completed,
+                           "Up from \(tab) must return real UIKit focus to the seek surface.")
+            XCTAssertEqual(app.staticTexts["episode-row-drawer-state"].label, "Closed")
+        }
+    }
+
     func testRemoteBackClosesEpisodesWithoutReopeningOrLeavingHighlights() throws {
         let app = launch(arguments: ["--long-season", "--production-player-input", "--capture-artwork"])
         defer { app.terminate() }

@@ -1313,8 +1313,9 @@ struct PlayerControls: View {
         // business, and leaving the whole card mid-detail would strand it.
         if castDetailPerson != nil { return false }
         switch focus {
-        case .button(.info), .button(.cast),
-             .infoNext, .infoPrev, .infoRestart, .infoStats:
+        case .button(let tab):
+            return Self.usesBottomCard(tab)
+        case .infoNext, .infoPrev, .infoRestart, .infoStats:
             return true
         default:
             return false
