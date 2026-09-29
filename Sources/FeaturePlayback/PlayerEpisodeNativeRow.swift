@@ -375,7 +375,9 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
                 }
             }
         case .previousError(let error), .nextError(let error):
-            var title: LocalizedStringResource = element.id == .previousError ? "Earlier episodes" : "Later episodes"
+            var title = element.id == .previousError
+                ? LocalizedStringResource("Earlier episodes", comment: "Heading for a retry card when loading episodes before the current range fails.")
+                : LocalizedStringResource("Later episodes", comment: "Heading for a retry card when loading episodes after the current range fails; these are existing episodes, not future releases.")
             var message = error.userMessage
             var retry: LocalizedStringResource = "Try Again"
             title.locale = environment.locale
@@ -473,7 +475,7 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
         guard spoilerSettings.shouldHideText(for: item) else { return item.title }
         var resource = spoilerSettings.maskedTitle(for: item)
         resource.locale = environment.locale
-        return String(localized: resource)
+        return String(localized: resource) // l10n:content — UIKit boundary; resolved with the current environment locale on every update
     }
 
     override func layoutSubviews() {
@@ -533,7 +535,8 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
                     case .previousError(let error), .nextError(let error):
                         VStack(alignment: .leading, spacing: 8) {
                             Text(element.id == .previousError
-                                 ? LocalizedStringResource("Earlier episodes") : LocalizedStringResource("Later episodes"))
+                                 ? LocalizedStringResource("Earlier episodes", comment: "Heading for a retry card when loading episodes before the current range fails.")
+                                 : LocalizedStringResource("Later episodes", comment: "Heading for a retry card when loading episodes after the current range fails; these are existing episodes, not future releases."))
                                 .font(layout.metrics.castNameFont)
                             Text(error.userMessage).font(.caption).lineLimit(2)
                             Text("Try Again").font(.caption.bold())

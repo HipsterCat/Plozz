@@ -126,7 +126,7 @@ public final class NativePosterCaptionLine: UIView {
     private let fade = CAGradientLayer()
     private var scrolls = false
     private var centersShortText = true
-    private var horizontalInset: CGFloat = 12
+    private var horizontalInset: CGFloat = 0
     private var placeholderWidthFraction: CGFloat?
     private var placeholderHeight: CGFloat = 0
     private var motion: Motion?
@@ -162,7 +162,7 @@ public final class NativePosterCaptionLine: UIView {
 
     public func configure(
         text: String, font: UIFont, color: UIColor, scrolls: Bool,
-        centersShortText: Bool = true, horizontalInset: CGFloat = 12
+        centersShortText: Bool = true, horizontalInset: CGFloat = 0
     ) {
         let changesLayout =
             placeholderWidthFraction != nil
@@ -241,17 +241,26 @@ public final class NativePosterCaptionLine: UIView {
         CATransaction.setDisableActions(true)
         label.frame = CGRect(x: x, y: 0, width: width, height: lineHeight)
         fade.frame = bounds
-        if overflows, bounds.width > 0, inset > 0 {
-            let edge = inset / bounds.width
-            fade.colors = [UIColor.clear.cgColor, UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor]
-            fade.locations = [0, NSNumber(value: edge), NSNumber(value: 1 - edge), 1]
+        let fadeWidth = inset > 0 ? inset : min(12, bounds.width)
+        if overflows, bounds.width > 0 {
+            let edge = fadeWidth / bounds.width
+            if inset > 0 {
+                fade.colors = [UIColor.clear.cgColor, UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor]
+                fade.locations = [0, NSNumber(value: edge), NSNumber(value: 1 - edge), 1]
+            } else {
+                // Edge-aligned poster captions keep the leading glyph visible at rest.
+                fade.colors = rightToLeft
+                    ? [UIColor.clear.cgColor, UIColor.black.cgColor, UIColor.black.cgColor]
+                    : [UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor]
+                fade.locations = rightToLeft ? [0, NSNumber(value: edge), 1] : [0, NSNumber(value: 1 - edge), 1]
+            }
             layer.mask = fade
         } else {
             layer.mask = nil
         }
         CATransaction.commit()
         guard next.scrolls, overflows, availableWidth > 0 else { return }
-        let distance = width - availableWidth
+        let distance = width - availableWidth + (inset == 0 ? fadeWidth : 0)
         let outward = Double(distance) / PlozzTheme.Metrics.marqueePointsPerSecond
         let returning = Double(distance) / PlozzTheme.Metrics.marqueeReturnPointsPerSecond
         let pause = PlozzTheme.Metrics.marqueeStartDelay
