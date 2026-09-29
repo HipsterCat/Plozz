@@ -9,6 +9,27 @@ import XCTest
 
 @MainActor
 final class SubtitleLineRenderingTests: XCTestCase {
+    func testWebVTTAuthoredGreensReachTheRendererAndRespectViewerOverride() throws {
+        let examples: [(String, CGFloat)] = [
+            ("", 1),
+            ("::cue(c.green) { color: lime; }", 1),
+            ("::cue(.green) { color: green; }", 128.0 / 255),
+            ("::cue(.green) { color: rgb(0,128,0); }", 128.0 / 255)
+        ]
+        for (css, green) in examples {
+            let file = "WEBVTT\n\nSTYLE\n\(css)\n\n00:00:01.000 --> 00:00:03.000\n<c.green>MMMM</c>"
+            let cue = try XCTUnwrap(SubtitleCueParser.parseCues(file).first)
+            guard case .text(let text) = cue.body else { return XCTFail("Expected text") }
+            var style = SubtitleStyle.default
+            style.usesSourceColors = true
+            let authored = styledConfig(style, text: text)
+            XCTAssertEqual(authored.fillSpans.first?.color, UIColor(red: 0, green: green, blue: 0, alpha: 1))
+            XCTAssertGreaterThan(try render(authored).ink.width, 0)
+            style.usesSourceColors = false
+            XCTAssertTrue(styledConfig(style, text: text).fillSpans.isEmpty)
+        }
+    }
+
     func testFreezingSystemStyleAndRoundTripHavePixelIdenticalRenderedAppearance() throws {
         let descriptor = try XCTUnwrap(SubtitleSystemFonts.descriptor(for: .caption(.smallCapitals)))
         let appearance = SystemCaptionAppearance(

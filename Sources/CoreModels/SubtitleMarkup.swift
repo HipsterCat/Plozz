@@ -5,32 +5,38 @@ import CoreGraphics
 /// renderer can honour: colour runs and source placement. Everything else
 /// (karaoke, fonts, ruby, voice spans) is stripped, as before.
 ///
-/// Only **inline** colour counts as source colour. ASS style-sheet colours are
+/// Inline colours and supported WebVTT CSS count as source colour. ASS style-sheet colours are
 /// deliberately ignored: nearly every script's `Default` style is white, and
 /// treating that as the file's choice would override the viewer's text colour
 /// on every line instead of acting as a fallback.
 enum SubtitleMarkup {
+    static let webVTTElements: Set<String> = ["c", "i", "b", "u", "ruby", "rt", "v", "lang"]
 
     // MARK: - SubRip / WebVTT
 
     /// Parses SRT/VTT cue text: `<font color>` and WebVTT colour classes
     /// (`<c.yellow>`) become runs, `<i>`/`<b>` whole-cue emphasis, and an SRT
     /// `{\an8}` override the cue's plane.
-    static func parseSubRip(_ raw: String) -> SubtitleText {
+    static func parseSubRip(_ raw: String, webVTTStyles: WebVTTColorStyles? = nil) -> SubtitleText {
         let lowered = raw.lowercased()
-        let isItalic = lowered.contains("<i>") || lowered.contains("<i ")
-        let isBold = lowered.contains("<b>") || lowered.contains("<b ")
+        let isItalic = lowered.contains("<i>") || lowered.contains("<i ") || lowered.contains("<i.")
+        let isBold = lowered.contains("<b>") || lowered.contains("<b ") || lowered.contains("<b.")
 
         var alignment: SubtitleAlignment?
         var builder = RunBuilder()
-        var colorStack: [SubtitleColor?] = []
+        let rootColor = webVTTStyles?.color()
+        builder.color = rootColor
+        var colorStack: [(element: String, color: SubtitleColor?)] = []
         var index = raw.startIndex
         while index < raw.endIndex {
             let ch = raw[index]
             if ch == "<", let close = raw[index...].firstIndex(of: ">") {
                 let tag = String(raw[raw.index(after: index)..<close])
                     .trimmingCharacters(in: .whitespaces)
-                applyHTMLTag(tag, stack: &colorStack, builder: &builder)
+                applyHTMLTag(
+                    tag, stack: &colorStack, builder: &builder,
+                    webVTTStyles: webVTTStyles, rootColor: rootColor
+                )
                 index = raw.index(after: close)
                 continue
             }
@@ -54,25 +60,34 @@ enum SubtitleMarkup {
     }
 
     private static func applyHTMLTag(
-        _ tag: String, stack: inout [SubtitleColor?], builder: inout RunBuilder
+        _ tag: String, stack: inout [(element: String, color: SubtitleColor?)],
+        builder: inout RunBuilder, webVTTStyles: WebVTTColorStyles?, rootColor: SubtitleColor?
     ) {
         let lowered = tag.lowercased()
-        if lowered == "/font" || lowered == "/c" || lowered.hasPrefix("/c.") {
-            _ = stack.popLast()
-            builder.color = stack.last ?? nil
+        let name = tag.prefix { !$0.isWhitespace }.components(separatedBy: ".")
+        let element = name[0].lowercased()
+        if element.hasPrefix("/") {
+            let closing = String(element.dropFirst())
+            if let index = stack.lastIndex(where: { $0.element == closing }) {
+                stack.removeSubrange(index...)
+                builder.color = stack.last?.color ?? rootColor
+            }
             return
         }
         let pushed: SubtitleColor?
         if lowered.hasPrefix("font") {
             pushed = fontColorAttribute(tag).flatMap(SubtitleColor.init(markup:)) ?? builder.color
+        } else if let webVTTStyles, webVTTElements.contains(element) {
+            pushed = webVTTStyles.color(
+                element: element, classes: Array(name.dropFirst()), inherited: builder.color
+            )
         } else if lowered == "c" || lowered.hasPrefix("c.") {
-            // WebVTT classes: `c.yellow.bg_black` — the first known colour wins.
             let classes = lowered.split(separator: ".").dropFirst()
             pushed = classes.lazy.compactMap { SubtitleColor(markup: String($0)) }.first ?? builder.color
         } else {
             return   // <i>, <b>, <v Speaker>, <ruby>, timestamps: no colour effect
         }
-        stack.append(pushed)
+        stack.append((element, pushed))
         builder.color = pushed
     }
 
@@ -264,15 +279,67 @@ extension SubtitleColor {
     /// An HTML/WebVTT colour: `#RRGGBB`, `#RGB`, bare hex, or a common name.
     init?(markup value: String) {
         let v = value.trimmingCharacters(in: .whitespaces).lowercased()
-        if let named = Self.namedMarkupColors[v] { self = named; return }
-        var hex = v.hasPrefix("#") ? String(v.dropFirst()) : v
-        if hex.count == 3 { hex = hex.map { "\($0)\($0)" }.joined() }
-        guard hex.count == 6, let n = UInt32(hex, radix: 16) else { return nil }
+        let n: UInt32
+        if let named = Self.namedMarkupColors[v] { n = named }
+        else {
+            var hex = v.hasPrefix("#") ? String(v.dropFirst()) : v
+            if hex.count == 3 { hex = hex.map { "\($0)\($0)" }.joined() }
+            guard hex.count == 6, let parsed = UInt32(hex, radix: 16) else { return nil }
+            n = parsed
+        }
         self.init(
             red: Double((n >> 16) & 0xFF) / 255,
             green: Double((n >> 8) & 0xFF) / 255,
             blue: Double(n & 0xFF) / 255
         )
+    }
+
+    /// CSS color values are not class names: `green` is exactly #008000.
+    init?(css value: String) {
+        let v = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if v == "transparent" { self = .clear; return }
+        if Self.namedMarkupColors[v] != nil { self.init(markup: v); return }
+        if v.hasPrefix("#") {
+            var hex = String(v.dropFirst())
+            guard hex.allSatisfy(\.isHexDigit) else { return nil }
+            if hex.count == 3 || hex.count == 4 { hex = hex.map { "\($0)\($0)" }.joined() }
+            if hex.count == 6 { self.init(markup: hex); return }
+            guard hex.count == 8, let n = UInt32(hex, radix: 16) else { return nil }
+            self.init(
+                red: Double((n >> 24) & 0xFF) / 255, green: Double((n >> 16) & 0xFF) / 255,
+                blue: Double((n >> 8) & 0xFF) / 255, alpha: Double(n & 0xFF) / 255
+            )
+            return
+        }
+        guard (v.hasPrefix("rgb(") || v.hasPrefix("rgba(")), v.hasSuffix(")"),
+              let open = v.firstIndex(of: "(") else { return nil }
+        let body = String(v[v.index(after: open)..<v.index(before: v.endIndex)])
+        let components: [String]
+        if body.contains(",") {
+            guard !body.contains("/") else { return nil }
+            components = body.components(separatedBy: ",").map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            guard Set(components.prefix(3).map { $0.hasSuffix("%") }).count == 1 else { return nil }
+        } else {
+            let parts = body.components(separatedBy: "/")
+            guard parts.count <= 2 else { return nil }
+            var channels = parts[0].split(whereSeparator: \.isWhitespace).map(String.init)
+            guard channels.count == 3 else { return nil }
+            if parts.count == 2 { channels.append(parts[1].trimmingCharacters(in: .whitespacesAndNewlines)) }
+            components = channels
+        }
+        guard components.count == 3 || components.count == 4 else { return nil }
+        func channel(_ text: String, scale: Double) -> Double? {
+            let percent = text.hasSuffix("%")
+            guard let number = Double(percent ? String(text.dropLast()) : text), number.isFinite else { return nil }
+            return min(1, max(0, number / (percent ? 100 : scale)))
+        }
+        guard let red = channel(components[0], scale: 255),
+              let green = channel(components[1], scale: 255),
+              let blue = channel(components[2], scale: 255),
+              let alpha = components.count == 4 ? channel(components[3], scale: 1) : 1 else { return nil }
+        self.init(red: red, green: green, blue: blue, alpha: alpha)
     }
 
     /// An ASS `&HBBGGRR&` colour (an optional leading alpha byte is ignored).
@@ -285,27 +352,13 @@ extension SubtitleColor {
         )
     }
 
-    /// WebVTT's default colour classes plus the HTML names SRT files use.
-    private static let namedMarkupColors: [String: SubtitleColor] = [
-        "white": .init(red: 1, green: 1, blue: 1),
-        "black": .init(red: 0, green: 0, blue: 0),
-        "red": .init(red: 1, green: 0, blue: 0),
-        "lime": .init(red: 0, green: 1, blue: 0),
-        "green": .init(red: 0, green: 0.5, blue: 0),
-        "blue": .init(red: 0, green: 0, blue: 1),
-        "yellow": .init(red: 1, green: 1, blue: 0),
-        "cyan": .init(red: 0, green: 1, blue: 1),
-        "aqua": .init(red: 0, green: 1, blue: 1),
-        "magenta": .init(red: 1, green: 0, blue: 1),
-        "fuchsia": .init(red: 1, green: 0, blue: 1),
-        "orange": .init(red: 1, green: 0.65, blue: 0),
-        "gray": .init(red: 0.5, green: 0.5, blue: 0.5),
-        "grey": .init(red: 0.5, green: 0.5, blue: 0.5),
-        "silver": .init(red: 0.75, green: 0.75, blue: 0.75),
-        "purple": .init(red: 0.5, green: 0, blue: 0.5),
-        "maroon": .init(red: 0.5, green: 0, blue: 0),
-        "navy": .init(red: 0, green: 0, blue: 0.5),
-        "olive": .init(red: 0.5, green: 0.5, blue: 0),
-        "teal": .init(red: 0, green: 0.5, blue: 0.5)
+    private static let namedMarkupColors: [String: UInt32] = [
+        "white": 0xFFFFFF, "black": 0x000000, "red": 0xFF0000,
+        "lime": 0x00FF00, "green": 0x008000, "limegreen": 0x32CD32, "blue": 0x0000FF,
+        "yellow": 0xFFFF00, "cyan": 0x00FFFF, "aqua": 0x00FFFF,
+        "magenta": 0xFF00FF, "fuchsia": 0xFF00FF, "orange": 0xFFA500,
+        "gray": 0x808080, "grey": 0x808080, "silver": 0xC0C0C0,
+        "purple": 0x800080, "maroon": 0x800000, "navy": 0x000080,
+        "olive": 0x808000, "teal": 0x008080
     ]
 }

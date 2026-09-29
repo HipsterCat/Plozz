@@ -51,6 +51,19 @@ and the diagnostics overlay.
 - **No secrets in URLs logged.** Stream URLs frequently embed tokens —
   `PlayerViewModel` redacts before logging.
 
+WebVTT sidecars distinguish caption class names from literal CSS colors.
+An unstyled `<c.green>` is a compatibility alias for bright `lime` (`#00FF00`),
+while CSS `color: green` and SRT `<font color="green">` retain `#008000`.
+Header `STYLE` foreground colors support global `::cue`, cue-element/class
+selectors (including compound classes and selector lists), common named colors,
+hex and RGB/RGBA values, inheritance, specificity, source order and `!important`.
+Explicit rules override class defaults; nested spans restore their parent color.
+CCExtractor's blank line after `STYLE` is tolerated. External stylesheets,
+conditional/complex selectors and other CSS properties are not interpreted.
+All resulting colors still obey the viewer's existing source-color preference;
+unstyled text retains the viewer's chosen color. Native/engine-decoded attributed
+captions keep their decoder-supplied colors rather than reinterpreting them.
+
 Foreground recovery captures a request- and engine-scoped position before
 suspension can reset the decoder clock. An internal engine recovery at zero is
 not proof that the correct position survived. Restoration uses the normal
