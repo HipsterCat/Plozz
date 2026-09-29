@@ -3,6 +3,59 @@ import XCTest
 
 @MainActor
 final class ReleaseNotesTests: XCTestCase {
+    private func revisedRelease(
+        _ build: Int, version: String, marketingVersion: String? = "2026.9.25"
+    ) -> ReleaseNotesRelease {
+        ReleaseNotesRelease(
+            id: String(format: "release/%03d", build), version: version,
+            build: build, releasedAt: "2026-09-29",
+            sections: [ReleaseNotesSection(category: .new, items: ["New release"])],
+            marketingVersion: marketingVersion
+        )
+    }
+
+    func testIndependentReleasesGroupAndAnnounceWithUnchangedAppleVersion() throws {
+        let catalog = try ReleaseNotesCatalog(releases: [
+            revisedRelease(46, version: "2026.9.29.10"),
+            revisedRelease(45, version: "2026.9.29.9")
+        ])
+        let decoded = try ReleaseNotesCatalog(data: JSONEncoder().encode(catalog))
+        XCTAssertEqual(decoded, catalog)
+        XCTAssertEqual(catalog.releases.map(\.appleVersion), ["2026.9.25", "2026.9.25"])
+        XCTAssertEqual(catalog.allGroups.map(\.version), ["2026.9.29.10", "2026.9.29.9"])
+        let store = TestReleaseNotesStore(lastSeenReleaseID: "release/045")
+        let model = ReleaseNotesModel(
+            catalog: catalog, currentReleaseID: "release/046", store: store
+        )
+        model.prepareForStartup()
+        XCTAssertEqual(model.pendingVersionGroups.map(\.version), ["2026.9.29.10"])
+    }
+
+    func testReleaseRevisionAndAppleVersionValidation() {
+        for version in ["2026.9.29.0", "2026.9.29.01", "2026.9.30.1", "2026.2.31.1"] {
+            XCTAssertThrowsError(try ReleaseNotesCatalog(releases: [
+                revisedRelease(45, version: version)
+            ]), version)
+        }
+        for marketing in [nil, "2026.9.29.1"] as [String?] {
+            XCTAssertThrowsError(try ReleaseNotesCatalog(releases: [
+                revisedRelease(45, version: "2026.9.29.1", marketingVersion: marketing)
+            ]))
+        }
+        XCTAssertThrowsError(try ReleaseNotesCatalog(releases: [
+            revisedRelease(46, version: "2026.9.29.1"),
+            revisedRelease(45, version: "2026.9.29.1")
+        ]))
+        XCTAssertThrowsError(try ReleaseNotesCatalog(releases: [
+            revisedRelease(46, version: "2026.9.29.9"),
+            revisedRelease(45, version: "2026.9.29.10")
+        ]))
+        XCTAssertThrowsError(try ReleaseNotesCatalog(releases: [
+            revisedRelease(46, version: "2026.9.29.2", marketingVersion: "2026.9.24"),
+            revisedRelease(45, version: "2026.9.29.1")
+        ]))
+    }
+
     func testCatalogDecodesAndGroupsSameVersionBuilds() throws {
         let catalog = try makeCatalog()
 

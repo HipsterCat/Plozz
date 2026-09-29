@@ -2,6 +2,21 @@ import XCTest
 @testable import CoreModels
 
 final class DiagnosticsReportTests: XCTestCase {
+    func testReportRetainsPublicAndAppleVersionsWithoutDuplicatingLegacyVersion() {
+        for displayVersion in ["2026.9.29.1", "2026.9.25"] {
+            let report = DiagnosticsReport(
+                appVersion: displayVersion, appBuild: "45", providers: "Plex",
+                repoURL: "https://github.com/brandomoore/Plozz",
+                marketingVersion: "2026.9.25"
+            )
+            XCTAssertTrue(report.environmentBlock.contains("Plozz: \(displayVersion) (build 45)"))
+            XCTAssertEqual(
+                report.environmentBlock.contains("Apple version: 2026.9.25"),
+                displayVersion != "2026.9.25"
+            )
+        }
+    }
+
     func testNewIssueURLContainsEnvironmentAndRedactedLogTail() throws {
         let report = DiagnosticsReport(
             appVersion: "1.2",

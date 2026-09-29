@@ -210,22 +210,17 @@ def require_crash_reporting_dsn
   )
 end
 
-# The marketing version (CFBundleShortVersionString) this ship will carry.
-#
-# Mirrors tools/generate-project.sh's precedence — an explicit
-# PLOZZ_MARKETING_VERSION override, else CalVer `YYYY.M.D` — and is computed ONCE
-# per run, then exported so the script bakes the very same value. Letting both
-# derive it independently would disagree across a midnight boundary, which is
-# exactly the kind of mismatch App Store Review rejects.
+# Apple keeps one version series while Plozz publishes distinct date/revision
+# releases. The committed catalog, not the clock, owns both identities.
 def marketing_version
   @marketing_version ||= begin
-    override = ENV["PLOZZ_MARKETING_VERSION"]
-    if override && !override.strip.empty?
-      override.strip
-    else
-      t = Time.now
-      "#{t.year}.#{t.month}.#{t.day}"
-    end
+    tool = File.join(REPO_ROOT, "tools", "release-notes.py")
+    arguments = ["python3", tool, "identity"]
+    release_id = ENV["PLOZZ_RELEASE_ID"].to_s.strip
+    override = ENV["PLOZZ_MARKETING_VERSION"].to_s.strip
+    arguments += ["--release-id", release_id] unless release_id.empty?
+    arguments += ["--version", override] unless override.empty?
+    JSON.parse(sh(arguments.shelljoin)).fetch("marketingVersion")
   end
 end
 
@@ -244,9 +239,8 @@ EDITABLE_VERSION_STATES = %w[
 # the platform has none yet.
 #
 # App Store Review rejects a submission whose version record disagrees with the
-# binary's CFBundleShortVersionString. Because the marketing version is CalVer —
-# it changes on its own whenever you ship on a new day — keeping the records in
-# step by hand is a standing trap, so `release` does it as part of shipping.
+# binary's CFBundleShortVersionString. A deliberate Apple-version change must
+# update those records too, so `release` does it as part of shipping.
 #
 # TestFlight ignores these records entirely, which is why `beta` doesn't call it.
 def sync_app_store_versions(version)
@@ -317,7 +311,7 @@ end
 
 # The committed catalog is the sole release-note source for the app, TestFlight,
 # GitHub releases, and App Store metadata. A stable release id is explicit so two
-# builds shipped under the same CalVer date cannot select the wrong entry.
+# builds shipped under the same Apple version cannot select the wrong entry.
 def release_notes_entry
   @release_notes_entry ||= begin
     release_id = ENV["PLOZZ_RELEASE_ID"].to_s.strip
@@ -356,9 +350,10 @@ def release_notes_text(entry, platform, empty_text: nil)
 
     "#{section.fetch('category')}\n#{visible.map { |item| "• #{item}" }.join("\n")}"
   end
-  return empty_text if blocks.empty?
+  text = blocks.empty? ? empty_text : blocks.join("\n\n")
+  return text if text.nil? || !entry.key?("marketingVersion")
 
-  blocks.join("\n\n")
+  "Plozz #{entry.fetch('version')}\n\n#{text}"
 end
 
 def github_release_notes(entry)
@@ -386,6 +381,23 @@ def validate_release_notes_build(entry, build_number)
     "--release-id #{entry.fetch('id').shellescape} " \
     "--version #{marketing_version.shellescape} --build #{build_number}"
   )
+end
+
+def release_artifact_jobs(entry, notes_by_target)
+  RELEASE_TARGETS.map do |target|
+    PlozzTestflightPipeline.job(
+      name: target[:name],
+      app_identifier: APP_IDENTIFIER,
+      platform: target[:platform],
+      ipa: File.join(REPO_ROOT, OUTPUT_DIR, target[:output_name]),
+      version: marketing_version,
+      release_version: entry.fetch("version"),
+      release_id: entry.fetch("id"),
+      build_number: ENV.fetch("PLOZZ_BUILD_NUMBER"),
+      notes: notes_by_target.fetch(target[:name]),
+      group: EXTERNAL_GROUP
+    )
+  end
 end
 
 # Tags the shipped commit `release/<build>` and opens a GitHub Release with an
@@ -430,7 +442,7 @@ def report_release_tagging_failures
   @release_tagging_failures = []
 end
 
-def tag_github_release(build_number, notes, prerelease)
+def tag_github_release(build_number, notes, prerelease, release_version)
   return UI.important("No build number available; skipping release tag.") if build_number.nil? || build_number.to_s.strip.empty?
 
   # APPEND the override rather than `||=`-ing it. The host injects
@@ -471,20 +483,9 @@ def tag_github_release(build_number, notes, prerelease)
     end
   changelog = "- (no changes recorded)" if changelog.empty?
 
-  # Release title = the app's CalVer marketing version (e.g. "2026.7.18"), read from
-  # the generated project (generate-project.sh bakes MARKETING_VERSION = build date).
-  # Falls back to today's CalVer if it can't be read. The build number still shows in
-  # the release via its `release/<NNN>` tag, so same-day builds remain distinguishable.
-  today_cal = "#{Time.now.year}.#{Time.now.month}.#{Time.now.day}"
-  version =
-    begin
-      v = sh("cd .. && grep -m1 'MARKETING_VERSION' Plozz.xcodeproj/project.pbxproj 2>/dev/null | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' || true").strip
-      v.empty? ? today_cal : v
-    rescue
-      today_cal
-    end
+  version = release_version
   date = Time.now.strftime("%Y-%m-%d")
-  body = +"TestFlight build #{build_number} — #{date}\n"
+  body = +"Plozz #{version} — #{date}\nApple version #{marketing_version}, build #{build_number}\n"
   body << "\nWhat to Test:\n#{notes.strip}\n" unless notes.strip.empty?
   body << "\nChanges:\n#{changelog}\n"
 
@@ -533,9 +534,8 @@ lane :build do |options|
   # TestFlight is the source of truth, so derive the next build from (latest
   # TestFlight build + 1). Set it BEFORE generating the project so generate-project.sh
   # bakes it into CFBundleVersion for both the app and the Top Shelf extension.
-  # Marketing version (CFBundleShortVersionString) is auto-derived — CalVer by
-  # default, or PLOZZ_MARKETING_VERSION for a hand-chosen release name — and
-  # `release` writes the same value to the App Store version records.
+  # Apple version stays on the catalog's selected series unless deliberately
+  # changed; the selected entry separately owns the displayed Plozz version.
   build_number = next_build_number
   ENV["PLOZZ_BUILD_NUMBER"] = build_number.to_s
   UI.message("Using build number #{build_number} (CFBundleVersion)")
@@ -543,9 +543,7 @@ lane :build do |options|
     validate_release_notes_build(release_notes_entry, build_number)
   end
 
-  # Pin the marketing version for this run so generate-project.sh bakes exactly
-  # the value `release` will later write to the App Store version records —
-  # rather than each deriving CalVer separately and disagreeing at midnight.
+  # Pin the Apple version across both archives and their extensions.
   ENV["PLOZZ_MARKETING_VERSION"] = marketing_version
   UI.message("Using marketing version #{marketing_version} (CFBundleShortVersionString)")
 
@@ -596,22 +594,14 @@ lane :beta do
     end
     [
       target[:name],
-      authored || "No changes for this platform in this build."
+      authored || release_notes_text(
+        entry, target[:notes_platform],
+        empty_text: "No changes for this platform in this build."
+      )
     ]
   end
   build
-  jobs = RELEASE_TARGETS.map do |target|
-    PlozzTestflightPipeline.job(
-      name: target[:name],
-      app_identifier: APP_IDENTIFIER,
-      platform: target[:platform],
-      ipa: File.join(REPO_ROOT, OUTPUT_DIR, target[:output_name]),
-      version: marketing_version,
-      build_number: ENV.fetch("PLOZZ_BUILD_NUMBER"),
-      notes: notes_by_target.fetch(target[:name]),
-      group: EXTERNAL_GROUP
-    )
-  end
+  jobs = release_artifact_jobs(entry, notes_by_target)
   # Check BOTH exported binaries before starting either irreversible upload.
   PlozzTestflightPipeline.validate_jobs!(jobs)
   begin
@@ -630,7 +620,8 @@ lane :beta do
   tag_github_release(
     ENV["PLOZZ_BUILD_NUMBER"],
     github_release_notes(entry),
-    true
+    true,
+    entry.fetch("version")
   )
   report_release_tagging_failures
   end
@@ -655,8 +646,9 @@ lane :release do
     [target[:name], notes]
   end
   build
+  PlozzTestflightPipeline.validate_jobs!(release_artifact_jobs(entry, notes_by_target))
   # Keep every platform's App Store version record in step with the binaries
-  # being uploaded. Review rejects a mismatch, and CalVer moves on its own.
+  # being uploaded. This is independent of the Plozz display release.
   sync_app_store_versions(marketing_version)
   RELEASE_TARGETS.each do |target|
     notes = notes_by_target.fetch(target[:name])
@@ -680,7 +672,8 @@ lane :release do
   tag_github_release(
     ENV["PLOZZ_BUILD_NUMBER"],
     github_release_notes(entry),
-    false
+    false,
+    entry.fetch("version")
   )
   report_release_tagging_failures
   end

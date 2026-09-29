@@ -206,7 +206,7 @@ public struct RootView: View {
             .filter { seen.insert($0).inserted }
         return CrashReportContext.make(
             bundleIdentifier: Bundle.main.bundleIdentifier ?? "com.thatcube.Plozz",
-            version: AppInfo.version,
+            version: AppInfo.marketingVersion,
             build: AppInfo.build,
             providers: providers,
             environment: AppReleaseChannel.current.crashReportEnvironment

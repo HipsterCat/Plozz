@@ -129,6 +129,117 @@ class ReleaseNotesToolTests(unittest.TestCase):
             self.assertEqual(result.stdout, "\n")
             self.assertIn("has no iOS notes", result.stderr)
 
+    def revised_catalog(self, root: Path, versions=("2026.9.29.10", "2026.9.29.9")) -> Path:
+        path = self.fixture(root, ["Shared"])
+        catalog = json.loads(path.read_text())
+        catalog["releases"] = [
+            {
+                "id": f"release/{50 - index:03d}",
+                "version": version,
+                "marketingVersion": "2026.9.25",
+                "build": 50 - index,
+                "releasedAt": "2026-09-29",
+                "sections": [{"category": "New", "items": ["Shared"]}],
+            }
+            for index, version in enumerate(versions)
+        ] + catalog["releases"]
+        path.write_text(json.dumps(catalog))
+        return path
+
+    def test_identity_keeps_apple_version_and_local_builds_unreleased(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = self.revised_catalog(Path(temp))
+            before = path.read_bytes()
+            for _ in range(2):
+                local = self.run_tool(path, "identity")
+                self.assertEqual(local.returncode, 0, local.stderr)
+                self.assertEqual(json.loads(local.stdout), {
+                    "marketingVersion": "2026.9.25", "releaseVersion": "", "releaseID": ""
+                })
+                selected = self.run_tool(path, "identity", "--release-id", "release/050",
+                                         "--version", "2026.9.25", "--build", "50")
+                self.assertEqual(selected.returncode, 0, selected.stderr)
+                self.assertEqual(json.loads(selected.stdout), {
+                    "marketingVersion": "2026.9.25",
+                    "releaseVersion": "2026.9.29.10", "releaseID": "release/050"
+                })
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_legacy_identity_and_explicit_new_apple_series(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = self.fixture(Path(temp), ["Shared"])
+            for arguments, expected in (
+                ((), "2026.8.1"), (("--version", "2026.10.1"), "2026.10.1")
+            ):
+                result = self.run_tool(path, "identity", *arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["marketingVersion"], expected)
+            invalid = self.run_tool(path, "identity", "--version", "2026.9.29.1")
+            self.assertNotEqual(invalid.returncode, 0)
+
+    def test_selected_identity_rejects_mismatched_apple_version_build_and_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = self.revised_catalog(Path(temp))
+            for arguments in (
+                ("--release-id", "release/999"),
+                ("--release-id", "release/050", "--build", "51"),
+                ("--release-id", "release/050", "--version", "2026.9.29"),
+                ("--release-id", "release/050", "--version", "2026.9.29.10"),
+            ):
+                with self.subTest(arguments=arguments):
+                    self.assertNotEqual(self.run_tool(path, "identity", *arguments).returncode, 0)
+            valid = self.run_tool(path, "validate", "--release-id", "release/050",
+                                  "--version", "2026.9.25", "--build", "50")
+            self.assertEqual(valid.returncode, 0, valid.stderr)
+
+    def test_next_revision_is_numeric_non_mutating_and_resets_each_day(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = self.revised_catalog(Path(temp))
+            before = path.read_bytes()
+            for day, expected in (("2026-09-29", "2026.9.29.11"),
+                                  ("2026-09-30", "2026.9.30.1"),
+                                  ("2026-09-29", "2026.9.29.11")):
+                result = self.run_tool(path, "next-version", "--date", day)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+            self.assertNotEqual(
+                self.run_tool(path, "next-version", "--date", "2026-09-28").returncode, 0
+            )
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_new_releases_require_unique_valid_revisions_and_explicit_apple_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            for changes in (
+                {"version": "2026.9.29.0"}, {"version": "2026.9.29.09"},
+                {"version": "2026.9.29.9"}, {"version": "2026.9.29.8"},
+                {"version": "2026.9.30.1"}, {"version": "2026.2.31.1"},
+                {"marketingVersion": "2026.9.29.1"}, {"marketingVersion": None},
+                {"marketingVersion": "2026.9.24"},
+            ):
+                with self.subTest(changes=changes):
+                    path = self.revised_catalog(Path(temp))
+                    data = json.loads(path.read_text())
+                    data["releases"][0].update(changes)
+                    if changes.get("marketingVersion", "") is None:
+                        data["releases"][0].pop("marketingVersion")
+                    path.write_text(json.dumps(data))
+                    self.assertNotEqual(self.run_tool(path, "validate").returncode, 0)
+
+    def test_new_release_notes_identify_display_version_and_explicit_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = self.revised_catalog(Path(temp))
+            result = self.run_tool(path, "render", "--release-id", "release/050")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "Plozz 2026.9.29.10\n\nNew\n• Shared")
+            data = json.loads(path.read_text())
+            data["releases"][0]["sections"][0]["items"] = [
+                {"text": "TV only", "platforms": ["tvOS"]}
+            ]
+            path.write_text(json.dumps(data))
+            result = self.run_tool(path, "render", "--release-id", "release/050",
+                                   "--platform", "iOS", "--empty-text", "No changes.")
+            self.assertEqual(result.stdout.strip(), "Plozz 2026.9.29.10\n\nNo changes.")
+
 
 if __name__ == "__main__":
     unittest.main()
