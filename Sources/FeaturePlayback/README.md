@@ -476,6 +476,11 @@ moving focus out of the closing drawer. Episode activation does not leave a
 persistent collection selection. Episode browsing auto-hides after 15 seconds
 without navigation; each focus move restarts that window. Other cards retain
 their existing timeout.
+The playback focus surface and controls hosts are siblings under a nonfocusable
+root. TVUIKit also projects artwork when an ancestor is focused, so returning
+focus to a parent containing the drawer would highlight every parked episode,
+regardless of the cells' own focus state. Back exits every bottom card through
+the same drawer-close and playback-focus handoff as Info.
 Initial loading
 uses nonfocusable artwork/caption skeletons with the loaded cards' dimensions,
 not a spinner or visible loading message. TVUIKit projects only the artwork;

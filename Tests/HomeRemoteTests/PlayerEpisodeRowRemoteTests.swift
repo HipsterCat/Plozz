@@ -3,8 +3,35 @@ import XCTest
 
 @MainActor
 final class PlayerEpisodeRowRemoteTests: XCTestCase {
+    func testRemoteBackClosesEpisodesWithoutReopeningOrLeavingHighlights() throws {
+        let app = launch(arguments: ["--long-season", "--production-player-input", "--capture-artwork"])
+        defer { app.terminate() }
+        XCUIRemote.shared.press(.down)
+        XCTAssertTrue(app.buttons["Episodes"].waitForExistence(timeout: 5))
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(app.collectionViews.firstMatch.waitForExistence(timeout: 5))
+        for _ in 0..<3 {
+            XCUIRemote.shared.press(.down)
+            _ = try focusedEpisode(in: app)
+            XCUIRemote.shared.press(.right, forDuration: 2)
+            XCUIRemote.shared.press(.left, forDuration: 1)
+            assertInAppArtworkIsClean(in: app)
+            XCUIRemote.shared.press(.menu)
+            let closed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "label == 'Closed'"),
+                object: app.staticTexts["episode-row-drawer-state"]
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 3), .completed,
+                           "Back must leave the bottom drawer, not restore its tab and reopen it.")
+            Thread.sleep(forTimeInterval: 0.5)
+            XCTAssertEqual(app.staticTexts["episode-row-drawer-state"].label, "Closed")
+            XCUIRemote.shared.press(.down)
+            assertInAppArtworkIsClean(in: app)
+        }
+    }
+
     func testAutomaticPlayerCloseClearsArtworkBeforeReenteringTheRow() throws {
-        let app = launch(arguments: ["--long-season", "--production-player-input"])
+        let app = launch(arguments: ["--long-season", "--production-player-input", "--capture-artwork"])
         defer { app.terminate() }
         XCUIRemote.shared.press(.down)
         let episodes = app.buttons["Episodes"]
@@ -20,7 +47,7 @@ final class PlayerEpisodeRowRemoteTests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.6)
             XCTAssertGreaterThan(try XCTUnwrap(Int(app.staticTexts["episode-row-activity"].label)), activity,
                                  "Native episode navigation must restart the production idle timer.")
-            try assertOnlyFocusedArtworkIsEnlarged(in: app)
+            assertInAppArtworkIsClean(in: app)
             Thread.sleep(forTimeInterval: 8)
             XCTAssertEqual(app.staticTexts["episode-row-drawer-state"].label, "Open")
             XCUIRemote.shared.press(.right)
@@ -35,8 +62,19 @@ final class PlayerEpisodeRowRemoteTests: XCTestCase {
             XCUIRemote.shared.press(.down)
             Thread.sleep(forTimeInterval: 0.8)
             XCTAssertEqual(app.collectionViews.firstMatch.cells.matching(NSPredicate(format: "hasFocus == true")).count, 0)
-            try assertOnlyFocusedArtworkIsEnlarged(in: app)
+            assertInAppArtworkIsClean(in: app)
         }
+    }
+
+    private func assertInAppArtworkIsClean(in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        Thread.sleep(forTimeInterval: 0.8)
+        let activity = app.staticTexts["episode-row-activity"].label
+        let capture = app.staticTexts["episode-row-artwork-capture"]
+        let clean = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", "\(activity):clean"), object: capture
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [clean], timeout: 3), .completed,
+                       "Only focused artwork may enlarge; app-side capture: \(capture.label)", file: file, line: line)
     }
 
     func testOnlyFocusedArtworkStaysEnlargedAfterRapidMovesAndInterruptedDrawer() throws {

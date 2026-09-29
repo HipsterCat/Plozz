@@ -12,6 +12,8 @@ struct EpisodeRowRemoteFixture: View {
     @State private var closeRequest = 0
     @State private var engine = EpisodeInputFixtureEngine()
     @State private var subtitles = LiveSubtitleModel()
+    @State private var artworkCapture = ""
+    @State private var captureRun = UUID().uuidString
     @FocusState private var focus: PlayerControls.FocusSlot?
 
     init() {
@@ -77,6 +79,18 @@ struct EpisodeRowRemoteFixture: View {
                 do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
             }
         }
+        .task(id: player.controls.controlBarActivity) {
+            guard ProcessInfo.processInfo.arguments.contains("--capture-artwork") else { return }
+            let activity = player.controls.controlBarActivity
+            do {
+                try await Task.sleep(for: .milliseconds(700))
+                try captureArtwork(activity: activity)
+            } catch is CancellationError {
+                return
+            } catch {
+                artworkCapture = "\(activity):error:\(error.localizedDescription)"
+            }
+        }
     }
 
     private var isolatedRow: some View {
@@ -130,6 +144,8 @@ struct EpisodeRowRemoteFixture: View {
                     .accessibilityIdentifier("episode-row-ready")
                 Text(verbatim: String(player.controls.controlBarActivity))
                     .accessibilityIdentifier("episode-row-activity")
+                Text(verbatim: artworkCapture)
+                    .accessibilityIdentifier("episode-row-artwork-capture")
             }
             .allowsHitTesting(false)
         }
@@ -137,6 +153,74 @@ struct EpisodeRowRemoteFixture: View {
 
     private func countCells(in view: UIView) -> Int {
         (view is PlayerEpisodeNativeCell ? 1 : 0) + view.subviews.map(countCells).reduce(0, +)
+    }
+
+    @MainActor
+    private func captureArtwork(activity: Int) throws {
+        guard player.controls.controlBarVisible else {
+            artworkCapture = "\(activity):closed"
+            return
+        }
+        guard let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+            .flatMap(\.windows).first(where: \.isKeyWindow) else {
+            preconditionFailure("Episode capture requires its own visible window")
+        }
+        func cells(in view: UIView) -> [PlayerEpisodeNativeCell] {
+            (view as? PlayerEpisodeNativeCell).map { [$0] } ?? view.subviews.flatMap { cells(in: $0) }
+        }
+        let visible = cells(in: window).filter {
+            guard let collection = $0.superview as? UICollectionView else { return false }
+            return $0.isFocused || collection.bounds.insetBy(dx: -1, dy: -1).contains($0.frame)
+        }
+        guard visible.count >= 2 else {
+            artworkCapture = "\(activity):no-row"
+            return
+        }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+            precondition(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+        }
+        guard let source = image.cgImage, let png = image.pngData() else {
+            preconditionFailure("Episode capture must produce a readable image")
+        }
+        var clean = true
+        var measurements: [[String: Any]] = []
+        for cell in visible {
+            let frame = cell.convert(cell.bounds, to: window)
+            guard let crop = source.cropping(to: CGRect(
+                x: frame.midX, y: frame.minY - 4, width: 1, height: 40
+            ).integral) else { preconditionFailure("Episode artwork must be inside the capture") }
+            var pixels = [UInt8](repeating: 0, count: crop.width * crop.height * 4)
+            let firstBlue = pixels.withUnsafeMutableBytes { bytes -> Int? in
+                guard let context = CGContext(
+                    data: bytes.baseAddress, width: crop.width, height: crop.height,
+                    bitsPerComponent: 8, bytesPerRow: crop.width * 4,
+                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ) else { preconditionFailure("Episode artwork must be drawable") }
+                context.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
+                return (0..<crop.height).first {
+                    let offset = $0 * crop.width * 4
+                    return bytes[offset + 2] > 150 && Double(bytes[offset + 2]) > Double(bytes[offset]) * 1.5
+                }
+            }
+            let inset = firstBlue.map { $0 - 4 }
+            let matches = inset.map { cell.isFocused ? $0 < 4 : abs($0 - 12) <= 2 } ?? false
+            clean = clean && matches
+            measurements.append([
+                "title": cell.accessibilityLabel ?? "", "focused": cell.isFocused,
+                "highlighted": cell.isHighlighted, "selected": cell.isSelected,
+                "configurationFocused": cell.configurationState.isFocused,
+                "paintedInset": inset ?? -100, "matches": matches
+            ])
+        }
+        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("episode-focus-\(captureRun)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try png.write(to: directory.appendingPathComponent("\(activity).png"))
+        try JSONSerialization.data(withJSONObject: measurements, options: [.prettyPrinted, .sortedKeys])
+            .write(to: directory.appendingPathComponent("\(activity).json"))
+        artworkCapture = "\(activity):\(clean ? "clean" : "stale")"
     }
 
     @MainActor

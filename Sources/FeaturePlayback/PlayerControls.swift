@@ -1558,7 +1558,7 @@ struct PlayerControls: View {
             castCloseRequest &+= 1
             return
         }
-        if openPanel == .info {
+        if Self.usesBottomCard(openPanel) {
             // The card leaves with its tab, straight back to the scrub bar.
             closeInfoCard()
         } else if openPanel != nil {
