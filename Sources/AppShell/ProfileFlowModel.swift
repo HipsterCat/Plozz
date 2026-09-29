@@ -9,8 +9,8 @@ import FeatureProfiles
 /// The profile-flow + household facet, extracted from `AppState`.
 ///
 /// Owns the profile-switching orchestration (launch picker state, switch/create/
-/// edit/remove sequencing) and the household membership model (enable/disable
-/// profiles, ask-on-startup, per-server inclusion). This is the profile lifecycle
+/// edit/remove sequencing) and the household membership model (startup sign-in,
+/// per-server inclusion). This is the profile lifecycle
 /// coordinator the earlier batches' injected `switchProfile` callback lands on —
 /// now that this facet is the owner, the Plex-home-user facet's PIN-cancel
 /// fallback wires directly to `switchProfile(to:)`.
@@ -94,8 +94,8 @@ public final class ProfileFlowModel {
 
     // MARK: Launch picker lifecycle (driven by AppState bootstrap / onboarding)
 
-    /// Configures the launch profile picker: shown when the household opted into
-    /// "ask on startup" and has more than one profile.
+    /// Shows the launch picker for multiple profiles unless automatic sign-in
+    /// restores a trusted session on this device.
     ///
     /// Also forced when the profile we'd otherwise restore is locked. Landing on
     /// the picker (rather than restoring the profile and putting a PIN screen
@@ -106,8 +106,7 @@ public final class ProfileFlowModel {
     public func prepareLaunchPicker() {
         let restored = plexHomeUsers.restoreAutomaticSignInAtLaunch()
         isChoosingProfile = !restored && (
-            activeProfileAwaitsUnlock
-                || (profilesModel.askProfileOnStartup && profilesModel.profiles.count > 1)
+            activeProfileAwaitsUnlock || profilesModel.profiles.count > 1
         )
         isProfileSelectionCancelable = false
     }
@@ -662,11 +661,6 @@ public final class ProfileFlowModel {
     }
 
     // MARK: Household preferences
-
-    /// Persists the "Ask which profile on startup" launch-picker toggle.
-    public func setAskProfileOnStartup(_ value: Bool) {
-        profilesModel.setAskProfileOnStartup(value)
-    }
 
     /// Whether `accountID` is included in the active profile's "Use this
     /// server" set. Used by Settings to drive the per-server toggle.

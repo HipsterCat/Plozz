@@ -2,6 +2,7 @@ import XCTest
 import CoreModels
 import FeatureAuth
 import FeatureMusic
+import FeatureSettings
 @testable import AppRuntime
 @testable import AppShell
 
@@ -93,7 +94,6 @@ final class AutomaticSignInTests: XCTestCase {
         let house = try household()
         let env = launch(house)
         _ = env.profiles.add(name: "Second", avatarSymbol: "person", colorIndex: 1)
-        env.profiles.setAskProfileOnStartup(true)
         env.flow.prepareLaunchPicker()
         XCTAssertFalse(env.plex.automaticallySignIn)
         XCTAssertTrue(env.flow.isChoosingProfile)
@@ -181,12 +181,10 @@ final class AutomaticSignInTests: XCTestCase {
         first.flow.setAutomaticallySignIn(true)
         let other = first.profiles.add(name: "Other", avatarSymbol: "person", colorIndex: 1)
         first.flow.switchProfile(to: other.id)
-        first.profiles.setAskProfileOnStartup(true)
         let next = launch(house)
         next.flow.prepareLaunchPicker()
         XCTAssertEqual(next.profiles.activeProfileID, other.id)
         XCTAssertFalse(next.flow.isChoosingProfile)
-        XCTAssertTrue(next.profiles.askProfileOnStartup, "Do not rewrite the separate picker preference")
     }
 
     func testDisableDeletesTrustAndRestoresLaunchPrompt() async throws {
@@ -430,5 +428,83 @@ final class AutomaticSignInTests: XCTestCase {
         XCTAssertFalse(env.plex.automaticallySignIn)
         XCTAssertNotNil(env.plex.automaticSignInError)
         XCTAssertFalse(launch(house).plex.restoreAutomaticSignInAtLaunch())
+    }
+
+    func testLegacyPickerPreferenceCannotSkipSelectionOrGrantPINTrust() throws {
+        for legacyValue in ["true", "false"] {
+            let house = try household(provider: .jellyfin)
+            house.defaults.set(
+                Data(legacyValue.utf8), forKey: "com.plozz.profiles.askOnStartup"
+            )
+            let env = launch(house)
+            let other = env.profiles.add(name: "Other", avatarSymbol: "person", colorIndex: 1)
+            env.profiles.select(other.id)
+            let next = launch(house)
+            next.flow.prepareLaunchPicker()
+            XCTAssertTrue(next.flow.isChoosingProfile)
+            XCTAssertFalse(next.plex.automaticallySignIn)
+        }
+    }
+
+    func testDisablingTheOnlyStartupSettingRestoresProfileSelection() throws {
+        let house = try household(provider: .jellyfin)
+        let env = launch(house)
+        let other = env.profiles.add(name: "Other", avatarSymbol: "person", colorIndex: 1)
+        env.flow.switchProfile(to: other.id)
+        env.flow.setAutomaticallySignIn(true)
+        let next = launch(house)
+        next.flow.prepareLaunchPicker()
+        XCTAssertFalse(next.flow.isChoosingProfile)
+        next.flow.setAutomaticallySignIn(false)
+        let disabled = launch(house)
+        disabled.flow.prepareLaunchPicker()
+        XCTAssertTrue(disabled.flow.isChoosingProfile)
+        XCTAssertFalse(disabled.flow.isProfileSelectionCancelable)
+    }
+
+    func testSettingsOmitPINExplanationForUnlockedProfiles() throws {
+        let house = try household()
+        let env = launch(house)
+        let settings = AutomaticSignInSettings(
+            isEnabled: .constant(false), profile: env.profiles.activeProfile,
+            accounts: env.hub.accounts
+        )
+        XCTAssertNil(settings.explanation)
+        XCTAssertNil(settings.error)
+    }
+
+    func testSettingsExplainStartupPINBypassForLocalAndPlexLocks() throws {
+        let house = try household()
+        let env = launch(house)
+        var locallyLocked = env.profiles.activeProfile
+        locallyLocked.replaceLock(with: ProfileLock.make(pin: "1357", iterations: 1))
+        let plexLocked = env.profiles.activeProfile.settingHomeUserBinding(
+            .init(homeUserID: "parent", name: "Parent", requiresPIN: true),
+            forPlexAccount: "account"
+        )
+        for profile in [locallyLocked, plexLocked] {
+            let settings = AutomaticSignInSettings(
+                isEnabled: .constant(false), profile: profile,
+                accounts: env.hub.accounts
+            )
+            XCTAssertEqual(
+                String(localized: try XCTUnwrap(settings.explanation)),
+                "Skip the PIN at startup on this device."
+            )
+        }
+        let removedAccount = AutomaticSignInSettings(
+            isEnabled: .constant(false), profile: plexLocked, accounts: []
+        )
+        XCTAssertNil(removedAccount.explanation)
+    }
+
+    func testSettingsStillSurfaceErrorsWithoutPINHelp() throws {
+        let env = launch(try household(provider: .jellyfin))
+        let settings = AutomaticSignInSettings(
+            isEnabled: .constant(false), profile: env.profiles.activeProfile,
+            accounts: env.hub.accounts, error: "Couldn’t update automatic sign-in on this device. Try again."
+        )
+        XCTAssertNil(settings.explanation)
+        XCTAssertNotNil(settings.error)
     }
 }

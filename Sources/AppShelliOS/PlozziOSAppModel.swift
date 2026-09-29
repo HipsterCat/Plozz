@@ -573,7 +573,7 @@ final class PlozziOSAppModel {
         // ordinary `selectProfile(_:)` gate with the picker behind it.
         let requiresLaunchProfileSelection =
             profiles.activeProfile.isLocked
-            || (profiles.askProfileOnStartup && profiles.profiles.count > 1)
+            || profiles.profiles.count > 1
         let accountsProviders = AccountsProvidersModel(
             accountStore: accountStore,
             registry: registry,

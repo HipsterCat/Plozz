@@ -48,8 +48,11 @@ session persistence.
 Settings → Profiles offers an off-by-default, device-only startup preference on
 tvOS and iOS/iPadOS. When enabled from an authenticated profile, the next launch
 opens the last successfully used profile without the profile picker or PIN.
-The existing ask-on-startup preference is preserved and applies again when
-automatic sign-in is disabled.
+This is the only startup control. When disabled, households with multiple
+profiles see the picker and protected profiles require their PIN as usual.
+The retired ask-on-startup preference is ignored, not converted into consent
+to bypass a PIN. PIN help appears only when the active profile has a local lock
+or a protected Plex Home binding.
 
 `AppRuntime.AutomaticSignInStore` retains one session in a non-synchronizable,
 ThisDeviceOnly Keychain item (per Apple TV system user). It stores authenticated

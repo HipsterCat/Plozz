@@ -477,12 +477,13 @@ public struct RootView: View {
                         activeProfile: appState.profilesModel.activeProfile,
                         liveTVPreferencesNamespace: appState.profilesModel.activeNamespace,
                         plexIdentityGeneration: appState.plexHomeUsers.plexIdentityGeneration,
-                        askProfileOnStartup: appState.profilesModel.askProfileOnStartup,
                         automaticSignIn: AutomaticSignInSettings(
                             isEnabled: Binding(
                                 get: { appState.plexHomeUsers.automaticallySignIn },
                                 set: { appState.profileFlow.setAutomaticallySignIn($0) }
                             ),
+                            profile: appState.profilesModel.activeProfile,
+                            accounts: appState.accountsProviders.accounts,
                             error: appState.plexHomeUsers.automaticSignInError
                         ),
                         homeRuntime: HomeTabRuntime(
@@ -506,7 +507,6 @@ public struct RootView: View {
                         ),
                         isAccountIncludedInActiveProfile: { appState.profileFlow.isAccountIncludedInActiveProfile($0) },
                         onSetAccountIncluded: { appState.profileFlow.setAccount($0, includedInActiveProfile: $1) },
-                        onSetAskProfileOnStartup: { appState.profileFlow.setAskProfileOnStartup($0) },
                         onSaveProfile: { appState.profileFlow.saveProfile($0) },
                         onCreateProfile: createProfileForSetup,
                         onUpdateProfileCosmetics: { appState.profileFlow.updateProfileCosmetics($0) },

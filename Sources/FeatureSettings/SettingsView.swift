@@ -131,14 +131,12 @@ public struct SettingsView: View {
     private let liveTVPreferencesNamespace: String?
     @Environment(LiveTVSettingsSources.self) private var liveTVSources: LiveTVSettingsSources?
     @Environment(SubtitleStyleSettingsDestination.self) private var subtitleStyleDestination: SubtitleStyleSettingsDestination?
-    private let askProfileOnStartup: Bool
     private let automaticSignIn: AutomaticSignInSettings
     private let appVersion: String
     private let appBuild: String
     private let repoURL: String
     private let isAccountIncludedInActiveProfile: (String) -> Bool
     private let onSetAccountIncluded: (String, Bool) -> Void
-    private let onSetAskProfileOnStartup: (Bool) -> Void
     private let onSwitchProfile: () -> Void
     private let onSaveProfile: (ProfileDraft) -> Void
     private let onCreateProfile: (ProfileDraft) -> Void
@@ -239,14 +237,12 @@ public struct SettingsView: View {
         profiles: [Profile],
         activeProfile: Profile,
         liveTVPreferencesNamespace: String?,
-        askProfileOnStartup: Bool,
         automaticSignIn: AutomaticSignInSettings,
         appVersion: String,
         appBuild: String,
         repoURL: String,
         isAccountIncludedInActiveProfile: @escaping (String) -> Bool,
         onSetAccountIncluded: @escaping (String, Bool) -> Void,
-        onSetAskProfileOnStartup: @escaping (Bool) -> Void,
         onSwitchProfile: @escaping () -> Void,
         onSaveProfile: @escaping (ProfileDraft) -> Void,
         onCreateProfile: @escaping (ProfileDraft) -> Void = { _ in },
@@ -309,14 +305,12 @@ public struct SettingsView: View {
         self.profiles = profiles
         self.activeProfile = activeProfile
         self.liveTVPreferencesNamespace = liveTVPreferencesNamespace
-        self.askProfileOnStartup = askProfileOnStartup
         self.automaticSignIn = automaticSignIn
         self.appVersion = appVersion
         self.appBuild = appBuild
         self.repoURL = repoURL
         self.isAccountIncludedInActiveProfile = isAccountIncludedInActiveProfile
         self.onSetAccountIncluded = onSetAccountIncluded
-        self.onSetAskProfileOnStartup = onSetAskProfileOnStartup
         self.onSwitchProfile = onSwitchProfile
         self.onSaveProfile = onSaveProfile
         self.onCreateProfile = onCreateProfile
@@ -378,11 +372,9 @@ public struct SettingsView: View {
             activeAccountID: activeAccountID,
             profiles: profiles,
             activeProfile: activeProfile,
-            askProfileOnStartup: askProfileOnStartup,
             automaticSignIn: automaticSignIn,
             isAccountIncludedInActiveProfile: isAccountIncludedInActiveProfile,
             onSetAccountIncluded: onSetAccountIncluded,
-            onSetAskProfileOnStartup: onSetAskProfileOnStartup,
             onSwitchProfile: onSwitchProfile,
             onSaveProfile: onSaveProfile,
             onCreateProfile: onCreateProfile,
@@ -731,7 +723,7 @@ public struct SettingsView: View {
 
                 // Profile roster management is a device concern (who exists on
                 // this Apple TV), not a per-profile one — so it lives here.
-                // "Ask on startup" (the launch picker) lives inside Profiles.
+                // Device startup sign-in lives inside Profiles.
                 navRow("Profiles", icon: "person.2",
                        value: Text(verbatim: profiles.count.formatted()),
                        route: .profile)
