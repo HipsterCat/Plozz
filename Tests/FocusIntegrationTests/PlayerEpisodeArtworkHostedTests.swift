@@ -9,6 +9,109 @@ import XCTest
 
 @MainActor
 final class PlayerEpisodeArtworkHostedTests: XCTestCase {
+    func testNativeEpisodeArtworkIsIsolatedAcrossReuseAccountsAndPolicy() throws {
+        let store = MetadataProviderSettingsStore()
+        let original = store.load()
+        defer { store.save(original) }
+        let shared = URL(string: "https://art.example.test/\(UUID())/shared.jpg")!
+        let first = MediaItem(
+            id: UUID().uuidString, title: "First", kind: .episode, posterURL: shared
+        ).taggingSource("one")
+        var second = first
+        second.id = UUID().uuidString
+        let cell = PlayerEpisodeNativeCell()
+        defer { cell.cancelArtwork() }
+        for online in [true, false] {
+            var settings = original
+            settings.preferOnlineArtwork = online
+            store.save(settings)
+            for (index, item) in [first, second, first.taggingSource("two")].enumerated() {
+                let channel = online ? index : (index + 1) % 3
+                let color = [UIColor.red, .green, .blue][channel]
+                let source = EpisodeArtworkSource(item: item, spoilerSettings: .default)
+                seedArtwork(color, source: source)
+                let image = try configuredArtwork(cell, item: item)
+                let pixel = try artworkPixel(image)
+                XCTAssertGreaterThan(pixel[channel], 220)
+                for other in 0..<3 where other != channel { XCTAssertLessThan(pixel[other], 25) }
+                XCTAssertEqual(cell.accessibilityLabel, item.title)
+            }
+        }
+    }
+
+    func testNativeEpisodeSpoilersMaskTitlesAndExcludeHiddenStills() throws {
+        let cell = PlayerEpisodeNativeCell()
+        defer { cell.cancelArtwork() }
+        var item = MediaItem(
+            id: UUID().uuidString, title: "A revealing title", kind: .episode,
+            seasonNumber: 2, episodeNumber: 3,
+            posterURL: URL(string: "https://art.example.test/\(UUID())/episode.jpg")!,
+            fallbackArtworkURL: URL(string: "https://art.example.test/\(UUID())/show.jpg")!
+        )
+        let visible = EpisodeArtworkSource(item: item, spoilerSettings: .default)
+        let hidden = SpoilerSettings(isEnabled: true, mode: .placeholder)
+        let safe = EpisodeArtworkSource(item: item, spoilerSettings: hidden)
+        seedArtwork(.red, source: visible)
+        seedArtwork(.green, source: safe)
+        XCTAssertFalse(safe.references.contains(.remote(try XCTUnwrap(item.posterURL))))
+        let protected = try artworkPixel(configuredArtwork(cell, item: item, spoilers: hidden))
+        XCTAssertGreaterThan(protected[1], 220)
+        XCTAssertLessThan(protected[0], 25)
+        XCTAssertEqual(cell.accessibilityLabel, "Episode 3")
+        XCTAssertEqual(views(in: cell, of: UILabel.self).first?.text, "Episode 3")
+
+        item.resumePosition = 60
+        let inProgress = try artworkPixel(configuredArtwork(cell, item: item, spoilers: hidden))
+        XCTAssertGreaterThan(inProgress[0], 220, "In-progress episodes keep their own still.")
+        XCTAssertEqual(cell.accessibilityLabel, "Episode 3")
+        item.isPlayed = true
+        _ = try configuredArtwork(cell, item: item, spoilers: hidden)
+        XCTAssertEqual(cell.accessibilityLabel, item.title)
+        XCTAssertEqual(views(in: cell, of: UILabel.self).first?.text, item.title)
+    }
+
+    func testProductionEpisodePanelUsesThePlayersSpoilerSettings() async throws {
+        let playing = EpisodeRowProvider.episode(season: 2, number: 2)
+        let player = PlayerViewModel(
+            provider: EpisodeRowProvider(), itemID: playing.id, episodeItem: playing,
+            spoilerSettings: .init(isEnabled: true, mode: .placeholder)
+        )
+        let browser = try XCTUnwrap(player.episodeBrowser)
+        await browser.loadIfNeeded()
+        try await withProductionPanel(player) { _, window in
+            try await self.waitUntil { !self.nativePosters(in: window).isEmpty }
+            let labels = self.nativePosters(in: window).compactMap(\.accessibilityLabel)
+            XCTAssertTrue(labels.allSatisfy { $0.hasPrefix("Episode ") })
+            XCTAssertFalse(labels.contains(playing.title))
+        }
+    }
+
+    func testNativeEpisodeBlurDisappearsForInProgressArtwork() throws {
+        let cell = PlayerEpisodeNativeCell()
+        defer { cell.cancelArtwork() }
+        var item = MediaItem(
+            id: UUID().uuidString, title: "Hidden title", kind: .episode, episodeNumber: 4
+        )
+        let source = EpisodeArtworkSource(item: item, spoilerSettings: .default)
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 160, height: 90)).image {
+            UIColor.red.setFill()
+            $0.fill(CGRect(x: 0, y: 0, width: 80, height: 90))
+            UIColor.blue.setFill()
+            $0.fill(CGRect(x: 80, y: 0, width: 80, height: 90))
+        }
+        seedArtwork(image, source: source)
+        let hidden = SpoilerSettings(isEnabled: true, mode: .blur)
+        let blurred = try artworkPixel(configuredArtwork(cell, item: item, spoilers: hidden), x: 0.47)
+        XCTAssertGreaterThan(blurred[2], 20)
+        XCTAssertLessThan(blurred[0], 230)
+        XCTAssertEqual(cell.accessibilityLabel, "Episode 4")
+        item.resumePosition = 30
+        let visible = try artworkPixel(configuredArtwork(cell, item: item, spoilers: hidden), x: 0.47)
+        XCTAssertGreaterThan(visible[0], 240)
+        XCTAssertLessThan(visible[2], 10)
+        XCTAssertEqual(cell.accessibilityLabel, "Episode 4")
+    }
+
     func testLeavingCollectionReplacesArtworkButHorizontalMovesPreserveIt() async throws {
         let playing = EpisodeRowProvider.episode(season: 2, number: 2)
         let player = PlayerViewModel(provider: EpisodeRowProvider(), itemID: playing.id, episodeItem: playing)
@@ -526,6 +629,57 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
         XCTAssertEqual(caption.transform.ty, 0, accuracy: 0.1)
     }
 
+    private func seedArtwork(_ color: UIColor, source: EpisodeArtworkSource) {
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 160, height: 90)).image {
+            color.setFill()
+            $0.fill(CGRect(x: 0, y: 0, width: 160, height: 90))
+        }
+        seedArtwork(image, source: source)
+    }
+
+    private func seedArtwork(_ image: UIImage, source: EpisodeArtworkSource) {
+        ArtworkSeedMemo.store(
+            FirstPaintArtwork(
+                image: image, reference: .remote(URL(string: "https://art.example.test/\(UUID()).jpg")!),
+                variant: .landscapeCard
+            ), for: source.requestIdentity
+        )
+    }
+
+    private func configuredArtwork(
+        _ cell: PlayerEpisodeNativeCell, item: MediaItem, spoilers: SpoilerSettings = .default
+    ) throws -> UIImage {
+        let layout = PlayerSequenceLayout(metrics: .tv, cardMetrics: .standard, contained: true, hasError: false)
+        var environment = EnvironmentValues()
+        environment.locale = Locale(identifier: "en_US")
+        environment.displayScale = 1
+        cell.frame = CGRect(x: 0, y: 0, width: layout.cardWidth, height: layout.rowHeight)
+        cell.configure(
+            .episode(PlayerEpisodeEntry(item: item, seasonID: "season", seasonNumber: 2)),
+            layout: layout, environment: environment, spoilerSettings: spoilers
+        )
+        cell.updateConfiguration(using: cell.configurationState)
+        cell.layoutIfNeeded()
+        let content = try XCTUnwrap(cell.contentView as? TVMediaItemContentView)
+        return try XCTUnwrap((content.configuration as? TVMediaItemContentConfiguration)?.image)
+    }
+
+    private func artworkPixel(_ image: UIImage, x: CGFloat = 0.5) throws -> [UInt8] {
+        let source = try XCTUnwrap(image.cgImage)
+        let crop = try XCTUnwrap(source.cropping(to: CGRect(
+            x: CGFloat(source.width) * x, y: CGFloat(source.height) / 3, width: 1, height: 1
+        )))
+        var pixel = [UInt8](repeating: 0, count: 4)
+        try pixel.withUnsafeMutableBytes { bytes in
+            let context = try XCTUnwrap(CGContext(
+                data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        return pixel
+    }
+
     private func focusEpisode(_ id: PlayerEpisodeEntry.ID, in window: UIWindow) throws {
         let collection = try XCTUnwrap(scrollView(in: window) as? UICollectionView)
         let dataSource = try XCTUnwrap(collection.dataSource as? UICollectionViewDiffableDataSource<Int, NativeEpisodeElement.ID>)
@@ -700,7 +854,13 @@ private actor EpisodeRowProvider: MediaProvider {
     func libraries() async throws -> [MediaLibrary] { [] }
     func continueWatching(limit: Int) async throws -> [MediaItem] { [] }
     func latest(limit: Int) async throws -> [MediaItem] { [] }
-    func item(id: String) async throws -> MediaItem { throw AppError.notFound }
+    func item(id: String) async throws -> MediaItem {
+        let parts = id.split(separator: "-")
+        guard parts.count == 2, let season = Int(parts[0]), let number = Int(parts[1]) else {
+            throw AppError.notFound
+        }
+        return Self.episode(season: season, number: number)
+    }
     func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
         MediaPage(items: [], startIndex: page.startIndex, totalCount: 0)
     }

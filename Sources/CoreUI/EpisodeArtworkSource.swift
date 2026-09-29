@@ -8,6 +8,10 @@ public struct EpisodeArtworkSource: Sendable {
     public let references: [ArtworkReference]
     public let pinIdentity: String
     public let fallbackURL: @Sendable () async -> URL?
+    #if canImport(UIKit)
+    public let requestIdentity: String
+    private let prefersOnlineArtwork: Bool
+    #endif
 
     public init(item: MediaItem, spoilerSettings: SpoilerSettings) {
         let hidesStill = spoilerSettings.mode == .placeholder
@@ -27,15 +31,40 @@ public struct EpisodeArtworkSource: Sendable {
             return await ArtworkRouter.shared.artworkURL(.hero, for: subject)
                 ?? subject.fallbackArtworkURL
         }
+        #if canImport(UIKit)
+        let settings = MetadataProviderSettingsStore().load()
+        prefersOnlineArtwork = settings.preferOnlineArtwork
+        requestIdentity = ArtworkResolveKey.make(
+            references: references, variant: .landscapeCard, maxAspectRatio: nil,
+            pinIdentity: pinIdentity,
+            providerPolicyIdentity: ArtworkResolveKey.policyIdentity(settings)
+        )
+        #endif
     }
 
     #if canImport(UIKit)
     @MainActor
-    public func prepare() async {
-        await ArtworkFirstPaintResolver.prepare(
+    public var preparedArtwork: FirstPaintArtwork? {
+        ArtworkSeedMemo.prepared(for: requestIdentity, variant: .landscapeCard)
+    }
+
+    @MainActor
+    public func resolve(background: Bool = false) async -> FirstPaintArtwork? {
+        if let preparedArtwork { return preparedArtwork }
+        guard let artwork = await ArtworkFirstPaintResolver.resolve(
             references: references, variant: .landscapeCard,
-            asyncOnlineURL: fallbackURL, pinIdentity: pinIdentity
-        )
+            asyncOnlineURL: fallbackURL,
+            maximumOnlineWait: ArtworkFirstPaintResolver.denseArtworkWait,
+            prefersOnlineArtwork: prefersOnlineArtwork,
+            sharedKey: background ? nil : requestIdentity, background: background
+        ), !Task.isCancelled else { return nil }
+        ArtworkSeedMemo.store(artwork, for: requestIdentity)
+        return artwork
+    }
+
+    @MainActor
+    public func prepare() async {
+        _ = await resolve(background: true)
     }
     #endif
 }

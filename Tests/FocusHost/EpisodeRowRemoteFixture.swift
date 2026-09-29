@@ -316,7 +316,13 @@ private actor EpisodeRemoteProvider: MediaProvider {
     func libraries() async throws -> [MediaLibrary] { [] }
     func continueWatching(limit: Int) async throws -> [MediaItem] { [] }
     func latest(limit: Int) async throws -> [MediaItem] { [] }
-    func item(id: String) async throws -> MediaItem { throw AppError.notFound }
+    func item(id: String) async throws -> MediaItem {
+        let parts = id.split(separator: "-")
+        guard parts.count == 2, let season = Int(parts[0]), let number = Int(parts[1]) else {
+            throw AppError.notFound
+        }
+        return Self.episode(season: season, number: number)
+    }
     func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
         MediaPage(items: [], startIndex: page.startIndex, totalCount: 0)
     }

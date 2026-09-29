@@ -331,7 +331,7 @@ public final class PlayerViewModel {
     @ObservationIgnored private var streamingMediaSourceID: String?
     /// Per-profile spoiler protection, used to mask the Up Next card's thumbnail
     /// and title for an unwatched next episode (the common case). Pure value type.
-    private let spoilerSettings: SpoilerSettings
+    let spoilerSettings: SpoilerSettings
     /// Owns per-profile per-series audio/subtitle memory (key derivation, gated
     /// reads/writes, cross-server reconciliation). Constructed from the injected
     /// store, fallback account id, and the profile toggles; a `nil` store disables
@@ -612,7 +612,7 @@ public final class PlayerViewModel {
         self.neighborResolver = neighborResolver
         self.playlistContext = playlistContext
         let browserItem = episodeItem ?? offlineItem
-        if let browserItem, browserItem.kind == .episode, browserItem.seriesID != nil {
+        if let browserItem, browserItem.kind == .episode {
             self.episodeBrowser = PlayerEpisodeBrowser(item: browserItem, provider: provider)
         } else {
             self.episodeBrowser = nil

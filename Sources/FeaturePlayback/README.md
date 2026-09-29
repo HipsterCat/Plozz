@@ -520,6 +520,18 @@ rounded boundary.
 Portrait layouts use vertical episode rows. Playlist entries retain server
 order and load only as they become visible.
 
+The episode browser resolves the playing episode through its owning provider
+before loading parents: a retargeted opening card can still carry another
+server's series and season IDs. The resolved identity must match the playing
+episode; missing or failed server metadata remains a retryable error.
+Both player layouts use `EpisodeArtworkSource`, matching the detail row's
+server/online preference, episode-specific fallback and prepared-image identity.
+Requests are isolated by episode, account, spoiler mode and artwork policy,
+even when several episodes share the same library fallback image.
+The active player's profile-scoped spoiler settings mask unwatched titles
+before captions or accessibility see them. Placeholder mode never loads the
+hidden episode still; blur mode blurs only the artwork, not its numbered badge.
+
 ## Siri Remote input
 
 `ScrubGestureInterpreter` routes upward and downward swipes through the same

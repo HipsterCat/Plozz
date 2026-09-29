@@ -26,6 +26,8 @@ struct PlayerEpisodeNativeRow: UIViewRepresentable {
     let items: [NativeEpisodeElement]
     let initialID: PlayerEpisodeEntry.ID?
     let layout: PlayerSequenceLayout
+    var spoilerSettings: SpoilerSettings = .default
+    let artworkSettings = MetadataProviderSettingsStore().load()
     @FocusState.Binding var focus: PlayerControls.FocusSlot?
     let onVisible: ([NativeEpisodeElement.ID]) -> Void
     let onFocus: (PlayerEpisodeEntry.ID) -> Void
@@ -103,6 +105,8 @@ struct PlayerEpisodeNativeRow: UIViewRepresentable {
                 || configuration?.layout.imageHeight != value.layout.imageHeight
                 || configuration?.layout.metrics.castNameFont != value.layout.metrics.castNameFont
                 || configuration?.layout.metrics.castRoleFont != value.layout.metrics.castRoleFont
+                || configuration?.spoilerSettings != value.spoilerSettings
+                || configuration?.artworkSettings != value.artworkSettings
             self.environment = environment
             configuration = value
             guard let collection, let layout = collection.collectionViewLayout as? EpisodeCollectionLayout else { return }
@@ -139,7 +143,10 @@ struct PlayerEpisodeNativeRow: UIViewRepresentable {
 
         private func configure(_ cell: PlayerEpisodeNativeCell, id: NativeEpisodeElement.ID) {
             guard let configuration, let item = displayed.first(where: { $0.id == id }) else { return }
-            cell.configure(item, layout: configuration.layout, environment: environment)
+            cell.configure(
+                item, layout: configuration.layout, environment: environment,
+                spoilerSettings: configuration.spoilerSettings
+            )
         }
 
         private func apply(_ value: PlayerEpisodeNativeRow) {
@@ -293,7 +300,8 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
     private var layout: PlayerSequenceLayout?
     private var artwork: UIImage?
     private var preparedArtwork: UIImage?
-    private var references: [ArtworkReference] = []
+    private var artworkRequestIdentity: String?
+    private var spoilerSettings: SpoilerSettings = .default
     private var imageTask: Task<Void, Never>?
     private var revision = UUID()
     private let caption = NativePosterCaptionLine()
@@ -312,8 +320,11 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
         return state
     }
 
-    func configure(_ element: NativeEpisodeElement, layout: PlayerSequenceLayout, environment: EnvironmentValues) {
-        let needsArtworkUpdate = self.element != element || self.layout?.imageWidth != layout.imageWidth
+    func configure(
+        _ element: NativeEpisodeElement, layout: PlayerSequenceLayout, environment: EnvironmentValues,
+        spoilerSettings: SpoilerSettings = .default
+    ) {
+        var needsArtworkUpdate = self.element != element || self.layout?.imageWidth != layout.imageWidth
             || self.layout?.imageHeight != layout.imageHeight
             || self.layout?.metrics.castNameFont != layout.metrics.castNameFont
             || self.layout?.metrics.castRoleFont != layout.metrics.castRoleFont
@@ -322,9 +333,11 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
             || self.environment.colorScheme != environment.colorScheme
             || self.environment.layoutDirection != environment.layoutDirection
             || self.environment.dynamicTypeSize != environment.dynamicTypeSize
+            || self.spoilerSettings != spoilerSettings
         self.element = element
         self.layout = layout
         self.environment = environment
+        self.spoilerSettings = spoilerSettings
         let enabledChanged = enabled != environment.isEnabled
         enabled = environment.isEnabled
         clipsToBounds = false
@@ -334,7 +347,7 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
         accessibilityTraits = .button
         switch element {
         case .episode(let entry):
-            accessibilityLabel = entry.item.title
+            accessibilityLabel = title(for: entry.item)
             accessibilityValue = entry.badge
             if caption.superview == nil {
                 caption.isUserInteractionEnabled = false
@@ -342,22 +355,23 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
                 addSubview(caption)
             }
             updateCaption()
-            let references = entry.item.artworkReferences(for: .episodeThumbnail)
-            if references != self.references {
+            let source = EpisodeArtworkSource(item: entry.item, spoilerSettings: spoilerSettings)
+            if source.requestIdentity != artworkRequestIdentity {
                 imageTask?.cancel()
-                self.references = references
-                artwork = nil
+                imageTask = nil
+                artworkRequestIdentity = source.requestIdentity
+                artwork = source.preparedArtwork?.image
+                needsArtworkUpdate = true
                 revision = UUID()
                 let revision = revision
-                imageTask = Task { [weak self] in
-                    let result = await ArtworkFirstPaintResolver.resolve(
-                        references: references, variant: .landscapeCard, maxAspectRatio: nil,
-                        asyncOnlineURL: nil, maximumOnlineWait: 0, prefersOnlineArtwork: false
-                    )
-                    guard !Task.isCancelled, let self, self.revision == revision else { return }
-                    artwork = result?.image
-                    prepareArtwork()
-                    setNeedsUpdateConfiguration()
+                if artwork == nil {
+                    imageTask = Task { [weak self] in
+                        let result = await source.resolve()
+                        guard !Task.isCancelled, let self, self.revision == revision else { return }
+                        artwork = result?.image
+                        prepareArtwork()
+                        setNeedsUpdateConfiguration()
+                    }
                 }
             }
         case .previousError(let error), .nextError(let error):
@@ -391,7 +405,7 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
         // Keep static chrome in the same bitmap as TVUIKit's native focus projection.
         // Render only for a new item, bitmap or presentation, never for a focus change.
         let renderer = ImageRenderer(content: NativeEpisodeCellArtwork(
-            element: element, image: artwork, layout: layout
+            element: element, image: artwork, layout: layout, spoilerSettings: spoilerSettings
         ).environment(\.self, environment)
             .frame(width: layout.imageWidth, height: layout.imageHeight)
             .clipped())
@@ -406,7 +420,7 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
     override func updateConfiguration(using state: UICellConfigurationState) {
         super.updateConfiguration(using: state)
         var configuration = TVMediaItemContentConfiguration.wideCell()
-        configuration.image = preparedArtwork ?? artwork ?? Self.placeholder
+        configuration.image = preparedArtwork ?? Self.placeholder
         contentConfiguration = configuration.updated(for: state)
     }
 
@@ -447,12 +461,19 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
             caption.setNeedsLayout()
         }
         caption.configure(
-            text: entry.item.title,
+            text: title(for: entry.item),
             font: .systemFont(ofSize: layout.metrics.castNameSize, weight: .semibold),
             color: UIColor(enabled && isFocused ? environment.themePalette.primaryText : environment.themePalette.secondaryText),
             scrolls: enabled && isFocused && !environment.accessibilityReduceMotion,
             centersShortText: false, horizontalInset: layout.cardMetrics.landscapeCaptionInset
         )
+    }
+
+    private func title(for item: MediaItem) -> String {
+        guard spoilerSettings.shouldHideText(for: item) else { return item.title }
+        var resource = spoilerSettings.maskedTitle(for: item)
+        resource.locale = environment.locale
+        return String(localized: resource)
     }
 
     override func layoutSubviews() {
@@ -471,14 +492,14 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
     func cancelArtwork() {
         imageTask?.cancel()
         imageTask = nil
-        if artwork == nil { references = [] }
+        if artwork == nil { artworkRequestIdentity = nil }
     }
 
     override func prepareForReuse() {
         super.prepareForReuse()
         cancelArtwork()
         revision = UUID()
-        references = []
+        artworkRequestIdentity = nil
         artwork = nil
         preparedArtwork = nil
         element = nil
@@ -494,6 +515,7 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
         let element: NativeEpisodeElement
         let image: UIImage?
         let layout: PlayerSequenceLayout
+        let spoilerSettings: SpoilerSettings
 
         var body: some View {
             Color(uiColor: .darkGray)
@@ -502,6 +524,8 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
                     case .episode(let entry):
                         if let image {
                             Image(uiImage: image).resizable().scaledToFill()
+                                .blur(radius: spoilerSettings.shouldHideThumbnail(for: entry.item)
+                                      && spoilerSettings.mode == .blur ? 28 : 0)
                         }
                         if let badge = entry.badge {
                             PlayerEpisodeArtworkOverlay(badge: badge, layout: layout)

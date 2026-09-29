@@ -41,14 +41,12 @@ public final class PlayerEpisodeBrowser {
     public private(set) var nextSeasonIndex: Int?
 
     private let provider: any MediaProvider
-    private let seriesID: String
-    private let initialSeasonID: String?
+    private var initialSeasonID: String?
     private let initialEpisodeID: String
     private let accountID: String?
 
     public init(item: MediaItem, provider: any MediaProvider) {
         self.provider = provider
-        seriesID = item.seriesID ?? ""
         initialSeasonID = item.seasonID
         initialEpisodeID = item.id
         accountID = item.sourceAccountID
@@ -66,6 +64,16 @@ public final class PlayerEpisodeBrowser {
         isLoading = true
         loadError = nil
         do {
+            // Source selection can retain another server's parent IDs on the opening card.
+            let playing = try await provider.item(id: initialEpisodeID)
+            try Task.checkCancellation()
+            guard playing.id == initialEpisodeID, playing.kind == .episode else {
+                throw AppError.invalidResponse
+            }
+            guard let seriesID = playing.seriesID, !seriesID.isEmpty else {
+                throw AppError.notFound
+            }
+            initialSeasonID = playing.seasonID
             let all = try await provider.children(of: seriesID)
             try Task.checkCancellation()
             seasons = all.filter { $0.kind == .season }

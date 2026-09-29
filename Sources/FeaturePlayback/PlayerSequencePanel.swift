@@ -146,7 +146,7 @@ struct PlayerSequencePanel: View {
         if let error = browser.nextLoadError { elements.append(.nextError(error)) }
         return PlayerEpisodeNativeRow(
             items: elements, initialID: browser.initialEntryID,
-            layout: layout, focus: $focus
+            layout: layout, spoilerSettings: player.spoilerSettings, focus: $focus
         ) { visible in
             if let id = browser.episodes.first?.id, visible.contains(.episode(id)) {
                 previousEpisodeLoadID = id
@@ -416,7 +416,7 @@ struct PlayerSequencePanel: View {
                                     .font(metrics.castRoleFont)
                                     .foregroundStyle(.secondary)
                             }
-                            Text(verbatim: item.title)
+                            title(item)
                                 .font(metrics.castNameFont)
                                 .lineLimit(source == .episodes ? 1 : 2)
                         }
@@ -443,11 +443,11 @@ struct PlayerSequencePanel: View {
                         Group {
                             if source == .episodes {
                                 PlozzMarqueeText(
-                                    text: Text(verbatim: item.title), font: metrics.castNameFont,
+                                    text: title(item), font: metrics.castNameFont,
                                     color: .primary, inset: 0, isFocused: isFocused
                                 )
                             } else {
-                                Text(verbatim: item.title)
+                                title(item)
                                     .font(metrics.castNameFont)
                                     .fontWeight(selected ? .bold : .semibold)
                                     .lineLimit(layout.compact ? 1 : 2)
@@ -472,20 +472,43 @@ struct PlayerSequencePanel: View {
         ))
         .focusEffectDisabled(source == .episodes)
         .focused($focus, equals: focusSlot)
-        .accessibilityLabel(Text(verbatim: [episodeBadge, item.title]
-            .compactMap { $0 }.joined(separator: " · ")))
+        .accessibilityLabel(title(item))
+        .accessibilityValue(Text(verbatim: episodeBadge ?? ""))
         .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
-    private func thumbnail(_ item: MediaItem) -> some View {
-        FallbackAsyncImage(
-            references: item.artworkReferences(for: .episodeThumbnail),
-            variant: .landscapeCard
-        ) {
-            Image(systemName: "play.rectangle")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.white.opacity(0.12))
+    private func title(_ item: MediaItem) -> Text {
+        if player.spoilerSettings.shouldHideText(for: item) {
+            return Text(player.spoilerSettings.maskedTitle(for: item))
         }
+        return Text(verbatim: item.title)
+    }
+
+    @ViewBuilder
+    private func thumbnail(_ item: MediaItem) -> some View {
+        if item.kind == .episode {
+            let source = EpisodeArtworkSource(item: item, spoilerSettings: player.spoilerSettings)
+            FallbackAsyncImage(
+                references: source.references, variant: .landscapeCard,
+                asyncFallbackURL: source.fallbackURL, pinIdentity: source.pinIdentity
+            ) {
+                thumbnailPlaceholder
+            }
+            .blur(radius: player.spoilerSettings.shouldHideThumbnail(for: item)
+                  && player.spoilerSettings.mode == .blur ? 28 : 0)
+        } else {
+            FallbackAsyncImage(
+                references: item.artworkReferences(for: .episodeThumbnail), variant: .landscapeCard
+            ) {
+                thumbnailPlaceholder
+            }
+        }
+    }
+
+    private var thumbnailPlaceholder: some View {
+        Image(systemName: "play.rectangle")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(.white.opacity(0.12))
     }
 }
 
