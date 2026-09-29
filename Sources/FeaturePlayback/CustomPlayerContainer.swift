@@ -1346,7 +1346,8 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
                 let hideAt = ControlsAutoHidePolicy.hideDate(
                     loadDoneAt: loadDoneAt,
                     inputAt: inputAt,
-                    infoCardOpen: self?.model.controlBar.infoCardOpen ?? false
+                    infoCardOpen: self?.model.controlBar.infoCardOpen ?? false,
+                    episodeBrowserOpen: self?.model.controlBar.episodeBrowserOpen ?? false
                 )
                 let wait = hideAt.timeIntervalSinceNow
                 if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }

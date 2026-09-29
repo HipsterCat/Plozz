@@ -9,6 +9,65 @@ import XCTest
 
 @MainActor
 final class PlayerEpisodeArtworkHostedTests: XCTestCase {
+    func testDisablingFocusedArtworkClearsPresentationBeforeUIKitMovesFocus() async throws {
+        let provider = EpisodeRowProvider()
+        let playing = EpisodeRowProvider.episode(season: 2, number: 2)
+        let player = PlayerViewModel(provider: provider, itemID: playing.id, episodeItem: playing)
+        let browser = try XCTUnwrap(player.episodeBrowser)
+        await browser.loadIfNeeded()
+        try await withProductionPanel(player) { model, window in
+            try await self.waitUntil { model.observedFocus == .button(.episodes) }
+            let entry = try XCTUnwrap(browser.episodes.first { $0.item.id == playing.id })
+            model.target = entry.id
+            try await self.waitUntil {
+                (UIFocusSystem.focusSystem(for: window)?.focusedItem as? PlayerEpisodeNativeCell)?
+                    .accessibilityLabel == playing.title
+            }
+            try await Task.sleep(for: .milliseconds(300))
+            let cell = try XCTUnwrap(self.nativePosters(in: window).first(where: \.isFocused))
+            let caption = try XCTUnwrap(self.views(in: cell, of: NativePosterCaptionLine.self).first)
+            let layout = PlayerSequenceLayout(metrics: .tv, cardMetrics: .standard, contained: true, hasError: false)
+            var environment = EnvironmentValues()
+            environment.isEnabled = false
+            cell.configure(.episode(entry), layout: layout, environment: environment)
+            cell.updateConfiguration(using: cell.configurationState)
+            cell.layoutIfNeeded()
+            XCTAssertFalse(cell.canBecomeFocused)
+            XCTAssertEqual(caption.transform.ty, 0, accuracy: 0.1,
+                           "Parking must clear the caption without waiting for UIKit's focus departure.")
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+                XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "Disabled episode artwork before focus departure"
+            attachment.lifetime = .keepAlways
+            self.add(attachment)
+            let cgImage = try XCTUnwrap(image.cgImage)
+            let scale = CGFloat(cgImage.width) / window.bounds.width
+            let frame = cell.convert(cell.bounds, to: window)
+            let crop = try XCTUnwrap(cgImage.cropping(to: CGRect(
+                x: frame.midX * scale, y: frame.minY * scale, width: 1, height: 30 * scale
+            ).integral))
+            var pixels = [UInt8](repeating: 0, count: crop.width * crop.height * 4)
+            let firstArtworkRow = try pixels.withUnsafeMutableBytes { bytes -> Int? in
+                let context = try XCTUnwrap(CGContext(
+                    data: bytes.baseAddress, width: crop.width, height: crop.height,
+                    bitsPerComponent: 8, bytesPerRow: crop.width * 4,
+                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ))
+                context.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
+                return (0..<crop.height).first {
+                    let offset = $0 * crop.width * 4
+                    return max(bytes[offset], bytes[offset + 1], bytes[offset + 2]) > 50
+                }
+            }
+            XCTAssertEqual(CGFloat(try XCTUnwrap(firstArtworkRow)) / scale, 12, accuracy: 2,
+                           "A disabled card must paint at resting size, even before the focus system catches up.")
+        }
+    }
+
     func testNativeMarqueePaintFadesBothEdgesAndKeepsRestingTextInsideTheFade() throws {
         for direction in [UISemanticContentAttribute.forceLeftToRight, .forceRightToLeft] {
             let caption = NativePosterCaptionLine()

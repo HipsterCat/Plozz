@@ -129,6 +129,8 @@ public final class ControlBarEntryModel {
     /// True while the Info card is open. The scrub bar reads it so its focus
     /// appearance doesn't change underneath the card's reveal — see `ScrubBar`.
     public var infoCardOpen: Bool = false
+    /// Episode browsing gets a longer idle window than the other bottom cards.
+    public var episodeBrowserOpen: Bool = false
 
     public init() {}
 }

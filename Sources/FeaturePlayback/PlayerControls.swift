@@ -475,6 +475,7 @@ struct PlayerControls: View {
             // the old control bar instead: idle for the timeout and it hides.
             model.isPanelOpen = panel != nil && panel != .info
                 && panel != .episodes && panel != .playlist
+            model.controlBar.episodeBrowserOpen = panel == .episodes
             // ANY card tab, not just Info.
             //
             // This holds the scrub bar in its focused shape for the whole reveal.
@@ -581,6 +582,7 @@ struct PlayerControls: View {
         // closing quickly. Clearing it stays with the `onChange`, where being a
         // beat late is exactly what the closing travel wants.
         model.controlBar.infoCardOpen = true
+        model.controlBar.episodeBrowserOpen = category == .episodes
         withAnimation(revealClock) { openPanel = category }
     }
 

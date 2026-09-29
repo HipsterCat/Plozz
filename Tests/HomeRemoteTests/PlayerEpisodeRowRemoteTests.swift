@@ -3,6 +3,42 @@ import XCTest
 
 @MainActor
 final class PlayerEpisodeRowRemoteTests: XCTestCase {
+    func testAutomaticPlayerCloseClearsArtworkBeforeReenteringTheRow() throws {
+        let app = launch(arguments: ["--long-season", "--production-player-input"])
+        defer { app.terminate() }
+        XCUIRemote.shared.press(.down)
+        let episodes = app.buttons["Episodes"]
+        XCTAssertTrue(episodes.waitForExistence(timeout: 5))
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(app.collectionViews.firstMatch.waitForExistence(timeout: 5))
+        for _ in 0..<3 {
+            XCUIRemote.shared.press(.down)
+            _ = try focusedEpisode(in: app)
+            let activity = try XCTUnwrap(Int(app.staticTexts["episode-row-activity"].label))
+            XCUIRemote.shared.press(.right, forDuration: 2)
+            XCUIRemote.shared.press(.left, forDuration: 1)
+            Thread.sleep(forTimeInterval: 0.6)
+            XCTAssertGreaterThan(try XCTUnwrap(Int(app.staticTexts["episode-row-activity"].label)), activity,
+                                 "Native episode navigation must restart the production idle timer.")
+            try assertOnlyFocusedArtworkIsEnlarged(in: app)
+            Thread.sleep(forTimeInterval: 8)
+            XCTAssertEqual(app.staticTexts["episode-row-drawer-state"].label, "Open")
+            XCUIRemote.shared.press(.right)
+            let lastInput = Date()
+            let closed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "label == 'Closed'"),
+                object: app.staticTexts["episode-row-drawer-state"]
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 20), .completed)
+            XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(lastInput), 14.5,
+                                        "The full 15-second episode timeout restarts after navigation.")
+            XCUIRemote.shared.press(.down)
+            Thread.sleep(forTimeInterval: 0.8)
+            XCTAssertEqual(app.collectionViews.firstMatch.cells.matching(NSPredicate(format: "hasFocus == true")).count, 0)
+            try assertOnlyFocusedArtworkIsEnlarged(in: app)
+        }
+    }
+
     func testOnlyFocusedArtworkStaysEnlargedAfterRapidMovesAndInterruptedDrawer() throws {
         let app = launch(arguments: ["--long-season", "--interrupt-focus", "--refresh-on-focus"])
         defer { app.terminate() }

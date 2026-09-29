@@ -302,6 +302,16 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
 
     override var canBecomeFocused: Bool { element != nil && enabled }
 
+    override var configurationState: UICellConfigurationState {
+        var state = super.configurationState
+        if !enabled {
+            state.isFocused = false
+            state.isHighlighted = false
+            state.isSelected = false
+        }
+        return state
+    }
+
     func configure(_ element: NativeEpisodeElement, layout: PlayerSequenceLayout, environment: EnvironmentValues) {
         let needsArtworkUpdate = self.element != element || self.layout?.imageWidth != layout.imageWidth
             || self.layout?.imageHeight != layout.imageHeight
@@ -315,10 +325,7 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
         self.element = element
         self.layout = layout
         self.environment = environment
-        if !enabled && environment.isEnabled {
-            // Reopening a parked drawer must not revive an interrupted TVUIKit focus projection.
-            contentConfiguration = nil
-        }
+        let enabledChanged = enabled != environment.isEnabled
         enabled = environment.isEnabled
         clipsToBounds = false
         contentView.clipsToBounds = false
@@ -365,6 +372,17 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
             caption.removeFromSuperview()
         }
         if needsArtworkUpdate { prepareArtwork() }
+        if enabledChanged {
+            // Closing can precede UIKit's focus departure; never park its live projection.
+            UIView.performWithoutAnimation {
+                contentConfiguration = nil
+                updateConfiguration(using: configurationState)
+                caption.layer.removeAllAnimations()
+                caption.transform = CGAffineTransform(
+                    translationX: 0, y: enabled && isFocused ? layout.captionFocusTravel : 0
+                )
+            }
+        }
         setNeedsUpdateConfiguration()
         setNeedsLayout()
     }
@@ -396,8 +414,11 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         updateCaption()
-        let offset = isFocused ? layout?.captionFocusTravel ?? 0 : 0
-        let moveCaption = { self.caption.transform = CGAffineTransform(translationX: 0, y: offset) }
+        let moveCaption = {
+            self.caption.transform = CGAffineTransform(
+                translationX: 0, y: self.enabled && self.isFocused ? self.layout?.captionFocusTravel ?? 0 : 0
+            )
+        }
         if environment.accessibilityReduceMotion {
             UIView.performWithoutAnimation(moveCaption)
         } else {
@@ -416,8 +437,8 @@ final class PlayerEpisodeNativeCell: UICollectionViewCell {
         caption.configure(
             text: entry.item.title,
             font: .systemFont(ofSize: layout.metrics.castNameSize, weight: .semibold),
-            color: UIColor(isFocused ? environment.themePalette.primaryText : environment.themePalette.secondaryText),
-            scrolls: isFocused && !environment.accessibilityReduceMotion,
+            color: UIColor(enabled && isFocused ? environment.themePalette.primaryText : environment.themePalette.secondaryText),
+            scrolls: enabled && isFocused && !environment.accessibilityReduceMotion,
             centersShortText: false, horizontalInset: layout.cardMetrics.landscapeCaptionInset
         )
     }

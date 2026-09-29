@@ -20,6 +20,7 @@ enum ControlsAutoHidePolicy {
     /// than a row of buttons to act on, so the 4s that suits the transport cuts a
     /// viewer off mid-sentence.
     static let minSinceInputWithInfoCard: TimeInterval = 9.0
+    static let minSinceInputWithEpisodes: TimeInterval = 15.0
 
     /// When the transport should hide: 1s after the load finishes, but never
     /// sooner than the input floor. A long load therefore clears the transport
@@ -27,8 +28,11 @@ enum ControlsAutoHidePolicy {
     /// interaction keeps the controls around for the time the viewer needs to act on
     /// what they just summoned — longer when that's the Info card, which is read
     /// rather than operated.
-    static func hideDate(loadDoneAt: Date, inputAt: Date, infoCardOpen: Bool = false) -> Date {
-        let floor = infoCardOpen ? minSinceInputWithInfoCard : minSinceInput
+    static func hideDate(
+        loadDoneAt: Date, inputAt: Date, infoCardOpen: Bool = false, episodeBrowserOpen: Bool = false
+    ) -> Date {
+        let floor = episodeBrowserOpen ? minSinceInputWithEpisodes
+            : (infoCardOpen ? minSinceInputWithInfoCard : minSinceInput)
         return max(loadDoneAt.addingTimeInterval(postLoadGrace),
                    inputAt.addingTimeInterval(floor))
     }

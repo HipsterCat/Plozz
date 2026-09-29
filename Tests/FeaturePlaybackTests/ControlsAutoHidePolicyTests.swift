@@ -72,6 +72,33 @@ final class ControlsAutoHidePolicyTests: XCTestCase {
         )
     }
 
+    func testEpisodeBrowserHoldsFifteenSecondsFromTheLastInput() {
+        let inputAt = Date()
+        let loadDoneAt = inputAt.addingTimeInterval(0.2)
+        let hideAt = ControlsAutoHidePolicy.hideDate(
+            loadDoneAt: loadDoneAt, inputAt: inputAt, infoCardOpen: true, episodeBrowserOpen: true
+        )
+        XCTAssertEqual(hideAt.timeIntervalSince(inputAt), 15, accuracy: 0.0001)
+        let nextInputAt = inputAt.addingTimeInterval(8)
+        XCTAssertEqual(ControlsAutoHidePolicy.hideDate(
+            loadDoneAt: loadDoneAt, inputAt: nextInputAt, infoCardOpen: true, episodeBrowserOpen: true
+        ).timeIntervalSince(inputAt), 23, accuracy: 0.0001)
+    }
+
+    func testLeavingEpisodesRestoresOtherCardAndTransportTimeouts() {
+        let inputAt = Date()
+        let loadDoneAt = inputAt.addingTimeInterval(0.2)
+        XCTAssertEqual(ControlsAutoHidePolicy.hideDate(
+            loadDoneAt: loadDoneAt, inputAt: inputAt, infoCardOpen: true, episodeBrowserOpen: false
+        ).timeIntervalSince(inputAt), 9, accuracy: 0.0001)
+        XCTAssertEqual(ControlsAutoHidePolicy.hideDate(
+            loadDoneAt: loadDoneAt, inputAt: inputAt, episodeBrowserOpen: false
+        ).timeIntervalSince(inputAt), 4, accuracy: 0.0001)
+        XCTAssertEqual(ControlsAutoHidePolicy.hideDate(
+            loadDoneAt: inputAt.addingTimeInterval(20), inputAt: inputAt, episodeBrowserOpen: true
+        ).timeIntervalSince(inputAt), 21, accuracy: 0.0001)
+    }
+
     // MARK: outcome — interaction pins beat focus routing
 
     func testScrubbingStaysVisibleRegardlessOfFocus() {
