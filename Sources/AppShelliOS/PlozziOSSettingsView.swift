@@ -1253,6 +1253,16 @@ private struct PlozziOSProfilesView: View {
 
     private var orderedProfiles: [Profile] { appModel.profiles.profilesByRecency }
 
+    private var automaticSignIn: AutomaticSignInSettings {
+        AutomaticSignInSettings(
+            isEnabled: Binding(
+                get: { appModel.plexHomeUsers.automaticallySignIn },
+                set: { appModel.setAutomaticallySignIn($0) }
+            ),
+            error: appModel.plexHomeUsers.automaticSignInError
+        )
+    }
+
     /// One optional route owned by this page. A row cannot activate another
     /// row's destination, and there is no per-row NavigationLink state for
     /// SwiftUI's split-view reconciliation to accidentally stack.
@@ -1262,6 +1272,11 @@ private struct PlozziOSProfilesView: View {
 
     var body: some View {
         List {
+            SettingsSectionGroup {
+                AutomaticSignInToggle(settings: automaticSignIn)
+            } footer: {
+                AutomaticSignInDescription(settings: automaticSignIn)
+            }
             SettingsSectionGroup {
                 Toggle(
                     "Ask Who’s Watching on Startup",
@@ -1274,6 +1289,7 @@ private struct PlozziOSProfilesView: View {
                         }
                     )
                 )
+                .disabled(appModel.plexHomeUsers.automaticallySignIn)
             } footer: {
                 Text("Profiles keep Home, settings, and downloads personal. Watch history belongs to the account each profile watches as.")
             }

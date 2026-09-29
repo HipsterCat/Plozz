@@ -478,6 +478,13 @@ public struct RootView: View {
                         liveTVPreferencesNamespace: appState.profilesModel.activeNamespace,
                         plexIdentityGeneration: appState.plexHomeUsers.plexIdentityGeneration,
                         askProfileOnStartup: appState.profilesModel.askProfileOnStartup,
+                        automaticSignIn: AutomaticSignInSettings(
+                            isEnabled: Binding(
+                                get: { appState.plexHomeUsers.automaticallySignIn },
+                                set: { appState.profileFlow.setAutomaticallySignIn($0) }
+                            ),
+                            error: appState.plexHomeUsers.automaticSignInError
+                        ),
                         homeRuntime: HomeTabRuntime(
                             homeViewModel: homeViewModelBox,
                             // The key that governs the Home VIEW MODEL, which

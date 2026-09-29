@@ -132,6 +132,7 @@ public struct SettingsView: View {
     @Environment(LiveTVSettingsSources.self) private var liveTVSources: LiveTVSettingsSources?
     @Environment(SubtitleStyleSettingsDestination.self) private var subtitleStyleDestination: SubtitleStyleSettingsDestination?
     private let askProfileOnStartup: Bool
+    private let automaticSignIn: AutomaticSignInSettings
     private let appVersion: String
     private let appBuild: String
     private let repoURL: String
@@ -239,6 +240,7 @@ public struct SettingsView: View {
         activeProfile: Profile,
         liveTVPreferencesNamespace: String?,
         askProfileOnStartup: Bool,
+        automaticSignIn: AutomaticSignInSettings,
         appVersion: String,
         appBuild: String,
         repoURL: String,
@@ -308,6 +310,7 @@ public struct SettingsView: View {
         self.activeProfile = activeProfile
         self.liveTVPreferencesNamespace = liveTVPreferencesNamespace
         self.askProfileOnStartup = askProfileOnStartup
+        self.automaticSignIn = automaticSignIn
         self.appVersion = appVersion
         self.appBuild = appBuild
         self.repoURL = repoURL
@@ -376,6 +379,7 @@ public struct SettingsView: View {
             profiles: profiles,
             activeProfile: activeProfile,
             askProfileOnStartup: askProfileOnStartup,
+            automaticSignIn: automaticSignIn,
             isAccountIncludedInActiveProfile: isAccountIncludedInActiveProfile,
             onSetAccountIncluded: onSetAccountIncluded,
             onSetAskProfileOnStartup: onSetAskProfileOnStartup,

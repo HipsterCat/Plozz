@@ -72,7 +72,7 @@ public final class AppState {
             && !profileFlow.isPickingAppearanceForNewProfile
             && !profileFlow.hasResumableSetup
             && plexHomeUsers.pendingPlexPINRequest == nil
-            && (!profile.isLocked || profileFlow.isUnlockedThisRun(profile.id))
+            && !profileFlow.activeProfileAwaitsUnlock
             && !profile.awaitsIdentity(amongAccounts: accountsProviders.activeAccountIDs)
     }
     public var allowsStandalonePlayback: Bool { admissionContext.explicitStandaloneChoice }
@@ -1332,7 +1332,8 @@ public final class AppState {
         // provider name instead of the server's real name). Shared with iOS.
         accountsProviders.refreshServerNames()
         PlozzLog.boot("bootstrap accountsProviders.accounts=\(accountsProviders.accounts.count) activeIDs=\(accountsProviders.activeAccountIDs.count)")
-        // The "Ask which profile on startup" toggle is the single source of
+        // Unless this device restores a trusted automatic sign-in, the
+        // "Ask which profile on startup" toggle is the source of
         // truth for whether the launch picker appears. When it's ON we MUST
         // show the picker even if the Apple TV system user has a remembered
         // selection — the remembered pick becomes the picker's initial focus,

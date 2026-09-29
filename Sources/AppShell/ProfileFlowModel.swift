@@ -104,9 +104,19 @@ public final class ProfileFlowModel {
     /// `switchProfile(to:)` gate with the picker sitting behind it. It also
     /// matches what people expect from "who's watching?" elsewhere.
     public func prepareLaunchPicker() {
-        isChoosingProfile = activeProfileAwaitsUnlock
-            || (profilesModel.askProfileOnStartup && profilesModel.profiles.count > 1)
+        let restored = plexHomeUsers.restoreAutomaticSignInAtLaunch()
+        isChoosingProfile = !restored && (
+            activeProfileAwaitsUnlock
+                || (profilesModel.askProfileOnStartup && profilesModel.profiles.count > 1)
+        )
         isProfileSelectionCancelable = false
+    }
+
+    public func setAutomaticallySignIn(_ enabled: Bool) {
+        plexHomeUsers.setAutomaticallySignIn(
+            enabled,
+            profileIsUnlocked: !activeProfileAwaitsUnlock && !isChoosingProfile
+        )
     }
 
     /// Force-dismisses the picker (used by the debug first-run reset).
@@ -288,6 +298,7 @@ public final class ProfileFlowModel {
         // picker on a switch that never happened would strand the child in the
         // grown-up profile the gate exists to withhold.
         guard profilesModel.activeProfileID == id else { return }
+        plexHomeUsers.beginExplicitProfileActivation()
         audioController.stop()
         // Past both gates, so the hold has done its job — released here rather
         // than in `submitParentalPIN` so that switching into ANOTHER Kids
@@ -353,6 +364,7 @@ public final class ProfileFlowModel {
     public var activeProfileAwaitsUnlock: Bool {
         let active = profilesModel.activeProfile
         return active.isLocked && !unlockedProfileIDs.contains(active.id)
+            && !plexHomeUsers.isAutomaticallySignedIn(active)
     }
 
     public func isUnlockedThisRun(_ id: String) -> Bool {
@@ -643,7 +655,7 @@ public final class ProfileFlowModel {
             isChoosingProfile = true
             return true
         }
-        guard active.isLocked, !unlockedProfileIDs.contains(active.id) else { return false }
+        guard activeProfileAwaitsUnlock else { return false }
         isProfileSelectionCancelable = false
         isChoosingProfile = true
         return true

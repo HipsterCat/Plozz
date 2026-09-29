@@ -43,6 +43,28 @@ session persistence.
 - **Always cancellable.** Every flow must be Cancel-able from the remote
   without leaking polling tasks.
 
+## Automatically Sign In
+
+Settings → Profiles offers an off-by-default, device-only startup preference on
+tvOS and iOS/iPadOS. When enabled from an authenticated profile, the next launch
+opens the last successfully used profile without the profile picker or PIN.
+The existing ask-on-startup preference is preserved and applies again when
+automatic sign-in is disabled.
+
+`AppRuntime.AutomaticSignInStore` retains one session in a non-synchronizable,
+ThisDeviceOnly Keychain item (per Apple TV system user). It stores authenticated
+Plex server and Discover tokens, never a PIN. The preference and session are not
+part of profile sync, device pairing, or credential export. Restoration requires
+the same profile, lock revision, account credential revisions, and Plex bindings;
+missing or changed state returns to the normal gates, never the owner's identity.
+
+Only the startup entry point can restore this session, once per process. Manual
+profile activation discards startup unlock credit and Plex overrides, so switching
+back to a protected Plex Home user still requires their PIN, including two Plozz
+profiles mapped to the same Plex user. Local Profile Locks and Kids Profile exit
+gates remain in force for manual switching. Disabling automatic sign-in removes
+the stored session without changing any PIN; sign-out invalidates it.
+
 ## Where to look first
 
 - `SessionStateMachine.swift` — the pure auth-state reducer (start here

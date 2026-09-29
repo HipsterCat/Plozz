@@ -57,6 +57,12 @@ struct ProfileDetailView: View {
     private var profilesListPanel: some View {
         SettingsPanel {
             VStack(alignment: .leading, spacing: 12) {
+                AutomaticSignInToggle(settings: context.automaticSignIn)
+                    .toggleStyle(SettingsSwitchToggleStyle())
+                AutomaticSignInDescription(settings: context.automaticSignIn)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                PlozzDivider()
                 // Whether the "Who's watching?" picker appears at launch. Only
                 // meaningful with 2+ profiles; pinned to the top of the panel.
                 if context.profiles.count > 1 {
@@ -65,6 +71,7 @@ struct ProfileDetailView: View {
                         set: { context.onSetAskProfileOnStartup($0) }
                     ))
                     .toggleStyle(SettingsSwitchToggleStyle())
+                    .disabled(context.automaticSignIn.isEnabled.wrappedValue)
                     PlozzDivider()
                 }
                 ForEach(orderedProfiles) { profile in
