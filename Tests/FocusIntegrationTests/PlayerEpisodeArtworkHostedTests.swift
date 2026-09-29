@@ -28,25 +28,25 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
         XCTAssertEqual(browser.episodes.map(\.item.id), (1...8).map { "2-\($0)" })
         try await withProductionPanel(player, direction: direction) { model, window in
             try await self.waitUntil {
-                !self.nativePosters(in: window).isEmpty && model.observedFocus == .button(.episodes)
+                !self.views(in: window, of: PlayerEpisodeNativeCell.self).isEmpty && model.observedFocus == .button(.episodes)
             }
             let entry = try XCTUnwrap(browser.initialEntryID)
             model.target = entry
             try await self.waitUntil {
-                (UIFocusSystem.focusSystem(for: window)?.focusedItem as? TVPosterView)?
+                (UIFocusSystem.focusSystem(for: window)?.focusedItem as? PlayerEpisodeNativeCell)?
                     .accessibilityLabel == playing.title
             }
             try await self.waitUntil { await provider.isHolding("season-1") }
             for number in [3, 2] {
                 let target = try XCTUnwrap(browser.episodes.first { $0.item.id == "2-\(number)" })
-                model.target = target.id
+                try self.focusEpisode(target.id, in: window)
                 try await self.waitUntil {
-                    (UIFocusSystem.focusSystem(for: window)?.focusedItem as? TVPosterView)?
+                    (UIFocusSystem.focusSystem(for: window)?.focusedItem as? PlayerEpisodeNativeCell)?
                         .accessibilityLabel == target.item.title
                 }
             }
             try await Task.sleep(for: .milliseconds(300))
-            let poster = try XCTUnwrap(UIFocusSystem.focusSystem(for: window)?.focusedItem as? TVPosterView)
+            let poster = try XCTUnwrap(UIFocusSystem.focusSystem(for: window)?.focusedItem as? PlayerEpisodeNativeCell)
             let scroll = try XCTUnwrap(self.scrollView(in: window))
             try await self.waitUntil { !scroll.isDecelerating && !scroll.isDragging }
             // Preserve even a viewport parked between card slots.
@@ -54,8 +54,9 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(100))
             let frame = poster.convert(poster.bounds, to: window)
             let width = scroll.contentSize.width
+            let count = browser.episodes.count
             await provider.release("season-1")
-            try await self.waitUntil { browser.episodes.count == 16 && scroll.contentSize.width > width + 1000 }
+            try await self.waitUntil { browser.episodes.count >= count + 8 && scroll.contentSize.width > width + 1000 }
             for _ in 0..<20 {
                 try await Task.sleep(for: .milliseconds(20))
                 XCTAssertTrue(UIFocusSystem.focusSystem(for: window)?.focusedItem === poster)
@@ -66,7 +67,7 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
         }
     }
 
-    func testPrependFinishingDuringNativeScrollNeverMovesFocusToAnotherEpisode() async throws {
+    func testPrependFinishingDuringNativeFocusTransitionNeverMovesFocusToAnotherEpisode() async throws {
         let provider = EpisodeRowProvider()
         await provider.hold("season-1")
         defer { Task { await provider.release("season-1") } }
@@ -76,21 +77,27 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
         await browser.loadIfNeeded()
         try await withProductionPanel(player) { model, window in
             try await self.waitUntil {
-                !self.nativePosters(in: window).isEmpty && model.observedFocus == .button(.episodes)
+                !self.views(in: window, of: PlayerEpisodeNativeCell.self).isEmpty && model.observedFocus == .button(.episodes)
+            }
+            model.target = browser.initialEntryID
+            try await self.waitUntil {
+                UIFocusSystem.focusSystem(for: window)?.focusedItem is PlayerEpisodeNativeCell
             }
             for number in [2, 3, 2] {
                 let entry = try XCTUnwrap(browser.episodes.first { $0.item.id == "2-\(number)" })
-                model.target = entry.id
+                try self.focusEpisode(entry.id, in: window)
                 try await self.waitUntil {
-                    (UIFocusSystem.focusSystem(for: window)?.focusedItem as? TVPosterView)?
+                    (UIFocusSystem.focusSystem(for: window)?.focusedItem as? PlayerEpisodeNativeCell)?
                         .accessibilityLabel == entry.item.title
                 }
             }
             try await self.waitUntil { await provider.isHolding("season-1") }
-            let poster = try XCTUnwrap(UIFocusSystem.focusSystem(for: window)?.focusedItem as? TVPosterView)
+            let poster = try XCTUnwrap(UIFocusSystem.focusSystem(for: window)?.focusedItem as? PlayerEpisodeNativeCell)
             let scroll = try XCTUnwrap(self.scrollView(in: window))
             let width = scroll.contentSize.width
-            XCTAssertTrue(scroll.isDecelerating, "Complete the request during native directional scrolling.")
+            let count = browser.episodes.count
+            let coordinator = try XCTUnwrap((scroll as? UICollectionView)?.delegate as? PlayerEpisodeNativeRow.Coordinator)
+            XCTAssertGreaterThan(coordinator.focusAnimations, 0, "Complete the request during a native focus transition.")
             await provider.release("season-1")
             var priorX = poster.convert(poster.bounds, to: window).minX
             for _ in 0..<75 {
@@ -100,7 +107,7 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
                 XCTAssertLessThan(abs(x - priorX), 80, "Loading must not snap the viewport.")
                 priorX = x
             }
-            XCTAssertEqual(browser.episodes.count, 16)
+            XCTAssertGreaterThanOrEqual(browser.episodes.count, count + 8)
             XCTAssertGreaterThan(scroll.contentSize.width, width + 1000, "Apply the loaded season after scrolling settles.")
         }
     }
@@ -115,13 +122,17 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
         await browser.loadIfNeeded()
         try await withProductionPanel(player) { model, window in
             try await self.waitUntil {
-                !self.nativePosters(in: window).isEmpty && model.observedFocus == .button(.episodes)
+                !self.views(in: window, of: PlayerEpisodeNativeCell.self).isEmpty && model.observedFocus == .button(.episodes)
+            }
+            model.target = browser.initialEntryID
+            try await self.waitUntil {
+                UIFocusSystem.focusSystem(for: window)?.focusedItem is PlayerEpisodeNativeCell
             }
             for number in [8, 7] {
                 let target = try XCTUnwrap(browser.episodes.first { $0.item.id == "2-\(number)" })
-                model.target = target.id
+                try self.focusEpisode(target.id, in: window)
                 try await self.waitUntil {
-                    (UIFocusSystem.focusSystem(for: window)?.focusedItem as? TVPosterView)?
+                    (UIFocusSystem.focusSystem(for: window)?.focusedItem as? PlayerEpisodeNativeCell)?
                         .accessibilityLabel == target.item.title
                 }
             }
@@ -129,7 +140,7 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
             let scroll = try XCTUnwrap(self.scrollView(in: window))
             try await self.waitUntil { !scroll.isDecelerating && !scroll.isDragging }
             try await Task.sleep(for: .milliseconds(100))
-            let poster = try XCTUnwrap(UIFocusSystem.focusSystem(for: window)?.focusedItem as? TVPosterView)
+            let poster = try XCTUnwrap(UIFocusSystem.focusSystem(for: window)?.focusedItem as? PlayerEpisodeNativeCell)
             let frame = poster.convert(poster.bounds, to: window)
             let count = browser.episodes.count
             await provider.release("season-3")
@@ -139,6 +150,43 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
                 XCTAssertTrue(UIFocusSystem.focusSystem(for: window)?.focusedItem === poster)
                 XCTAssertEqual(poster.convert(poster.bounds, to: window).minX, frame.minX, accuracy: 1)
             }
+        }
+    }
+
+    func testLeadingRetryInsertionAndSelectionPreserveTheEpisodeViewport() async throws {
+        let provider = EpisodeRowProvider()
+        await provider.hold("season-1")
+        await provider.failNext("season-1")
+        defer { Task { await provider.release("season-1") } }
+        let playing = EpisodeRowProvider.episode(season: 2, number: 2)
+        let player = PlayerViewModel(provider: provider, itemID: playing.id, episodeItem: playing)
+        let browser = try XCTUnwrap(player.episodeBrowser)
+        await browser.loadIfNeeded()
+        try await withProductionPanel(player) { model, window in
+            try await self.waitUntil { model.observedFocus == .button(.episodes) }
+            model.target = browser.initialEntryID
+            try await self.waitUntil {
+                UIFocusSystem.focusSystem(for: window)?.focusedItem is PlayerEpisodeNativeCell
+            }
+            try await self.waitUntil { await provider.isHolding("season-1") }
+            let cell = try XCTUnwrap(UIFocusSystem.focusSystem(for: window)?.focusedItem as? PlayerEpisodeNativeCell)
+            let collection = try XCTUnwrap(self.scrollView(in: window) as? UICollectionView)
+            let source = try XCTUnwrap(collection.dataSource as? UICollectionViewDiffableDataSource<Int, NativeEpisodeElement.ID>)
+            try await Task.sleep(for: .milliseconds(300))
+            let x = cell.convert(cell.bounds, to: window).minX
+            await provider.release("season-1")
+            try await self.waitUntil { source.indexPath(for: .previousError) != nil }
+            XCTAssertTrue(UIFocusSystem.focusSystem(for: window)?.focusedItem === cell)
+            XCTAssertEqual(cell.convert(cell.bounds, to: window).minX, x, accuracy: 1)
+            let retry = try XCTUnwrap(source.indexPath(for: .previousError))
+            collection.delegate?.collectionView?(collection, didSelectItemAt: retry)
+            try await self.waitUntil {
+                browser.previousLoadError == nil && browser.episodes.first?.seasonNumber == 1
+                    && source.indexPath(for: .previousError) == nil
+            }
+            try await Task.sleep(for: .milliseconds(150))
+            XCTAssertTrue(UIFocusSystem.focusSystem(for: window)?.focusedItem === cell)
+            XCTAssertEqual(cell.convert(cell.bounds, to: window).minX, x, accuracy: 1)
         }
     }
 
@@ -153,7 +201,7 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
             try await self.waitUntil { await provider.isHolding("series") }
             try await self.waitUntil { model.observedFocus == .button(.episodes) }
             XCTAssertFalse(browser.hasLoaded)
-            XCTAssertTrue(self.nativePosters(in: window).isEmpty)
+            XCTAssertTrue(self.views(in: window, of: PlayerEpisodeNativeCell.self).isEmpty)
             XCTAssertTrue(self.views(in: window, of: UIActivityIndicatorView.self).isEmpty)
             let before = try XCTUnwrap(UIFocusSystem.focusSystem(for: window)?.focusedItem)
             let loadingScroll = try XCTUnwrap(self.scrollView(in: window))
@@ -163,7 +211,7 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
             attachment.lifetime = .keepAlways
             self.add(attachment)
             await provider.release("series")
-            try await self.waitUntil { browser.hasLoaded && !self.nativePosters(in: window).isEmpty }
+            try await self.waitUntil { browser.hasLoaded && !self.views(in: window, of: PlayerEpisodeNativeCell.self).isEmpty }
             try await Task.sleep(for: .milliseconds(250))
             XCTAssertTrue(UIFocusSystem.focusSystem(for: window)?.focusedItem === before)
             XCTAssertEqual(model.observedFocus, .button(.episodes))
@@ -203,11 +251,15 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
             previous?.makeKeyAndVisible()
         }
 
-        try await waitUntil { self.nativePosters(in: window).count == entries.count }
+        try await waitUntil { !self.nativePosters(in: window).isEmpty }
         for index in [0, 1, 2, 3, 2] {
-            model.target = entries[index].id
+            if index == 0 {
+                model.target = entries[index].id
+            } else {
+                try focusEpisode(entries[index].id, in: window)
+            }
             try await waitUntil {
-                (UIFocusSystem.focusSystem(for: window)?.focusedItem as? TVPosterView)?
+                (UIFocusSystem.focusSystem(for: window)?.focusedItem as? PlayerEpisodeNativeCell)?
                     .accessibilityLabel == entries[index].item.title
             }
             try await Task.sleep(for: .milliseconds(250))
@@ -216,9 +268,28 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
             XCTAssertEqual(model.observedFocus, .episodeItem(entries[index].id))
             XCTAssertTrue(posters.filter { $0.accessibilityLabel != entries[index].item.title }
                 .allSatisfy { !$0.isFocused })
-            XCTAssertTrue(posters.allSatisfy { $0.footerView == nil },
+            XCTAssertTrue(posters.filter(\.isFocused).allSatisfy {
+                guard let media = self.views(in: $0, of: TVMediaItemContentView.self).first,
+                      let configuration = media.configuration as? TVMediaItemContentConfiguration else { return false }
+                return configuration.text?.isEmpty != false && configuration.secondaryText?.isEmpty != false
+            },
                           "Titles must remain outside the native artwork projection.")
         }
+
+        let focused = try XCTUnwrap(nativePosters(in: window).first(where: \.isFocused))
+        let media = try XCTUnwrap(views(in: focused, of: TVMediaItemContentView.self).first)
+        let configuration = try XCTUnwrap(media.configuration as? TVMediaItemContentConfiguration)
+        let projectedImage = try XCTUnwrap(configuration.image?.cgImage)
+        var artworkPixels = [UInt8](repeating: 0, count: projectedImage.width * projectedImage.height * 4)
+        let artworkContext = try XCTUnwrap(CGContext(
+            data: &artworkPixels, width: projectedImage.width, height: projectedImage.height,
+            bitsPerComponent: 8, bytesPerRow: projectedImage.width * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        artworkContext.draw(projectedImage, in: CGRect(x: 0, y: 0, width: projectedImage.width, height: projectedImage.height))
+        XCTAssertGreaterThan(stride(from: 0, to: artworkPixels.count, by: 4).filter {
+            min(artworkPixels[$0], artworkPixels[$0 + 1], artworkPixels[$0 + 2]) > 230
+        }.count, 20, "The native focus projection must include the white season/episode label.")
 
         let screenshot = DetailTransitionSnapshot.image(of: window)
         let image = try XCTUnwrap(screenshot.cgImage)
@@ -247,8 +318,20 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
         add(attachment)
     }
 
-    private func nativePosters(in view: UIView) -> [TVPosterView] {
-        (view as? TVPosterView).map { [$0] } ?? view.subviews.flatMap { nativePosters(in: $0) }
+    private func focusEpisode(_ id: PlayerEpisodeEntry.ID, in window: UIWindow) throws {
+        let collection = try XCTUnwrap(scrollView(in: window) as? UICollectionView)
+        let dataSource = try XCTUnwrap(collection.dataSource as? UICollectionViewDiffableDataSource<Int, NativeEpisodeElement.ID>)
+        let index = try XCTUnwrap(dataSource.indexPath(for: .episode(id)))
+        if collection.cellForItem(at: index) == nil {
+            collection.scrollToItem(at: index, at: [], animated: false)
+            collection.layoutIfNeeded()
+        }
+        let coordinator = try XCTUnwrap(collection.delegate as? PlayerEpisodeNativeRow.Coordinator)
+        coordinator.requestFocus(at: index)
+    }
+
+    private func nativePosters(in view: UIView) -> [PlayerEpisodeNativeCell] {
+        (view as? PlayerEpisodeNativeCell).map { [$0] } ?? view.subviews.flatMap { nativePosters(in: $0) }
     }
 
     private func scrollView(in view: UIView) -> UIScrollView? {
@@ -313,6 +396,7 @@ private struct EpisodeArtworkFixture: View {
     let model: EpisodeArtworkFixtureModel
     let entries: [PlayerEpisodeEntry]
     @FocusState private var focus: PlayerControls.FocusSlot?
+    @State private var currentID: PlayerEpisodeEntry.ID?
     private let layout = PlayerSequenceLayout(
         metrics: .tv, cardMetrics: .standard, contained: true, hasError: false
     )
@@ -320,25 +404,21 @@ private struct EpisodeArtworkFixture: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal) {
-                    HStack(spacing: layout.columnSpacing) {
-                        ForEach(entries) { entry in
-                            PlayerEpisodeArtworkCard(entry: entry, layout: layout, focus: $focus) {}
-                                .id(entry.id)
-                        }
-                    }
-                }
-                .scrollClipDisabled()
+            PlayerEpisodeNativeRow(
+                items: entries.map(NativeEpisodeElement.episode), initialID: entries.first?.id,
+                layout: layout, focus: $focus, onVisible: { _ in },
+                onFocus: { currentID = $0 }, onSelect: { _ in }
+            )
+                .frame(height: layout.rowHeight)
                 .modifier(PlayerEpisodePanelSurface(layout: layout))
                 .frame(width: 1000)
-                .onChange(of: model.target) { _, id in
-                    if let id {
-                        proxy.scrollTo(id, anchor: .center)
-                        focus = .episodeItem(id)
-                    }
+                .focused($focus, equals: (currentID ?? entries.first?.id).map(PlayerControls.FocusSlot.episodeItem))
+                .onChange(of: currentID) { _, id in
+                    if let id { focus = .episodeItem(id) }
                 }
-            }
+                .onChange(of: model.target) { _, id in
+                    if let id { focus = .episodeItem(id) }
+                }
         }
         .environment(\.plozzCardFocusStyle, .system)
         .onChange(of: focus) { _, value in model.observedFocus = value }
@@ -376,6 +456,7 @@ private actor EpisodeRowProvider: MediaProvider {
     )
     private var heldIDs: Set<String> = []
     private var pending: [String: CheckedContinuation<Void, Never>] = [:]
+    private var failures: Set<String> = []
     private(set) var requests: [String] = []
 
     nonisolated static func episode(season: Int, number: Int) -> MediaItem {
@@ -386,6 +467,7 @@ private actor EpisodeRowProvider: MediaProvider {
     }
 
     func hold(_ id: String) { heldIDs.insert(id) }
+    func failNext(_ id: String) { failures.insert(id) }
     func isHolding(_ id: String) -> Bool { pending[id] != nil }
     func release(_ id: String) {
         heldIDs.remove(id)
@@ -396,6 +478,7 @@ private actor EpisodeRowProvider: MediaProvider {
         if heldIDs.contains(itemID) {
             await withCheckedContinuation { pending[itemID] = $0 }
         }
+        if failures.remove(itemID) != nil { throw AppError.invalidResponse }
         if itemID == "series" {
             return (1...3).map { (number: Int) in
                 MediaItem(id: "season-\(number)", title: "Season", kind: .season, seasonNumber: number)

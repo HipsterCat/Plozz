@@ -455,20 +455,28 @@ missing provider/configuration nor a skipped XCTest is a successful live run.
 The player's Playlist tab uses standalone, full-height media cards spaced like
 Cast. Episodes uses one continuous row across seasons in an Info-style panel,
 without season tabs or a width-limited season rail. Each numbered episode shows
-its season/episode code on the rounded still. Only the current season loads on
+its season/episode code at the bottom leading edge of the rounded still, over the
+shared artwork scrim rather than a capsule. Only the current season loads on
 entry; adjacent seasons load as browsing reaches the row's edges. Empty seasons
 are skipped, and a failed adjacent load exposes a retry at that edge. Adjacent
 loads belong to the row and follow visible edges, not the lifecycle of lazy
 cards; once started they finish even if that edge scrolls offscreen. Task and
-transport cancellations do not become retry errors. Incoming rows wait until
-native scrolling settles before changing the displayed content. Earlier seasons
-adjust the scroll offset by their exact inserted extent in the same unanimated
-update, preserving the visible artwork's position without refocusing or snapping
-the row back to a card boundary. Initial loading
+transport cancellations do not become retry errors. On tvOS, a reusable native
+collection owns directional focus and realizes cells throughout held Left/Right
+input. Stable episode IDs and layout offset adjustments preserve the focused cell
+and its exact viewport position when earlier seasons or retry rows arrive,
+including during native focus transitions and in RTL. Native scroll targets use
+complete card slots constrained to fully reveal the focused cell. First-card
+entry and return share the same gutter, with no idle realignment. Mobile SwiftUI
+rows defer leading insertions until scrolling settles.
+Initial loading
 uses nonfocusable artwork/caption skeletons with the loaded cards' dimensions,
-not a spinner or visible loading message. On tvOS,
-the shared native poster owns artwork focus, leaving titles and neighboring
-tiles in place. The panel clips scrolling content and focus projection at its
+not a spinner or visible loading message. TVUIKit projects only the artwork,
+leaving captions and neighboring tiles in place. The shared scrim and episode
+text are rendered into that image at display scale so TVUIKit retains them on
+focus; this work is cached across focus changes. Panel glass is a separate
+background, not a compositor around the native row, so it cannot hide the
+focused artwork. The panel clips scrolling content and focus projection at its
 rounded boundary.
 Portrait layouts use vertical episode rows. Playlist entries retain server
 order and load only as they become visible.

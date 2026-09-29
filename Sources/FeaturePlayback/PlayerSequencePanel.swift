@@ -48,6 +48,7 @@ struct PlayerSequencePanel: View {
     @State private var nextEpisodeLoadID: PlayerEpisodeEntry.ID?
     @State private var displayedEpisodes: EpisodeRowContent?
     @State private var episodeRowIsScrolling = false
+    @State private var nativeEpisodeFocusID: PlayerEpisodeEntry.ID?
 
     private struct EpisodeRowContent: Equatable {
         let entries: [PlayerEpisodeEntry]
@@ -118,9 +119,58 @@ struct PlayerSequencePanel: View {
         } else if browser.episodes.isEmpty {
             emptyRow("No episodes available")
         } else {
+            #if os(tvOS)
+            nativeEpisodeRow(browser)
+            #else
             episodeRow(browser)
+            #endif
         }
     }
+
+    #if os(tvOS)
+    private func nativeEpisodeRow(_ browser: PlayerEpisodeBrowser) -> some View {
+        var elements = browser.episodes.map(NativeEpisodeElement.episode)
+        if let error = browser.previousLoadError { elements.insert(.previousError(error), at: 0) }
+        if let error = browser.nextLoadError { elements.append(.nextError(error)) }
+        return PlayerEpisodeNativeRow(
+            items: elements, initialID: browser.initialEntryID,
+            layout: layout, focus: $focus
+        ) { visible in
+            if let id = browser.episodes.first?.id, visible.contains(.episode(id)) {
+                previousEpisodeLoadID = id
+            }
+            if let id = browser.episodes.last?.id, visible.contains(.episode(id)) {
+                nextEpisodeLoadID = id
+            }
+        } onFocus: { id in
+            nativeEpisodeFocusID = id
+        } onSelect: { element in
+            switch element {
+            case .episode(let entry):
+                player.playEpisode(entry.item)
+            case .previousError:
+                Task { await browser.retryPrevious() }
+            case .nextError:
+                Task { await browser.retryNext() }
+            }
+        }
+        .frame(height: layout.rowHeight)
+        .focused($focus, equals: nativeEpisodeFocusTarget(browser))
+        .task(id: previousEpisodeLoadID) {
+            guard previousEpisodeLoadID != nil else { return }
+            await browser.loadPrevious()
+        }
+        .task(id: nextEpisodeLoadID) {
+            guard nextEpisodeLoadID != nil else { return }
+            await browser.loadNext()
+        }
+    }
+
+    private func nativeEpisodeFocusTarget(_ browser: PlayerEpisodeBrowser) -> PlayerControls.FocusSlot? {
+        return (nativeEpisodeFocusID ?? browser.initialEntryID ?? browser.episodes.first?.id)
+            .map(PlayerControls.FocusSlot.episodeItem)
+    }
+    #endif
 
     private func emptyRow(_ title: LocalizedStringKey) -> some View {
         Text(title)
@@ -186,19 +236,10 @@ struct PlayerSequencePanel: View {
                 }
             }
             ForEach(displayed.entries) { entry in
-                Group {
-                    #if os(tvOS)
-                    PlayerEpisodeArtworkCard(
-                        entry: entry, layout: layout, focus: $focus
-                    ) { player.playEpisode(entry.item) }
-                    .environment(\.plozzCardFocusStyle, .system)
-                    #else
-                    card(
-                        entry.item, focusSlot: .episodeItem(entry.id),
-                        selected: false, episodeBadge: entry.badge
-                    ) { player.playEpisode(entry.item) }
-                    #endif
-                }
+                card(
+                    entry.item, focusSlot: .episodeItem(entry.id),
+                    selected: false, episodeBadge: entry.badge
+                ) { player.playEpisode(entry.item) }
                 .id(entry.id)
             }
             if let error = displayed.nextError {
@@ -384,13 +425,7 @@ struct PlayerSequencePanel: View {
                             )
                             .overlay(alignment: .bottomLeading) {
                                 if source == .episodes, let episodeBadge {
-                                    Text(verbatim: episodeBadge)
-                                        .font(metrics.castRoleFont.weight(.semibold))
-                                        .foregroundStyle(.white)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 5)
-                                        .background(.black.opacity(0.72), in: Capsule())
-                                        .padding(10)
+                                    PlayerEpisodeArtworkOverlay(badge: episodeBadge, layout: layout)
                                 }
                             }
                         Text(verbatim: item.title)
@@ -430,6 +465,25 @@ struct PlayerSequencePanel: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(.white.opacity(0.12))
         }
+    }
+}
+
+struct PlayerEpisodeArtworkOverlay: View {
+    let badge: String
+    let layout: PlayerSequenceLayout
+
+    var body: some View {
+        MediaArtworkChromeScrim(top: false, bottom: true)
+            .overlay(alignment: .bottomLeading) {
+                Text(verbatim: badge)
+                    .font(layout.metrics.castRoleFont.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(layout.cardMetrics.resumeChipInset)
+            }
+            .clipShape(RoundedRectangle(
+                cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius, style: .continuous
+            ))
+            .allowsHitTesting(false)
     }
 }
 
@@ -487,72 +541,16 @@ struct PlayerEpisodePanelSurface: ViewModifier {
             .padding(.horizontal, layout.metrics.contentPadding)
             .padding(.vertical, layout.containerVerticalInset)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .modifier(PanelGlassBackground(cornerRadius: layout.metrics.panelCornerRadius))
+            .background {
+                // Keep TVUIKit's focused projection out of the panel's glass compositor.
+                Color.clear.modifier(PanelGlassBackground(cornerRadius: layout.metrics.panelCornerRadius))
+            }
             .clipShape(RoundedRectangle(
                 cornerRadius: layout.metrics.panelCornerRadius,
                 style: .continuous
             ))
     }
 }
-
-#if os(tvOS)
-struct PlayerEpisodeArtworkCard: View {
-    let entry: PlayerEpisodeEntry
-    let layout: PlayerSequenceLayout
-    @FocusState.Binding var focus: PlayerControls.FocusSlot?
-    let action: () -> Void
-    @PlozzCardFocus private var artworkFocused
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            NativeArtworkSurface(
-                width: layout.imageWidth,
-                aspectRatio: layout.imageWidth / layout.imageHeight,
-                title: entry.item.title, subtitle: entry.badge,
-                focus: $artworkFocused, action: action
-            ) {
-                FallbackAsyncImage(
-                    references: entry.item.artworkReferences(for: .episodeThumbnail),
-                    variant: .landscapeCard
-                ) { Color.clear }
-            } overlay: {
-                if let badge = entry.badge {
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Text(verbatim: badge)
-                                .font(layout.metrics.castRoleFont.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(.black.opacity(0.72), in: Capsule())
-                            Spacer()
-                        }
-                    }
-                    .padding(10)
-                }
-            }
-            .focused($focus, equals: .episodeItem(entry.id))
-            Text(verbatim: entry.item.title)
-                .font(layout.metrics.castNameFont)
-                .lineLimit(layout.compact ? 1 : 2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(height: layout.titleHeight, alignment: .center)
-                .padding(.horizontal, layout.cardMetrics.landscapeCaptionInset)
-                .padding(.top, layout.cardMetrics.landscapeCaptionTopSpacing)
-                .accessibilityHidden(true)
-        }
-        .padding([.top, .horizontal], layout.cardMetrics.cardInset)
-        .padding(.bottom, layout.cardMetrics.cardInset + layout.cardMetrics.landscapeCaptionInset)
-        .frame(width: layout.cardWidth, height: layout.rowHeight, alignment: .topLeading)
-        .onChange(of: focus, initial: true) { _, target in
-            if target == .episodeItem(entry.id), !artworkFocused {
-                $artworkFocused.requestFocus()
-            }
-        }
-    }
-}
-#endif
 
 private struct PlayerSequenceCardStyle: ButtonStyle {
     let focused: Bool

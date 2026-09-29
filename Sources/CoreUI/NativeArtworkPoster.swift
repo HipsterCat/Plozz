@@ -1,56 +1,6 @@
 #if os(tvOS)
 import SwiftUI
 
-/// A native focusable artwork surface; callers keep captions outside its projection.
-public struct NativeArtworkSurface<Artwork: View, Overlay: View>: View {
-    private let width: CGFloat
-    private let aspectRatio: CGFloat
-    private let title: String
-    private let subtitle: String?
-    private let focus: PlozzCardFocus.Binding
-    private let action: () -> Void
-    private let artwork: Artwork
-    private let overlay: Overlay
-    @State private var resolution = ArtworkResolutionState()
-
-    public init(
-        width: CGFloat,
-        aspectRatio: CGFloat,
-        title: String,
-        subtitle: String?,
-        focus: PlozzCardFocus.Binding,
-        action: @escaping () -> Void,
-        @ViewBuilder artwork: () -> Artwork,
-        @ViewBuilder overlay: () -> Overlay
-    ) {
-        self.width = width
-        self.aspectRatio = aspectRatio
-        self.title = title
-        self.subtitle = subtitle
-        self.focus = focus
-        self.action = action
-        self.artwork = artwork()
-        self.overlay = overlay()
-    }
-
-    public var body: some View {
-        NativeTVPoster(
-            image: resolution.image, treatment: .original, aspectRatio: aspectRatio,
-            fallbackWidth: width, title: .content(title), subtitle: subtitle,
-            overlay: overlay, focus: focus, action: action
-        )
-        .focused(focus.focusState)
-        .frame(width: width, height: width / aspectRatio)
-        .background {
-            artwork
-                .environment(\.artworkResolutionState, resolution)
-                .frame(width: width, height: width / aspectRatio)
-                .hidden()
-                .accessibilityHidden(true)
-        }
-    }
-}
-
 /// Native artwork focus with captions outside the surface, matching media posters.
 public struct NativeArtworkPoster<Artwork: View>: View {
     private let width: CGFloat
