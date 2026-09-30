@@ -1124,28 +1124,39 @@ public struct JellyfinClient: Sendable {
     /// `/UserItems/{itemId}/UserData?userId={userId}`. Unlike
     /// `/Sessions/Playing/Stopped`, this never opens or terminates a live
     /// now-playing session, so an out-of-band convergence write can't zero a
-    /// dashboard that is currently streaming the title. Sending only position
-    /// and recency leaves unrelated user-data fields (played,
-    /// favorite, play count) untouched — the server merges field-by-field.
-    ///
-    /// Emby's PlaystateService documents the user-scoped route and nullable
-    /// UserItemDataDto fields. Never reinterpret its 404 as playback stopping.
+    /// dashboard that is currently streaming the title. Jellyfin merges omitted
+    /// fields, but Emby resets an omitted Played to false. Read and include Emby's
+    /// current flag on every write, including zero-position clears after completion.
+    /// An unreadable flag must fail the write, never guess unwatched.
     func updatePlaybackPosition(_ seconds: TimeInterval, userID: String, itemID: String, lastPlayedAt: Date = Date()) async throws {
         let isEmby = providerKind == .emby
-        var endpoint = Endpoint(
-            method: .post,
-            path: isEmby ? "/Users/\(userID)/Items/\(itemID)/UserData" : "/UserItems/\(itemID)/UserData",
-            queryItems: isEmby ? [] : [URLQueryItem(name: "userId", value: userID)],
-            headers: authHeaders
-        )
-        endpoint = try endpoint.jsonBody(UpdateUserItemDataBody(
-            PlaybackPositionTicks: JellyfinTicks.ticks(fromSeconds: max(seconds, 0)),
-            LastPlayedDate: JellyfinDate.iso8601(from: lastPlayedAt)
-        ))
         let context = playbackLifecycleContext(sessionID: nil, origin: "resume-convergence")
             + " item=\(HandoffDiagnostics.correlationID(itemID)) route=\(isEmby ? "emby-user-data" : "jellyfin-user-data")"
         HandoffDiagnostics.emit("session RESUME_WRITE_BEGIN \(context)")
         do {
+            let played: Bool?
+            if isEmby {
+                let current = try await http.decode(
+                    EmbyPlayedStateResponse.self,
+                    from: Endpoint(path: "/Users/\(userID)/Items/\(itemID)", headers: authHeaders),
+                    baseURL: baseURL
+                )
+                played = current.UserData.Played
+            } else {
+                played = nil
+            }
+            try Task.checkCancellation()
+            var endpoint = Endpoint(
+                method: .post,
+                path: isEmby ? "/Users/\(userID)/Items/\(itemID)/UserData" : "/UserItems/\(itemID)/UserData",
+                queryItems: isEmby ? [] : [URLQueryItem(name: "userId", value: userID)],
+                headers: authHeaders
+            )
+            endpoint = try endpoint.jsonBody(UpdateUserItemDataBody(
+                PlaybackPositionTicks: JellyfinTicks.ticks(fromSeconds: max(seconds, 0)),
+                LastPlayedDate: JellyfinDate.iso8601(from: lastPlayedAt),
+                Played: played
+            ))
             _ = try await http.send(endpoint, baseURL: baseURL)
             HandoffDiagnostics.emit("session RESUME_WRITE_ACK \(context)")
         } catch {
@@ -1536,17 +1547,19 @@ private struct PlaybackProgressBody: Encodable {
     let IsPaused: Bool
 }
 
-/// Partial user-data update for Jellyfin and Emby. Sends the position **and** a
-/// `LastPlayedDate` recency stamp so the item surfaces in Jellyfin's "Continue
-/// Watching" / Resume home row — that row is ordered/filtered by `LastPlayedDate`,
-/// so a position-only write (the previous behaviour) made the title *resumable*
-/// when opened directly but invisible in the row. The server still merges
-/// field-by-field, so played/favorite/play-count state is preserved. `LastPlayedDate`
-/// is optional and omitted (via `encodeIfPresent`) when nil so other callers can
-/// write a bare position if ever needed.
+private struct EmbyPlayedStateResponse: Decodable {
+    struct UserDataValue: Decodable {
+        let Played: Bool
+    }
+    let UserData: UserDataValue
+}
+
+/// LastPlayedDate keeps resumed titles in the server's recency-ordered feed.
+/// Emby requires the preserved Played flag; Jellyfin leaves it omitted.
 private struct UpdateUserItemDataBody: Encodable {
     let PlaybackPositionTicks: Int64
     var LastPlayedDate: String?
+    var Played: Bool?
 }
 
 // MARK: - Reachability latching

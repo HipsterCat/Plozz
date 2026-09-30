@@ -37,6 +37,24 @@ supported capability remains at parity.
 - **Co-equal with `ProviderPlex`.** Any new `MediaProvider` capability must be
   implemented here whenever it's implemented for Plex (and vice versa).
 
+## Watch-state writes
+
+Manual marking and playback completion both use the shared watch outbox.
+`PlayedItems` writes watched state; the following session-less `UserData` write
+clears or updates the resume position without stopping playback.
+
+Emby's `UserData` endpoint is not a field-by-field patch for `Played`: omitting
+that field saves `false`, even when the request succeeds. Before each Emby resume
+write, read the same user's current item state and explicitly preserve `Played`.
+Never cache or default that flag. A failed read, missing flag, or failed write
+must throw so the durable outbox retains the update. Leave favorites and play
+count out of the update. Jellyfin retains its partial update without the extra
+read; its older-server stop fallback must never apply to Emby.
+
+`EmbyWatchStateTests` models the behavior reproduced against Emby 4.10.0.40 and
+checks persisted server state after marking, completion, rewatching, dismissal,
+reload, and failed-read recovery, not just successful HTTP responses.
+
 ## Collections
 
 Jellyfin and Emby retain native `boxsets` libraries and `BoxSet` items. Both also
