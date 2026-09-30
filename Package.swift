@@ -87,8 +87,8 @@ let package = Package(
         // Powers the native HLS-fMP4 remux path for MKV → DoVi + Atmos + seek.
         // See AGENTS.local.md › "Playback engine (AetherEngine / Plozzigen)".
         //
-        // Pinned to upstream release 7.16.1:
-        // 4ef5ef95faf271cb0c0e9cc79a0bf81a54b1244b.
+        // Pinned to upstream release 7.22.2:
+        // 0e2f5c967b5f92e692e03edf612f2753289029cf.
         //
         // Plozz no longer carries an AetherEngine fork. Everything the old
         // `plozz-pin-*` stack existed for is upstream as of 5.23.2:
@@ -215,9 +215,14 @@ let package = Package(
         // title behind the tvOS screensaver. 7.16.0 keeps IPTV path credentials
         // out of the engine log; 7.15.2 times remote-HLS sourceTime to the picture.
         //
+        // 7.22.2 waits for an observed display switch before offering an unproven
+        // HDR master and never latches a refusal raised mid-switch (#667/#669).
+        // FFmpegBuild advances to 3.6.x; see docs/playback-engines.md for the
+        // intervening playback changes and HDR10+ verification limits.
+        //
         // SMB enters AetherEngine only through Plozz's protocol-neutral custom-source
         // bridge; the engine's legacy SMB URL product is not linked.
-        .package(url: "https://github.com/superuser404notfound/AetherEngine", revision: "4ef5ef95faf271cb0c0e9cc79a0bf81a54b1244b"),
+        .package(url: "https://github.com/superuser404notfound/AetherEngine", revision: "0e2f5c967b5f92e692e03edf612f2753289029cf"),
         // NOTE: FFmpegBuild (FFmpeg n8.1.x decode-only) and LibDovi (Dolby Vision
         // RPU parser) are pulled in TRANSITIVELY by AetherEngine — its own manifest
         // declares and consumes them. Plozz used to declare them directly only for
