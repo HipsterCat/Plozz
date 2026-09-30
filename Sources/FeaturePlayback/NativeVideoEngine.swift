@@ -279,6 +279,7 @@ public final class NativeVideoEngine: VideoEngine {
             if let muxItem {
                 item = muxItem
                 asset = AVURLAsset(url: streamURL)
+                HandoffDiagnostics.emit("native ASSET route=trailer-composition")
             } else {
                 asset = makeAsset(for: request, streamURL: streamURL, injectableSubtitles: injectableSubtitles)
                 item = AVPlayerItem(asset: asset)
@@ -441,11 +442,8 @@ public final class NativeVideoEngine: VideoEngine {
 
     // MARK: - Asset construction
 
-    /// Builds the asset to play. When the server is direct-playing the original
-    /// file (not transcoding) and the item has text subtitles the player would
-    /// otherwise never see, wrap the stream in a synthesized HLS playlist that
-    /// adds those subtitles as selectable renditions. Otherwise play the stream
-    /// URL directly (transcoded HLS already carries subtitles in its manifest).
+    /// tvOS sidecars use the owned overlay, leaving the video asset untouched.
+    /// Other platforms retain subtitle injection; provider HLS stays unchanged.
     private func makeAsset(
         for request: PlaybackRequest,
         streamURL: URL,
@@ -453,11 +451,13 @@ public final class NativeVideoEngine: VideoEngine {
     ) -> AVURLAsset {
         subtitleLoader = nil
         guard !request.isManifestStream else {
+            HandoffDiagnostics.emit("native ASSET route=provider-manifest")
             return AVURLAsset(url: streamURL)
         }
         guard !injectableSubtitles.isEmpty,
               let duration = request.item.runtime,
               duration > 0 else {
+            HandoffDiagnostics.emit("native ASSET route=original-url")
             return AVURLAsset(url: streamURL)
         }
         let composer = SubtitleHLSComposer(
@@ -467,6 +467,7 @@ public final class NativeVideoEngine: VideoEngine {
         )
         let loader = SubtitleInjectingResourceLoader(composer: composer)
         subtitleLoader = loader
+        HandoffDiagnostics.emit("native ASSET route=subtitle-wrapper")
         return loader.makeAsset()
     }
 
@@ -597,6 +598,11 @@ public final class NativeVideoEngine: VideoEngine {
     private func resolveInjectableSubtitles(
         for request: PlaybackRequest
     ) async -> [InjectableSubtitle] {
+        #if os(tvOS)
+        // Track menus already use the provider tracks. Resolve sidecars only
+        // when the owned overlay selects them, never by repackaging the video.
+        return []
+        #else
         guard !request.isManifestStream else { return [] }
         var result: [InjectableSubtitle] = []
         for track in request.subtitleTracks where track.kind == .subtitle {
@@ -621,6 +627,7 @@ public final class NativeVideoEngine: VideoEngine {
             )
         }
         return result
+        #endif
     }
 
     public func play() {
