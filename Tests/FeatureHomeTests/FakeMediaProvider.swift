@@ -94,6 +94,11 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
     var supplementalFactsByItem: [String: ProbedStreamFacts] = [:]
     var supplementalFactsGate: (@Sendable () async -> Void)?
     var librariesGate: (@Sendable () async -> Void)?
+    var libraryItems: [MediaLibrary] = []
+    var latestItems: [MediaItem] = []
+    var containerGates: [String: @Sendable () async -> Void] = [:]
+    var containerErrors: [String: AppError] = [:]
+    var latestError: AppError?
     private var _supplementalProbeCount = 0
     var supplementalProbeCount: Int { withLock { _supplementalProbeCount } }
 
@@ -131,7 +136,7 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
     func libraries() async throws -> [MediaLibrary] {
         withLock { _librariesCallCount += 1 }
         await librariesGate?()
-        return []
+        return libraryItems
     }
     /// How many times `libraries()` was called — lets a test prove whether the
     /// Home aggregator re-ran (e.g. that a redundant reload was skipped).
@@ -148,7 +153,8 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
     var latestGate: (@Sendable () async -> Void)?
     func latest(limit: Int) async throws -> [MediaItem] {
         await latestGate?()
-        return []
+        if let latestError { throw latestError }
+        return Array(latestItems.prefix(limit))
     }
     func item(id: String) async throws -> MediaItem {
         withLock { _itemCallCounts[id, default: 0] += 1 }
@@ -206,6 +212,8 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
             _requestedKinds.append(kind)
         }
         if alwaysFail { throw AppError.serverUnreachable }
+        await containerGates[containerID]?()
+        if let error = containerErrors[containerID] { throw error }
         onItemsRequest?(page)
         do {
             if let hook = pageHooks[page.startIndex] {

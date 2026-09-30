@@ -54,6 +54,9 @@ public struct MediaRowView: View {
     /// heading (previously spelled as an empty string).
     private let title: Text?
     private let loadingPlaceholderCount: Int
+    /// Gives the first pending Home row a visible waiting destination. Other
+    /// skeletons stay inert; data arriving below must not choose initial focus.
+    private let reservesLoadingFocus: Bool
     private let episodeEntry: MediaRowEpisodeEntry?
     /// Row contents, guaranteed to hold each `id` once.
     ///
@@ -202,6 +205,7 @@ public struct MediaRowView: View {
     @State private var entryLayout = MediaRowEntryLayout()
     @State private var pendingEntryHandoff = false
     @State private var alignedEntryTarget: String?
+    @FocusState private var loadingCardFocused: Bool
 
     public init(
         title: Text?,
@@ -223,6 +227,7 @@ public struct MediaRowView: View {
         statusCue: ((MediaItem) -> LocalizedStringResource?)? = nil,
         pendingRemovalIDs: Set<String> = [],
         loadingPlaceholderCount: Int = 0,
+        reservesLoadingFocus: Bool = false,
         episodeEntry: MediaRowEpisodeEntry? = nil,
         playsOnSelect: Bool = false,
         onSelect: @escaping (MediaItem) -> Void
@@ -247,6 +252,7 @@ public struct MediaRowView: View {
             statusCue: statusCue,
             pendingRemovalIDs: pendingRemovalIDs,
             loadingPlaceholderCount: loadingPlaceholderCount,
+            reservesLoadingFocus: reservesLoadingFocus,
             episodeEntry: episodeEntry,
             playsOnSelect: playsOnSelect,
             onSelect: onSelect
@@ -273,12 +279,14 @@ public struct MediaRowView: View {
         statusCue: ((MediaItem) -> LocalizedStringResource?)? = nil,
         pendingRemovalIDs: Set<String> = [],
         loadingPlaceholderCount: Int = 0,
+        reservesLoadingFocus: Bool = false,
         episodeEntry: MediaRowEpisodeEntry? = nil,
         playsOnSelect: Bool = false,
         onSelect: @escaping (MediaItem) -> Void
     ) {
         self.title = title
         self.loadingPlaceholderCount = max(loadingPlaceholderCount, 0)
+        self.reservesLoadingFocus = reservesLoadingFocus
         self.episodeEntry = episodeEntry
         let uniqueItems = Self.uniqued(items)
         self.items = uniqueItems
@@ -512,9 +520,14 @@ public struct MediaRowView: View {
                                 switch element {
                                 case .item(let item):
                                     tappableCard(for: item)
-                                case .loadingPlaceholder:
-                                    loadingPlaceholder
-                                        .frame(width: cardSlotWidth)
+                                case .loadingPlaceholder(let index):
+                                    if index == 0, reservesLoadingFocus, items.isEmpty {
+                                        loadingFocusEntry
+                                            .frame(width: cardSlotWidth)
+                                    } else {
+                                        loadingPlaceholder
+                                            .frame(width: cardSlotWidth)
+                                    }
                                 }
                             }
                         }
@@ -864,6 +877,29 @@ public struct MediaRowView: View {
         case .episodeColumn:
             EpisodeRowEntryPlaceholder()
         }
+    }
+
+    private var loadingFocusEntry: some View {
+        loadingPlaceholder
+            .overlay {
+                ProgressView()
+                    .tint(palette.primaryText)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius)
+                    .strokeBorder(palette.primaryText.opacity(loadingCardFocused ? 0.7 : 0), lineWidth: 3)
+            }
+            #if os(tvOS)
+            .focusable(true)
+            .focused($loadingCardFocused)
+            .focusEffectDisabled()
+            .onChange(of: loadingCardFocused) { _, focused in
+                if focused { onFocusEntered?() }
+            }
+            #endif
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Loading")
+            .accessibilityIdentifier("media-row-loading-entry")
     }
 
     private var layoutMetrics: PlozzMetrics {

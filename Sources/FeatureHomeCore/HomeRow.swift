@@ -89,13 +89,15 @@ public struct HomeRow: Identifiable, Equatable, Sendable {
     public let kind: HomeRowKind
     public var items: [MediaItem]
     public var libraries: [AggregatedLibrary]
+    public var loadingPlaceholderCount: Int
+    public var failure: AppError?
 
     /// True when this row would draw nothing on Home. A row survives the
     /// visibility filter as an empty shell, so "are there any rows" is not the
     /// same question as "will anything appear" — and only the latter tells Home
     /// whether it is about to render a screen with nothing to focus.
     public var isEmptyOnHome: Bool {
-        items.isEmpty && libraries.isEmpty
+        items.isEmpty && libraries.isEmpty && loadingPlaceholderCount == 0 && failure == nil
     }
 
     public var id: HomeRowKind { kind }
@@ -110,10 +112,18 @@ public struct HomeRow: Identifiable, Equatable, Sendable {
     /// Recorded per row so the next launch's skeleton shows a matching count.
     public var cardCount: Int { max(items.count, libraries.count) }
 
-    init(kind: HomeRowKind, items: [MediaItem] = [], libraries: [AggregatedLibrary] = []) {
+    init(
+        kind: HomeRowKind,
+        items: [MediaItem] = [],
+        libraries: [AggregatedLibrary] = [],
+        loadingPlaceholderCount: Int = 0,
+        failure: AppError? = nil
+    ) {
         self.kind = kind
         self.items = items
         self.libraries = libraries
+        self.loadingPlaceholderCount = loadingPlaceholderCount
+        self.failure = failure
     }
 }
 
@@ -146,14 +156,31 @@ public extension HomeRow {
         for content: HomeViewModel.Content,
         isLibraryVisible: (String) -> Bool,
         isGlobalRowEnabled: (HomeGlobalRow) -> Bool = { _ in true },
-        includesEmptyWatchlist: Bool = false
+        includesEmptyWatchlist: Bool = false,
+        loadingRows: Set<HomeRowKind> = [],
+        failures: [HomeRowKind: AppError] = [:],
+        skeletonLayout: [HomeRowLayout] = []
     ) -> [HomeRow] {
         var rows: [HomeRow] = []
+        func makeRow(
+            _ kind: HomeRowKind, items: [MediaItem] = [], libraries: [AggregatedLibrary] = []
+        ) -> HomeRow {
+            let isLoading = loadingRows.contains(kind) && (kind != .libraries || libraries.isEmpty)
+            let previousCount = skeletonLayout.first { $0.kind == kind }?.count ?? 0
+            return HomeRow(
+                kind: kind, items: isLoading ? [] : items, libraries: libraries,
+                loadingPlaceholderCount: isLoading ? min(12, previousCount > 0 ? previousCount : 8) : 0,
+                failure: failures[kind]
+            )
+        }
+        func isPending(_ kind: HomeRowKind) -> Bool {
+            loadingRows.contains(kind) || failures[kind] != nil
+        }
 
         if isGlobalRowEnabled(.continueWatching) {
             let continueWatching = content.continueWatching.filter { $0.isVisibleOnHome(isLibraryVisible: isLibraryVisible) }
-            if !continueWatching.isEmpty {
-                rows.append(HomeRow(kind: .continueWatching, items: continueWatching))
+            if !continueWatching.isEmpty || isPending(.continueWatching) {
+                rows.append(makeRow(.continueWatching, items: continueWatching))
             }
         }
         // Watchlist is deliberately NOT library-filtered: it's an explicit user
@@ -163,19 +190,19 @@ public extension HomeRow {
         // explicit (rather than relying on watchlist items happening to lack a
         // libraryID) so the guarantee survives even if provenance is added later.
         if isGlobalRowEnabled(.watchlist),
-           !content.watchlist.isEmpty || includesEmptyWatchlist {
-            rows.append(HomeRow(kind: .watchlist, items: content.watchlist))
+           !content.watchlist.isEmpty || includesEmptyWatchlist || isPending(.watchlist) {
+            rows.append(makeRow(.watchlist, items: content.watchlist))
         }
         if isGlobalRowEnabled(.recentlyAdded) {
             let latest = content.latest.filter { $0.isVisibleOnHome(isLibraryVisible: isLibraryVisible) }
-            if !latest.isEmpty {
-                rows.append(HomeRow(kind: .recentlyAdded, items: latest))
+            if !latest.isEmpty || isPending(.recentlyAdded) {
+                rows.append(makeRow(.recentlyAdded, items: latest))
             }
         }
 
         let visibleLibraries = content.libraries.filter { isLibraryVisible($0.key) }
-        if !visibleLibraries.isEmpty {
-            rows.append(HomeRow(kind: .libraries, libraries: visibleLibraries))
+        if !visibleLibraries.isEmpty || isPending(.libraries) {
+            rows.append(makeRow(.libraries, libraries: visibleLibraries))
         }
 
         return rows

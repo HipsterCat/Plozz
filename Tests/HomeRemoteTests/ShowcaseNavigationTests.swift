@@ -1,7 +1,190 @@
 import XCTest
+import notify
 
 @MainActor
 final class ShowcaseNavigationTests: XCTestCase {
+    func testLowerRowArrivalDoesNotMoveFocusOrTheContinueWatchingAnchor() throws {
+        try checkUnrequestedRowArrival(showcase: true)
+    }
+
+    func testLowerRowArrivalDoesNotMoveFocusOrTheFullscreenHero() throws {
+        try checkUnrequestedRowArrival(showcase: false)
+    }
+
+    func testLowerRowArrivalDoesNotMoveFocusOrTheClassicStartingRow() throws {
+        try checkUnrequestedRowArrival(showcase: false, heroDisabled: true)
+    }
+
+    private func checkUnrequestedRowArrival(showcase: Bool, heroDisabled: Bool = false) throws {
+        continueAfterFailure = false
+        let fullscreen = !showcase && !heroDisabled
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        let resumeNotification = "com.thatcube.Plozz.HomeFixtureRows.\(UUID().uuidString)"
+        let recentNotification = "com.thatcube.Plozz.HomeFixtureRecent.\(UUID().uuidString)"
+        app.launchArguments = ["--production-home-fixture", "--pinned-home", "--progressive-home-load"]
+        app.launchArguments.append(heroDisabled ? "--hero-disabled-home" : showcase ? "--immersive-home" : "--cached-home-hero")
+        app.launchEnvironment["PLOZZ_HOME_ROWS_RELEASE_NOTIFICATION"] = resumeNotification
+        app.launchEnvironment["PLOZZ_HOME_RECENT_RELEASE_NOTIFICATION"] = recentNotification
+        app.launch()
+        defer {
+            notify_post(recentNotification)
+            notify_post(resumeNotification)
+            app.terminate()
+        }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        let heading = app.staticTexts["Continue Watching"]
+        XCTAssertTrue(heading.waitForExistence(timeout: 5))
+        let hero = app.buttons["home-hero-action-row"]
+        if fullscreen {
+            XCTAssertTrue(hero.waitForExistence(timeout: 10), "This must exercise the real full-screen hero.")
+        }
+        let before = heading.frame
+        let heroBefore = fullscreen ? hero.frame : .zero
+        let heroWasFocused = fullscreen && hero.hasFocus
+        let focusedButtons = app.buttons.matching(NSPredicate(format: "hasFocus == true"))
+        let initialFocus = focusedButtons.firstMatch.exists ? focusedButtons.firstMatch.label : nil
+        XCTAssertGreaterThan(before.minY, 0)
+        XCTAssertLessThan(before.maxY, app.frame.maxY)
+
+        XCTAssertEqual(notify_post(recentNotification), UInt32(NOTIFY_STATUS_OK))
+        let recentReady = NSPredicate { _, _ in app.staticTexts["home-fixture-latest-state"].label == "ready" }
+        XCTAssertEqual(XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: recentReady, object: nil)], timeout: 5
+        ), .completed, "Readiness must be verified even when the fullscreen hero leaves that row off-screen.")
+        XCTAssertEqual(app.staticTexts["home-fixture-resume-state"].label, "pending")
+        let afterFocus = focusedButtons.firstMatch.exists ? focusedButtons.firstMatch.label : nil
+        XCTAssertEqual(afterFocus, initialFocus, "No remote input was sent; fresh data must not choose a different row.")
+        XCTAssertEqual(heading.frame.minY, before.minY, accuracy: 0.5)
+        XCTAssertEqual(heading.frame.maxY, before.maxY, accuracy: 0.5)
+        XCTAssertFalse(focusedCard(in: app).elementType == .button)
+        if fullscreen {
+            XCTAssertEqual(hero.hasFocus, heroWasFocused)
+            XCTAssertEqual(hero.frame.minY, heroBefore.minY, accuracy: 0.5)
+        }
+        let waiting = XCTAttachment(screenshot: app.screenshot())
+        waiting.name = "home-waiting-with-ready-lower-row-\(heroDisabled ? "classic" : showcase ? "showcase" : "fullscreen")"
+        waiting.lifetime = .keepAlways
+        add(waiting)
+
+        XCTAssertEqual(notify_post(resumeNotification), UInt32(NOTIFY_STATUS_OK))
+        let finished = NSPredicate { _, _ in app.staticTexts["home-fixture-resume-state"].label == "ready" }
+        XCTAssertEqual(XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: finished, object: nil)], timeout: 10
+        ), .completed)
+        XCTAssertEqual(heading.frame.minY, before.minY, accuracy: 0.5)
+        if fullscreen {
+            XCTAssertTrue(hero.exists)
+            XCTAssertEqual(hero.hasFocus, heroWasFocused)
+            XCTAssertEqual(hero.frame.minY, heroBefore.minY, accuracy: 0.5)
+        } else {
+            let card = focusedCard(in: app)
+            if card.elementType == .button {
+                let index = try XCTUnwrap(Int(card.label.split(separator: " ").last ?? ""))
+                XCTAssertTrue((0..<24).contains(index), "Finishing Continue Watching must not select a lower row.")
+            }
+        }
+    }
+
+    func testFreshMergedRowsAreUsableBeforeResumeInShowcase() throws {
+        try checkProgressiveRows(layout: "--immersive-home", libraryRows: false)
+    }
+
+    func testFreshMergedRowsAreUsableBeforeResumeWithoutHero() throws {
+        try checkProgressiveRows(layout: "--hero-disabled-home", libraryRows: false)
+    }
+
+    func testFreshMergedRowsAreUsableBeforeResumeWithCarousel() throws {
+        try checkProgressiveRows(layout: nil, libraryRows: false)
+    }
+
+    func testManualNavigationBelowFullscreenHeroSurvivesLateResume() throws {
+        try checkProgressiveRows(layout: "--cached-home-hero", libraryRows: false)
+    }
+
+    func testTwentyLibraryRowsDoNotBlockTheFirstReadyShowcaseRow() throws {
+        try checkProgressiveRows(layout: "--immersive-home", libraryRows: true)
+    }
+
+    func testTwentyLibraryRowsDoNotBlockTheFirstReadyClassicRow() throws {
+        try checkProgressiveRows(layout: "--hero-disabled-home", libraryRows: true)
+    }
+
+    func testEmptyResumeResultKeepsTheManuallyFocusedShowcaseCardStable() throws {
+        try checkProgressiveRows(layout: "--immersive-home", libraryRows: false, emptyResume: true)
+    }
+
+    func testEmptyResumeResultKeepsTheManuallyFocusedClassicCardSelected() throws {
+        try checkProgressiveRows(layout: "--hero-disabled-home", libraryRows: false, emptyResume: true)
+    }
+
+    func testEmptyResumeResultKeepsTheManuallyFocusedFullscreenCardStable() throws {
+        try checkProgressiveRows(layout: "--cached-home-hero", libraryRows: false, emptyResume: true)
+    }
+
+    private func checkProgressiveRows(layout: String?, libraryRows: Bool, emptyResume: Bool = false) throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        let notification = "com.thatcube.Plozz.HomeFixtureRows.\(UUID().uuidString)"
+        app.launchArguments = ["--production-home-fixture", "--pinned-home", "--progressive-home-load"]
+        if let layout { app.launchArguments.append(layout) }
+        if libraryRows { app.launchArguments.append("--progressive-library-rows") }
+        if emptyResume { app.launchArguments.append("--empty-home-resume") }
+        app.launchEnvironment["PLOZZ_HOME_ROWS_RELEASE_NOTIFICATION"] = notification
+        app.launch()
+        defer {
+            notify_post(notification)
+            app.terminate()
+        }
+        XCTAssertTrue(app.staticTexts["Production Home ready"].waitForExistence(timeout: 30))
+        let resumeState = app.staticTexts["home-fixture-resume-state"]
+        XCTAssertEqual(resumeState.label, "pending")
+        if layout == nil || layout == "--cached-home-hero" {
+            if layout == "--cached-home-hero" {
+                XCTAssertTrue(app.buttons["home-hero-action-row"].waitForExistence(timeout: 10))
+            }
+            XCUIRemote.shared.press(.right)
+            XCUIRemote.shared.press(.down)
+        } else {
+            XCUIRemote.shared.press(.down)
+        }
+        try enterMediaRow(in: app)
+        waitForStableCard(in: app)
+        let enteredIndex = try XCTUnwrap(Int(focusedCard(in: app).label.split(separator: " ").last ?? ""))
+        XCTAssertTrue((24..<43).contains(enteredIndex), "Focus must enter the already loaded Recently Added row.")
+        XCUIRemote.shared.press(.right)
+        waitForStableCard(in: app)
+        let selected = focusedCard(in: app)
+        let label = selected.label
+        let frame = selected.frame
+        XCTAssertEqual(label, "Fixture movie \(enteredIndex + 1)")
+        XCTAssertEqual(resumeState.label, "pending", "A real card must be usable before the slow requests finish.")
+
+        let before = XCTAttachment(screenshot: app.screenshot())
+        before.name = "focused-card-before-late-rows"
+        before.lifetime = .keepAlways
+        add(before)
+        XCTAssertEqual(notify_post(notification), UInt32(NOTIFY_STATUS_OK))
+        let settled = NSPredicate { [self] _, _ in
+            let card = focusedCard(in: app)
+            // Without a hero, removing an empty first row reaches the scroll
+            // view's top boundary. Its selection and horizontal position survive;
+            // its old vertical position no longer exists in the shorter page.
+            let keepsVerticalAnchor = emptyResume && layout == "--hero-disabled-home"
+                ? card.frame.minY >= 0 && card.frame.maxY <= app.frame.maxY
+                : abs(card.frame.minY - frame.minY) < 0.5
+            return resumeState.label == "ready" && card.label == label
+                && abs(card.frame.minX - frame.minX) < 0.5
+                && keepsVerticalAnchor
+        }
+        XCTAssertEqual(XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: settled, object: nil)], timeout: 10
+        ), .completed, "Late rows must preserve the focused card and its on-screen position.")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "progressive-home-\(layout ?? "carousel")-libraries-\(libraryRows)"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
     func testScheduleBadgeClearsTallLogoDuringHorizontalNavigation() throws {
         let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
         app.launchArguments = [
@@ -50,6 +233,9 @@ final class ShowcaseNavigationTests: XCTestCase {
         XCTAssertTrue(app.wait(for: .runningBackground, timeout: 5))
         app.activate()
         XCTAssertTrue(app.staticTexts["Continue Watching"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Fixture movie")
+        ).firstMatch.waitForExistence(timeout: 20), "Wait for real cards, not the loading row's heading.")
         try enterMediaRow(in: app)
         XCTAssertTrue(focusedCard(in: app).label.contains("Fixture movie"))
         XCTAssertLessThan(app.staticTexts["Continue Watching"].frame.maxY, focusedCard(in: app).frame.minY)
@@ -69,20 +255,30 @@ final class ShowcaseNavigationTests: XCTestCase {
         XCTAssertEqual(viewport.frame.maxY, app.frame.maxY, accuracy: 0.5)
         XCTAssertTrue(viewport.staticTexts.matching(identifier: "media-row-title").count >= 2)
         for _ in 0..<8 { XCUIRemote.shared.press(.right) }
+        waitForStableCard(in: app)
         let first = focusedCard(in: app)
-        let firstLabel = first.label
-        let firstFrame = first.frame
+        var firstLabel = first.label
+        var firstFrame = first.frame
         let firstHeading = app.staticTexts["Continue Watching"].frame
         let description = app.staticTexts["A locally supplied movie for measuring the production Home view."].firstMatch
         let firstHeroY = description.frame.minY
         XCUIRemote.shared.press(.down)
         for _ in 0..<3 { XCUIRemote.shared.press(.right) }
+        waitForStableCard(in: app)
         let second = focusedCard(in: app)
         let secondLabel = second.label
         let secondFrame = second.frame
         let secondHeading = app.staticTexts["Recently Added"].frame
         let secondHeroY = description.frame.minY
         XCTAssertNotEqual(firstLabel, secondLabel)
+        // Ordinary Home rows use native column-aligned entry. Establish the
+        // reciprocal pair after moving horizontally on the lower row.
+        XCUIRemote.shared.press(.up)
+        waitForStableCard(in: app)
+        firstLabel = focusedCard(in: app).label
+        firstFrame = focusedCard(in: app).frame
+        XCUIRemote.shared.press(.down)
+        waitForCard(in: app, label: secondLabel, frame: secondFrame)
         for _ in 0..<3 {
             XCUIRemote.shared.press(.down)
             XCTAssertEqual(focusedCard(in: app).label, secondLabel, "The last row must retain focus without drift.")
@@ -91,12 +287,14 @@ final class ShowcaseNavigationTests: XCTestCase {
             XCUIRemote.shared.press(.up)
             XCUIRemote.shared.press(.down)
         }
+        waitForCard(in: app, label: secondLabel, frame: secondFrame)
         XCTAssertEqual(focusedCard(in: app).label, secondLabel)
         XCTAssertEqual(focusedCard(in: app).frame.minX, secondFrame.minX, accuracy: 0.5)
         XCTAssertEqual(focusedCard(in: app).frame.minY, secondFrame.minY, accuracy: 0.5)
         XCTAssertEqual(app.staticTexts["Recently Added"].frame.minY, secondHeading.minY, accuracy: 0.5)
         XCTAssertEqual(description.frame.minY, secondHeroY, accuracy: 0.5)
         XCUIRemote.shared.press(.up)
+        waitForCard(in: app, label: firstLabel, frame: firstFrame)
         XCTAssertEqual(focusedCard(in: app).label, firstLabel)
         XCTAssertEqual(focusedCard(in: app).frame.minX, firstFrame.minX, accuracy: 0.5)
         XCTAssertEqual(focusedCard(in: app).frame.minY, firstFrame.minY, accuracy: 0.5)
@@ -326,7 +524,6 @@ final class ShowcaseNavigationTests: XCTestCase {
         }
         let ready = NSPredicate { [self] _, _ in focusedCard(in: app).elementType == .button }
         let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: ready, object: nil)], timeout: 5)
-        XCTAssertEqual(result, .completed, "The workload requires actual media focus.")
         if result != .completed {
             let tree = XCTAttachment(string: app.debugDescription)
             tree.name = "showcase-focus-tree"
@@ -336,11 +533,49 @@ final class ShowcaseNavigationTests: XCTestCase {
             image.name = "showcase-focus-failure"
             image.lifetime = .keepAlways
             add(image)
+            XCTAssertEqual(result, .completed, "The workload requires actual media focus.")
             throw NSError(domain: "ShowcaseNavigationTests", code: 1)
         }
     }
 
+    private func waitForStableCard(in app: XCUIApplication) {
+        var previousLabel = ""
+        var previousFrame = CGRect.zero
+        var unchangedSince = Date()
+        let settled = NSPredicate { [self] _, _ in
+            let card = focusedCard(in: app)
+            let frame = card.frame
+            guard card.elementType == .button, card.label == previousLabel,
+                  abs(frame.minX - previousFrame.minX) < 0.5,
+                  abs(frame.minY - previousFrame.minY) < 0.5 else {
+                previousLabel = card.label
+                previousFrame = frame
+                unchangedSince = Date()
+                return false
+            }
+            return Date().timeIntervalSince(unchangedSince) >= 0.2
+        }
+        XCTAssertEqual(XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: settled, object: nil)], timeout: 5
+        ), .completed, "Capture anchor geometry only after native focus scrolling settles.")
+    }
+
+    private func waitForCard(in app: XCUIApplication, label: String, frame: CGRect) {
+        let settled = NSPredicate { [self] _, _ in
+            let card = focusedCard(in: app)
+            return card.label == label && abs(card.frame.minX - frame.minX) < 0.5
+                && abs(card.frame.minY - frame.minY) < 0.5
+        }
+        XCTAssertEqual(XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: settled, object: nil)], timeout: 3
+        ), .completed, "Native scrolling must settle at the same focused-card anchor.")
+    }
+
     private func focusedCard(in app: XCUIApplication) -> XCUIElement {
+        let native = app.buttons.matching(
+            NSPredicate(format: "hasFocus == true AND label MATCHES %@", "Fixture movie [0-9]+")
+        ).firstMatch
+        if native.exists { return native }
         return app.buttons.allElementsBoundByIndex
             .filter {
                 $0.label.contains("Fixture movie") && $0.frame.width > 100 && $0.frame.height > 100

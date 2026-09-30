@@ -56,6 +56,31 @@ fallback when the user's server has no attached trailer.
   grids, and covered detail pages cannot retain background audio. A cancelled
   or no-longer-frontmost detail resolver cannot start a trailer after departure.
 
+## Home loading
+
+Home uses a shared queue of at most five row/inventory operations, rather than waiting
+for every account and feed before publishing anything. Each global row arrives
+once its own sources are complete, preserving cross-server deduplication and
+ordering. A slow Continue Watching feed therefore retains its own skeleton
+without holding up Watchlist, Recently Added, or per-library rows.
+
+Enabled library rows start as soon as their inventory is known. Recently Added
+and recommendation requests complete independently, in stable library/row slots.
+Both shells use the same loading/error state; failed rows can be retried without
+removing successful rows. Cancellation stops queued requests. Parent-series
+identity lookups are coalesced per account and load, and incomplete Home content
+does not overwrite the durable snapshot.
+
+Showcase keeps its first-row anchor while that row loads; a lower row finishing
+does not choose focus or scroll the page. Its leading loading card has a visible
+progress indicator and can hold focus without making the other skeletons
+interactive. After the viewer navigates, it keeps
+the focused card when an earlier row finishes. Carousel rows share a native focus
+section so Down can cross a loading row to reach usable content. Placeholder and
+resolved heroes use the
+same row-recede geometry. The `PLZBOOT` row-ready events distinguish first usable
+data from completion of the entire Home load.
+
 ## Showcase
 
 `FocusHeroHomeView` keeps focus-driven movement and hero updates outside the

@@ -16,6 +16,7 @@ struct FocusHeroRow: Identifiable {
     let leadItem: MediaItem?
     /// The row's titles, so their details can load before focus reaches them.
     var items: [MediaItem] = []
+    var isPlaceholder: Bool = false
     /// The wide picture a card in this row leads with, for rows whose cards show
     /// wide art. The hero steers its backdrop off it. `nil` for poster rows.
     var cardArtwork: ((MediaItem) -> [ArtworkReference])? = nil
@@ -578,6 +579,7 @@ private struct FocusHeroScrollingRows<RowContent: View>: View {
         .scrollIndicators(.hidden)
         .scrollClipDisabled()
         .accessibilityIdentifier("showcase-rows")
+        .accessibilityLabel(rows.allSatisfy(\.isPlaceholder) ? Text("Loading") : Text(verbatim: ""))
     }
 }
 

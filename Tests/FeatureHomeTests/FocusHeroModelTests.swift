@@ -29,6 +29,39 @@ final class FocusHeroModelTests: XCTestCase {
         XCTAssertEqual(model.subject?.item?.id, "tbate", "Nothing focused yet, so the hero follows the new first row")
     }
 
+    func testEarlierLoadingRowKeepsTheInitialAnchorUntilTheViewerNavigates() {
+        let model = FocusHeroModel()
+        var resume = row("continue", [])
+        resume.isPlaceholder = true
+        var watchlist = row("watchlist", [])
+        watchlist.isPlaceholder = true
+        let latest = row("latest", ["first", "second"])
+        let loading = [resume, watchlist, latest]
+        model.seed(from: loading)
+        XCTAssertEqual(model.resolvedActiveRowID(in: loading), resume.id)
+        XCTAssertNil(model.subject, "A ready lower row must not choose the starting title or scroll position.")
+
+        let resumeReady = [row("continue", ["resume"]), watchlist, latest]
+        model.seed(from: resumeReady)
+        XCTAssertEqual(model.resolvedActiveRowID(in: resumeReady), resume.id)
+        XCTAssertEqual(model.subject?.item?.id, "resume")
+    }
+
+    func testManualNavigationToReadyRowSurvivesAnEarlierRowFinishing() {
+        let model = FocusHeroModel()
+        var resume = row("continue", [])
+        resume.isPlaceholder = true
+        let latest = row("latest", ["first", "second"])
+        let loading = [resume, latest]
+        model.seed(from: loading)
+        model.activate(latest, in: loading)
+        model.show(.item(item("second")), in: latest)
+        let settled = [row("continue", ["resume"]), latest]
+        model.seed(from: settled)
+        XCTAssertEqual(model.resolvedActiveRowID(in: settled), latest.id)
+        XCTAssertEqual(model.subject?.item?.id, "second")
+    }
+
     func testAFocusedRowKeepsThePinWhenARowArrivesAboveIt() {
         let model = FocusHeroModel()
         let watchlist = row("watchlist", ["terror", "dune"])

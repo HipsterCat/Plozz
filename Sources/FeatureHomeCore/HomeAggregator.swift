@@ -6,11 +6,9 @@ import CoreNetworking
 /// unified Home/Settings content, tagging each item/library with its owning
 /// account so callers can route a selection back to the right provider.
 ///
-/// All fan-out is concurrent (`TaskGroup`/`async let`) and **resilient**: each
-/// provider call is isolated, so one server being slow never blocks the others
-/// and one server failing (or being down) simply contributes nothing rather than
-/// failing the whole screen. It uses only the existing indexed/limited provider
-/// queries — never a full-library walk.
+/// Requests share a bounded queue and publish completed rows independently.
+/// Each merged row retains deterministic cross-server ordering; unrelated rows
+/// never wait for its slowest source. Queries remain indexed and limited.
 public struct HomeAggregator: Sendable {
     public init() {}
 
@@ -38,6 +36,12 @@ public struct HomeAggregator: Sendable {
         }
     }
 
+    public struct Progress: Equatable, Sendable {
+        public var content: UnmergedContent
+        public var loadingRows: Set<HomeRowKind>
+        public var failures: [HomeRowKind: AppError]
+    }
+
     /// Loads and merges Continue Watching, Recently Added, and Libraries across
     /// `accounts`. Per-account results keep their server order; Recently Added and
     /// Watchlist rows from different servers are round-robin interleaved so every
@@ -53,78 +57,21 @@ public struct HomeAggregator: Sendable {
         visibility: HomeLibraryVisibility = .default,
         forceLibraryScoping: Bool = false,
         identitySources: @Sendable (MediaItem) -> [MediaSourceRef] = { _ in [] },
-        onContinueWatching: @escaping @Sendable (String, [MediaItem]) async -> Void = { _, _ in }
+        onContinueWatching: @escaping @Sendable (String, [MediaItem]) async -> Void = { _, _ in },
+        onProgress: @escaping @Sendable (Progress) async -> Void = { _ in }
     ) async -> Content {
-        let continueWatchingLimit = continueWatchingLimit ?? policy.rowLimit
-        let clock = ContinuousClock()
-        let started = clock.now
-        let perAccount = await Self.loadPerAccount(accounts) { resolved in
-            let accountStarted = clock.now
-            let result = await Self.load(
-                from: resolved,
-                continueWatchingLimit: continueWatchingLimit,
-                latestLimit: latestLimit,
-                visibility: visibility,
-                forceLibraryScoping: forceLibraryScoping,
-                onContinueWatching: { accountID, items in
-                    guard !Task.isCancelled else { return }
-                    await onContinueWatching(accountID, policy.curated(items))
-                }
-            )
-            PlozzLog.boot("HomeAgg.account id=\(resolved.account.id) provider=\(resolved.account.server.provider) ms=\(Self.elapsedMS(from: accountStarted, to: clock.now)) cw=\(result.continueWatching.count) latest=\(result.latest.count) wl=\(result.watchlist.count) libs=\(result.libraries.count)")
-            return result
-        }
-        PlozzLog.boot("HomeAgg.fanout accounts=\(accounts.count) ms=\(Self.elapsedMS(from: started, to: clock.now))")
-
-        // Collapse the same title living on several servers into one card on the
-        // aggregated rows, sharing the exact identity/merge core Search uses. Each
-        // merged card keeps every server's own item id / versions / watch-state
-        // (in `sources`) and surfaces a unified, most-recent-wins watch-state, so
-        // progress made on any server shows here regardless of which one backs the
-        // card.
-        let serverInfo = accounts.sourceServerInfo()
-        let resolve: (String) -> SourceServerInfo? = { serverInfo[$0] }
-
-        // Home keeps the entire provider feed. Apply restrictions only when a
-        // caller explicitly opts in; recency sorting below never removes titles.
-        let curatedContinueWatching = perAccount.map { policy.curated($0.continueWatching) }
-        Self.logContinueWatchingCuration(perAccount.map(\.continueWatching), curated: curatedContinueWatching)
-        Self.logContinueWatchingMergeInputs(curatedContinueWatching)
-
+        let result = await Self.loadContent(
+            from: accounts, policy: policy,
+            continueWatchingLimit: continueWatchingLimit ?? policy.rowLimit,
+            latestLimit: latestLimit, watchlistLimit: watchlistLimit,
+            perLibraryLimit: nil, visibility: visibility,
+            forceLibraryScoping: forceLibraryScoping,
+            identitySources: identitySources,
+            onContinueWatching: onContinueWatching, onProgress: onProgress
+        )
         return Content(
-            continueWatching: Self.mergedRow(
-                from: curatedContinueWatching,
-                limit: continueWatchingLimit,
-                serverInfo: resolve,
-                identitySources: identitySources,
-                sortByRecency: true
-            ),
-            latest: Self.mergedRow(
-                from: perAccount.map(\.latest),
-                limit: latestLimit,
-                serverInfo: resolve,
-                identitySources: identitySources
-            ),
-            watchlist: Self.mergedRow(
-                from: perAccount.map(\.watchlist),
-                limit: watchlistLimit,
-                serverInfo: resolve,
-                identitySources: identitySources
-            ),
-            // Library TILES are NEVER merged across accounts/servers: every
-            // enabled library keeps its own tile (keyed `accountID:library.id`)
-            // showing exactly that server's content, so same-named libraries on
-            // different servers/users don't fold into one and vanish. Cross-server
-            // CONTENT merging is preserved on the rows above (`mergedRow`) and in
-            // the detail server picker. Order is first account first, then each
-            // account's own library order — matching the Settings checklist
-            // (`libraries(from:)`).
-            //
-            // **Music libraries are excluded from Home entirely** — they have their
-            // own dedicated Music tab, so they never appear as a Home tile (merged)
-            // or a per-library section (unmerged). They remain in `libraries(from:)`
-            // for the Settings list so the user can still enable/disable them.
-            libraries: perAccount.flatMap(\.libraries).filter { !$0.library.isMusic }
+            continueWatching: result.continueWatching, latest: result.latest,
+            watchlist: result.watchlist, libraries: result.libraries
         )
     }
 
@@ -235,9 +182,8 @@ public struct HomeAggregator: Sendable {
         }
     }
 
-    /// Builds the unmerged Home content. Reuses ``content(from:)`` for the global
-    /// rows + full library inventory, then fans out (bounded) over the
-    /// visible-on-home libraries to assemble each one's **opted-in** rows:
+    /// Builds unmerged Home with the same global rows. Opted-in library requests
+    /// enter the bounded queue as soon as their library inventory arrives:
     ///  - **Recently Added** — the library's newest items (`items(in:)` sorted by
     ///    date added), uniform across providers — when the user enabled it.
     ///  - **Recommended rows** — the provider's native discovery hubs
@@ -258,124 +204,17 @@ public struct HomeAggregator: Sendable {
         perLibraryLimit: Int = 20,
         visibility: HomeLibraryVisibility = .default,
         identitySources: @Sendable (MediaItem) -> [MediaSourceRef] = { _ in [] },
-        onContinueWatching: @escaping @Sendable (String, [MediaItem]) async -> Void = { _, _ in }
+        onContinueWatching: @escaping @Sendable (String, [MediaItem]) async -> Void = { _, _ in },
+        onProgress: @escaping @Sendable (Progress) async -> Void = { _ in }
     ) async -> UnmergedContent {
-        // Global rows + full (tagged) library inventory come from the merged path,
-        // so Continue Watching / Watchlist stay identical to merged mode — including
-        // the policy's curation and limit, which are applied there.
-        let merged = await content(
-            from: accounts,
-            policy: policy,
-            continueWatchingLimit: continueWatchingLimit,
-            latestLimit: latestLimit,
-            watchlistLimit: watchlistLimit,
-            visibility: visibility,
+        await Self.loadContent(
+            from: accounts, policy: policy,
+            continueWatchingLimit: continueWatchingLimit ?? policy.rowLimit,
+            latestLimit: latestLimit, watchlistLimit: watchlistLimit,
+            perLibraryLimit: perLibraryLimit, visibility: visibility,
             identitySources: identitySources,
-            onContinueWatching: onContinueWatching
+            onContinueWatching: onContinueWatching, onProgress: onProgress
         )
-
-        // Libraries that are visible on Home AND have at least one opted-in row.
-        let candidates = merged.libraries.filter { lib in
-            visibility.isVisibleOnHome(lib.key)
-                && LibraryHomeRowKind.allCases.contains { visibility.isLibraryRowEnabled(lib.key, kind: $0) }
-        }
-        guard !candidates.isEmpty else {
-            return UnmergedContent(
-                continueWatching: merged.continueWatching,
-                latest: merged.latest,
-                watchlist: merged.watchlist,
-                libraries: merged.libraries,
-                librarySections: []
-            )
-        }
-
-        let providerByAccount = Dictionary(
-            accounts.map { ($0.account.id, $0.provider) },
-            uniquingKeysWith: { first, _ in first }
-        )
-
-        // Bounded per-library fan-out (reuses the account limiter's cap) so many
-        // libraries don't storm the network / decode pipeline at once. Order is
-        // preserved; a library whose fetches all fail contributes no block.
-        let groups = await Self.loadBounded(candidates) { aggregated -> HomeLibrarySectionGroup? in
-            guard let provider = providerByAccount[aggregated.accountID] else { return nil }
-            let sections = await Self.librarySections(
-                for: aggregated,
-                provider: provider,
-                perLibraryLimit: perLibraryLimit,
-                visibility: visibility
-            )
-            guard !sections.isEmpty else { return nil }
-            return HomeLibrarySectionGroup(library: aggregated, sections: sections)
-        }
-
-        return UnmergedContent(
-            continueWatching: merged.continueWatching,
-            latest: merged.latest,
-            watchlist: merged.watchlist,
-            libraries: merged.libraries,
-            librarySections: groups.compactMap { $0 }
-        )
-    }
-
-    /// Assembles one library's **opted-in** rows: Recently Added (`items(in:)`) and
-    /// the provider's discovery hubs — each only when the user enabled it, so only
-    /// enabled rows are fetched. Items are tagged with the owning account/library
-    /// so selection routes back to the right provider; empty rows are dropped.
-    private static func librarySections(
-        for aggregated: AggregatedLibrary,
-        provider: any MediaProvider,
-        perLibraryLimit: Int,
-        visibility: HomeLibraryVisibility
-    ) async -> [LibrarySection] {
-        let accountID = aggregated.accountID
-        let libraryID = aggregated.library.id
-        let libraryKey = aggregated.key
-        let kind = aggregated.library.kind
-
-        let wantsRecentlyAdded = visibility.isLibraryRowEnabled(libraryKey, kind: .recentlyAdded)
-        let wantsHubs = visibility.isLibraryRowEnabled(libraryKey, kind: .hubs)
-
-        // Recently Added: the library's newest items, uniform across providers.
-        async let recentTask = wantsRecentlyAdded ? (try? provider.items(
-            in: libraryID,
-            kind: kind,
-            page: PageRequest(
-                startIndex: 0,
-                limit: perLibraryLimit,
-                sort: SortDescriptor(field: .dateAdded, direction: .descending)
-            )
-        )) : nil
-        // Provider-native discovery hubs (Plex only; [] elsewhere).
-        async let hubsTask = wantsHubs ? (try? provider.libraryHubs(libraryID: libraryID, kind: kind, limit: perLibraryLimit)) : nil
-
-        let recent = ((await recentTask) ?? nil)?.items ?? []
-        let hubs = ((await hubsTask) ?? nil) ?? []
-
-        func tag(_ items: [MediaItem]) -> [MediaItem] {
-            items.map { $0.taggingSource(accountID).taggingLibrary(libraryID) }
-        }
-
-        var sections: [LibrarySection] = []
-        let recentTagged = tag(recent)
-        if !recentTagged.isEmpty {
-            sections.append(LibrarySection(
-                id: "recentlyAdded",
-                title: "Recently Added in \(aggregated.library.title)",
-                style: .poster,
-                items: recentTagged
-            ))
-        }
-        // Plex hubs already carry their own titles/ids; tag their items for routing.
-        for hub in hubs where !hub.items.isEmpty {
-            sections.append(LibrarySection(
-                id: hub.id,
-                title: hub.title,
-                style: hub.style,
-                items: tag(hub.items)
-            ))
-        }
-        return sections
     }
 
     // MARK: - Per-account loading
@@ -385,6 +224,8 @@ public struct HomeAggregator: Sendable {
         var latest: [MediaItem] = []
         var watchlist: [MediaItem] = []
         var libraries: [AggregatedLibrary] = []
+        var completed: Set<HomeRowKind> = []
+        var failures: [HomeRowKind: AppError] = [:]
     }
 
     /// Bounded account-level fan-out for Home aggregation so launch-time network
@@ -464,107 +305,371 @@ public struct HomeAggregator: Sendable {
         }
     }
 
-    private static func load(
-        from resolved: ResolvedAccount,
+    private enum Feed: CaseIterable, Sendable {
+        case continueWatching, latest, watchlist
+
+        var row: HomeRowKind {
+            switch self {
+            case .continueWatching: .continueWatching
+            case .latest: .recentlyAdded
+            case .watchlist: .watchlist
+            }
+        }
+    }
+
+    private enum Request: Sendable {
+        case libraries(Int)
+        case feed(Int, Feed, libraryIDs: [String]?)
+        case library(Int, AggregatedLibrary, LibraryHomeRowKind)
+    }
+
+    private enum Response: Sendable {
+        case libraries(Int, Result<[MediaLibrary], AppError>)
+        case feed(Int, Feed, Result<[MediaItem], AppError>)
+        case library(String, LibraryHomeRowKind, Result<[LibrarySection], AppError>)
+    }
+
+    private struct LibraryContent {
+        let library: AggregatedLibrary
+        var loadingRows: Set<LibraryHomeRowKind>
+        var sections: [LibraryHomeRowKind: [LibrarySection]] = [:]
+        var failures: [LibraryHomeRowKind: AppError] = [:]
+
+        var group: HomeLibrarySectionGroup {
+            HomeLibrarySectionGroup(
+                library: library,
+                sections: LibraryHomeRowKind.allCases.flatMap { sections[$0] ?? [] },
+                loadingRows: loadingRows,
+                failures: failures
+            )
+        }
+    }
+
+    private actor SeriesIdentities {
+        private var tasks: [String: Task<[String: [String: String]], Never>] = [:]
+
+        func resolve(_ items: [MediaItem], provider: any MediaProvider) async -> [String: [String: String]] {
+            let seriesIDs = Set(items.filter { $0.kind == .episode }.compactMap(\.seriesID))
+            let missing = seriesIDs.filter { tasks[$0] == nil }
+            if !missing.isEmpty, !Task.isCancelled {
+                let pendingItems = items.filter { $0.seriesID.map(missing.contains) ?? false }
+                let task = Task { await seriesProviderIDs(for: pendingItems, provider: provider) }
+                for id in missing { tasks[id] = task }
+            }
+            var result: [String: [String: String]] = [:]
+            for id in seriesIDs {
+                guard !Task.isCancelled else { return [:] }
+                if let ids = await tasks[id]?.value[id] { result[id] = ids }
+            }
+            return result
+        }
+
+        func cancel() {
+            for task in tasks.values { task.cancel() }
+        }
+    }
+
+    private static func loadContent(
+        from accounts: [ResolvedAccount],
+        policy: ContinueWatchingPolicy,
         continueWatchingLimit: Int,
         latestLimit: Int,
+        watchlistLimit: Int,
+        perLibraryLimit: Int?,
         visibility: HomeLibraryVisibility,
         forceLibraryScoping: Bool = false,
-        onContinueWatching: @Sendable (String, [MediaItem]) async -> Void
-    ) async -> AccountContent {
-        let accountID = resolved.account.id
-        let provider = resolved.provider
-        func publishResume(_ items: [MediaItem]) async {
-            guard !Task.isCancelled else { return }
-            let playable = items.filter {
-                $0.kind == .movie || $0.kind == .episode || $0.kind == .video
+        identitySources: @Sendable (MediaItem) -> [MediaSourceRef],
+        onContinueWatching: @escaping @Sendable (String, [MediaItem]) async -> Void,
+        onProgress: @escaping @Sendable (Progress) async -> Void
+    ) async -> UnmergedContent {
+        guard !accounts.isEmpty else { return UnmergedContent() }
+        let clock = ContinuousClock()
+        let started = clock.now
+        let serverInfo = accounts.sourceServerInfo()
+        let seriesIdentities = accounts.map { _ in SeriesIdentities() }
+        let scopedAccounts = Set(accounts.indices.filter { index in
+            forceLibraryScoping || visibility.disabledKeys.contains {
+                $0.hasPrefix("\(accounts[index].account.id):")
             }
-            await onContinueWatching(accountID, playable.map { $0.taggingSource(accountID) })
+        })
+
+        return await withTaskCancellationHandler {
+            await withTaskGroup(of: Response.self) { group in
+                var requests = accounts.indices.map(Request.libraries)
+                for index in accounts.indices {
+                    for feed in Feed.allCases where feed == .watchlist || !scopedAccounts.contains(index) {
+                        requests.append(.feed(index, feed, libraryIDs: nil))
+                    }
+                }
+                var nextRequest = 0
+                var running = 0
+                var perAccount = accounts.map { _ in AccountContent() }
+                var perLibrary: [String: LibraryContent] = [:]
+                var publishedRows: Set<HomeRowKind> = []
+                var content = UnmergedContent()
+                var failures: [HomeRowKind: AppError] = [:]
+
+                func enqueueAvailable() {
+                    while running < accountFanoutLimit, nextRequest < requests.count, !Task.isCancelled {
+                        let request = requests[nextRequest]
+                        nextRequest += 1
+                        running += 1
+                        group.addTask {
+                            await perform(
+                                request, accounts: accounts, policy: policy,
+                                continueWatchingLimit: continueWatchingLimit,
+                                latestLimit: latestLimit, perLibraryLimit: perLibraryLimit ?? 20,
+                                seriesIdentities: seriesIdentities,
+                                onContinueWatching: onContinueWatching
+                            )
+                        }
+                    }
+                }
+
+                enqueueAvailable()
+                while let response = await group.next() {
+                    running -= 1
+                    guard !Task.isCancelled else {
+                        group.cancelAll()
+                        break
+                    }
+                    switch response {
+                    case let .libraries(index, result):
+                        perAccount[index].completed.insert(.libraries)
+                        switch result {
+                        case let .success(libraries):
+                            let resolved = accounts[index]
+                            let tagged = libraries.map { aggregated($0, from: resolved) }
+                            perAccount[index].libraries = tagged
+                            let visible = tagged.filter {
+                                !$0.library.isMusic && visibility.isVisibleOnHome($0.key)
+                            }
+                            if scopedAccounts.contains(index) {
+                                for feed in [Feed.continueWatching, .latest] {
+                                    requests.append(.feed(index, feed, libraryIDs: visible.map(\.library.id)))
+                                }
+                            }
+                            if perLibraryLimit != nil {
+                                for library in visible where perLibrary[library.key] == nil {
+                                    let kinds = LibraryHomeRowKind.allCases.filter {
+                                        visibility.isLibraryRowEnabled(library.key, kind: $0)
+                                    }
+                                    guard !kinds.isEmpty else { continue }
+                                    perLibrary[library.key] = LibraryContent(
+                                        library: library, loadingRows: Set(kinds)
+                                    )
+                                    for kind in kinds {
+                                        requests.append(.library(index, library, kind))
+                                    }
+                                }
+                            }
+                        case let .failure(error):
+                            perAccount[index].failures[.libraries] = error
+                            if scopedAccounts.contains(index) {
+                                for kind in [HomeRowKind.continueWatching, .recentlyAdded] {
+                                    perAccount[index].completed.insert(kind)
+                                    perAccount[index].failures[kind] = error
+                                }
+                            }
+                        }
+                    case let .feed(index, feed, result):
+                        perAccount[index].completed.insert(feed.row)
+                        switch result {
+                        case let .success(items):
+                            switch feed {
+                            case .continueWatching: perAccount[index].continueWatching = items
+                            case .latest: perAccount[index].latest = items
+                            case .watchlist: perAccount[index].watchlist = items
+                            }
+                        case let .failure(error):
+                            perAccount[index].failures[feed.row] = error
+                        }
+                    case let .library(key, kind, result):
+                        perLibrary[key]?.loadingRows.remove(kind)
+                        switch result {
+                        case let .success(sections): perLibrary[key]?.sections[kind] = sections
+                        case let .failure(error): perLibrary[key]?.failures[kind] = error
+                        }
+                        PlozzLog.boot(
+                            "HomeAgg.libraryRow kind=\(kind.rawValue) ms=\(elapsedMS(from: started, to: clock.now))")
+                    }
+                    // Refill before publication so drawing a completed row never stalls
+                    // the request queue for the remaining libraries.
+                    enqueueAvailable()
+
+                    let librariesComplete = perAccount.allSatisfy { $0.completed.contains(.libraries) }
+                    content.libraries = perAccount.flatMap(\.libraries).filter { !$0.library.isMusic }
+                    for row in HomeRowKind.allCases where !publishedRows.contains(row) {
+                        guard perAccount.allSatisfy({ $0.completed.contains(row) }),
+                            row == .watchlist || librariesComplete
+                        else { continue }
+                        publishedRows.insert(row)
+                        failures[row] = perAccount.compactMap { $0.failures[row] }.first
+                        let groups = perAccount.map { account -> [MediaItem] in
+                            let music = Set(account.libraries.filter(\.library.isMusic).map(\.library.id))
+                            switch row {
+                            case .continueWatching:
+                                return policy.curated(
+                                    account.continueWatching.filter {
+                                        $0.libraryID.map { !music.contains($0) } ?? true
+                                    })
+                            case .recentlyAdded:
+                                return account.latest.filter { $0.libraryID.map { !music.contains($0) } ?? true }
+                            case .watchlist: return account.watchlist
+                            case .libraries: return []
+                            }
+                        }
+                        switch row {
+                        case .continueWatching:
+                            logContinueWatchingCuration(perAccount.map(\.continueWatching), curated: groups)
+                            logContinueWatchingMergeInputs(groups)
+                            content.continueWatching = mergedRow(
+                                from: groups, limit: continueWatchingLimit,
+                                serverInfo: { serverInfo[$0] }, identitySources: identitySources,
+                                sortByRecency: true
+                            )
+                        case .recentlyAdded:
+                            content.latest = mergedRow(
+                                from: groups, limit: latestLimit,
+                                serverInfo: { serverInfo[$0] }, identitySources: identitySources
+                            )
+                        case .watchlist:
+                            content.watchlist = mergedRow(
+                                from: groups, limit: watchlistLimit,
+                                serverInfo: { serverInfo[$0] }, identitySources: identitySources
+                            )
+                        case .libraries: break
+                        }
+                        PlozzLog.boot(
+                            "HomeAgg.rowReady row=\(row.rawValue) ms=\(elapsedMS(from: started, to: clock.now))")
+                    }
+                    content.librarySections = content.libraries.compactMap {
+                        guard let group = perLibrary[$0.key]?.group, !group.isEmpty else { return nil }
+                        return group
+                    }
+                    guard !Task.isCancelled else {
+                        group.cancelAll()
+                        break
+                    }
+                    await onProgress(
+                        Progress(
+                            content: content,
+                            loadingRows: Set(HomeRowKind.allCases).subtracting(publishedRows),
+                            failures: failures
+                        ))
+                }
+                PlozzLog.boot("HomeAgg.fanout accounts=\(accounts.count) ms=\(elapsedMS(from: started, to: clock.now))")
+                return content
+            }
+        } onCancel: {
+            Task {
+                for identities in seriesIdentities { await identities.cancel() }
+            }
         }
+    }
 
-        // Take the library-scoped fetch path when either:
-        //  - the account has a library that is disabled (not on Home) — scoping
-        //    excludes it at the source and stamps `libraryID` so an unscoped
-        //    Jellyfin feed can't leak it via the fail-open filter; or
-        //  - `forceLibraryScoping` is set (unmerged Home), so EVERY provider's feed
-        //    is library-attributed even when nothing is hidden — otherwise Jellyfin
-        //    Continue Watching items (no `libraryID` on the unscoped feed) couldn't
-        //    be sliced into their per-library rows.
-        // When nothing is disabled and scoping isn't forced we keep the original
-        // single-shot, fully-concurrent fetch (zero behaviour/performance change).
-        let accountHasHidden = visibility.disabledKeys
-            .contains { $0.hasPrefix("\(accountID):") }
-        let scopeToVisibleLibraries = forceLibraryScoping || accountHasHidden
-
-        // Libraries and watchlist load independently of the row strategy.
-        async let libs = try? provider.libraries()
-        async let saved = Self.watchlist(from: provider)
-
-        let cw: [MediaItem]
-        let lt: [MediaItem]
-        let rawLibs: [MediaLibrary]
-
-        if scopeToVisibleLibraries {
-            // Resolve the library list first so the row fetches can be scoped to
-            // the *visible* libraries. For providers that can only learn an item's
-            // owning library by scoping the fetch (Jellyfin — an episode's
-            // ParentId is its season, not its library), this both excludes hidden
-            // content at the source and stamps each item's `libraryID`. Providers
-            // that tag items by other means (Plex) inherit the unscoped default
-            // and rely on the row-level filter.
-            rawLibs = (await libs) ?? []
-            let visibleLibraryIDs = rawLibs
-                .filter { !$0.isMusic && visibility.isVisibleOnHome("\(accountID):\($0.id)") }
-                .map(\.id)
-            async let resume = try? provider.continueWatching(limit: continueWatchingLimit, inLibraries: visibleLibraryIDs)
-            async let recent = try? provider.latest(limit: latestLimit, inLibraries: visibleLibraryIDs)
-            cw = (await resume) ?? []
-            await publishResume(cw)
-            lt = (await recent) ?? []
-        } else {
-            async let resume = try? provider.continueWatching(limit: continueWatchingLimit)
-            async let recent = try? provider.latest(limit: latestLimit)
-            cw = (await resume) ?? []
-            await publishResume(cw)
-            lt = (await recent) ?? []
-            rawLibs = (await libs) ?? []
+    private static func perform(
+        _ request: Request,
+        accounts: [ResolvedAccount],
+        policy: ContinueWatchingPolicy,
+        continueWatchingLimit: Int,
+        latestLimit: Int,
+        perLibraryLimit: Int,
+        seriesIdentities: [SeriesIdentities],
+        onContinueWatching: @escaping @Sendable (String, [MediaItem]) async -> Void
+    ) async -> Response {
+        switch request {
+        case let .libraries(index):
+            let resolved = accounts[index]
+            return .libraries(index, await fetch("libraries", from: resolved) {
+                try await resolved.provider.libraries()
+            })
+        case let .feed(index, feed, libraryIDs):
+            let resolved = accounts[index]
+            let provider = resolved.provider
+            return .feed(index, feed, await fetch(feed.row.rawValue, from: resolved) {
+                let items: [MediaItem]
+                switch feed {
+                case .continueWatching:
+                    items = try await provider.continueWatching(
+                        limit: continueWatchingLimit, inLibraries: libraryIDs
+                    )
+                    try Task.checkCancellation()
+                    let playable = items.filter {
+                        $0.kind == .movie || $0.kind == .episode || $0.kind == .video
+                    }
+                    await onContinueWatching(
+                        resolved.account.id,
+                        policy.curated(playable.map { $0.taggingSource(resolved.account.id) })
+                    )
+                case .latest:
+                    items = try await provider.latest(limit: latestLimit, inLibraries: libraryIDs)
+                case .watchlist:
+                    items = try await (provider as? any WatchlistProviding)?.watchlist() ?? []
+                }
+                try Task.checkCancellation()
+                let identities = feed == .watchlist
+                    ? [:]
+                    : await seriesIdentities[index].resolve(items, provider: provider)
+                return stampSeriesProviderIDs(identities, onto: items).map {
+                    $0.taggingSource(resolved.account.id)
+                }
+            })
+        case let .library(index, library, kind):
+            let resolved = accounts[index]
+            return .library(library.key, kind, await fetch(kind.rawValue, from: resolved) {
+                let sections: [LibrarySection]
+                switch kind {
+                case .recentlyAdded:
+                    let page = try await resolved.provider.items(
+                        in: library.library.id, kind: library.library.kind,
+                        page: PageRequest(
+                            startIndex: 0, limit: perLibraryLimit,
+                            sort: SortDescriptor(field: .dateAdded, direction: .descending)
+                        )
+                    )
+                    sections = page.items.isEmpty ? [] : [LibrarySection(
+                        id: "recentlyAdded", title: "Recently Added in \(library.library.title)",
+                        style: .poster, items: page.items
+                    )]
+                case .hubs:
+                    sections = try await resolved.provider.libraryHubs(
+                        libraryID: library.library.id, kind: library.library.kind, limit: perLibraryLimit
+                    )
+                }
+                return sections.filter { !$0.items.isEmpty }.map { section in
+                    var section = section
+                    section.items = section.items.map {
+                        $0.taggingSource(library.accountID).taggingLibrary(library.library.id)
+                    }
+                    return section
+                }
+            })
         }
+    }
 
-        let wl = await saved
-
-        // Keep **music** out of the video Home rows. Music has its own tab, so a
-        // music album that a provider surfaces in Recently Added / on-deck must not
-        // land in Continue Watching or Recently Added. `rawLibs` is already resolved
-        // here, so this is a free in-memory filter (no extra request). Items tagged
-        // with a music `libraryID` (Plex always tags; Jellyfin tags on the scoped
-        // path) are dropped; untagged items stay (fail-open) — the Jellyfin scoped
-        // path above additionally excludes music at the source.
-        let musicLibraryIDs = Set(rawLibs.filter(\.isMusic).map(\.id))
-        let cwFiltered = musicLibraryIDs.isEmpty ? cw : cw.filter { $0.libraryID.map { !musicLibraryIDs.contains($0) } ?? true }
-        let ltFiltered = musicLibraryIDs.isEmpty ? lt : lt.filter { $0.libraryID.map { !musicLibraryIDs.contains($0) } ?? true }
-        let seriesIDsByItemID = await seriesProviderIDs(
-            for: cwFiltered + ltFiltered,
-            provider: provider
-        )
-        let resolvedContinueWatching = stampSeriesProviderIDs(
-            seriesIDsByItemID,
-            onto: cwFiltered
-        )
-        let resolvedLatest = stampSeriesProviderIDs(
-            seriesIDsByItemID,
-            onto: ltFiltered
-        )
-
-        if resolvedContinueWatching.isEmpty && resolvedLatest.isEmpty && rawLibs.isEmpty {
-            PlozzLog.app.error("Aggregation: no content from account \(accountID)")
+    private static func fetch<Value: Sendable>(
+        _ row: String,
+        from resolved: ResolvedAccount,
+        operation: @Sendable () async throws -> Value
+    ) async -> Result<Value, AppError> {
+        let clock = ContinuousClock()
+        let started = clock.now
+        defer {
+            PlozzLog.boot("HomeAgg.request row=\(row) provider=\(resolved.provider.kind) ms=\(elapsedMS(from: started, to: clock.now))")
         }
-
-        return AccountContent(
-            continueWatching: resolvedContinueWatching.map { $0.taggingSource(accountID) },
-            latest: resolvedLatest.map { $0.taggingSource(accountID) },
-            watchlist: wl.map { $0.taggingSource(accountID) },
-            libraries: rawLibs.map { aggregated($0, from: resolved) }
-        )
+        do {
+            try Task.checkCancellation()
+            return .success(try await operation())
+        } catch is CancellationError {
+            return .failure(.cancelled)
+        } catch {
+            let failure = (error as? AppError) ?? .unknown("")
+            if failure != .cancelled {
+                PlozzLog.app.error("Home row failed: row=\(row) provider=\(resolved.provider.kind)")
+            }
+            return .failure(failure)
+        }
     }
 
     /// Resolves each distinct parent series once so episode rows carry explicit
@@ -618,13 +723,6 @@ public struct HomeAggregator: Sendable {
             copy.providerIDs.mergeSeriesProviderIDs(from: sourceIDs)
             return copy
         }
-    }
-
-    /// Best-effort watchlist fetch for one provider: `[]` when the provider can't
-    /// express a watchlist or the request fails, so the row degrades gracefully.
-    private static func watchlist(from provider: any MediaProvider) async -> [MediaItem] {
-        guard let watchlistProvider = provider as? WatchlistProviding else { return [] }
-        return (try? await watchlistProvider.watchlist()) ?? []
     }
 
     private static func aggregated(_ library: MediaLibrary, from resolved: ResolvedAccount) -> AggregatedLibrary {
