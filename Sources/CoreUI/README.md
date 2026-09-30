@@ -21,6 +21,11 @@ cache that every feature module reuses. tvOS-only — guarded behind
   Settings card.
 - **Cast & metadata cards** — `CastRowView` and friends, used by Home /
   detail.
+- **Continue Watching logo contrast** — logo-overlay cards use a 40% base
+  artwork dim, reduced for dark artwork and increased by up to 25 percentage
+  points when the logo blends into its background (65% maximum). The dim sits
+  behind the logo; existing color-preserving logo treatments and Home/detail
+  hero shading are unchanged.
 
 ## Invariants
 
