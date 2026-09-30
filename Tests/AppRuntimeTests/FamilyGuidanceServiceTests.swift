@@ -23,7 +23,7 @@ final class FamilyGuidanceServiceTests: XCTestCase {
             providerIDs: ["PlexGuid": "plex://movie/0123456789abcdef01234567"], sourceAccountID: "account"
         )
 
-        init(homeUser: Bool = false, suspended: Bool = false) throws {
+        init(homeUser: Bool = false, suspended: Bool = false, statuses: [Int] = [200]) throws {
             suite = "FamilyGuidanceTests.\(UUID())"
             defaults = UserDefaults(suiteName: suite)!
             let store = ProfileStore(defaults: defaults)
@@ -40,7 +40,7 @@ final class FamilyGuidanceServiceTests: XCTestCase {
                 userID: "viewer", userName: "Viewer", deviceID: "fixture"
             ), token: homeUser ? "CHILD-SERVER" : "OWNER-TOKEN")
             accountStore.setActiveAccountIDs(["account"])
-            let client = GuidanceHTTP(suspended: suspended)
+            let client = GuidanceHTTP(suspended: suspended, statuses: statuses)
             http = client
             let registry = ProviderRegistry()
             registry.register(.plex) { context in
@@ -53,9 +53,22 @@ final class FamilyGuidanceServiceTests: XCTestCase {
             home = PlexHomeUsersModel(
                 accountsProviders: accounts, profilesModel: profiles,
                 plexHomeUserTokenCache: PlexHomeUserTokenCache(store: InMemorySecureStore()),
+                automaticSignInStore: AutomaticSignInStore(defaults: defaults, secureStore: InMemorySecureStore()),
                 switchProfile: { _ in }
             )
+            home.plexHomeUserSwitch = { _, _, _, _ in throw AppError.unauthorized }
+            home.plexServerTokenResolve = { _, _, _ in nil }
+            accounts.tokenResolver = { [weak home] in home?.resolvedToken(for: $0) }
+            accounts.credentialRevision = { [weak home] in home?.effectiveCredentialRevision(for: $0) ?? $0.credentialRevision }
             service = FamilyGuidanceService(accounts: accounts, profiles: profiles, plexHome: home)
+        }
+
+        func prepareMissingHomeCloudCredential() async throws {
+            home.plexHomeUserSwitch = { _, _, _, _ in "INITIAL-CHILD-CLOUD" }
+            home.plexServerTokenResolve = { _, _, _ in "CHILD-SERVER" }
+            _ = try await home.resolveDiscoverToken(for: "account")
+            home.plexDiscoverTokens.setToken(nil, for: "account")
+            home.plexServerTokenResolve = { _, _, _ in nil }
         }
 
         func close() { defaults.removePersistentDomain(forName: suite) }
@@ -89,6 +102,101 @@ final class FamilyGuidanceServiceTests: XCTestCase {
         _ = try await fixture.service.loadFamilyGuidance(for: fixture.item)
         let tokens = await fixture.http.tokens
         XCTAssertEqual(tokens, ["CHILD-CLOUD"])
+        let hosts = await fixture.http.hosts
+        XCTAssertEqual(hosts, ["metadata.provider.plex.tv"])
+    }
+
+    func testMissingHomeCloudCredentialIsRecoveredBeforeGuidanceRequest() async throws {
+        let fixture = try Fixture(homeUser: true)
+        defer { fixture.close() }
+        try await fixture.prepareMissingHomeCloudCredential()
+        fixture.home.plexHomeUserSwitch = { user, pin, _, _ in
+            XCTAssertEqual(user, "child-user")
+            XCTAssertNil(pin)
+            return "RECOVERED-CHILD-CLOUD"
+        }
+        let context = fixture.service.contextID
+        let result = try await fixture.service.loadFamilyGuidance(for: fixture.item)
+        guard case .available = result else { return XCTFail("The recovered credential must load the review.") }
+        XCTAssertEqual(fixture.service.contextID, context, "Credential repair must not dismiss an unchanged user's sheet.")
+        XCTAssertEqual(fixture.home.resolvedToken(for: "account"), "CHILD-SERVER")
+        let tokens = await fixture.http.tokens
+        XCTAssertEqual(tokens, ["RECOVERED-CHILD-CLOUD"])
+    }
+
+    func testFirstGuidanceLoadRecoversWithoutRebuildingLibraryIdentity() async throws {
+        let fixture = try Fixture(homeUser: true)
+        defer { fixture.close() }
+        fixture.home.plexHomeUserSwitch = { _, _, _, _ in "RECOVERED-CHILD-CLOUD" }
+        fixture.home.plexServerTokenResolve = { _, _, _ in
+            XCTFail("Opening guidance must not refresh the library's server credential.")
+            return "ROTATED-SERVER-CREDENTIAL"
+        }
+        let context = fixture.service.contextID
+        let result = try await fixture.service.loadFamilyGuidance(for: fixture.item)
+        guard case .available = result else { return XCTFail("The first attempt must load the review.") }
+        XCTAssertEqual(fixture.service.contextID, context, "Changing this context dismisses the detail and guidance pages.")
+        XCTAssertEqual(fixture.home.resolvedToken(for: "account"), "CHILD-SERVER")
+        let tokens = await fixture.http.tokens
+        XCTAssertEqual(tokens, ["RECOVERED-CHILD-CLOUD"])
+    }
+
+    func testRetryAfterCloudRecoveryFailureUsesNewScopedCredential() async throws {
+        let fixture = try Fixture(homeUser: true)
+        defer { fixture.close() }
+        try await fixture.prepareMissingHomeCloudCredential()
+        fixture.home.plexHomeUserSwitch = { _, _, _, _ in throw AppError.unauthorized }
+        do {
+            _ = try await fixture.service.loadFamilyGuidance(for: fixture.item)
+            XCTFail("The failed switch must not send the server or owner credential to guidance.")
+        } catch let error as AppError {
+            XCTAssertEqual(error, .unauthorized)
+        }
+        let rejectedTokens = await fixture.http.tokens
+        XCTAssertTrue(rejectedTokens.isEmpty)
+        fixture.home.plexHomeUserSwitch = { _, _, _, _ in "RECOVERED-CHILD-CLOUD" }
+        let result = try await fixture.service.loadFamilyGuidance(for: fixture.item)
+        guard case .available = result else { return XCTFail("Retry must try recovering the same Home user again.") }
+        let tokens = await fixture.http.tokens
+        XCTAssertEqual(tokens, ["RECOVERED-CHILD-CLOUD"])
+    }
+
+    func testSourceDisabledDuringCloudRecoveryDoesNotRequestGuidance() async throws {
+        let fixture = try Fixture(homeUser: true)
+        defer { fixture.close() }
+        try await fixture.prepareMissingHomeCloudCredential()
+        fixture.home.plexHomeUserSwitch = { _, _, _, _ in
+            await MainActor.run {
+                fixture.profiles.setActiveAccountIDs([], for: fixture.profiles.activeProfileID)
+                fixture.accounts.reloadAccounts()
+            }
+            return "RECOVERED-CHILD-CLOUD"
+        }
+        do {
+            _ = try await fixture.service.loadFamilyGuidance(for: fixture.item)
+            XCTFail("The disabled source must not make a guidance request.")
+        } catch is CancellationError {}
+        let tokens = await fixture.http.tokens
+        XCTAssertTrue(tokens.isEmpty)
+    }
+
+    func testRetryResolvesCurrentHomeCredentialWithoutOwnerFallback() async throws {
+        let fixture = try Fixture(homeUser: true, statuses: [401, 200])
+        defer { fixture.close() }
+        fixture.home.plexDiscoverTokens.setToken("OLD-CHILD-CLOUD", for: "account")
+        do {
+            _ = try await fixture.service.loadFamilyGuidance(for: fixture.item)
+            XCTFail("The rejected credential must be surfaced.")
+        } catch let error as AppError {
+            XCTAssertEqual(error, .unauthorized)
+        }
+        fixture.home.plexDiscoverTokens.setToken("NEW-CHILD-CLOUD", for: "account")
+        let result = try await fixture.service.loadFamilyGuidance(for: fixture.item)
+        guard case .available = result else { return XCTFail("Retry should use the now-current credential.") }
+        let tokens = await fixture.http.tokens
+        XCTAssertEqual(tokens, ["OLD-CHILD-CLOUD", "NEW-CHILD-CLOUD"])
+        let hosts = await fixture.http.hosts
+        XCTAssertEqual(hosts, ["metadata.provider.plex.tv", "metadata.provider.plex.tv"])
     }
 
     func testProfileSwitchDiscardsAnInFlightResponse() async throws {
@@ -138,8 +246,13 @@ private actor GuidanceHTTP: HTTPClient {
     private var continuation: CheckedContinuation<Void, Never>?
     private var startWaiters: [CheckedContinuation<Void, Never>] = []
     private(set) var tokens: [String] = []
+    private(set) var hosts: [String] = []
+    private let statuses: [Int]
 
-    init(suspended: Bool) { self.suspended = suspended }
+    init(suspended: Bool, statuses: [Int]) {
+        self.suspended = suspended
+        self.statuses = statuses
+    }
 
     func waitForRequest() async {
         if !tokens.isEmpty { return }
@@ -157,12 +270,14 @@ private actor GuidanceHTTP: HTTPClient {
 
     func sendRaw(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
         tokens.append(endpoint.headers["X-Plex-Token"] ?? "")
+        hosts.append(baseURL.host ?? "")
+        let status = statuses[min(tokens.count - 1, statuses.count - 1)]
         startWaiters.forEach { $0.resume() }
         startWaiters.removeAll()
         if suspended { await withCheckedContinuation { continuation = $0 } }
         return (
             Data(#"{"MediaContainer":{"CommonSenseMedia":[{"AgeRating":[{"type":"official","age":14,"rating":3}]}]}}"#.utf8),
-            HTTPURLResponse(url: baseURL, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            HTTPURLResponse(url: baseURL, statusCode: status, httpVersion: nil, headerFields: nil)!
         )
     }
 }

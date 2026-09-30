@@ -38,6 +38,7 @@ final class PlexHomeUsersModelTests: XCTestCase {
 
     private func makeModel(
         accountIDs: [String] = [],
+        cache: PlexHomeUserTokenCache = PlexHomeUserTokenCache(store: InMemorySecureStore()),
         switchProfile: @escaping @MainActor (String) -> Void = { _ in }
     ) throws -> (PlexHomeUsersModel, AccountsProvidersModel, ProfilesModel) {
         let store = AccountStore(secureStore: InMemorySecureStore())
@@ -54,6 +55,8 @@ final class PlexHomeUsersModelTests: XCTestCase {
         let model = PlexHomeUsersModel(
             accountsProviders: hub,
             profilesModel: profiles,
+            plexHomeUserTokenCache: cache,
+            automaticSignInStore: AutomaticSignInStore(defaults: makeDefaults(), secureStore: InMemorySecureStore()),
             switchProfile: switchProfile
         )
         return (model, hub, profiles)
@@ -178,6 +181,202 @@ final class PlexHomeUsersModelTests: XCTestCase {
 
         // Generation was stable through the refresh → the confirming write proceeded.
         XCTAssertEqual(model.resolvedToken(for: "a"), "tok-happy")
+    }
+
+    func testPartialWarmCacheRecoversCloudTokenWhenServerResolutionFails() async throws {
+        let cache = PlexHomeUserTokenCache(store: InMemorySecureStore())
+        cache.store(token: "CACHED-CHILD-SERVER", account: "a", homeUser: "child")
+        let (model, _, _) = try makeModel(accountIDs: ["a"], cache: cache)
+        model.plexHomeUserSwitch = { user, _, _, _ in
+            XCTAssertEqual(user, "child")
+            return "FRESH-CHILD-CLOUD"
+        }
+        model.plexServerTokenResolve = { _, _, _ in nil }
+        model.setPlexHomeUserForActiveProfile(
+            accountID: "a", user: PlexHomeUser(id: "child", name: "Child", requiresPIN: false)
+        )
+        let generation = model.plexIdentityGeneration
+        await drainMainActor()
+        XCTAssertEqual(model.resolvedToken(for: "a"), "CACHED-CHILD-SERVER")
+        XCTAssertEqual(model.discoverToken(for: "a"), "FRESH-CHILD-CLOUD",
+                       "A failed server-token lookup must not discard the successfully authenticated cloud credential.")
+        XCTAssertEqual(cache.discoverToken(account: "a", homeUser: "child"), "FRESH-CHILD-CLOUD")
+        XCTAssertEqual(model.plexIdentityGeneration, generation, "Repairing cloud access must not rebuild the browsing tree.")
+    }
+
+    func testAlreadyResolvedUnprotectedUserRepairsMissingCloudHalf() async throws {
+        let (model, _, _) = try makeModel(accountIDs: ["a"])
+        await installUnprotectedOverride(model, accountID: "a", userID: "child", token: "CHILD-SERVER")
+        model.plexDiscoverTokens.setToken(nil, for: "a")
+        model.plexHomeUserSwitch = { _, _, _, _ in "REFRESHED-CHILD-CLOUD" }
+        model.plexServerTokenResolve = { _, _, _ in nil }
+        model.ensurePlexIdentityForActiveProfile()
+        await drainMainActor()
+        XCTAssertEqual(model.resolvedToken(for: "a"), "CHILD-SERVER")
+        XCTAssertEqual(model.discoverToken(for: "a"), "REFRESHED-CHILD-CLOUD")
+    }
+
+    func testAwaitedCloudRecoveryPreservesServerIdentityAndPlozzLock() async throws {
+        let cache = PlexHomeUserTokenCache(store: InMemorySecureStore())
+        let (model, hub, profiles) = try makeModel(accountIDs: ["a"], cache: cache)
+        await installUnprotectedOverride(model, accountID: "a", userID: "child", token: "CHILD-SERVER")
+        var profile = profiles.activeProfile
+        profile.replaceLock(with: ProfileLock.make(pin: "1357", iterations: 1))
+        profiles.update(profile)
+        model.plexDiscoverTokens.setToken(nil, for: "a")
+        model.plexHomeUserSwitch = { user, pin, credential, _ in
+            XCTAssertEqual(user, "child")
+            XCTAssertNil(pin, "A Plozz profile PIN must not be sent to Plex.")
+            XCTAssertEqual(credential, "admin-a", "The stored credential authorizes only the scoped switch.")
+            return "RECOVERED-CHILD-CLOUD"
+        }
+        model.plexServerTokenResolve = { _, _, _ in
+            XCTFail("Cloud-only recovery must not rotate a working library credential.")
+            return "ROTATED-SERVER-CREDENTIAL"
+        }
+        let generation = model.plexIdentityGeneration
+        let revision = model.effectiveCredentialRevision(for: hub.accounts[0])
+        let token = try await model.resolveDiscoverToken(for: "a")
+        XCTAssertEqual(token, "RECOVERED-CHILD-CLOUD")
+        XCTAssertEqual(model.resolvedToken(for: "a"), "CHILD-SERVER")
+        XCTAssertEqual(model.plexIdentityGeneration, generation)
+        XCTAssertEqual(model.effectiveCredentialRevision(for: hub.accounts[0]), revision)
+        XCTAssertEqual(profiles.activeProfile.lock, profile.lock)
+        XCTAssertNil(model.pendingPlexPINRequest)
+        XCTAssertEqual(cache.discoverToken(account: "a", homeUser: "child"), token)
+    }
+
+    func testCloudRecoveryCannotSilentlyUnlockProtectedPlexUser() async throws {
+        let cache = PlexHomeUserTokenCache(store: InMemorySecureStore())
+        cache.store(token: "PROTECTED-SERVER", account: "a", homeUser: "parent")
+        cache.storeDiscoverToken("PROTECTED-CLOUD", account: "a", homeUser: "parent")
+        let (model, _, _) = try makeModel(accountIDs: ["a"], cache: cache)
+        model.plexHomeUserSwitch = { _, _, _, _ in
+            XCTFail("Cloud recovery must not switch a protected user without their PIN.")
+            return "UNAUTHORIZED-CLOUD"
+        }
+        model.setPlexHomeUserForActiveProfile(
+            accountID: "a", user: PlexHomeUser(id: "parent", name: "Parent", requiresPIN: true)
+        )
+        do {
+            _ = try await model.resolveDiscoverToken(for: "a")
+            XCTFail("Expected normal Plex PIN authorization.")
+        } catch let error as AppError {
+            XCTAssertEqual(error, .unauthorized)
+        }
+        XCTAssertEqual(model.pendingPlexPINRequest?.homeUserID, "parent")
+        XCTAssertNil(model.discoverToken(for: "a"))
+        XCTAssertNil(cache.discoverToken(account: "a", homeUser: "parent"))
+    }
+
+    func testCloudOnlyIdentityIsClearedWhenLeavingItsScope() async throws {
+        enum Departure: CaseIterable {
+            case owner, otherUser, protectedUser, activation, forgetAccount
+        }
+        for departure in Departure.allCases {
+            let cache = PlexHomeUserTokenCache(store: InMemorySecureStore())
+            let (model, _, profiles) = try makeModel(accountIDs: ["a"], cache: cache)
+            profiles.update(profiles.activeProfile.settingHomeUserBinding(
+                PlexHomeUserBinding(homeUserID: "child", name: "Child", requiresPIN: false),
+                forPlexAccount: "a"
+            ))
+            model.plexHomeUserSwitch = { _, _, _, _ in "CLOUD-ONLY-CHILD" }
+            model.plexServerTokenResolve = { _, _, _ in
+                XCTFail("Cloud recovery must not change the server credential.")
+                return nil
+            }
+            _ = try await model.resolveDiscoverToken(for: "a")
+            XCTAssertEqual(model.resolvedToken(for: "a"), "admin-a")
+            XCTAssertEqual(model.discoverToken(for: "a"), "CLOUD-ONLY-CHILD")
+            model.plexHomeUserSwitch = { _, _, _, _ in throw AppError.unauthorized }
+            switch departure {
+            case .owner:
+                model.setPlexHomeUserForActiveProfile(accountID: "a", user: nil)
+            case .otherUser, .protectedUser:
+                model.setPlexHomeUserForActiveProfile(
+                    accountID: "a",
+                    user: PlexHomeUser(id: "other", name: "Other", requiresPIN: departure == .protectedUser)
+                )
+            case .activation:
+                model.beginExplicitProfileActivation()
+            case .forgetAccount:
+                model.forgetAccount("a")
+                XCTAssertNil(cache.discoverToken(account: "a", homeUser: "child"))
+            }
+            await drainMainActor()
+            XCTAssertNil(model.discoverToken(for: "a"), "\(departure) must clear cloud-only identity too.")
+        }
+    }
+
+    func testCloudRecoveryDoesNotDismissAnotherAccountsPINPrompt() async throws {
+        let (model, _, profiles) = try makeModel(accountIDs: ["a", "b"])
+        model.setPlexHomeUserForActiveProfile(
+            accountID: "b", user: PlexHomeUser(id: "parent", name: "Parent", requiresPIN: true)
+        )
+        profiles.update(profiles.activeProfile.settingHomeUserBinding(
+            PlexHomeUserBinding(homeUserID: "child", name: "Child", requiresPIN: false),
+            forPlexAccount: "a"
+        ))
+        model.plexHomeUserSwitch = { user, pin, _, _ in
+            XCTAssertEqual(user, "child")
+            XCTAssertNil(pin)
+            return "CHILD-CLOUD"
+        }
+        _ = try await model.resolveDiscoverToken(for: "a")
+        XCTAssertEqual(model.pendingPlexPINRequest?.accountID, "b")
+        XCTAssertEqual(model.pendingPlexPINRequest?.homeUserID, "parent")
+    }
+
+    func testCloudRecoveryRejectsSupersededAuthorizationBeforePublishing() async throws {
+        enum Mutation: CaseIterable {
+            case profile, binding, plexProtection, lock, accountRemoval, accountCredential, activation
+        }
+        for mutation in Mutation.allCases {
+            let cache = PlexHomeUserTokenCache(store: InMemorySecureStore())
+            let (model, hub, profiles) = try makeModel(accountIDs: ["a"], cache: cache)
+            await installUnprotectedOverride(model, accountID: "a", userID: "child", token: "CHILD-SERVER")
+            model.plexDiscoverTokens.setToken(nil, for: "a")
+            model.plexHomeUserSwitch = { _, _, _, _ in
+                try await MainActor.run {
+                    switch mutation {
+                    case .profile:
+                        let other = profiles.add(name: "Other", avatarSymbol: "person", colorIndex: 1)
+                        profiles.select(other.id)
+                    case .binding:
+                        profiles.update(profiles.activeProfile.settingHomeUserBinding(
+                            PlexHomeUserBinding(homeUserID: "other", name: "Other", requiresPIN: false),
+                            forPlexAccount: "a"
+                        ))
+                    case .plexProtection:
+                        profiles.update(profiles.activeProfile.settingHomeUserBinding(
+                            PlexHomeUserBinding(homeUserID: "child", name: "Child", requiresPIN: true),
+                            forPlexAccount: "a"
+                        ))
+                    case .lock:
+                        var profile = profiles.activeProfile
+                        profile.replaceLock(with: ProfileLock.make(pin: "2468", iterations: 1))
+                        profiles.update(profile)
+                    case .accountRemoval:
+                        model.forgetAccount("a")
+                        try hub.accountStore.remove(id: "a")
+                        hub.reloadAccounts()
+                    case .accountCredential:
+                        try hub.accountStore.add(hub.accounts[0], token: "NEW-ACCOUNT-CREDENTIAL")
+                        hub.reloadAccounts()
+                    case .activation:
+                        model.beginExplicitProfileActivation()
+                    }
+                }
+                return "STALE-CHILD-CLOUD"
+            }
+            model.plexServerTokenResolve = { _, _, _ in nil }
+            do {
+                _ = try await model.resolveDiscoverToken(for: "a")
+                XCTFail("A superseded \(mutation) must cancel recovery.")
+            } catch is CancellationError {}
+            XCTAssertNil(model.discoverToken(for: "a"), "\(mutation)")
+            XCTAssertNotEqual(cache.discoverToken(account: "a", homeUser: "child"), "STALE-CHILD-CLOUD", "\(mutation)")
+        }
     }
 
     /// A failing Home-users fetch is logged (see PlozzLog.auth) but still honours the

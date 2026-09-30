@@ -221,7 +221,15 @@ final class FamilyGuidanceRemoteTests: XCTestCase {
     }
 
     func testFailedGuidanceOffersRetryWithoutLosingBasicRating() {
-        let app = launch(extra: "--family-guidance-failure")
+        checkGuidanceRetry(extra: "--family-guidance-failure")
+    }
+
+    func testGuidanceRetryAfterAuthorizationFailureActuallyLoadsTheReview() {
+        checkGuidanceRetry(extra: "--family-guidance-expired-once")
+    }
+
+    private func checkGuidanceRetry(extra: String) {
+        let app = launch(extra: extra)
         defer { app.terminate() }
         XCUIRemote.shared.press(.select)
         let retry = app.buttons["Retry"].firstMatch
@@ -230,7 +238,11 @@ final class FamilyGuidanceRemoteTests: XCTestCase {
         XCUIRemote.shared.press(.right)
         XCTAssertTrue(isFocused(retry))
         XCUIRemote.shared.press(.select)
-        XCTAssertTrue(app.staticTexts["What parents need to know"].waitForExistence(timeout: 5))
+        let reader = app.descendants(matching: .any)["family-guidance-reader"].firstMatch
+        XCTAssertTrue(reader.waitForExistence(timeout: 5), "The static section heading is not evidence that Retry loaded anything.")
+        XCTAssertTrue((reader.value as? String)?.contains("Review paragraph 1.") == true)
+        XCTAssertTrue(app.buttons["family-guidance-topic-violence"].exists)
+        XCTAssertFalse(retry.exists)
     }
 
     func testRestrictedGuidanceDoesNotPretendTheContentIsSafe() {

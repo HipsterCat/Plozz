@@ -76,8 +76,47 @@ final class PlexCommonSenseMediaTests: XCTestCase {
         XCTAssertNil(guidance.topics[1].rating)
         XCTAssertTrue(guidance.topics[2].isPositive)
         XCTAssertTrue(guidance.hasDetails)
-        XCTAssertEqual(http.sentBaseURLs.last?.host, "discover.provider.plex.tv")
+        XCTAssertEqual(http.sentBaseURLs.last?.host, "metadata.provider.plex.tv")
         XCTAssertEqual(http.sentPaths, ["/library/metadata/\(metadataID)/commonsensemedia"])
+    }
+
+    func testGuidanceUsesTheMetadataHostNotTheDiscoverWatchlistHost() async throws {
+        let http = GuidanceHostHTTP()
+        let client = PlexClient(
+            baseURL: URL(string: "https://server.example")!,
+            deviceProfile: PlexDeviceProfile(clientIdentifier: "fixture"),
+            token: "SERVER-TOKEN", discoverToken: "CURRENT-HOME-CLOUD", http: http
+        )
+        let result = try await client.commonSenseMedia(metadataID: metadataID)
+        guard case .available(let guidance) = result else {
+            return XCTFail("The metadata endpoint should return the detailed guidance.")
+        }
+        XCTAssertEqual(guidance.parentsNeedToKnow, "A fictional detailed review.")
+        let requests = await http.requests
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.host, "metadata.provider.plex.tv")
+        XCTAssertEqual(requests.first?.token, "CURRENT-HOME-CLOUD")
+        XCTAssertEqual(requests.first?.redirectPolicy, .sameOrigin)
+    }
+
+    func testRetryUsesANewRequestAndNeverCachesAnAuthorizationFailure() async throws {
+        let http = StubHTTPClient()
+        http.stubSequence(pathSuffix: "/commonsensemedia", responses: [
+            ("{}", 401),
+            (#"{"MediaContainer":{"CommonSenseMedia":[{"parentsNeedToKnow":"A newly available fictional review."}]}}"#, 200)
+        ])
+        let value = provider(http: http)
+        do {
+            _ = try await value.familyGuidance(for: item, accountToken: "EXPIRED-HOME-TOKEN")
+            XCTFail("The first unauthorized response must remain an explicit failure.")
+        } catch let error as AppError {
+            XCTAssertEqual(error, .unauthorized)
+        }
+        let result = try await value.familyGuidance(for: item, accountToken: "CURRENT-HOME-TOKEN")
+        guard case .available(let guidance) = result else { return XCTFail("Retry must fetch the review.") }
+        XCTAssertEqual(guidance.parentsNeedToKnow, "A newly available fictional review.")
+        XCTAssertEqual(http.sentPaths.count, 2)
+        XCTAssertTrue(http.sentBaseURLs.allSatisfy { $0.host == "metadata.provider.plex.tv" })
     }
 
     func testInvalidScoresStayUnknownRatherThanClampingToSafeValues() throws {
@@ -88,6 +127,35 @@ final class PlexCommonSenseMediaTests: XCTestCase {
         XCTAssertNil(dto.summary.recommendedAge)
         XCTAssertNil(dto.summary.qualityRating)
         XCTAssertNil(dto.guidance.topics.first?.rating)
+    }
+
+    private actor GuidanceHostHTTP: HTTPClient {
+        struct Request: Sendable {
+            let host: String?
+            let token: String?
+            let redirectPolicy: Endpoint.RedirectPolicy
+        }
+        private(set) var requests: [Request] = []
+
+        func send(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
+            try await sendRaw(endpoint, baseURL: baseURL)
+        }
+
+        func sendRaw(_ endpoint: Endpoint, baseURL: URL) async throws -> (Data, HTTPURLResponse) {
+            requests.append(Request(
+                host: baseURL.host, token: endpoint.headers["X-Plex-Token"],
+                redirectPolicy: endpoint.redirectPolicy
+            ))
+            let expected = baseURL.host == "metadata.provider.plex.tv"
+                && endpoint.headers["X-Plex-Token"] == "CURRENT-HOME-CLOUD"
+            let body = expected
+                ? #"{"MediaContainer":{"CommonSenseMedia":[{"parentsNeedToKnow":"A fictional detailed review."}]}}"#
+                : "{}"
+            return (
+                Data(body.utf8),
+                HTTPURLResponse(url: baseURL, statusCode: expected ? 200 : 401, httpVersion: nil, headerFields: nil)!
+            )
+        }
     }
 
     func testRestrictedMissingAndAuthenticationFailureRemainDistinct() async throws {

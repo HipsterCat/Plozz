@@ -60,6 +60,7 @@ public struct PlexHomeUserTokenCache {
 
     func storeDiscoverToken(_ token: String, account: String, homeUser: String) {
         try? secureStore.setString(token, for: discoverKey(account: account, homeUser: homeUser))
+        recordEntry(account: account, homeUser: homeUser)
     }
 
     private func discoverKey(account: String, homeUser: String) -> String {
@@ -69,6 +70,10 @@ public struct PlexHomeUserTokenCache {
     /// Persists (upserts) a resolved token and records it in the index.
     func store(token: String, account: String, homeUser: String) {
         try? secureStore.setString(token, for: entryKey(account: account, homeUser: homeUser))
+        recordEntry(account: account, homeUser: homeUser)
+    }
+
+    private func recordEntry(account: String, homeUser: String) {
         var index = loadIndex()
         index[account, default: []].insert(homeUser)
         saveIndex(index)
