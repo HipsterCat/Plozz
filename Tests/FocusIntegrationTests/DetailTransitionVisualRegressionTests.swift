@@ -1025,6 +1025,7 @@ private final class TransitionShowModel {
     let trailer = HeroTrailerController()
     var trailerReturnItemID: String?
     let stackDepth = DetailStackDepth()
+    let coveredPageID = UUID()
     let homeRecede = HomeHeroRecedeModel()
     var showsHomeHero = true
     @ObservationIgnored var resolveTrailer: HeroTrailerResolving = { _ in nil }
@@ -1085,8 +1086,8 @@ private struct TransitionShowRoot: View {
                         .navigationDestination(for: Int.self) { destination in
                             if destination == 2 {
                                 Button("Covered detail") {}
-                                    .onAppear { model.stackDepth.pageAppeared() }
-                                    .onDisappear { model.stackDepth.pageDismissed() }
+                                    .onAppear { model.stackDepth.pageAppeared(model.coveredPageID) }
+                                    .onDisappear { model.stackDepth.pageDismissed(model.coveredPageID) }
                             } else {
                                 ItemDetailView(
                                     viewModel: model.detail, onPlay: { _ in }, onSelectChild: { _ in },

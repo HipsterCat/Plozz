@@ -239,6 +239,7 @@ public final class HeroTrailerController {
         disableCaptions(on: item)
 
         currentItemID = itemID
+        HandoffDiagnostics.emit("trailer QUEUED item=\(HandoffDiagnostics.correlationID(itemID)) owner=\(HandoffDiagnostics.correlationID(endHandlerOwnerID))")
         PlozzLog.app.info("Hero trailer: queued item=\(itemID) muted=\(muted) url=\(PlozzLog.redact(url: resolvedURL))")
     }
 
@@ -348,14 +349,16 @@ public final class HeroTrailerController {
     /// mode-off so the single player never lingers.
     public func stop() {
         guard isPlaying || currentItemID != nil else { return }
+        HandoffDiagnostics.emit("trailer STOP item=\(HandoffDiagnostics.correlationID(currentItemID)) owner=\(HandoffDiagnostics.correlationID(endHandlerOwnerID))")
         stopPlayback(resetItem: true)
         PlozzLog.app.info("Hero trailer: stopped")
     }
 
     /// Stops only if the currently-loaded item is `itemID` (a scoped teardown so a
     /// stale view's disappear can't stop a trailer that already advanced).
-    public func stop(ifShowing itemID: String) {
+    public func stop(ifShowing itemID: String, ownedBy ownerID: String? = nil) {
         guard currentItemID == itemID else { return }
+        if let ownerID, let endHandlerOwnerID, ownerID != endHandlerOwnerID { return }
         stop()
     }
 

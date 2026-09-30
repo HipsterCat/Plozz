@@ -203,6 +203,54 @@ final class CinematicDetailTransitionHostedTests: XCTestCase {
         XCTAssertNil(session.returnArtwork)
     }
 
+    func testCancelledBackRevealsThePageThatRemainsOnTheRealNavigationStack() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        fixture.model.open(in: fixture.window, usesCard: true)
+        try await waitUntil { fixture.model.session?.stage == .complete }
+        let session = try XCTUnwrap(fixture.model.session)
+        // UIKit can cancel a pop or re-present this controller. The route
+        // remains present; a browse snapshot must not masquerade as a completed pop.
+        session.close {}
+        try await Task.sleep(for: .milliseconds(350))
+        session.pageAppeared()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertFalse(session.isClosing)
+        XCTAssertFalse(session.blocksNavigation)
+        XCTAssertEqual(session.stage, .complete)
+        XCTAssertTrue(overlays(in: fixture.window).isEmpty)
+        XCTAssertTrue(inputGuards(in: fixture.window).isEmpty)
+        XCTAssertFalse(DetailTransitionNavigation.isRestoringSourcePage)
+        XCTAssertEqual(fixture.model.path, [1])
+        let visible = try pixel(fixture.window, at: try XCTUnwrap(fixture.model.frames[.controls]))
+        XCTAssertGreaterThan(visible.max() ?? 0, 100, "The retained page must not remain transparent and unfocusable.")
+        try await waitUntil { UIFocusSystem.focusSystem(for: fixture.window)?.focusedItem != nil }
+        session.close { fixture.model.path.removeLast() }
+        try await waitUntil { self.overlays(in: fixture.window).isEmpty }
+        XCTAssertTrue(fixture.model.path.isEmpty, "A cancelled Back must not prevent the next real Back.")
+    }
+
+    func testCancelledCoordinatorCannotLaterCancelANewerReturn() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        fixture.model.open(in: fixture.window, usesCard: true)
+        try await waitUntil { fixture.model.session?.stage == .complete }
+        let session = try XCTUnwrap(fixture.model.session)
+        let transition = CancelledDetailTransition()
+        session.close {}
+        session.navigationWillDisappear(using: transition)
+        transition.complete()
+        XCTAssertFalse(session.isClosing)
+        XCTAssertFalse(session.blocksNavigation)
+        XCTAssertTrue(inputGuards(in: fixture.window).isEmpty)
+        session.close { fixture.model.path.removeLast() }
+        transition.complete()
+        XCTAssertTrue(session.isClosing, "Completion from the cancelled pop must not affect this pop.")
+        try await waitUntil { self.overlays(in: fixture.window).isEmpty }
+        XCTAssertTrue(fixture.model.path.isEmpty)
+        XCTAssertTrue(inputGuards(in: fixture.window).isEmpty)
+    }
+
     func testSourceReplacementUsesNonspatialReturnInsteadOfTheWrongCard() async throws {
         let fixture = try await makeFixture()
         defer { fixture.close() }
@@ -896,6 +944,45 @@ final class CinematicDetailTransitionHostedTests: XCTestCase {
         }
         XCTAssertTrue(condition(), "Cinematic transition did not reach its expected state", file: file, line: line)
     }
+}
+
+@MainActor
+private final class CancelledDetailTransition: NSObject, UIViewControllerTransitionCoordinator {
+    let isAnimated = true
+    let presentationStyle = UIModalPresentationStyle.none
+    let initiallyInteractive = true
+    let isInterruptible = true
+    let isInteractive = false
+    let isCancelled = true
+    let transitionDuration: TimeInterval = 0.3
+    let percentComplete: CGFloat = 0
+    let completionVelocity: CGFloat = 0
+    let completionCurve = UIView.AnimationCurve.easeInOut
+    let containerView = UIView()
+    let targetTransform = CGAffineTransform.identity
+    private var completion: ((any UIViewControllerTransitionCoordinatorContext) -> Void)?
+
+    func animate(
+        alongsideTransition animation: ((any UIViewControllerTransitionCoordinatorContext) -> Void)?,
+        completion: ((any UIViewControllerTransitionCoordinatorContext) -> Void)?
+    ) -> Bool {
+        self.completion = completion
+        return true
+    }
+
+    func animateAlongsideTransition(
+        in view: UIView?,
+        animation: ((any UIViewControllerTransitionCoordinatorContext) -> Void)?,
+        completion: ((any UIViewControllerTransitionCoordinatorContext) -> Void)?
+    ) -> Bool {
+        animate(alongsideTransition: animation, completion: completion)
+    }
+
+    func notifyWhenInteractionChanges(_ handler: @escaping (any UIViewControllerTransitionCoordinatorContext) -> Void) {}
+    func notifyWhenInteractionEnds(_ handler: @escaping (any UIViewControllerTransitionCoordinatorContext) -> Void) {}
+    func viewController(forKey key: UITransitionContextViewControllerKey) -> UIViewController? { nil }
+    func view(forKey key: UITransitionContextViewKey) -> UIView? { nil }
+    func complete() { completion?(self) }
 }
 
 @MainActor
