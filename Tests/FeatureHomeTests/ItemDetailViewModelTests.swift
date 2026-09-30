@@ -1268,6 +1268,96 @@ final class ItemDetailViewModelTests: XCTestCase {
         XCTAssertEqual(vm.state.value?.item.resumePosition, 300)
     }
 
+    func testLateAlternateMetadataPreservesScopedPlaybackProgressAndOtherSources() async throws {
+        let primary = MediaItem(
+            id: "plex-movie", title: "Movie", kind: .movie, overview: "Fixture",
+            runtime: 1_000, isPlayed: true, sourceAccountID: "plex",
+            lastPlayedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let alternate = MediaItem(
+            id: "share-movie", title: "Movie", kind: .movie, overview: "Fixture",
+            runtime: 1_000, sourceAccountID: "share",
+            versions: [MediaVersion(id: "fresh-file", height: 2160)]
+        )
+        let plex = FakeMediaProvider(allItems: [primary], kind: .plex)
+        let share = FakeMediaProvider(allItems: [alternate], kind: .mediaShare)
+        let gate = AsyncGate()
+        share.itemGate = [alternate.id: { await gate.wait() }]
+        let vm = ItemDetailViewModel(
+            provider: plex, itemID: primary.id, sourceAccountID: "plex",
+            onlineTrailerResolver: { _ in [] },
+            playableVideoIDResolver: { _ in nil },
+            initialSources: [
+                MediaSourceRef(accountID: "plex", itemID: primary.id, kind: .movie),
+                MediaSourceRef(accountID: "share", itemID: alternate.id, kind: .movie)
+            ],
+            alternateProviderResolver: { $0 == "share" ? share : plex }
+        )
+        defer { gate.open(); vm.suspendEnrichment() }
+        await vm.load()
+        await waitUntil { share.itemCallCount(for: alternate.id) > 0 }
+        let priorPlex = try XCTUnwrap(vm.sources.first { $0.accountID == "plex" })
+        vm.applyWatchedState(MediaItemMutation(
+            itemIDs: [alternate.id], scopedItemIDs: ["share:\(alternate.id)"],
+            resumePosition: 120, playedPercentage: 0.12
+        ))
+        XCTAssertEqual(vm.state.value?.item.resumePosition, 120)
+        XCTAssertFalse(vm.state.value?.item.isPlayed ?? true)
+        XCTAssertEqual(MediaItemMerger.playbackResumePosition(from: vm.sources), 120)
+
+        gate.open()
+        await waitUntil {
+            vm.sources.first { $0.accountID == "share" }?.versions.first?.id == "fresh-file"
+        }
+        XCTAssertEqual(vm.sources.first { $0.accountID == "plex" }, priorPlex)
+        XCTAssertEqual(vm.state.value?.item.resumePosition, 120)
+        XCTAssertEqual(vm.sources.first { $0.accountID == "share" }?.resumePosition, 120)
+        XCTAssertEqual(MediaItemMerger.playbackResumePosition(from: vm.sources), 120)
+        XCTAssertEqual(vm.state.value?.item.sources, vm.sources)
+    }
+
+    func testSupplementalMetadataDoesNotCopyMergedProgressIntoAnUntargetedSource() async {
+        let primary = MediaItem(
+            id: "plex-movie", title: "Movie", kind: .movie, overview: "Fixture",
+            mediaInfo: .init(container: "mkv", audio: .init(codec: "eac3", channels: 6)),
+            sourceAccountID: "plex"
+        )
+        let alternate = MediaItem(
+            id: "share-movie", title: "Movie", kind: .movie,
+            overview: "Fixture", sourceAccountID: "share"
+        )
+        let plex = FakeMediaProvider(allItems: [primary], kind: .plex)
+        let share = FakeMediaProvider(allItems: [alternate], kind: .mediaShare)
+        let gate = AsyncGate()
+        plex.supplementalFactsGate = { await gate.wait() }
+        plex.supplementalFactsByItem[primary.id] = .init(
+            audioCodec: "eac3", audioChannels: 6, audioIsAtmos: true
+        )
+        let vm = ItemDetailViewModel(
+            provider: plex, itemID: primary.id, sourceAccountID: "plex",
+            onlineTrailerResolver: { _ in [] },
+            playableVideoIDResolver: { _ in nil },
+            initialSources: [
+                MediaSourceRef(accountID: "plex", itemID: primary.id, kind: .movie),
+                MediaSourceRef(accountID: "share", itemID: alternate.id, kind: .movie)
+            ],
+            alternateProviderResolver: { $0 == "share" ? share : plex }
+        )
+        defer { gate.open(); vm.suspendEnrichment() }
+        await vm.load()
+        await waitUntil { plex.supplementalProbeCount == 1 }
+        vm.applyWatchedState(MediaItemMutation(
+            itemIDs: [alternate.id], scopedItemIDs: ["share:\(alternate.id)"],
+            resumePosition: 120, playedPercentage: 0.12
+        ))
+        gate.open()
+        await waitUntil { vm.state.value?.item.mediaInfo?.audio?.profile == "Dolby Atmos" }
+        XCTAssertNil(vm.sources.first { $0.accountID == "plex" }?.resumePosition)
+        XCTAssertEqual(vm.sources.first { $0.accountID == "share" }?.resumePosition, 120)
+        XCTAssertEqual(vm.state.value?.item.resumePosition, 120)
+        XCTAssertEqual(vm.sources.first { $0.accountID == "plex" }?.versions.first?.audioProfile, "Dolby Atmos")
+    }
+
     func testSingleSourceItemHasNoSourcePicker() async {
         let movie = MediaItem(id: "m1", title: "Arrival", kind: .movie, productionYear: 2016,
                               sourceAccountID: "plex")

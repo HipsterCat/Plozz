@@ -82,6 +82,9 @@ public final class ItemDetailViewModel {
     /// Keep a season edit authoritative over late or stale episode fetches.
     /// Subsequent individual edits replay after it so they still take precedence.
     @ObservationIgnored private var seasonWatchMutations: [MediaItemMutation] = []
+    /// Local edits remain authoritative while this page is open and writes are
+    /// still converging. Metadata/snapshot responses must not undo them.
+    @ObservationIgnored private var detailWatchMutations: [(mutation: MediaItemMutation, date: Date)] = []
     /// The episode this series should resume at, as the **server** reports it.
     ///
     /// Season containers cannot be trusted to answer this. Measured on a real
@@ -1564,7 +1567,15 @@ public final class ItemDetailViewModel {
     /// SwiftUI updates just the affected cards and the user's focus stays exactly
     /// where it was.
     public func applyWatchedState(_ mutation: MediaItemMutation) {
-        if let item = state.value?.item, item.kind == .series,
+        var matchingItem = state.value?.item
+        if !sources.isEmpty { matchingItem?.sources = sources }
+        let targetsDetail = matchingItem.map(mutation.targets) == true
+        if targetsDetail,
+           mutation.played != nil || mutation.favorite != nil
+            || mutation.resumePosition != nil || mutation.playedPercentage != nil {
+            detailWatchMutations.append((mutation, Date()))
+        }
+        if let item = matchingItem, item.kind == .series,
            mutation.targets(item), mutation.played != nil {
             seasonWatchMutations.removeAll()
         } else if mutation.cascadesToSeasonEpisodes || !seasonWatchMutations.isEmpty {
@@ -1572,10 +1583,15 @@ public final class ItemDetailViewModel {
         }
         var seriesPlayedCascade: Bool?
         if case var .loaded(detail) = state {
+            // The provider detail has only its own identity; the picker knows
+            // the other physical copies. Match through that same source set.
+            if !sources.isEmpty { detail.item.sources = sources }
             if detail.item.kind == .series, mutation.targets(detail.item) {
                 seriesPlayedCascade = mutation.played
             }
-            detail.item = mutation.applied(to: detail.item)
+            detail.item = applyingDetailWatchMutations(to: mutation.applied(to: detail.item))
+            sources = sources.map { applyingDetailWatchMutations(to: $0) }
+            initialSources = initialSources.map { applyingDetailWatchMutations(to: $0) }
             detail.serverResumeEpisode = detail.serverResumeEpisode.map { mutation.applied(to: $0) }
             detail.children = detail.children.map { child in
                 var updated = mutation.applied(to: child)
@@ -1602,6 +1618,34 @@ public final class ItemDetailViewModel {
                 return copy
             })
         }
+        if targetsDetail {
+            applyUnifiedWatchState()
+            persistSnapshot()
+        }
+    }
+
+    private func applyingDetailWatchMutations(to source: MediaSourceRef) -> MediaSourceRef {
+        detailWatchMutations.reduce(source) { current, change in
+            guard change.mutation.matches(accountID: current.accountID, itemID: current.itemID) else { return current }
+            var updated = change.mutation.applied(to: current)
+            if change.mutation.played != nil || change.mutation.resumePosition != nil {
+                updated.lastPlayedAt = change.date
+            }
+            return updated
+        }
+    }
+
+    private func applyingDetailWatchMutations(to item: MediaItem) -> MediaItem {
+        var updated = detailWatchMutations.reduce(item) { current, change in
+            guard change.mutation.targets(current) else { return current }
+            var updated = change.mutation.applied(to: current)
+            if change.mutation.played != nil || change.mutation.resumePosition != nil {
+                updated.lastPlayedAt = change.date
+            }
+            return updated
+        }
+        updated.sources = updated.sources.map { applyingDetailWatchMutations(to: $0) }
+        return updated
     }
 
     /// Quietly re-fetches the detail, its children, and any season episode lists
@@ -1661,6 +1705,8 @@ public final class ItemDetailViewModel {
             upcomingSchedule: upcomingSchedule,
             serverResumeEpisode: serverResumeEpisode
         ))
+        sources = sources.map { stampedPrimarySource($0, from: tagged(item)) }
+        applyUnifiedWatchState()
         loadUpcomingSchedule(for: item)
         startStreamProbeEnrichment(
             for: item,
@@ -2180,9 +2226,10 @@ public final class ItemDetailViewModel {
         } else {
             tagged.editionOpeningSource = nil
         }
-        return seasonWatchMutations.reduce(tagged) { item, mutation in
+        let updated = seasonWatchMutations.reduce(tagged) { item, mutation in
             mutation.applied(to: item)
         }
+        return applyingDetailWatchMutations(to: updated)
     }
 
     private func isCurrentSource(
@@ -2412,7 +2459,7 @@ public final class ItemDetailViewModel {
         let enrichedItem = detail.item.applyingSupplementalStreamFacts(facts)
         detail.item = enrichedItem
         state = .loaded(detail)
-        sources = sources.map { stampedPrimarySource($0, from: enrichedItem) }
+        sources = sources.map { stampedPrimarySource($0, from: enrichedItem, preservingWatchState: true) }
         persistSnapshot()
     }
 
@@ -2576,18 +2623,22 @@ public final class ItemDetailViewModel {
 
     /// Stamps the primary source with the freshly-fetched detail so the picker and
     /// version list are correct for the server the user is already looking at.
-    private func stampedPrimarySource(_ source: MediaSourceRef, from primary: MediaItem) -> MediaSourceRef {
+    private func stampedPrimarySource(
+        _ source: MediaSourceRef, from primary: MediaItem, preservingWatchState: Bool = false
+    ) -> MediaSourceRef {
         guard source.accountID == activeSourceAccountID, source.itemID == primary.id else { return source }
         var seeded = source
         seeded.versions = primary.versions.isEmpty
             ? [MediaVersion.synthesized(from: primary)]
             : primary.versions
         seeded.edition = primary.edition
-        seeded.resumePosition = primary.resumePosition
-        seeded.playedPercentage = primary.playedPercentage
-        seeded.isPlayed = primary.isPlayed
-        seeded.isFavorite = primary.isFavorite
-        seeded.lastPlayedAt = primary.lastPlayedAt
+        if !preservingWatchState {
+            seeded.resumePosition = primary.resumePosition
+            seeded.playedPercentage = primary.playedPercentage
+            seeded.isPlayed = primary.isPlayed
+            seeded.isFavorite = primary.isFavorite
+            seeded.lastPlayedAt = primary.lastPlayedAt
+        }
         return Self.preservingEditionMetadata(in: seeded, from: source)
     }
 
@@ -2873,12 +2924,15 @@ public final class ItemDetailViewModel {
     /// stamps it onto the loaded detail, so a merged title's hero shows unified
     /// progress (e.g. 4 min watched on server A even when primary-backed by B).
     private func applyUnifiedWatchState() {
+        sources = sources.map { applyingDetailWatchMutations(to: $0) }
         guard sources.count > 1, case var .loaded(detail) = state else { return }
         let unified = MediaItemMerger.unifiedWatchState(from: sources)
+        detail.item.sources = sources
         detail.item.resumePosition = unified.resumePosition
         detail.item.playedPercentage = unified.playedPercentage
         detail.item.isPlayed = unified.isPlayed
         detail.item.lastPlayedAt = unified.lastPlayedAt
+        detail.item = applyingDetailWatchMutations(to: detail.item)
         state = .loaded(detail)
     }
 
