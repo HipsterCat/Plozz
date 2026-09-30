@@ -9,6 +9,175 @@ import XCTest
 
 @MainActor
 final class NativeInformationCardHostedTests: XCTestCase {
+    func testFocusedNativeInformationCardPaintsAboveAnOverlappingPeer() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        for button in [false, true] {
+            let host = NativeInformationFocusHost(rootView: AnyView(
+                NativeInformationStackingFixture(button: button)
+                    .environment(\.plozzCardFocusStyle, .system)
+                    .environment(\.plozzNativeInformationFocus, true)
+                    .environment(\.themePalette, .dark)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.black)
+            ))
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(200))
+            let cards = nativeCards(in: window).sorted {
+                $0.convert($0.bounds, to: window).minX < $1.convert($1.bounds, to: window).minX
+            }
+            XCTAssertEqual(cards.count, 2)
+            let front = try XCTUnwrap(cards.first)
+            let back = try XCTUnwrap(cards.last)
+            host.target = front
+            host.setNeedsFocusUpdate()
+            host.updateFocusIfNeeded()
+            let deadline = ContinuousClock.now + .seconds(3)
+            while !front.isFocused, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertTrue(front.isFocused)
+            try await Task.sleep(for: .milliseconds(350))
+            let frontFrame = try XCTUnwrap(NativeFocusProjection.artworkFrame(of: front.contentView, in: window))
+            let backFrame = try XCTUnwrap(NativeFocusProjection.artworkFrame(of: back.contentView, in: window))
+            let overlap = frontFrame.intersection(backFrame)
+            XCTAssertGreaterThan(overlap.width, 8, "The stacking test must actually overlap.")
+            let image = DetailTransitionSnapshot.image(of: window)
+            let crop = try XCTUnwrap(image.cgImage?.cropping(to: CGRect(
+                x: overlap.midX, y: overlap.midY, width: 1, height: 1
+            )))
+            var rgba = [UInt8](repeating: 0, count: 4)
+            try rgba.withUnsafeMutableBytes { bytes in
+                let context = try XCTUnwrap(CGContext(
+                    data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ))
+                context.draw(crop, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "information-focused-stacking-button-\(button)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            XCTAssertGreaterThan(Int(rgba[0]), Int(rgba[2]) + 40,
+                                 "The focused red card must paint above the later blue peer. button=\(button), pixel=\(rgba)")
+        }
+    }
+
+    func testFocusedInformationCardsDoNotOverlapTheirNeighbors() async throws {
+        for kind in [MediaItemKind.movie, .series] {
+            for width in [CGFloat(1920), 1280] {
+                try await checkInformationFocus(kind: kind, width: width)
+            }
+        }
+    }
+
+    private func checkInformationFocus(kind: MediaItemKind, width: CGFloat) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let model = NativeInformationRefreshModel()
+        model.item.kind = kind
+        model.item.overview = String(repeating: "A film about friendship and unexpected choices. ", count: 9)
+        model.item.ratings = [
+            .init(source: .rottenTomatoes, value: 64, scale: .percent),
+            .init(source: .rottenTomatoesAudience, value: 80, scale: .percent),
+            .init(source: .imdb, value: 6.5, scale: .outOfTen),
+            .init(source: .tmdb, value: 6.2, scale: .outOfTen)
+        ]
+        model.item.familyGuidance = FamilyGuidanceSummary(
+            recommendedAge: 13, qualityRating: nil, overview: "A short content advisory."
+        )
+        let host = NativeInformationFocusHost(rootView: AnyView(
+            NativeInformationRefreshView(model: model)
+                .frame(width: width, height: 1080)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        ))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            host.target = nil
+            window.isHidden = true
+            window.rootViewController = nil
+            previous?.makeKeyAndVisible()
+        }
+        window.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(600))
+        let cards = nativeCards(in: window)
+        XCTAssertGreaterThanOrEqual(cards.count, 8)
+        var samples: [String] = []
+        for (index, card) in cards.enumerated() {
+            host.target = card
+            host.setNeedsFocusUpdate()
+            host.updateFocusIfNeeded()
+            let until = ContinuousClock.now + .seconds(3)
+            while !card.isFocused, ContinuousClock.now < until {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertTrue(card.isFocused, "card \(index)")
+            for _ in 0..<8 {
+                try await Task.sleep(for: .milliseconds(45))
+                let projected = try XCTUnwrap(NativeFocusProjection.artworkFrame(of: card.contentView, in: window))
+                samples.append("card=\(index) size=\(card.contentSize) increase=\(card.focusSizeIncrease) projected=\(projected)")
+                XCTAssertLessThanOrEqual(projected.width, card.contentSize.width * 1.03 + 1, "card \(index)")
+                XCTAssertLessThanOrEqual(projected.height, card.contentSize.height * 1.03 + 1, "card \(index)")
+                for (otherIndex, other) in cards.enumerated() where other !== card {
+                    let resting = try XCTUnwrap(NativeFocusProjection.artworkFrame(of: other.contentView, in: window))
+                    let overlap = projected.intersection(resting)
+                    XCTAssertTrue(overlap.isNull || overlap.width < 1 || overlap.height < 1,
+                                  "Focused card \(index) overlaps card \(otherIndex) by \(overlap)")
+                }
+            }
+            let image = XCTAttachment(image: DetailTransitionSnapshot.image(of: window))
+            image.name = "focused-information-\(kind)-\(Int(width))-card-\(index)"
+            image.lifetime = .keepAlways
+            add(image)
+        }
+        let attachment = XCTAttachment(string: samples.joined(separator: "\n"))
+        attachment.name = "information-native-focus-geometry-\(kind)-\(Int(width))"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    func testInformationFocusBudgetIsScopedAndRestoresNativeMediaDefaults() {
+        let card = NativeTVCard<EmptyView>.Card()
+        card.contentSize = CGSize(width: 1400, height: 800)
+        let native = card.focusSizeIncrease
+        card.updateFocusSize()
+        XCTAssertEqual(card.focusSizeIncrease, native)
+        card.usesInformationFocus = true
+        card.updateFocusSize()
+        XCTAssertEqual(card.focusSizeIncrease.leading, -6, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(abs(card.focusSizeIncrease.top), 6)
+        XCTAssertEqual(
+            card.focusSizeIncrease.leading / card.contentSize.width,
+            card.focusSizeIncrease.top / card.contentSize.height, accuracy: 0.0001
+        )
+        card.contentSize = CGSize(width: 250, height: 300)
+        card.updateFocusSize()
+        XCTAssertEqual(card.focusSizeIncrease.leading, -2.5, accuracy: 0.001)
+        XCTAssertEqual(card.focusSizeIncrease.top, -3, accuracy: 0.001)
+        card.usesInformationFocus = false
+        card.updateFocusSize()
+        XCTAssertEqual(card.focusSizeIncrease, native)
+    }
+
     func testInformationTextDoesNotReplayDuringUnrelatedAnimatedUpdates() async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !UIApplication.shared.connectedScenes.contains(where: { $0.activationState == .foregroundActive }),
@@ -360,6 +529,37 @@ final class NativeInformationCardHostedTests: XCTestCase {
                 .plozzForeground(.primary)
                 .onAppear { observe(palette, scheme) }
         }
+    }
+}
+
+private struct NativeInformationStackingFixture: View {
+    let button: Bool
+
+    var body: some View {
+        HStack(spacing: -18) {
+            ForEach(0..<2) { index in
+                if button {
+                    Button {} label: {
+                        (index == 0 ? Color.red : Color.blue).frame(width: 240, height: 180)
+                    }
+                    .plozzCardButton(cornerRadius: 18, focusedScale: PlozzTheme.Metrics.readOnlyFocusedCardScale)
+                    .frame(width: 240, height: 180)
+                } else {
+                    (index == 0 ? Color.red : Color.blue)
+                        .frame(width: 240, height: 180)
+                        .plozzFocusableCard(cornerRadius: 18)
+                        .frame(width: 240, height: 180)
+                }
+            }
+        }
+    }
+}
+
+@MainActor
+private final class NativeInformationFocusHost: UIHostingController<AnyView> {
+    weak var target: UIView?
+    override var preferredFocusEnvironments: [any UIFocusEnvironment] {
+        target.map { [$0] } ?? super.preferredFocusEnvironments
     }
 }
 

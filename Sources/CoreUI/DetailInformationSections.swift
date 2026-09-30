@@ -88,6 +88,7 @@ public struct DetailInformationSections: View {
     public var body: some View {
         if hasContent {
             sectionBody
+                .environment(\.plozzNativeInformationFocus, true)
                 .padding(.horizontal, horizontalInset)
                 .padding(.top, bandTopPadding)
                 .padding(.bottom, bandBottomPadding)

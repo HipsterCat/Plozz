@@ -302,6 +302,7 @@ public struct PlozzFocusableCardModifier: ViewModifier {
         if focusStyle.usesSystemEffect {
             NativeTVCard(content: content.padding(focusPadding), focus: $focused, isEnabled: true, action: {})
                 .focused($focused.focusState)
+                .zIndex(focused ? 1 : 0)
                 .accessibilityRemoveTraits(.isButton)
         } else {
             content
