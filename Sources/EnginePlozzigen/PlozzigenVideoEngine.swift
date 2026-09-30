@@ -1479,8 +1479,10 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         }
     }
 
-    private func syncTracks() {
-        audioTracks = engine.audioTracks.map { track in
+    nonisolated static func selectableAudioTracks(from tracks: [TrackInfo], route: VideoRoute) -> [MediaTrack] {
+        // Aether 7.22 publishes bypass tracks for diagnostics, not selection.
+        guard route != .remoteBypass else { return [] }
+        return tracks.map { track in
             MediaTrack(
                 id: track.id,
                 kind: .audio,
@@ -1495,6 +1497,10 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
                 isCommentary: track.isCommentary
             )
         }
+    }
+
+    private func syncTracks() {
+        audioTracks = Self.selectableAudioTracks(from: engine.audioTracks, route: engine.videoRoute)
         subtitleTracks = engine.subtitleTracks.map { track in
             MediaTrack(
                 id: track.id,

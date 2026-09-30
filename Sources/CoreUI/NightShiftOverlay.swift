@@ -36,11 +36,9 @@ import CoreModels
 
 // MARK: - Installer
 
-/// Adds the tint view to the active window once a window is available and keeps it
-/// alive for the app's lifetime. It lives as a hidden representable inside the
-/// root view purely so SwiftUI gives it a lifecycle hook; the actual tint view is
-/// attached to the main window, retrying until the window has connected (the
-/// scene is often not ready on the very first layout pass).
+/// Keeps observing the profile for the app's lifetime, but attaches a tint view
+/// only while the effective colour is non-neutral. A white multiply layer is
+/// still a compositing filter, not the absence of one.
 private struct NightShiftOverlayInstaller: UIViewRepresentable {
     var model: NightShiftSettingsModel
 
@@ -70,6 +68,7 @@ private struct NightShiftOverlayInstaller: UIViewRepresentable {
         private var attempts = 0
         private var hasArmed = false
         private var isInvalidated = false
+        private var paintGeneration = 0
         /// Bumped each time the observation loop is (re)armed so a loop left over
         /// from a previous model instance self-terminates the next time it fires.
         private var observationGeneration = 0
@@ -88,27 +87,28 @@ private struct NightShiftOverlayInstaller: UIViewRepresentable {
             guard !isInvalidated else { return }
             let changed = newModel !== model
             model = newModel
-            installIfNeeded()
             if changed || !hasArmed {
                 hasArmed = true
                 armObservation()
                 paintTint(animated: false)
+            } else if tintView?.superview == nil {
+                paintTint(animated: false)
             }
         }
 
-        private func installIfNeeded() {
-            guard !isInvalidated else { return }
+        private func installIfNeeded() -> UIView? {
+            guard !isInvalidated else { return nil }
             // Already attached to a window — nothing to do.
-            if let view = tintView, view.superview != nil { return }
+            if let view = tintView, view.superview != nil { return view }
 
             guard let window = Self.mainWindow() else {
                 // The window can lag the first few layout passes — retry briefly.
                 attempts += 1
-                guard attempts < 60 else { return }
+                guard attempts < 60 else { return nil }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                    self?.installIfNeeded()
+                    self?.paintTint(animated: false)
                 }
-                return
+                return nil
             }
 
             let view = tintView ?? UIView(frame: window.bounds)
@@ -121,10 +121,11 @@ private struct NightShiftOverlayInstaller: UIViewRepresentable {
             // it drawing last — above any fullScreenCover presented later, which
             // are sibling subviews of this same window.
             view.layer.compositingFilter = "multiplyBlendMode"
-            view.layer.zPosition = .greatestFiniteMagnitude
+            view.layer.zPosition = CGFloat(Float.greatestFiniteMagnitude.nextDown)
 
             window.addSubview(view)
-            paintTint(animated: false)
+            attempts = 0
+            return view
         }
 
         /// Repaints the tint whenever any value the multiply colour derives from
@@ -159,16 +160,29 @@ private struct NightShiftOverlayInstaller: UIViewRepresentable {
             isInvalidated = true
             observationGeneration &+= 1
             hasArmed = false
+            removeTint()
+        }
+
+        private func removeTint() {
+            paintGeneration &+= 1
+            tintView?.layer.removeAnimation(forKey: "tint")
+            tintView?.layer.compositingFilter = nil
             tintView?.removeFromSuperview()
             tintView = nil
+            attempts = 0
         }
 
         /// Sets the tint layer's colour to the model's current per-channel
-        /// multiply (white by day → invisible, redder as night deepens),
-        /// optionally easing from wherever it is now.
+        /// multiply, removing the layer when a fade reaches neutral.
         private func paintTint(animated: Bool) {
-            guard let view = tintView else { return }
+            guard !isInvalidated else { return }
             let scalars = model.channelScalars
+            let neutral = scalars == .identity
+            if neutral && (!animated || tintView?.superview == nil) {
+                removeTint()
+                return
+            }
+            guard let view = neutral ? tintView : installIfNeeded() else { return }
             let target = CGColor(
                 colorSpace: Self.colorSpace,
                 components: [
@@ -184,19 +198,37 @@ private struct NightShiftOverlayInstaller: UIViewRepresentable {
                 alpha: 1
             ).cgColor
 
+            paintGeneration &+= 1
+            let generation = paintGeneration
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
             if animated {
+                if neutral {
+                    CATransaction.setCompletionBlock { [weak self, weak view] in
+                        Task { @MainActor in
+                            guard let self, let view, !self.isInvalidated,
+                                  self.paintGeneration == generation,
+                                  self.tintView === view,
+                                  self.model.channelScalars == .identity else { return }
+                            self.removeTint()
+                        }
+                    }
+                }
                 let animation = CABasicAnimation(keyPath: "backgroundColor")
                 // Chase from the on-screen colour so rapid updates (the day
                 // preview sweep) glide instead of snapping.
                 animation.fromValue = view.layer.presentation()?.backgroundColor
                     ?? view.layer.backgroundColor
-                    ?? target
+                    ?? UIColor.white.cgColor
                 animation.toValue = target
                 animation.duration = 0.6
                 animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 view.layer.add(animation, forKey: "tint")
+            } else {
+                view.layer.removeAnimation(forKey: "tint")
             }
             view.layer.backgroundColor = target
+            CATransaction.commit()
         }
 
         private static func mainWindow() -> UIWindow? {

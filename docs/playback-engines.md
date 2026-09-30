@@ -6,8 +6,29 @@ with the best possible quality (Dolby Vision, Atmos, full-timeline seek).
 
 ## Dependency version
 
-Plozz pins upstream release **7.16.1**, commit
-`4ef5ef95faf271cb0c0e9cc79a0bf81a54b1244b`. It carries the two stage-2
+Plozz pins upstream release **7.22.2**, commit
+`0e2f5c967b5f92e692e03edf612f2753289029cf`. This release waits for an observed,
+still-running display switch before offering an unproven HDR master. A rejection
+during a switch still falls back for that item but no longer latches a
+process-wide HDR-master refusal
+([superuser404notfound/AetherEngine#667](https://github.com/superuser404notfound/AetherEngine/issues/667),
+[superuser404notfound/AetherEngine#669](https://github.com/superuser404notfound/AetherEngine/pull/669)).
+Plozz leaves this timing policy inside the engine; it does not add another
+display-criteria writer or an EDR-headroom assertion.
+
+The 7.16.1-to-7.22.2 update also includes bounded input/relay handling, stale
+load/seek cancellation fixes, off-main bitmap subtitle decoding, corrected
+software-video/still colour tags, and recovery improvements for sequential
+sources and live audio. FFmpegBuild moves to 3.6.x for MPEG-TS audio-payload
+identification; LibDovi stays at 2.1.x. Platform minimums are unchanged.
+Played-media bitrate and network throughput remain separate in the engine's
+telemetry. New stream-description and software-escalation APIs do not opt Plozz
+into new playback features or change its configured routing/track preferences.
+Remote-HLS audio tracks newly published as informational data stay out of Plozz's
+selection menus: upstream explicitly cannot switch those tracks through
+`selectAudioTrack`. The engine's records remain available to diagnostics.
+
+It retains the two stage-2
 recovery fixes behind issue #61: the media fallback comes back where the
 refused item was placed rather than where the session first started
 ([superuser404notfound/AetherEngine#621](https://github.com/superuser404notfound/AetherEngine/pull/621)),
@@ -33,7 +54,7 @@ wait for an origin slot until their deadline. Plozz's existing public-API
 integration and stricter HTTP transport remain unchanged.
 
 Its iOS/tvOS 18 minimum matches Plozz's existing deployment targets. The engine
-owns the FFmpegBuild 3.5.x and LibDovi 2.1.x dependencies; Plozz does not link a
+owns the FFmpegBuild 3.6.x and LibDovi 2.1.x dependencies; Plozz does not link a
 second FFmpeg build. This release also retains both earlier integration fixes:
 
 - [superuser404notfound/AetherEngine#566](https://github.com/superuser404notfound/AetherEngine/pull/566):
@@ -96,6 +117,21 @@ transcodes retain the original-source metadata rather than treating the
 re-encoded asset as evidence about the original file.
 
 These are candidate corrections for issue #58, not a hardware-verified fix.
+
+### Neutral Circadian compositing
+
+Circadian Mode's observer stays attached, but its window-wide multiply layer
+exists only while it actually changes colour or brightness. Off, scheduled
+daytime, and zero-strength settings leave no neutral sRGB compositing filter
+above either video engine. Active warmth/dimming and its transitions remain
+available; a superseded fade cannot remove a newly enabled tint.
+
+This is a separate candidate for #58 from the engine's display-switch timing
+change. The previous overlay was opaque white even when disabled. Hosted
+coverage verifies its removal and active-mode behavior, not HDMI metadata.
+Keep native MP4 and Plozzigen MKV comparisons on the same HDR10+ test file and
+display; require the metadata-dependent picture change and the TV's HDMI
+HDR10+ indication before claiming the reported output problem is resolved.
 
 ### Supplemental Emby HDR10+ detection
 
