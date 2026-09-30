@@ -356,15 +356,7 @@ public struct MediaItemMutation: Sendable, Equatable {
                 guard matches(accountID: ref.accountID, itemID: ref.itemID) || isCascadedOrigin else {
                     return ref
                 }
-                var updated = ref
-                if let played {
-                    updated.isPlayed = played
-                    updated.hasBeenPlayed = played
-                }
-                if let favorite { updated.isFavorite = favorite }
-                if let resumePosition { updated.resumePosition = resumePosition > 0 ? resumePosition : nil }
-                if let playedPercentage { updated.playedPercentage = playedPercentage }
-                return updated
+                return applyingFields(to: ref)
             }
         }
         if let played {
@@ -373,6 +365,25 @@ public struct MediaItemMutation: Sendable, Equatable {
             copy.hasBeenPlayed = played || copy.sources.contains(where: \.hasBeenPlayed)
         }
         return copy
+    }
+
+    /// Applies the same fields to a standalone source record without changing its
+    /// provider identity, versions, or unrelated watch state.
+    public func applied(to source: MediaSourceRef) -> MediaSourceRef {
+        guard matches(accountID: source.accountID, itemID: source.itemID) else { return source }
+        return applyingFields(to: source)
+    }
+
+    private func applyingFields(to source: MediaSourceRef) -> MediaSourceRef {
+        var updated = source
+        if let played {
+            updated.isPlayed = played
+            updated.hasBeenPlayed = played
+        }
+        if let favorite { updated.isFavorite = favorite }
+        if let resumePosition { updated.resumePosition = resumePosition > 0 ? resumePosition : nil }
+        if let playedPercentage { updated.playedPercentage = playedPercentage }
+        return updated
     }
 
     /// Posts a `.mediaItemDidMutate` notification carrying this mutation.

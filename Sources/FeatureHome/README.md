@@ -115,6 +115,20 @@ as well as Release; it never rebuilds or replaces the app under measurement.
 Use optimized physical-device measurements for performance acceptance, not
 simulator timing or passing navigation assertions alone.
 
+## Detail watch-state updates
+
+The shared `ItemDetailViewModel` applies account-scoped watch mutations to both
+the displayed item and its separate source-picker records. Playing an SMB copy
+must update a Plex-backed merged detail even when cross-server synchronization
+is disabled, without changing the Plex copy's state. The next Play/Resume target
+uses those same updated records rather than a stale pre-play position.
+
+Local edits remain authoritative for the open page across delayed source
+enrichment, snapshot restoration, and source switches while provider writes
+converge. Metadata-only enrichment must not copy unified progress into an
+untargeted physical source. Regressions cover the production stop notification,
+source selection, completion, unwatch, and unrelated-account ID collisions.
+
 ## Invariants
 
 - **Provider-agnostic.** All data flows through `MediaProvider`. No
