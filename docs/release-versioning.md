@@ -4,9 +4,14 @@ Plozz has three distinct version values:
 
 | Value | Example | Purpose |
 | --- | --- | --- |
-| Public release `version` | `2026.9.29.2` | About, update history, tester notes, and GitHub release title |
+| Public release `version` | `2026.9.29` | Release date shown in About and update history |
 | Apple `marketingVersion` | `2026.9.25` | `CFBundleShortVersionString` and App Store Connect's version series |
 | `build` | `45` | `CFBundleVersion`, assigned above the highest TestFlight build on either platform |
+
+Keep the familiar date-and-build identity: **2026.9.29 (45)**. About retains
+its separate Version and Build fields; tester notes and GitHub release titles
+combine them. Never append a daily revision such as `.1` to the date.
+Multiple releases on the same day share the date and have different build numbers.
 
 Keep Apple's existing version series unless deliberately starting a new one.
 Apple says later external-testing builds of the same version **might not** need
@@ -19,12 +24,13 @@ update does not.
 
 `App/Resources/ReleaseNotes.json` owns release identity and approved notes.
 Historical three-part `version` entries remain unchanged and also supply their
-Apple version. New entries use `YYYY.M.D.revision` and an explicit three-part
-`marketingVersion`. The date matches `releasedAt`; the positive revision is unique
-within that day and orders numerically (`.10` follows `.9`).
+Apple version. New entries use `YYYY.M.D` and an explicit three-part
+`marketingVersion`. The public date matches `releasedAt`; build numbers uniquely
+identify releases and order same-day updates. History continues to group notes
+by public date, while startup announcements track unseen release IDs/builds.
 
 ```sh
-# Read-only proposal; never consumes a revision or modifies the catalog.
+# Read-only date proposal; never allocates a build or modifies the catalog.
 python3 tools/release-notes.py next-version
 
 # Inspect the stable local Apple version; public release fields are empty.
@@ -39,14 +45,14 @@ python3 tools/release-notes.py render --release-id release/045 --platform iOS
 
 The example ID/build above is illustrative, not an existing approved release.
 Establish the actual assigned build from App Store Connect before preparing it.
-Each intended distribution gets its own entry, notes, and public version. Retries
-reuse that exact identity; Git pushes and local builds do not allocate revisions.
+Each intended distribution gets its own entry, notes, and build number. Retries
+reuse that exact identity; Git pushes and local builds do not allocate releases.
 Do not add a new entry merely to compile or merge code.
 
 Platform-specific notes use `{"text": "...", "platforms": ["tvOS"]}` or `["iOS"]`;
 plain strings apply to both. New-format rendered notes begin with the public
-Plozz version so testers can identify the release even while TestFlight's Apple
-version is unchanged. For an empty platform, review the beta lane's exact fallback:
+Plozz date and build so testers can identify the release even while TestFlight's
+Apple version is unchanged. For an empty platform, review the beta lane's exact fallback:
 
 ```sh
 python3 tools/release-notes.py render --release-id release/045 --platform iOS \
@@ -71,8 +77,8 @@ PLOZZ_RELEASE_ID=release/045 fastlane release --env fastlane
 
 `PLOZZ_MARKETING_VERSION` is an intentional Apple-version override, not the public
 release label. With a selected release it must match the catalog's Apple version.
-Never put the four-part public label in that override. Both platforms and Top
-Shelf share the Apple version/build; apps additionally bake `PlozzReleaseVersion`
+Never use that override merely to change the date shown in the app. Both platforms
+and Top Shelf share the Apple version/build; apps additionally bake `PlozzReleaseVersion`
 and `PlozzReleaseID`. About uses the public label; diagnostic reports retain the
 Apple version/build too. Crash-report and protocol version fields retain Apple's
 version identity.
@@ -85,7 +91,7 @@ than claiming to be a newly distributed release.
 Before uploading, both distribution lanes check both exported IPAs' platform, identifier,
 Apple version/build, and public release version/ID. A mismatch stops both uploads.
 After delivery, tags remain `release/<zero-padded-build>`; GitHub release titles
-use the public version. Inspect `.build/testflight-uploads/` and both platforms'
+use the public date and build. Inspect `.build/testflight-uploads/` and both platforms'
 actual App Store Connect availability before reporting success. After partial
 success, never blindly rerun `beta`, increment the build, or reupload: reconcile
 the recorded per-platform outcomes first.

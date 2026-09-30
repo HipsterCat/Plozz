@@ -25,10 +25,9 @@ struct SettingsContext {
     let activeAccountID: String?
     let profiles: [Profile]
     let activeProfile: Profile
-    let askProfileOnStartup: Bool
+    let automaticSignIn: AutomaticSignInSettings
     let isAccountIncludedInActiveProfile: (String) -> Bool
     let onSetAccountIncluded: (String, Bool) -> Void
-    let onSetAskProfileOnStartup: (Bool) -> Void
     let onSwitchProfile: () -> Void
     let onSaveProfile: (ProfileDraft) -> Void
     /// Creates a NEW profile and hands it to the app-level setup step. Distinct

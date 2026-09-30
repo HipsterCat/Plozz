@@ -210,7 +210,7 @@ def require_crash_reporting_dsn
   )
 end
 
-# Apple keeps one version series while Plozz publishes distinct date/revision
+# Apple keeps one version series while Plozz publishes dated, numbered
 # releases. The committed catalog, not the clock, owns both identities.
 def marketing_version
   @marketing_version ||= begin
@@ -353,7 +353,7 @@ def release_notes_text(entry, platform, empty_text: nil)
   text = blocks.empty? ? empty_text : blocks.join("\n\n")
   return text if text.nil? || !entry.key?("marketingVersion")
 
-  "Plozz #{entry.fetch('version')}\n\n#{text}"
+  "Plozz #{entry.fetch('version')} (#{entry.fetch('build')})\n\n#{text}"
 end
 
 def github_release_notes(entry)
@@ -483,7 +483,7 @@ def tag_github_release(build_number, notes, prerelease, release_version)
     end
   changelog = "- (no changes recorded)" if changelog.empty?
 
-  version = release_version
+  version = "#{release_version} (#{build_number})"
   date = Time.now.strftime("%Y-%m-%d")
   body = +"Plozz #{version} — #{date}\nApple version #{marketing_version}, build #{build_number}\n"
   body << "\nWhat to Test:\n#{notes.strip}\n" unless notes.strip.empty?

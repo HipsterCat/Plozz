@@ -264,6 +264,16 @@ final class FocusHeroModel {
         return rows.indices.contains(index) ? rowHeights[rows[index].id] ?? 0 : 0
     }
 
+    /// The first row rests at offset zero so native navigation recognizes Home's
+    /// top edge. Subtract the same origin from the spacer and every destination.
+    func scrollOrigin(in rows: [FocusHeroRow]) -> CGFloat {
+        guard let first = rows.first else { return 0 }
+        return min(
+            rowHeights[first.id] ?? 0,
+            FocusHeroLayout.rowsBottom(rowSpacing: FocusHeroLayout.rowSpacing)
+        )
+    }
+
     /// The pinned height as the rows show it right now: between the row left
     /// and the row arriving, as far as the rows have come.
     func displayedHeight(in rows: [FocusHeroRow]) -> CGFloat {
@@ -570,7 +580,7 @@ private struct FocusHeroScrollingRows<RowContent: View>: View {
         let bottom = FocusHeroLayout.rowsBottom(rowSpacing: FocusHeroLayout.rowSpacing)
         ScrollView(.vertical) {
             VStack(spacing: 0) {
-                Color.clear.frame(height: bottom)
+                Color.clear.frame(height: bottom - model.scrollOrigin(in: rows))
                 FocusHeroRowStack(rows: rows, model: model, rowContent: rowContent)
                 Color.clear.frame(height: FocusHeroLayout.screenHeight - bottom)
             }
@@ -593,7 +603,8 @@ private struct FocusHeroScrollPosition: View {
         let index = model.activeIndex(in: rows)
         FocusHeroNativeScrollPosition(
             rowID: model.resolvedActiveRowID(in: rows),
-            y: model.top(ofRowAt: index, in: rows, rowSpacing: spacing) + model.activeHeight(in: rows),
+            y: model.top(ofRowAt: index, in: rows, rowSpacing: spacing)
+                + model.activeHeight(in: rows) - model.scrollOrigin(in: rows),
             onProgress: { [model] in model.advanceRows(to: $0) }
         )
     }

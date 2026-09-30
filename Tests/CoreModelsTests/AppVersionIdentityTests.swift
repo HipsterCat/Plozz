@@ -7,12 +7,25 @@ final class AppVersionIdentityTests: XCTestCase {
             "CFBundleShortVersionString": "2026.9.25",
             "CFBundleVersion": "45",
             "PlozzReleaseID": "release/045",
-            "PlozzReleaseVersion": "2026.9.29.1"
+            "PlozzReleaseVersion": "2026.9.29"
         ])
 
-        XCTAssertEqual(identity.displayVersion, "2026.9.29.1")
+        XCTAssertEqual(identity.displayVersion, "2026.9.29")
         XCTAssertEqual(identity.marketingVersion, "2026.9.25")
         XCTAssertEqual(identity.build, "45")
+    }
+
+    func testSameDayReleasesDifferByBuildNotDateSuffix() {
+        for build in ["45", "46"] {
+            let identity = AppVersionIdentity(infoDictionary: [
+                "CFBundleShortVersionString": "2026.9.25",
+                "CFBundleVersion": build,
+                "PlozzReleaseID": "release/0\(build)",
+                "PlozzReleaseVersion": "2026.9.29"
+            ])
+            XCTAssertEqual("\(identity.displayVersion) (\(identity.build))", "2026.9.29 (\(build))")
+            XCTAssertEqual(identity.marketingVersion, "2026.9.25")
+        }
     }
 
     func testLocalAndLegacyBundlesFallBackWithoutClaimingANewRelease() {
@@ -21,7 +34,7 @@ final class AppVersionIdentityTests: XCTestCase {
                 "CFBundleShortVersionString": "2026.9.25",
                 "CFBundleVersion": "4056.1",
                 "PlozzReleaseID": releaseID,
-                "PlozzReleaseVersion": "2026.9.29.1"
+                "PlozzReleaseVersion": "2026.9.29"
             ])
             XCTAssertEqual(identity.displayVersion, "2026.9.25")
             XCTAssertNil(identity.releaseVersion)

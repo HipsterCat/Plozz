@@ -1253,6 +1253,16 @@ private struct PlozziOSProfilesView: View {
 
     private var orderedProfiles: [Profile] { appModel.profiles.profilesByRecency }
 
+    private var automaticSignIn: AutomaticSignInSettings {
+        AutomaticSignInSettings(
+            isEnabled: Binding(
+                get: { appModel.plexHomeUsers.automaticallySignIn },
+                set: { appModel.setAutomaticallySignIn($0) }
+            ),
+            error: appModel.plexHomeUsers.automaticSignInError
+        )
+    }
+
     /// One optional route owned by this page. A row cannot activate another
     /// row's destination, and there is no per-row NavigationLink state for
     /// SwiftUI's split-view reconciliation to accidentally stack.
@@ -1263,21 +1273,10 @@ private struct PlozziOSProfilesView: View {
     var body: some View {
         List {
             SettingsSectionGroup {
-                Toggle(
-                    "Ask Who’s Watching on Startup",
-                    isOn: Binding(
-                        get: {
-                            appModel.profiles.askProfileOnStartup
-                        },
-                        set: {
-                            appModel.profiles.setAskProfileOnStartup($0)
-                        }
-                    )
-                )
+                AutomaticSignInToggle(settings: automaticSignIn)
             } footer: {
-                Text("Profiles keep Home, settings, and downloads personal. Watch history belongs to the account each profile watches as.")
+                AutomaticSignInErrorMessage(settings: automaticSignIn)
             }
-
             SettingsSectionGroup(isEditingProfiles ? "Edit Profiles" : "Who’s watching?") {
                 // Tapping a row switches; in editing mode it opens that
                 // profile's settings instead. Long-press does the same without

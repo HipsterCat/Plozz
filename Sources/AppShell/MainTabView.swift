@@ -367,7 +367,7 @@ struct MainTabView: View {
     /// because switching "watching as" changes whose rows these are without
     /// changing the profile or the account list.
     let plexIdentityGeneration: Int
-    let askProfileOnStartup: Bool
+    let automaticSignIn: AutomaticSignInSettings
     /// Session-scoped handles for the Home tab, assembled by `RootView`. Stored
     /// rather than computed here on purpose: this view's body is a `TabView`
     /// with four large tabs, and it sits close enough to the Swift
@@ -376,7 +376,6 @@ struct MainTabView: View {
     let homeRuntime: HomeTabRuntime
     let isAccountIncludedInActiveProfile: (String) -> Bool
     let onSetAccountIncluded: (String, Bool) -> Void
-    let onSetAskProfileOnStartup: (Bool) -> Void
     let onSaveProfile: (ProfileDraft) -> Void
     var onCreateProfile: (ProfileDraft) -> Void = { _ in }
     /// Live cosmetics-only persistence for editing an existing profile (see
@@ -1004,7 +1003,7 @@ struct MainTabView: View {
                 profiles: profiles,
                 activeProfile: activeProfile,
                 liveTVPreferencesNamespace: liveTVPreferencesNamespace,
-                askProfileOnStartup: askProfileOnStartup,
+                automaticSignIn: automaticSignIn,
                 appVersion: AppInfo.version,
                 appBuild: AppInfo.build,
                 repoURL: AppInfo.repoURLString,
@@ -1013,7 +1012,6 @@ struct MainTabView: View {
                     onSetAccountIncluded(accountID, included)
                     scheduleLibraryReloadFromCurrentScope(changedAccountID: accountID)
                 },
-                onSetAskProfileOnStartup: onSetAskProfileOnStartup,
                 onSwitchProfile: openProfileSwitcher,
                 onSaveProfile: onSaveProfile,
                 onCreateProfile: onCreateProfile,

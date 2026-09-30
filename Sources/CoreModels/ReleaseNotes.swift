@@ -129,7 +129,6 @@ public enum ReleaseNotesCatalogError: LocalizedError, Equatable {
     case invalidReleaseID(String, build: Int)
     case invalidVersion(String)
     case invalidMarketingVersion(String)
-    case duplicateVersion(String)
     case invalidReleaseDate(String)
     case missingSections(String)
     case invalidSectionOrder(String)
@@ -158,8 +157,6 @@ public enum ReleaseNotesCatalogError: LocalizedError, Equatable {
             return "ReleaseNotes.json contains invalid version \(version)."
         case let .invalidMarketingVersion(version):
             return "ReleaseNotes.json contains invalid Apple marketing version \(version)."
-        case let .duplicateVersion(version):
-            return "ReleaseNotes.json repeats release version \(version)."
         case let .invalidReleaseDate(date):
             return "ReleaseNotes.json contains invalid release date \(date)."
         case let .missingSections(id):
@@ -286,7 +283,6 @@ public struct ReleaseNotesCatalog: Codable, Equatable, Sendable {
         }
         var ids = Set<String>()
         var builds = Set<Int>()
-        var displayVersions = Set<String>()
         for release in releases {
             guard ids.insert(release.id).inserted else {
                 throw ReleaseNotesCatalogError.duplicateReleaseID(release.id)
@@ -300,7 +296,7 @@ public struct ReleaseNotesCatalog: Codable, Equatable, Sendable {
             }
             let versionParts = release.version.split(separator: ".", omittingEmptySubsequences: false)
             guard
-                versionParts.count == 3 || versionParts.count == 4,
+                versionParts.count == 3,
                 versionParts.allSatisfy({
                     !$0.isEmpty && $0.allSatisfy({ $0.isASCII && $0.isNumber })
                 })
@@ -313,10 +309,9 @@ public struct ReleaseNotesCatalog: Codable, Equatable, Sendable {
             }) else {
                 throw ReleaseNotesCatalogError.invalidMarketingVersion(release.appleVersion)
             }
-            if versionParts.count == 4 {
+            if release.marketingVersion != nil {
                 let numbers = versionParts.compactMap { Int($0) }
-                guard numbers.count == 4, (1...9999).contains(numbers[0]), numbers[3] > 0,
-                      release.marketingVersion != nil,
+                guard numbers.count == 3, (1...9999).contains(numbers[0]),
                       numbers.map(String.init).joined(separator: ".") == release.version else {
                     throw ReleaseNotesCatalogError.invalidVersion(release.version)
                 }
@@ -328,9 +323,6 @@ public struct ReleaseNotesCatalog: Codable, Equatable, Sendable {
                       calendar.component(.day, from: date) == numbers[2],
                       release.releasedAt == String(format: "%04d-%02d-%02d", numbers[0], numbers[1], numbers[2]) else {
                     throw ReleaseNotesCatalogError.invalidReleaseDate(release.releasedAt)
-                }
-                guard displayVersions.insert(release.version).inserted else {
-                    throw ReleaseNotesCatalogError.duplicateVersion(release.version)
                 }
             }
             let dateParts = release.releasedAt.split(separator: "-", omittingEmptySubsequences: false)

@@ -3,7 +3,7 @@ import XCTest
 
 final class DiagnosticsReportTests: XCTestCase {
     func testReportRetainsPublicAndAppleVersionsWithoutDuplicatingLegacyVersion() {
-        for displayVersion in ["2026.9.29.1", "2026.9.25"] {
+        for displayVersion in ["2026.9.29", "2026.9.25"] {
             let report = DiagnosticsReport(
                 appVersion: displayVersion, appBuild: "45", providers: "Plex",
                 repoURL: "https://github.com/brandomoore/Plozz",

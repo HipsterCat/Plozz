@@ -98,6 +98,12 @@ horizontal rows stay native and retain their focus and scroll state. The rows
 remain in the original SwiftUI hierarchy, including navigation and accessibility.
 Repeated updates to an unchanged destination never cancel an in-flight scroll,
 and Reduce Motion moves directly to the same anchor.
+The first row rests at native scroll offset zero. Its measured height is
+subtracted equally from the leading spacer and every scroll destination, keeping
+the pinned geometry unchanged while letting the system sidebar button recognize
+the top of Home. Native chrome still auto-hides farther down and returns at the
+first row. The UI regression checks actual painted chrome, not just its
+accessibility presence, including sidebar and detail returns.
 The schedule badge sits 16pt above the logo slot; Showcase
 constrains even tall logos to that slot rather than letting artwork grow into
 the badge. The outgoing row fades over 64pt, with its bottom edge trimmed so no

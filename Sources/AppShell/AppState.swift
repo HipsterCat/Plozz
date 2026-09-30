@@ -72,7 +72,7 @@ public final class AppState {
             && !profileFlow.isPickingAppearanceForNewProfile
             && !profileFlow.hasResumableSetup
             && plexHomeUsers.pendingPlexPINRequest == nil
-            && (!profile.isLocked || profileFlow.isUnlockedThisRun(profile.id))
+            && !profileFlow.activeProfileAwaitsUnlock
             && !profile.awaitsIdentity(amongAccounts: accountsProviders.activeAccountIDs)
     }
     public var allowsStandalonePlayback: Bool { admissionContext.explicitStandaloneChoice }
@@ -1311,8 +1311,7 @@ public final class AppState {
         return registry
     }
 
-    /// Restores stored accounts on launch (relaunch without re-login). Shows the
-    /// profile picker when the household has opted into "ask on startup".
+    /// Restores stored accounts and applies this device's startup sign-in policy.
     public func bootstrap() {
         // Dev-only: start the main-thread responsiveness probe (no-op unless
         // PLZXMEM=1) so we can measure whether background share scans stall the UI.
@@ -1332,16 +1331,8 @@ public final class AppState {
         // provider name instead of the server's real name). Shared with iOS.
         accountsProviders.refreshServerNames()
         PlozzLog.boot("bootstrap accountsProviders.accounts=\(accountsProviders.accounts.count) activeIDs=\(accountsProviders.activeAccountIDs.count)")
-        // The "Ask which profile on startup" toggle is the single source of
-        // truth for whether the launch picker appears. When it's ON we MUST
-        // show the picker even if the Apple TV system user has a remembered
-        // selection — the remembered pick becomes the picker's initial focus,
-        // not a reason to skip the picker entirely. Otherwise an already-
-        // selected household would never see the picker again, which
-        // contradicts what the toggle promises.
-        //
-        // When the toggle is OFF, the remembered selection (or default
-        // profile) is used silently and the picker stays hidden.
+        // Only a trusted automatic sign-in skips the normal profile/PIN gates.
+        // A remembered selection alone sets the picker's focus, not permission.
         profileFlow.prepareLaunchPicker()
         if allowsStandalonePlayback,
            accountsProviders.accounts.isEmpty,

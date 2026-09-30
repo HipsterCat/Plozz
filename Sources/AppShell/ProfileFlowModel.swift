@@ -9,8 +9,8 @@ import FeatureProfiles
 /// The profile-flow + household facet, extracted from `AppState`.
 ///
 /// Owns the profile-switching orchestration (launch picker state, switch/create/
-/// edit/remove sequencing) and the household membership model (enable/disable
-/// profiles, ask-on-startup, per-server inclusion). This is the profile lifecycle
+/// edit/remove sequencing) and the household membership model (startup sign-in,
+/// per-server inclusion). This is the profile lifecycle
 /// coordinator the earlier batches' injected `switchProfile` callback lands on —
 /// now that this facet is the owner, the Plex-home-user facet's PIN-cancel
 /// fallback wires directly to `switchProfile(to:)`.
@@ -94,8 +94,8 @@ public final class ProfileFlowModel {
 
     // MARK: Launch picker lifecycle (driven by AppState bootstrap / onboarding)
 
-    /// Configures the launch profile picker: shown when the household opted into
-    /// "ask on startup" and has more than one profile.
+    /// Shows the launch picker for multiple profiles unless automatic sign-in
+    /// restores a trusted session on this device.
     ///
     /// Also forced when the profile we'd otherwise restore is locked. Landing on
     /// the picker (rather than restoring the profile and putting a PIN screen
@@ -104,9 +104,18 @@ public final class ProfileFlowModel {
     /// `switchProfile(to:)` gate with the picker sitting behind it. It also
     /// matches what people expect from "who's watching?" elsewhere.
     public func prepareLaunchPicker() {
-        isChoosingProfile = activeProfileAwaitsUnlock
-            || (profilesModel.askProfileOnStartup && profilesModel.profiles.count > 1)
+        let restored = plexHomeUsers.restoreAutomaticSignInAtLaunch()
+        isChoosingProfile = !restored && (
+            activeProfileAwaitsUnlock || profilesModel.profiles.count > 1
+        )
         isProfileSelectionCancelable = false
+    }
+
+    public func setAutomaticallySignIn(_ enabled: Bool) {
+        plexHomeUsers.setAutomaticallySignIn(
+            enabled,
+            profileIsUnlocked: !activeProfileAwaitsUnlock && !isChoosingProfile
+        )
     }
 
     /// Force-dismisses the picker (used by the debug first-run reset).
@@ -288,6 +297,7 @@ public final class ProfileFlowModel {
         // picker on a switch that never happened would strand the child in the
         // grown-up profile the gate exists to withhold.
         guard profilesModel.activeProfileID == id else { return }
+        plexHomeUsers.beginExplicitProfileActivation()
         audioController.stop()
         // Past both gates, so the hold has done its job — released here rather
         // than in `submitParentalPIN` so that switching into ANOTHER Kids
@@ -353,6 +363,7 @@ public final class ProfileFlowModel {
     public var activeProfileAwaitsUnlock: Bool {
         let active = profilesModel.activeProfile
         return active.isLocked && !unlockedProfileIDs.contains(active.id)
+            && !plexHomeUsers.isAutomaticallySignedIn(active)
     }
 
     public func isUnlockedThisRun(_ id: String) -> Bool {
@@ -643,18 +654,13 @@ public final class ProfileFlowModel {
             isChoosingProfile = true
             return true
         }
-        guard active.isLocked, !unlockedProfileIDs.contains(active.id) else { return false }
+        guard activeProfileAwaitsUnlock else { return false }
         isProfileSelectionCancelable = false
         isChoosingProfile = true
         return true
     }
 
     // MARK: Household preferences
-
-    /// Persists the "Ask which profile on startup" launch-picker toggle.
-    public func setAskProfileOnStartup(_ value: Bool) {
-        profilesModel.setAskProfileOnStartup(value)
-    }
 
     /// Whether `accountID` is included in the active profile's "Use this
     /// server" set. Used by Settings to drive the per-server toggle.

@@ -2591,8 +2591,8 @@ extension JellyfinProvider: ResumeStateWriting {
     /// without disturbing any live now-playing session.
     ///
     /// Routes through the session-less user-data endpoint
-    /// (`POST /UserItems/{itemId}/UserData`, Jellyfin 10.9+), which updates only
-    /// `PlaybackPositionTicks`. The previous implementation reported a `stop` at
+    /// (`POST /UserItems/{itemId}/UserData`, Jellyfin 10.9+), updating position
+    /// and recency while preserving watched state. The previous implementation reported a `stop` at
     /// the position, which posts to `/Sessions/Playing/Stopped` and **terminates
     /// the live session**, snapping the server's now-playing dashboard to 0:00 —
     /// the bug this avoids. A position of `0` clears the resume point.
@@ -2603,9 +2603,10 @@ extension JellyfinProvider: ResumeStateWriting {
     /// older-server fallback only, a convergence write can still disturb a
     /// concurrent live session of the same title.
     ///
-    /// Emby uses its own user-scoped UserData endpoint. A failed Emby write must
-    /// throw so the durable outbox retries it, never synthesize a stop that could
-    /// terminate a concurrently playing transcode on that device.
+    /// Emby's user-scoped endpoint resets an omitted Played flag, so the client
+    /// reads and preserves it explicitly. A failed read or write must throw so
+    /// the outbox retries, never synthesize a stop that could terminate another
+    /// transcode on that device.
     public func setResumePosition(_ seconds: TimeInterval, itemID: String, capturedAt: Date = Date()) async throws {
         do {
             try await client.updatePlaybackPosition(max(seconds, 0), userID: session.userID, itemID: itemID, lastPlayedAt: capturedAt)
