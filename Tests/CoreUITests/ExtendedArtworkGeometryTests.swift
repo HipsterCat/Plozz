@@ -776,11 +776,11 @@ final class ContinueWatchingAdaptiveDimTests: XCTestCase {
         dim(tone(0.85, 0.15, 0.12), backdrop(0.55, 0.62, 0.72))
     }
 
-    func testBrightArtworkUses36PercentDimWithAnUnchangedAdaptiveBoost() {
-        XCTAssertEqual(brightAndClear, 0.36, accuracy: 0.001)
+    func testBrightArtworkUses40PercentDimWithA65PercentMaximum() {
+        XCTAssertEqual(brightAndClear, 0.40, accuracy: 0.001)
         let matching = dim(tone(0.85, 0.65, 0.30), backdrop(0.85, 0.65, 0.30))
-        XCTAssertEqual(matching, 0.60, accuracy: 0.001)
-        XCTAssertEqual(matching - brightAndClear, 0.24, accuracy: 0.001)
+        XCTAssertEqual(matching, 0.65, accuracy: 0.001)
+        XCTAssertEqual(matching - brightAndClear, 0.25, accuracy: 0.001)
     }
 
     /// **The case the whole thing exists for.** A logo sitting on artwork of its
@@ -884,7 +884,7 @@ final class ContinueWatchingAdaptiveDimTests: XCTestCase {
                 // Never inverts into a brightening, and never so dark the artwork
                 // stops reading as artwork.
                 XCTAssertGreaterThan(value, 0)
-                XCTAssertLessThanOrEqual(value, 0.6)
+                XCTAssertLessThanOrEqual(value, 0.65)
             }
         }
     }
