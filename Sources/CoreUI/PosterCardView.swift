@@ -141,6 +141,14 @@ public struct PosterCardView: View {
     /// no plate now.
     private var surfaceFocused: Bool { isFocused && focusStyle.drawsFocusOutline }
 
+    private var cardAccessibilityTitle: String? {
+        #if os(tvOS)
+        nativePosterTitle.resolve(locale: locale)
+        #else
+        nil
+        #endif
+    }
+
     /// Title/subtitle colour, flipped to dark ink over a focused card's opaque
     /// "lift" surface. Centralised in `PlozzCardCaption` so every card type flips
     /// identically.
@@ -372,7 +380,10 @@ public struct PosterCardView: View {
             cornerRadius: metrics.posterCardCornerRadius,
             outlineScale: PlozzTheme.Metrics.focusedCardScale
         )
-        .focusableCard(isFocused: $isFocused, cornerRadius: metrics.posterCardCornerRadius, action: selectCard)
+        .focusableCard(
+            isFocused: $isFocused, cornerRadius: metrics.posterCardCornerRadius,
+            accessibilityLabel: cardAccessibilityTitle, action: selectCard
+        )
         .plozzCardFocusTransition(isFocused: isFocused)
     }
 
@@ -428,7 +439,10 @@ public struct PosterCardView: View {
             cornerRadius: metrics.landscapeCardCornerRadius,
             outlineScale: PlozzTheme.Metrics.mediumFocusedCardScale
         )
-        .focusableCard(isFocused: $isFocused, cornerRadius: metrics.landscapeCardCornerRadius, action: selectCard)
+        .focusableCard(
+            isFocused: $isFocused, cornerRadius: metrics.landscapeCardCornerRadius,
+            accessibilityLabel: cardAccessibilityTitle, action: selectCard
+        )
         .plozzCardFocusTransition(isFocused: isFocused)
     }
 

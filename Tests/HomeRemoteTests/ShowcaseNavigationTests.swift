@@ -90,6 +90,21 @@ final class ShowcaseNavigationTests: XCTestCase {
         try checkProgressiveRows(layout: "--immersive-home", libraryRows: false)
     }
 
+    func testLoadingFocusRespectsEveryStyleAndContinueWatchingCardVariation() throws {
+        for focusStyle in ["system", "highlight", "outlined"] {
+            for framed in [false, true] {
+                for seriesArtwork in [true, false] {
+                    try XCTContext.runActivity(named: "\(focusStyle), framed=\(framed), series=\(seriesArtwork)") { _ in
+                        try checkProgressiveRows(
+                            layout: "--immersive-home", libraryRows: false,
+                            focusStyle: focusStyle, framed: framed, seriesArtwork: seriesArtwork
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     func testFreshMergedRowsAreUsableBeforeResumeWithoutHero() throws {
         try checkProgressiveRows(layout: "--hero-disabled-home", libraryRows: false)
     }
@@ -122,7 +137,10 @@ final class ShowcaseNavigationTests: XCTestCase {
         try checkProgressiveRows(layout: "--cached-home-hero", libraryRows: false, emptyResume: true)
     }
 
-    private func checkProgressiveRows(layout: String?, libraryRows: Bool, emptyResume: Bool = false) throws {
+    private func checkProgressiveRows(
+        layout: String?, libraryRows: Bool, emptyResume: Bool = false,
+        focusStyle: String = "system", framed: Bool = false, seriesArtwork: Bool = true
+    ) throws {
         continueAfterFailure = false
         let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
         let notification = "com.thatcube.Plozz.HomeFixtureRows.\(UUID().uuidString)"
@@ -130,6 +148,9 @@ final class ShowcaseNavigationTests: XCTestCase {
         if let layout { app.launchArguments.append(layout) }
         if libraryRows { app.launchArguments.append("--progressive-library-rows") }
         if emptyResume { app.launchArguments.append("--empty-home-resume") }
+        app.launchArguments.append("--focus-style=\(focusStyle)")
+        if framed { app.launchArguments.append("--framed-cards") }
+        if !seriesArtwork { app.launchArguments.append("--episode-home-artwork") }
         app.launchEnvironment["PLOZZ_HOME_ROWS_RELEASE_NOTIFICATION"] = notification
         app.launch()
         defer {
@@ -181,7 +202,7 @@ final class ShowcaseNavigationTests: XCTestCase {
             for: [XCTNSPredicateExpectation(predicate: settled, object: nil)], timeout: 10
         ), .completed, "Late rows must preserve the focused card and its on-screen position.")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "progressive-home-\(layout ?? "carousel")-libraries-\(libraryRows)"
+        screenshot.name = "progressive-home-\(layout ?? "carousel")-\(focusStyle)-framed-\(framed)-series-\(seriesArtwork)-libraries-\(libraryRows)"
         screenshot.lifetime = .keepAlways
         add(screenshot)
     }

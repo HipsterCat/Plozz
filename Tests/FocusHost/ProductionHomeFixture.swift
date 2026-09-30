@@ -220,6 +220,9 @@ private final class ProductionHomeState {
             userID: "fixture", userName: "Fixture", deviceID: "fixture"
         )
         let visibility = self.visibility
+        visibility.setContinueWatchingShowsSeriesArtwork(
+            !ProcessInfo.processInfo.arguments.contains("--episode-home-artwork")
+        )
         let libraryRows = ProcessInfo.processInfo.arguments.contains("--progressive-library-rows")
         visibility.setMergeLibrariesOnHome(!libraryRows)
         for row in HomeGlobalRow.allCases {

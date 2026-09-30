@@ -9,68 +9,95 @@ import CoreModels
 
 @MainActor
 final class NativeFocusRequestHostedTests: XCTestCase {
-    func testLoadingFocusOutlineMatchesNativeArtworkRatherThanItsLayoutSlot() async throws {
+    func testLoadingCardFocusStyleAndPresentationMatrix() async throws {
         let fixture = try await makeFixture()
         defer { fixture.close() }
-        for (style, seriesArtwork, caption) in [
-            (SkeletonCardView.Style.landscape, true, false),
-            (.landscape, false, true),
-            (.poster, false, true)
-        ] {
-            let host = UIHostingController(rootView:
-                SkeletonCardView(
-                    style: style, showsCaption: caption, showsSeriesArtwork: seriesArtwork,
-                    isFocused: true
-                )
-                .frame(width: 408)
-                .environment(\.plozzCardStyle, .borderless)
-                .environment(\.plozzCardFocusStyle, .system)
-                .environment(\.themePalette, .dark)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.black)
-            )
-            fixture.window.rootViewController = host
-            fixture.window.layoutIfNeeded()
-            try await waitUntil { self.nativePoster(in: host.view)?.imageView.bounds.width ?? 0 > 0 }
-            let poster = try XCTUnwrap(nativePoster(in: host.view))
-            XCTAssertFalse(poster.isEnabled, "The caller, not the decorative poster, owns loading focus.")
-            for scale in [CGFloat(1), 1.08] {
-                poster.imageView.transform = CGAffineTransform(scaleX: scale, y: scale)
-                let artwork = poster.imageView.convert(poster.imageView.bounds, to: fixture.window)
-                let outline = try XCTUnwrap(brightBounds(in: fixture.window, around: artwork))
-                XCTAssertEqual(outline.minX, artwork.minX, accuracy: 1)
-                XCTAssertEqual(outline.maxX, artwork.maxX, accuracy: 1)
-                XCTAssertEqual(outline.minY, artwork.minY, accuracy: 1)
-                XCTAssertEqual(outline.maxY, artwork.maxY, accuracy: 1)
-            }
-        }
-    }
+        var count = 0
+        for focusStyle in CardFocusStyle.allCases {
+            for cardStyle in CardStyle.allCases {
+                for (name, style, seriesArtwork, caption) in [
+                    ("series", SkeletonCardView.Style.landscape, true, false),
+                    ("episode-caption", .landscape, false, true),
+                    ("episode-no-caption", .landscape, false, false),
+                    ("poster-caption", .poster, false, true),
+                    ("poster-no-caption", .poster, false, false)
+                ] {
+                    let label = "\(focusStyle.rawValue)-\(cardStyle.rawValue)-\(name)"
+                    let model = SkeletonFocusMatrixModel()
+                    defer {
+                        model.focus = nil
+                        model.focusAnchor = nil
+                    }
+                    let host = UIHostingController(rootView:
+                        SkeletonFocusMatrixView(
+                            model: model, style: style,
+                            seriesArtwork: seriesArtwork, caption: caption
+                        )
+                        .environment(\.plozzCardStyle, cardStyle)
+                        .environment(\.plozzCardFocusStyle, focusStyle)
+                        .environment(\.themePalette, .dark)
+                    )
+                    host.overrideUserInterfaceStyle = .dark
+                    fixture.window.rootViewController = host
+                    fixture.window.layoutIfNeeded()
+                    try await waitUntil { model.focus != nil && model.frame.width > 0 }
+                    model.focusAnchor?()
+                    try await waitUntil { model.anchorFocused }
+                    let resting = model.frame
+                    let neighbor = model.neighborFrame
+                    model.focus?.requestFocus(animated: false)
+                    try await waitUntil(diagnostic: { label }) { model.isFocused }
+                    try await Task.sleep(for: .milliseconds(300))
+                    XCTAssertEqual(model.frame.width, resting.width, accuracy: 0.5, label)
+                    XCTAssertEqual(model.frame.height, resting.height, accuracy: 0.5, label)
+                    XCTAssertEqual(model.neighborFrame, neighbor, label)
+                    XCTAssertNotNil(UIFocusSystem.focusSystem(for: fixture.window)?.focusedItem, label)
 
-    private func brightBounds(in window: UIWindow, around region: CGRect) throws -> CGRect? {
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        format.opaque = true
-        format.preferredRange = .standard
-        let image = UIGraphicsImageRenderer(size: window.bounds.size, format: format).image { _ in
-            XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
-        }
-        let cg = try XCTUnwrap(image.cgImage)
-        XCTAssertEqual(cg.bitsPerPixel, 32)
-        let bytes = Array(try XCTUnwrap(cg.dataProvider?.data) as Data)
-        var left = cg.width, right = -1, top = cg.height, bottom = -1
-        for y in max(0, Int(region.minY) - 15)..<min(cg.height, Int(region.maxY) + 15) {
-            for x in max(0, Int(region.minX) - 15)..<min(cg.width, Int(region.maxX) + 15) {
-                let offset = y * cg.bytesPerRow + x * 4
-                if min(bytes[offset], bytes[offset + 1], bytes[offset + 2]) > 160 {
-                    left = min(left, x)
-                    right = max(right, x)
-                    top = min(top, y)
-                    bottom = max(bottom, y)
+                    let controls = lockups(in: host.view)
+                    if focusStyle.usesSystemEffect {
+                        let control = try XCTUnwrap(controls.first(where: \.isEnabled), label)
+                        XCTAssertTrue(control.isFocused, label)
+                        XCTAssertEqual(controls.filter(\.isEnabled).count, 1, label)
+                        if cardStyle == .borderless {
+                            let poster = try XCTUnwrap(control as? TVPosterView, label)
+                            let aspect: CGFloat = style == .poster ? 2 / 3
+                                : seriesArtwork ? ContinueWatchingCardShape.aspectRatio : 16 / 9
+                            XCTAssertEqual(poster.imageView.bounds.width / poster.imageView.bounds.height,
+                                           aspect, accuracy: 0.01, label)
+                            let surface = poster.imageView.overlayContentView
+                            let hosted = try XCTUnwrap(surface.subviews.first, label)
+                            let projected = hosted.convert(hosted.bounds, to: poster.imageView)
+                            XCTAssertEqual(projected, surface.convert(surface.bounds, to: poster.imageView), label)
+                            XCTAssertEqual(projected.midX, poster.imageView.bounds.midX, accuracy: 0.5, label)
+                            XCTAssertEqual(projected.midY, poster.imageView.bounds.midY, accuracy: 0.5, label)
+                        } else {
+                            XCTAssertTrue(control is TVCardView, label)
+                        }
+                    } else {
+                        XCTAssertTrue(controls.isEmpty, "Custom focus must not also apply a system effect: \(label)")
+                    }
+                    let format = UIGraphicsImageRendererFormat()
+                    format.scale = 1
+                    format.opaque = true
+                    let image = UIGraphicsImageRenderer(size: fixture.window.bounds.size, format: format).image { _ in
+                        XCTAssertTrue(fixture.window.drawHierarchy(in: fixture.window.bounds, afterScreenUpdates: true))
+                    }
+                    let attachment = XCTAttachment(image: image)
+                    attachment.name = "loading-focus-\(label)"
+                    attachment.lifetime = .keepAlways
+                    add(attachment)
+                    model.focusAnchor?()
+                    try await waitUntil { model.anchorFocused && !model.isFocused }
+                    XCTAssertEqual(model.frame, resting, label)
+                    count += 1
                 }
             }
         }
-        guard right >= left, bottom >= top else { return nil }
-        return CGRect(x: left, y: top, width: right - left + 1, height: bottom - top + 1)
+        XCTAssertEqual(count, CardFocusStyle.allCases.count * CardStyle.allCases.count * 5)
+    }
+
+    private func lockups(in view: UIView) -> [TVLockupView] {
+        (view as? TVLockupView).map { [$0] } ?? view.subviews.flatMap(lockups(in:))
     }
 
     func testFractionalPosterHeightCannotRoundDownIntoItsCaption() {
@@ -790,6 +817,56 @@ final class NativeFocusRequestHostedTests: XCTestCase {
             }
             return lines.joined(separator: "\n")
         }
+    }
+}
+
+@MainActor @Observable
+private final class SkeletonFocusMatrixModel {
+    @ObservationIgnored var focus: PlozzCardFocus.Binding?
+    @ObservationIgnored var focusAnchor: (() -> Void)?
+    var isFocused = false
+    var anchorFocused = false
+    var frame = CGRect.zero
+    var neighborFrame = CGRect.zero
+}
+
+private struct SkeletonFocusMatrixView: View {
+    let model: SkeletonFocusMatrixModel
+    let style: SkeletonCardView.Style
+    let seriesArtwork: Bool
+    let caption: Bool
+    @PlozzCardFocus private var focused
+    @FocusState private var anchorFocused: Bool
+    @Environment(\.plozzMetrics) private var metrics
+
+    var body: some View {
+        let width = style == .poster ? metrics.posterWidth : metrics.cardSlotWidth(
+            for: .landscape, cardStyle: .framed, showsSeriesArtwork: seriesArtwork
+        )
+        VStack(spacing: 80) {
+            Button("Anchor") {}
+                .focused($anchorFocused)
+            HStack(alignment: .top, spacing: 80) {
+                SkeletonCardView(
+                    style: style, showsCaption: caption, showsSeriesArtwork: seriesArtwork,
+                    isFocused: focused, showsProgress: true, focus: $focused
+                )
+                .frame(width: width)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.frame = $0 }
+                SkeletonCardView(style: style, showsCaption: caption, showsSeriesArtwork: seriesArtwork)
+                    .frame(width: width)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.neighborFrame = $0 }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.black)
+        .onAppear {
+            model.focus = $focused
+            let anchor = $anchorFocused
+            model.focusAnchor = { anchor.wrappedValue = true }
+        }
+        .onChange(of: focused) { _, value in model.isFocused = value }
+        .onChange(of: anchorFocused) { _, value in model.anchorFocused = value }
     }
 }
 

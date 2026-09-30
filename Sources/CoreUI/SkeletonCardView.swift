@@ -19,8 +19,8 @@ import UIKit
 /// Keeping this in lock-step with `PosterCardView` — via the shared
 /// `PlozzTheme.Metrics` and the same layout structure — is what makes a skeleton
 /// row pixel-for-pixel 1:1 with the loaded row, so nothing shifts or reflows when
-/// real content swaps in. It never owns focus itself. Home's explicit waiting
-/// destination can supply focus/progress state; ordinary skeletons stay inert.
+/// real content swaps in. Home's explicit waiting destination can supply a focus
+/// binding to use the same controls as loaded cards; ordinary skeletons stay inert.
 public struct SkeletonCardView: View {
     public enum Style { case poster, landscape }
 
@@ -37,6 +37,7 @@ public struct SkeletonCardView: View {
     private let showsSeriesArtwork: Bool
     private let isFocused: Bool
     private let showsProgress: Bool
+    private let focus: PlozzCardFocus.Binding?
 
     @Environment(\.plozzMetrics) private var metrics
     @Environment(\.themePalette) private var palette
@@ -45,19 +46,22 @@ public struct SkeletonCardView: View {
     /// real cards will render in.
     @Environment(\.plozzCardStyle) private var cardStyle
     @Environment(\.plozzCardFocusStyle) private var focusStyle
+    @Environment(\.plozzReduceTransparency) private var reduceTransparency
 
     public init(
         style: Style = .poster,
         showsCaption: Bool = true,
         showsSeriesArtwork: Bool = false,
         isFocused: Bool = false,
-        showsProgress: Bool = false
+        showsProgress: Bool = false,
+        focus: PlozzCardFocus.Binding? = nil
     ) {
         self.style = style
         self.showsCaption = showsCaption
         self.showsSeriesArtwork = showsSeriesArtwork
         self.isFocused = isFocused
         self.showsProgress = showsProgress
+        self.focus = focus
     }
 
     /// The artwork slot this placeholder reserves — identical to
@@ -75,6 +79,20 @@ public struct SkeletonCardView: View {
 
     @ViewBuilder
     public var body: some View {
+        if let focus {
+            cardBody
+                .focusableCard(
+                    isFocused: focus, cornerRadius: borderlessCornerRadius,
+                    nativeFocusInContent: cardStyle == .borderless, action: {}
+                )
+                .plozzCardFocusTransition(isFocused: isFocused)
+        } else {
+            cardBody
+        }
+    }
+
+    @ViewBuilder
+    private var cardBody: some View {
         #if os(tvOS)
         if focusStyle.usesSystemEffect && cardStyle == .borderless {
             nativeCard
@@ -85,6 +103,8 @@ public struct SkeletonCardView: View {
         styledBody
         #endif
     }
+
+    private var surfaceFocused: Bool { isFocused && focusStyle.drawsFocusOutline }
 
     @ViewBuilder
     private var styledBody: some View {
@@ -112,10 +132,7 @@ public struct SkeletonCardView: View {
                 .clipShape(RoundedRectangle(cornerRadius: PlozzTheme.Metrics.posterArtCornerRadius, style: .continuous))
                 .plozzMediaEdge(cornerRadius: PlozzTheme.Metrics.posterArtCornerRadius)
                 .overlay {
-                    SkeletonCardOverlay(
-                        cornerRadius: PlozzTheme.Metrics.posterArtCornerRadius,
-                        isFocused: false, showsProgress: showsProgress
-                    )
+                    SkeletonLoadingIndicator(isVisible: showsProgress)
                 }
 
             // Match PosterCardView's caption: VStack(spacing: 2), subheadline +
@@ -128,15 +145,17 @@ public struct SkeletonCardView: View {
                     .padding([.horizontal, .bottom], metrics.posterCaptionInset)
             }
         }
-        .padding(metrics.cardInset)
-        .plozzGlassCard(cornerRadius: metrics.posterCardCornerRadius, isFocused: false)
         .shimmering()
-        .overlay {
-            SkeletonCardOverlay(
-                cornerRadius: metrics.posterCardCornerRadius,
-                isFocused: isFocused, showsProgress: false
-            )
-        }
+        .plozzFramedMediaCard(
+            innerCornerRadius: PlozzTheme.Metrics.posterArtCornerRadius,
+            isFocused: surfaceFocused
+        )
+        .plozzCardRasterize(reduceTransparency: reduceTransparency)
+        .plozzRestingCardShadow(isFocused: isFocused)
+        .plozzCardFocusLift(
+            isFocused: isFocused, cornerRadius: metrics.posterCardCornerRadius,
+            outlineScale: PlozzTheme.Metrics.focusedCardScale
+        )
     }
 
     // Mirrors `PosterCardView.landscapeCard`.
@@ -148,10 +167,7 @@ public struct SkeletonCardView: View {
                 .clipShape(RoundedRectangle(cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius, style: .continuous))
                 .plozzMediaEdge(cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius)
                 .overlay {
-                    SkeletonCardOverlay(
-                        cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius,
-                        isFocused: false, showsProgress: showsProgress
-                    )
+                    SkeletonLoadingIndicator(isVisible: showsProgress)
                 }
 
             // PosterCardView's landscape caption uses VStack(spacing: 4).
@@ -161,38 +177,50 @@ public struct SkeletonCardView: View {
                     .frame(width: artworkSize.width, alignment: .leading)
             }
         }
-        .padding(metrics.cardInset)
-        .plozzGlassCard(cornerRadius: metrics.landscapeCardCornerRadius, isFocused: false)
         .shimmering()
-        .overlay {
-            SkeletonCardOverlay(
-                cornerRadius: metrics.landscapeCardCornerRadius,
-                isFocused: isFocused, showsProgress: false
-            )
-        }
+        .plozzFramedMediaCard(
+            innerCornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius,
+            isFocused: surfaceFocused
+        )
+        .plozzCardRasterize(reduceTransparency: reduceTransparency)
+        .plozzRestingCardShadow(isFocused: isFocused)
+        .plozzCardFocusLift(
+            isFocused: isFocused, cornerRadius: metrics.landscapeCardCornerRadius,
+            outlineScale: PlozzTheme.Metrics.mediumFocusedCardScale
+        )
     }
 
     #if os(tvOS)
     // MARK: Native (system focus, "Posters" style)
 
-    /// Mirrors `PosterCardView.nativePosterCard` at rest. The placeholder art is
+    /// Mirrors `PosterCardView.nativePosterCard`. The placeholder art is
     /// a native poster itself, so it keeps the same clearance for focus growth
     /// and the same corners as the real one.
     private var nativeCard: some View {
         VStack(spacing: metrics.nativePosterCaptionSpacing) {
-            NativePosterPlaceholder(
-                aspectRatio: borderlessAspectRatio,
-                fallbackWidth: nativeArtworkWidth,
-                fill: palette.fill,
-                isFocused: isFocused,
-                showsProgress: showsProgress
-            )
-            .frame(maxWidth: .infinity)
+            nativeArtwork.frame(maxWidth: .infinity)
             if showsCaption {
                 nativeCaption
+                    .offset(y: isFocused ? metrics.focusCaptionPush(for: .system) : 0)
             }
         }
         .padding(.horizontal, metrics.borderlessCardSideMargin)
+    }
+
+    @ViewBuilder
+    private var nativeArtwork: some View {
+        let artwork = NativePosterPlaceholder(
+            aspectRatio: borderlessAspectRatio,
+            fallbackWidth: nativeArtworkWidth,
+            fill: palette.fill,
+            focus: focus,
+            showsProgress: showsProgress
+        )
+        if let focus {
+            artwork.focused(focus.focusState)
+        } else {
+            artwork
+        }
     }
 
     /// The artwork width a native poster is given: the card's own artwork width.
@@ -226,7 +254,7 @@ public struct SkeletonCardView: View {
 
     // MARK: Borderless ("Posters" style)
 
-    /// Mirrors `PosterCardView.borderlessCard` at rest (skeletons never focus): no
+    /// Mirrors `PosterCardView.borderlessCard`: no
     /// glass surface, just the full-bleed artwork placeholder rounded at the outer
     /// radius, with the caption held off the artwork edge and riding up to the
     /// resting gap. Reserving the *focused* caption spacing (`borderlessCaptionSpacing`)
@@ -242,18 +270,17 @@ public struct SkeletonCardView: View {
                 textLines(contentWidth: borderlessCaptionContentWidth, spacing: 2)
                     .padding(.horizontal, borderlessCaptionInset)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    // The real caption rides up to the resting gap when unfocused (a pure
-                    // offset, never a layout change); a skeleton is always at rest.
-                    .offset(y: focusStyle.usesSystemEffect ? 0 : -captionPush)
+                    // Match the real caption's drawing offset without changing its slot.
+                    .offset(y: focusStyle.usesSystemEffect || isFocused ? 0 : -captionPush)
+                    .shimmering()
             }
         }
         .padding(.horizontal, metrics.borderlessCardSideMargin)
-        .shimmering()
+        .compositingGroup()
     }
 
     /// The full-bleed artwork placeholder for a borderless card, clipped to the
-    /// outer radius — mirrors `PosterCardView.borderlessArtwork` minus the focus
-    /// halo (skeletons never focus).
+    /// outer radius, with the same shared focus treatment as loaded artwork.
     private var borderlessArtwork: some View {
         Color.clear
             .aspectRatio(borderlessAspectRatio, contentMode: .fit)
@@ -261,15 +288,18 @@ public struct SkeletonCardView: View {
             .overlay {
                 RoundedRectangle(cornerRadius: borderlessCornerRadius, style: .continuous)
                     .fill(palette.fill)
+                    .shimmering()
             }
             .clipShape(RoundedRectangle(cornerRadius: borderlessCornerRadius, style: .continuous))
             .plozzMediaEdge(cornerRadius: borderlessCornerRadius)
             .overlay {
-                SkeletonCardOverlay(
-                    cornerRadius: borderlessCornerRadius,
-                    isFocused: isFocused, showsProgress: showsProgress
-                )
+                SkeletonLoadingIndicator(isVisible: showsProgress)
             }
+            .plozzFocusHalo(
+                cornerRadius: borderlessCornerRadius,
+                focusScale: PlozzTheme.Metrics.mediumFocusedCardScale,
+                isFocused: isFocused
+            )
     }
 
     /// Aspect ratio for the borderless full-bleed image (matches `PosterCardView`).
@@ -364,20 +394,14 @@ public struct SkeletonCardView: View {
     }
 }
 
-struct SkeletonCardOverlay: View {
-    let cornerRadius: CGFloat
-    let isFocused: Bool
-    let showsProgress: Bool
+struct SkeletonLoadingIndicator: View {
+    let isVisible: Bool
     @Environment(\.themePalette) private var palette
 
     var body: some View {
-        ZStack {
-            if showsProgress {
+        Group {
+            if isVisible {
                 ProgressView().tint(palette.primaryText)
-            }
-            if isFocused {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(palette.primaryText.opacity(0.7), lineWidth: 3)
             }
         }
         .allowsHitTesting(false)

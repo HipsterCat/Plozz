@@ -604,12 +604,12 @@ struct NativeTVCardButtonStyle: PrimitiveButtonStyle {
 /// A loading placeholder drawn by a real native poster of the card's shape, so
 /// it takes the same room (TVUIKit keeps clearance around the artwork for focus
 /// growth) and has the same corners as the poster that replaces it. The poster is
-/// disabled, so it never takes focus.
+/// disabled unless the caller supplies the explicit loading-entry focus binding.
 struct NativePosterPlaceholder: UIViewRepresentable {
     let aspectRatio: CGFloat
     let fallbackWidth: CGFloat
     let fill: Color
-    var isFocused = false
+    var focus: PlozzCardFocus.Binding?
     var showsProgress = false
 
     typealias Container = NativeTVPoster<EmptyView>.Container
@@ -618,15 +618,23 @@ struct NativePosterPlaceholder: UIViewRepresentable {
     /// matched to within a pixel of the native one.
     static let cornerRadius: CGFloat = 21
 
+    func makeCoordinator() -> NativeTVMediaCoordinator? {
+        focus.map { NativeTVMediaCoordinator(focus: $0, action: {}) }
+    }
+
     func makeUIView(context: Context) -> Container {
         let size = CGSize(width: fallbackWidth, height: fallbackWidth / aspectRatio)
         // TVUIKit sizes the clearance from the image, so it needs one of the
         // artwork's size from the start.
         let poster = NativeTVPoster<EmptyView>.Poster(image: Self.blank(size))
         poster.contentSize = size
-        poster.isEnabled = false
-        poster.isUserInteractionEnabled = false
-        poster.isAccessibilityElement = false
+        poster.isEnabled = focus != nil && context.environment.isEnabled
+        poster.isUserInteractionEnabled = focus != nil
+        poster.isAccessibilityElement = focus != nil
+        poster.onFocus = { [weak coordinator = context.coordinator] in coordinator?.observe($0) }
+        poster.onAvailable = { [weak coordinator = context.coordinator, weak poster] in
+            if let poster { coordinator?.requestFocusIfReady(in: poster) }
+        }
         // TVUIKit rounds a poster's image itself and leaves its overlay square,
         // so the fill carries TVUIKit's corner.
         let sheen = configuration(in: context).makeContentView()
@@ -644,7 +652,13 @@ struct NativePosterPlaceholder: UIViewRepresentable {
     }
 
     func updateUIView(_ container: Container, context: Context) {
-        container.poster.hostedOverlay?.configuration = configuration(in: context)
+        let poster = container.poster
+        poster.hostedOverlay?.configuration = configuration(in: context)
+        poster.isEnabled = focus != nil && context.environment.isEnabled
+        poster.isAccessibilityElement = focus != nil
+        poster.accessibilityLabel = focus == nil
+            ? nil : NativePosterText.localized("Loading").resolve(locale: context.environment.locale)
+        if let focus { context.coordinator?.update(focus: focus, action: {}, view: poster) }
     }
 
     private func configuration(in context: Context) -> any UIContentConfiguration {
@@ -653,10 +667,7 @@ struct NativePosterPlaceholder: UIViewRepresentable {
                 .fill(fill)
                 .shimmering()
                 .overlay {
-                    SkeletonCardOverlay(
-                        cornerRadius: Self.cornerRadius,
-                        isFocused: isFocused, showsProgress: showsProgress
-                    )
+                    SkeletonLoadingIndicator(isVisible: showsProgress)
                 }
                 .environment(\.self, context.environment)
         }

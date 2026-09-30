@@ -205,7 +205,7 @@ public struct MediaRowView: View {
     @State private var entryLayout = MediaRowEntryLayout()
     @State private var pendingEntryHandoff = false
     @State private var alignedEntryTarget: String?
-    @FocusState private var loadingCardFocused: Bool
+    @PlozzCardFocus private var loadingCardFocused: Bool
 
     public init(
         title: Text?,
@@ -336,7 +336,7 @@ public struct MediaRowView: View {
     /// Whether each card needs an individual focus binding installed — required
     /// to drive initial/default focus and to report focus changes to the hero.
     private var tracksFocus: Bool {
-        episodeEntry != nil || MediaRowFocusPolicy.observesFocus(
+        reservesLoadingFocus || episodeEntry != nil || MediaRowFocusPolicy.observesFocus(
             initialFocusID: initialFocusID,
             defaultFocusID: defaultFocusID,
             hasOnFocusEntered: onFocusEntered != nil,
@@ -634,7 +634,11 @@ public struct MediaRowView: View {
                     // Retry when the items land, otherwise the row simply opens
                     // un-aligned and the target only snaps into place much later,
                     // when focus leaves and the re-entry scroll runs.
-                    .onChange(of: itemIDSet) { _, _ in
+                    .onChange(of: itemIDSet) { previous, _ in
+                        if reservesLoadingFocus, previous.isEmpty, loadingCardFocused,
+                           let first = items.first?.stablePresentationID {
+                            focusedID = first
+                        }
                         applyInitialFocus(using: proxy)
                     }
                     .onChange(of: focusedID) { _, newValue in
@@ -866,37 +870,44 @@ public struct MediaRowView: View {
     }
 
     @ViewBuilder
-    private func skeletonPlaceholder(isFocused: Bool = false, showsProgress: Bool = false) -> some View {
+    private func skeletonPlaceholder(
+        isFocused: Bool = false, showsProgress: Bool = false, focus: PlozzCardFocus.Binding? = nil
+    ) -> some View {
         // The same shape and caption the real cards will have, so nothing in
         // the row moves when they arrive.
         switch presentation {
         case .poster:
             SkeletonCardView(
                 style: .poster, showsCaption: !captionsHidden,
-                isFocused: isFocused, showsProgress: showsProgress
+                isFocused: isFocused, showsProgress: showsProgress, focus: focus
             )
         case .landscape:
             SkeletonCardView(
                 style: .landscape,
                 showsCaption: !captionsHidden && !showsSeriesArtwork,
                 showsSeriesArtwork: showsSeriesArtwork,
-                isFocused: isFocused, showsProgress: showsProgress
+                isFocused: isFocused, showsProgress: showsProgress, focus: focus
             )
         case .episodeColumn:
-            EpisodeRowEntryPlaceholder(showsStatus: showsProgress, isFocused: isFocused)
+            if let focus {
+                EpisodeRowEntryPlaceholder(
+                    showsStatus: showsProgress, isFocused: isFocused, nativeFocus: focus
+                )
+                .focusableCard(
+                    isFocused: focus, cornerRadius: layoutMetrics.landscapeCardCornerRadius,
+                    nativeFocusInContent: true, action: {}
+                )
+            } else {
+                EpisodeRowEntryPlaceholder()
+            }
         }
     }
 
     private var loadingFocusEntry: some View {
-        skeletonPlaceholder(isFocused: loadingCardFocused, showsProgress: true)
-            #if os(tvOS)
-            .focusable(true)
-            .focused($loadingCardFocused)
-            .focusEffectDisabled()
+        skeletonPlaceholder(isFocused: loadingCardFocused, showsProgress: true, focus: $loadingCardFocused)
             .onChange(of: loadingCardFocused) { _, focused in
                 if focused { onFocusEntered?() }
             }
-            #endif
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Loading")
             .accessibilityIdentifier("media-row-loading-entry")
