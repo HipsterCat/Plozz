@@ -9,6 +9,70 @@ import CoreModels
 
 @MainActor
 final class NativeFocusRequestHostedTests: XCTestCase {
+    func testLoadingFocusOutlineMatchesNativeArtworkRatherThanItsLayoutSlot() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        for (style, seriesArtwork, caption) in [
+            (SkeletonCardView.Style.landscape, true, false),
+            (.landscape, false, true),
+            (.poster, false, true)
+        ] {
+            let host = UIHostingController(rootView:
+                SkeletonCardView(
+                    style: style, showsCaption: caption, showsSeriesArtwork: seriesArtwork,
+                    isFocused: true
+                )
+                .frame(width: 408)
+                .environment(\.plozzCardStyle, .borderless)
+                .environment(\.plozzCardFocusStyle, .system)
+                .environment(\.themePalette, .dark)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.black)
+            )
+            fixture.window.rootViewController = host
+            fixture.window.layoutIfNeeded()
+            try await waitUntil { self.nativePoster(in: host.view)?.imageView.bounds.width ?? 0 > 0 }
+            let poster = try XCTUnwrap(nativePoster(in: host.view))
+            XCTAssertFalse(poster.isEnabled, "The caller, not the decorative poster, owns loading focus.")
+            for scale in [CGFloat(1), 1.08] {
+                poster.imageView.transform = CGAffineTransform(scaleX: scale, y: scale)
+                let artwork = poster.imageView.convert(poster.imageView.bounds, to: fixture.window)
+                let outline = try XCTUnwrap(brightBounds(in: fixture.window, around: artwork))
+                XCTAssertEqual(outline.minX, artwork.minX, accuracy: 1)
+                XCTAssertEqual(outline.maxX, artwork.maxX, accuracy: 1)
+                XCTAssertEqual(outline.minY, artwork.minY, accuracy: 1)
+                XCTAssertEqual(outline.maxY, artwork.maxY, accuracy: 1)
+            }
+        }
+    }
+
+    private func brightBounds(in window: UIWindow, around region: CGRect) throws -> CGRect? {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        format.preferredRange = .standard
+        let image = UIGraphicsImageRenderer(size: window.bounds.size, format: format).image { _ in
+            XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+        }
+        let cg = try XCTUnwrap(image.cgImage)
+        XCTAssertEqual(cg.bitsPerPixel, 32)
+        let bytes = Array(try XCTUnwrap(cg.dataProvider?.data) as Data)
+        var left = cg.width, right = -1, top = cg.height, bottom = -1
+        for y in max(0, Int(region.minY) - 15)..<min(cg.height, Int(region.maxY) + 15) {
+            for x in max(0, Int(region.minX) - 15)..<min(cg.width, Int(region.maxX) + 15) {
+                let offset = y * cg.bytesPerRow + x * 4
+                if min(bytes[offset], bytes[offset + 1], bytes[offset + 2]) > 160 {
+                    left = min(left, x)
+                    right = max(right, x)
+                    top = min(top, y)
+                    bottom = max(bottom, y)
+                }
+            }
+        }
+        guard right >= left, bottom >= top else { return nil }
+        return CGRect(x: left, y: top, width: right - left + 1, height: bottom - top + 1)
+    }
+
     func testFractionalPosterHeightCannotRoundDownIntoItsCaption() {
         let poster = NativeTVPoster<EmptyView>.Poster(image: nil)
         let size = CGSize(width: 388, height: 218.25)

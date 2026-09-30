@@ -75,11 +75,12 @@ does not overwrite the durable snapshot.
 Showcase keeps its first-row anchor while that row loads; a lower row finishing
 does not choose focus or scroll the page. Its leading loading card has a visible
 progress indicator and can hold focus without making the other skeletons
-interactive. After the viewer navigates, it keeps
-the focused card when an earlier row finishes. Carousel rows share a native focus
+interactive. Its outline belongs to the artwork surface, following its corners
+and native focus projection rather than the wider layout/caption slot.
+After the viewer navigates, it keeps the focused card when an earlier row finishes.
+Carousel rows share a native focus
 section so Down can cross a loading row to reach usable content. Placeholder and
-resolved heroes use the
-same row-recede geometry. The `PLZBOOT` row-ready events distinguish first usable
+resolved heroes use the same row-recede geometry. The `PLZBOOT` row-ready events distinguish first usable
 data from completion of the entire Home load.
 
 ## Showcase

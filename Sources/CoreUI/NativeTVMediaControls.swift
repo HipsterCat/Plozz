@@ -609,6 +609,8 @@ struct NativePosterPlaceholder: UIViewRepresentable {
     let aspectRatio: CGFloat
     let fallbackWidth: CGFloat
     let fill: Color
+    var isFocused = false
+    var showsProgress = false
 
     typealias Container = NativeTVPoster<EmptyView>.Container
 
@@ -627,14 +629,8 @@ struct NativePosterPlaceholder: UIViewRepresentable {
         poster.isAccessibilityElement = false
         // TVUIKit rounds a poster's image itself and leaves its overlay square,
         // so the fill carries TVUIKit's corner.
-        let sheen = UIHostingConfiguration {
-            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .fill(fill)
-                .shimmering()
-                .environment(\.self, context.environment)
-        }
-        .margins(.all, 0)
-        .makeContentView()
+        let sheen = configuration(in: context).makeContentView()
+        poster.hostedOverlay = sheen
         let container = poster.imageView.overlayContentView
         container.addSubview(sheen)
         sheen.translatesAutoresizingMaskIntoConstraints = false
@@ -647,7 +643,25 @@ struct NativePosterPlaceholder: UIViewRepresentable {
         return Container(poster: poster)
     }
 
-    func updateUIView(_ container: Container, context: Context) {}
+    func updateUIView(_ container: Container, context: Context) {
+        container.poster.hostedOverlay?.configuration = configuration(in: context)
+    }
+
+    private func configuration(in context: Context) -> any UIContentConfiguration {
+        UIHostingConfiguration {
+            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
+                .fill(fill)
+                .shimmering()
+                .overlay {
+                    SkeletonCardOverlay(
+                        cornerRadius: Self.cornerRadius,
+                        isFocused: isFocused, showsProgress: showsProgress
+                    )
+                }
+                .environment(\.self, context.environment)
+        }
+        .margins(.all, 0)
+    }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: Container, context: Context) -> CGSize? {
         let width = proposal.width ?? fallbackWidth

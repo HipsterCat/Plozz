@@ -861,34 +861,34 @@ public struct MediaRowView: View {
         }
     }
 
-    @ViewBuilder
     private var loadingPlaceholder: some View {
+        skeletonPlaceholder()
+    }
+
+    @ViewBuilder
+    private func skeletonPlaceholder(isFocused: Bool = false, showsProgress: Bool = false) -> some View {
         // The same shape and caption the real cards will have, so nothing in
         // the row moves when they arrive.
         switch presentation {
         case .poster:
-            SkeletonCardView(style: .poster, showsCaption: !captionsHidden)
+            SkeletonCardView(
+                style: .poster, showsCaption: !captionsHidden,
+                isFocused: isFocused, showsProgress: showsProgress
+            )
         case .landscape:
             SkeletonCardView(
                 style: .landscape,
                 showsCaption: !captionsHidden && !showsSeriesArtwork,
-                showsSeriesArtwork: showsSeriesArtwork
+                showsSeriesArtwork: showsSeriesArtwork,
+                isFocused: isFocused, showsProgress: showsProgress
             )
         case .episodeColumn:
-            EpisodeRowEntryPlaceholder()
+            EpisodeRowEntryPlaceholder(showsStatus: showsProgress, isFocused: isFocused)
         }
     }
 
     private var loadingFocusEntry: some View {
-        loadingPlaceholder
-            .overlay {
-                ProgressView()
-                    .tint(palette.primaryText)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: PlozzTheme.Metrics.mediumMediaCornerRadius)
-                    .strokeBorder(palette.primaryText.opacity(loadingCardFocused ? 0.7 : 0), lineWidth: 3)
-            }
+        skeletonPlaceholder(isFocused: loadingCardFocused, showsProgress: true)
             #if os(tvOS)
             .focusable(true)
             .focused($loadingCardFocused)
