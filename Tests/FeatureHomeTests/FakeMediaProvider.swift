@@ -79,6 +79,9 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
     var alwaysFail = false
     private var _requestedPages: [PageRequest] = []
     var requestedPages: [PageRequest] { withLock { _requestedPages } }
+    private var activePageRequests = 0
+    private var maximumPageRequests = 0
+    var maximumActivePageRequests: Int { withLock { maximumPageRequests } }
     /// The `kind` each `items(in:kind:page:)` call asked for, in order. The
     /// combined browse gives every source its OWN kind, so this is how a test
     /// proves a movie library was never asked for series.
@@ -94,6 +97,11 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
     var supplementalFactsByItem: [String: ProbedStreamFacts] = [:]
     var supplementalFactsGate: (@Sendable () async -> Void)?
     var librariesGate: (@Sendable () async -> Void)?
+    var libraryItems: [MediaLibrary] = []
+    var latestItems: [MediaItem] = []
+    var containerGates: [String: @Sendable () async -> Void] = [:]
+    var containerErrors: [String: AppError] = [:]
+    var latestError: AppError?
     private var _supplementalProbeCount = 0
     var supplementalProbeCount: Int { withLock { _supplementalProbeCount } }
 
@@ -131,7 +139,7 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
     func libraries() async throws -> [MediaLibrary] {
         withLock { _librariesCallCount += 1 }
         await librariesGate?()
-        return []
+        return libraryItems
     }
     /// How many times `libraries()` was called — lets a test prove whether the
     /// Home aggregator re-ran (e.g. that a redundant reload was skipped).
@@ -148,7 +156,8 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
     var latestGate: (@Sendable () async -> Void)?
     func latest(limit: Int) async throws -> [MediaItem] {
         await latestGate?()
-        return []
+        if let latestError { throw latestError }
+        return Array(latestItems.prefix(limit))
     }
     func item(id: String) async throws -> MediaItem {
         withLock { _itemCallCounts[id, default: 0] += 1 }
@@ -204,8 +213,13 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
         withLock {
             _requestedPages.append(page)
             _requestedKinds.append(kind)
+            activePageRequests += 1
+            maximumPageRequests = max(maximumPageRequests, activePageRequests)
         }
+        defer { withLock { activePageRequests -= 1 } }
         if alwaysFail { throw AppError.serverUnreachable }
+        await containerGates[containerID]?()
+        if let error = containerErrors[containerID] { throw error }
         onItemsRequest?(page)
         do {
             if let hook = pageHooks[page.startIndex] {

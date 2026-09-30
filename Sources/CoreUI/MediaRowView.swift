@@ -54,6 +54,9 @@ public struct MediaRowView: View {
     /// heading (previously spelled as an empty string).
     private let title: Text?
     private let loadingPlaceholderCount: Int
+    /// Gives the first pending Home row a visible waiting destination. Other
+    /// skeletons stay inert; data arriving below must not choose initial focus.
+    private let reservesLoadingFocus: Bool
     private let episodeEntry: MediaRowEpisodeEntry?
     /// Row contents, guaranteed to hold each `id` once.
     ///
@@ -202,6 +205,8 @@ public struct MediaRowView: View {
     @State private var entryLayout = MediaRowEntryLayout()
     @State private var pendingEntryHandoff = false
     @State private var alignedEntryTarget: String?
+    @PlozzCardFocus private var loadingCardFocused: Bool
+    @State private var tracksLoadingFocus: Bool
 
     public init(
         title: Text?,
@@ -223,6 +228,7 @@ public struct MediaRowView: View {
         statusCue: ((MediaItem) -> LocalizedStringResource?)? = nil,
         pendingRemovalIDs: Set<String> = [],
         loadingPlaceholderCount: Int = 0,
+        reservesLoadingFocus: Bool = false,
         episodeEntry: MediaRowEpisodeEntry? = nil,
         playsOnSelect: Bool = false,
         onSelect: @escaping (MediaItem) -> Void
@@ -247,6 +253,7 @@ public struct MediaRowView: View {
             statusCue: statusCue,
             pendingRemovalIDs: pendingRemovalIDs,
             loadingPlaceholderCount: loadingPlaceholderCount,
+            reservesLoadingFocus: reservesLoadingFocus,
             episodeEntry: episodeEntry,
             playsOnSelect: playsOnSelect,
             onSelect: onSelect
@@ -273,12 +280,15 @@ public struct MediaRowView: View {
         statusCue: ((MediaItem) -> LocalizedStringResource?)? = nil,
         pendingRemovalIDs: Set<String> = [],
         loadingPlaceholderCount: Int = 0,
+        reservesLoadingFocus: Bool = false,
         episodeEntry: MediaRowEpisodeEntry? = nil,
         playsOnSelect: Bool = false,
         onSelect: @escaping (MediaItem) -> Void
     ) {
         self.title = title
         self.loadingPlaceholderCount = max(loadingPlaceholderCount, 0)
+        self.reservesLoadingFocus = reservesLoadingFocus
+        _tracksLoadingFocus = State(initialValue: reservesLoadingFocus)
         self.episodeEntry = episodeEntry
         let uniqueItems = Self.uniqued(items)
         self.items = uniqueItems
@@ -328,7 +338,7 @@ public struct MediaRowView: View {
     /// Whether each card needs an individual focus binding installed — required
     /// to drive initial/default focus and to report focus changes to the hero.
     private var tracksFocus: Bool {
-        episodeEntry != nil || MediaRowFocusPolicy.observesFocus(
+        tracksLoadingFocus || episodeEntry != nil || MediaRowFocusPolicy.observesFocus(
             initialFocusID: initialFocusID,
             defaultFocusID: defaultFocusID,
             hasOnFocusEntered: onFocusEntered != nil,
@@ -512,9 +522,14 @@ public struct MediaRowView: View {
                                 switch element {
                                 case .item(let item):
                                     tappableCard(for: item)
-                                case .loadingPlaceholder:
-                                    loadingPlaceholder
-                                        .frame(width: cardSlotWidth)
+                                case .loadingPlaceholder(let index):
+                                    if index == 0, reservesLoadingFocus, items.isEmpty {
+                                        loadingFocusEntry
+                                            .frame(width: cardSlotWidth)
+                                    } else {
+                                        loadingPlaceholder
+                                            .frame(width: cardSlotWidth)
+                                    }
                                 }
                             }
                         }
@@ -615,13 +630,22 @@ public struct MediaRowView: View {
                     // opposite side" bug, commit f812fe64).
                     .focusSectionIf(gatesFocus || episodeEntry != nil)
                     .onAppear { applyInitialFocus(using: proxy) }
+                    .onChange(of: reservesLoadingFocus) { _, reserves in
+                        // Becoming the first row must not replace already-loaded
+                        // cards with a different focus-binding hierarchy.
+                        if reserves, items.isEmpty { tracksLoadingFocus = true }
+                    }
                     // The opening alignment usually CAN'T run on first layout: a
                     // season page loads its episodes asynchronously, so `onAppear`
                     // fires with an empty row and the target not yet in `itemIDSet`.
                     // Retry when the items land, otherwise the row simply opens
                     // un-aligned and the target only snaps into place much later,
                     // when focus leaves and the re-entry scroll runs.
-                    .onChange(of: itemIDSet) { _, _ in
+                    .onChange(of: itemIDSet) { previous, _ in
+                        if reservesLoadingFocus, previous.isEmpty, loadingCardFocused,
+                           let first = items.first?.stablePresentationID {
+                            focusedID = first
+                        }
                         applyInitialFocus(using: proxy)
                     }
                     .onChange(of: focusedID) { _, newValue in
@@ -848,22 +872,52 @@ public struct MediaRowView: View {
         }
     }
 
-    @ViewBuilder
     private var loadingPlaceholder: some View {
+        skeletonPlaceholder()
+    }
+
+    @ViewBuilder
+    private func skeletonPlaceholder(
+        isFocused: Bool = false, showsProgress: Bool = false, focus: PlozzCardFocus.Binding? = nil
+    ) -> some View {
         // The same shape and caption the real cards will have, so nothing in
         // the row moves when they arrive.
         switch presentation {
         case .poster:
-            SkeletonCardView(style: .poster, showsCaption: !captionsHidden)
+            SkeletonCardView(
+                style: .poster, showsCaption: !captionsHidden,
+                isFocused: isFocused, showsProgress: showsProgress, focus: focus
+            )
         case .landscape:
             SkeletonCardView(
                 style: .landscape,
                 showsCaption: !captionsHidden && !showsSeriesArtwork,
-                showsSeriesArtwork: showsSeriesArtwork
+                showsSeriesArtwork: showsSeriesArtwork,
+                isFocused: isFocused, showsProgress: showsProgress, focus: focus
             )
         case .episodeColumn:
-            EpisodeRowEntryPlaceholder()
+            if let focus {
+                EpisodeRowEntryPlaceholder(
+                    showsStatus: showsProgress, isFocused: isFocused, nativeFocus: focus
+                )
+                .focusableCard(
+                    isFocused: focus, cornerRadius: layoutMetrics.landscapeCardCornerRadius,
+                    nativeFocusInContent: true, action: {}
+                )
+            } else {
+                EpisodeRowEntryPlaceholder()
+            }
         }
+    }
+
+    private var loadingFocusEntry: some View {
+        skeletonPlaceholder(isFocused: loadingCardFocused, showsProgress: true, focus: $loadingCardFocused)
+            .onChange(of: loadingCardFocused) { _, focused in
+                if focused { onFocusEntered?() }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Loading")
+            .accessibilityIdentifier("media-row-loading-entry")
     }
 
     private var layoutMetrics: PlozzMetrics {

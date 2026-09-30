@@ -56,6 +56,37 @@ fallback when the user's server has no attached trailer.
   grids, and covered detail pages cannot retain background audio. A cancelled
   or no-longer-frontmost detail resolver cannot start a trailer after departure.
 
+## Home loading
+
+Home gives inventory, each global feed, and per-library rows independent queues
+of at most five operations each. Slow resume feeds cannot occupy the slots
+needed to start other row types. Each global row arrives
+once its own sources are complete, preserving cross-server deduplication and
+ordering. A slow Continue Watching feed therefore retains its own skeleton
+without holding up Watchlist, Recently Added, or per-library rows.
+
+Enabled library rows start as soon as their inventory is known. Recently Added
+and recommendation requests complete independently, in stable library/row slots.
+Both shells use the same loading/error state; failed rows can be retried without
+removing successful rows. Cancellation stops queued requests. Parent-series
+identity lookups are coalesced per account and load, and incomplete Home content
+does not overwrite the durable snapshot.
+
+Showcase keeps its first-row anchor while that row loads; a lower row finishing
+does not choose focus or scroll the page. Its leading loading card has a visible
+progress indicator and can hold focus without making the other skeletons
+interactive. The waiting card uses the loaded cards' shared focus treatment:
+native TVUIKit for System, lighting/lift for Highlight, and glass for Outline.
+Borderless effects belong to the artwork, not its wider layout/caption slot;
+framed cards use the same concentric card surface as loaded content.
+After the viewer navigates, it keeps the focused card when an earlier row finishes.
+Classic Home preserves loaded cards' focus-binding hierarchy when an empty
+earlier row disappears, so the new first row does not recreate its focused card.
+Carousel rows share a native focus
+section so Down can cross a loading row to reach usable content. Placeholder and
+resolved heroes use the same row-recede geometry. The `PLZBOOT` row-ready events distinguish first usable
+data from completion of the entire Home load.
+
 ## Showcase
 
 `FocusHeroHomeView` keeps focus-driven movement and hero updates outside the
