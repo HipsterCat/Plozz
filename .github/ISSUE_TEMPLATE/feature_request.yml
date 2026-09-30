@@ -29,11 +29,15 @@ body:
     id: backend
     attributes:
       label: Affected backend(s)
-      description: Which backend(s) would this touch? Plozz keeps Jellyfin and Plex co-equal.
+      description: Which sources would this affect?
+      multiple: true
       options:
         - Jellyfin
+        - Emby
         - Plex
+        - Silo
         - SMB share
+        - IPTV / M3U
         - All backends
         - Not applicable / not sure
     validations:

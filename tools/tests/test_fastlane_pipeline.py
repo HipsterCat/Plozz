@@ -54,7 +54,8 @@ def harness.require_crash_reporting_dsn; end
 def harness.next_build_number; @events << "number"; 39; end
 def harness.marketing_version; "2026.9.17"; end
 def harness.release_notes_entry
-  { "id" => "release/039", "sections" => [
+  { "id" => "release/039", "version" => "2026.9.29.2",
+    "marketingVersion" => "2026.9.17", "build" => 39, "sections" => [
     { "category" => "Updated", "items" => ["Shared", { "text" => "TV only", "platforms" => ["tvOS"] }] },
     { "category" => "Fixed", "items" => [{ "text" => "iOS only", "platforms" => ["iOS"] }] }
   ] }
@@ -68,7 +69,7 @@ def harness.build_app(**options)
   @build_options << options
   raise "archive failed" if ENV["SCENARIO"] == "archive_failure" && options[:scheme] == "PlozziOS"
 end
-def harness.tag_github_release(*); @events << "tag"; end
+def harness.tag_github_release(*arguments); @events << "tag"; @tag_arguments = arguments; end
 PlozzTestflightPipeline.define_singleton_method(:validate_jobs!) do |jobs|
   harness.events << "validate IPAs"
 end
@@ -85,6 +86,7 @@ rescue => e
 end
 puts JSON.generate(events: harness.events, options: harness.build_options,
                    jobs: harness.instance_variable_get(:@jobs), error: error,
+                   tag_arguments: harness.instance_variable_get(:@tag_arguments),
                    git_parameters: ENV["GIT_CONFIG_PARAMETERS"])
 """
 
@@ -346,8 +348,14 @@ class FastlanePipelineTests(unittest.TestCase):
             result["events"], ["number", "gate", "Plozz", "PlozziOS", "validate IPAs", "upload both", "tag"]
         )
         tv, ios = [job["options"] for job in result["jobs"]]
-        self.assertEqual(tv["changelog"], "Updated\n• Shared\n• TV only")
-        self.assertEqual(ios["changelog"], "Updated\n• Shared\n\nFixed\n• iOS only")
+        self.assertEqual(tv["changelog"], "Plozz 2026.9.29.2\n\nUpdated\n• Shared\n• TV only")
+        self.assertEqual(ios["changelog"], "Plozz 2026.9.29.2\n\nUpdated\n• Shared\n\nFixed\n• iOS only")
+        for job in result["jobs"]:
+            self.assertEqual(job["release_version"], "2026.9.29.2")
+            self.assertEqual(job["release_id"], "release/039")
+            self.assertNotIn("release_version", job["options"])
+            self.assertNotIn("release_id", job["options"])
+        self.assertEqual(result["tag_arguments"][3], "2026.9.29.2")
         for options in (tv, ios):
             self.assertEqual(options["app_version"], "2026.9.17")
             self.assertEqual(options["build_number"], "39")
@@ -364,6 +372,43 @@ class FastlanePipelineTests(unittest.TestCase):
                 self.assertFalse(options[key])
         self.assertTrue(result["git_parameters"].endswith("'safe.bareRepository=all'"))
         self.assertIn("'test.preserve=value'", result["git_parameters"])
+
+    def test_real_apple_version_resolver_uses_catalog_and_pins_the_invocation(self) -> None:
+        source = FASTFILE_HARNESS.split("module AppleBuildLease")[0] + r"""
+require "open3"
+def harness.sh(command)
+  @identity_calls = (@identity_calls || 0) + 1
+  output, status = Open3.capture2e(*Shellwords.split(command))
+  raise output unless status.success?
+  output
+end
+first = harness.marketing_version
+ENV["PLOZZ_MARKETING_VERSION"] = "2099.1.1"
+second = harness.marketing_version
+puts JSON.generate(first: first, second: second,
+                   calls: harness.instance_variable_get(:@identity_calls))
+"""
+        result = self.ruby(source, PLOZZ_RELEASE_ID="", PLOZZ_MARKETING_VERSION="")
+        latest = json.loads((ROOT / "App/Resources/ReleaseNotes.json").read_text())["releases"][0]
+        self.assertEqual(result["first"], latest.get("marketingVersion", latest["version"]))
+        self.assertEqual(result["second"], result["first"])
+        self.assertEqual(result["calls"], 1)
+
+    def test_empty_platform_fallback_retains_public_version(self) -> None:
+        source = FASTFILE_HARNESS.split("module AppleBuildLease")[0] + r"""
+entry = { "version" => "2026.9.29.1", "marketingVersion" => "2026.9.25",
+          "sections" => [{ "category" => "New",
+            "items" => [{ "text" => "TV only", "platforms" => ["tvOS"] }] }] }
+puts JSON.generate(
+  authored: harness.release_notes_text(entry, "iOS"),
+  fallback: harness.release_notes_text(entry, "iOS",
+              empty_text: "No changes for this platform in this build.")
+)
+"""
+        result = self.ruby(source)
+        self.assertIsNone(result["authored"])
+        self.assertEqual(result["fallback"],
+                         "Plozz 2026.9.29.1\n\nNo changes for this platform in this build.")
 
     def test_failure_never_tags_or_blindly_retries(self) -> None:
         for scenario in ("gate_failure", "archive_failure", "upload_failure"):
@@ -654,6 +699,42 @@ end
 """
         result = self.ruby(source, IPA=str(ipa))
         self.assertIn('IPA build_number "38" != approved "39"', result["error"])
+
+    def test_exported_ipa_must_match_public_release_and_catalog_id(self) -> None:
+        ipa = self.directory / "release.ipa"
+        ipa.write_bytes(b"fixture")
+        source = r"""
+require ENV.fetch("PIPELINE_HELPER")
+analyser = Object.new
+def analyser.fetch_app_identifier(_); "com.thatcube.Plozz"; end
+def analyser.fetch_app_platform(_); "appletvos"; end
+def analyser.fetch_app_version(_); "2026.9.25"; end
+def analyser.fetch_app_build(_); "45"; end
+def analyser.fetch_info_plist_file(_); JSON.parse(ENV.fetch("PLIST")); end
+job = PlozzTestflightPipeline.job(
+  name: "tvOS", app_identifier: "com.thatcube.Plozz", platform: "appletvos",
+  ipa: ENV.fetch("IPA"), version: "2026.9.25", build_number: "45",
+  release_version: "2026.9.29.1", release_id: "release/045",
+  notes: "TV only", group: "Plozz External"
+)
+begin
+  PlozzTestflightPipeline.validate_jobs!([job], analyser: analyser)
+rescue => e
+  error = e.message
+end
+puts JSON.generate(error: error)
+"""
+        for plist, valid in (
+            ({"PlozzReleaseVersion": "2026.9.29.1", "PlozzReleaseID": "release/045"}, True),
+            ({"PlozzReleaseVersion": "2026.9.29.2", "PlozzReleaseID": "release/045"}, False),
+            ({"PlozzReleaseVersion": "2026.9.29.1", "PlozzReleaseID": "release/044"}, False),
+            ({}, False), (None, False),
+        ):
+            with self.subTest(plist=plist):
+                result = self.ruby(source, IPA=str(ipa), PLIST=json.dumps(plist))
+                self.assertEqual(result["error"] is None, valid, result)
+                if not valid:
+                    self.assertIn("does not match the approved release", result["error"])
 
     def test_worker_reports_exact_stages_and_observed_external_state(self) -> None:
         worker = self.directory / "pilot-worker.rb"

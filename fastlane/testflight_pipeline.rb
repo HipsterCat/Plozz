@@ -40,9 +40,12 @@ module PlozzTestflightPipeline
   end
 
   class << self
-    def job(name:, app_identifier:, platform:, ipa:, version:, build_number:, notes:, group:)
+    def job(name:, app_identifier:, platform:, ipa:, version:, build_number:, notes:, group:,
+            release_version: nil, release_id: nil)
       {
         name: name,
+        release_version: release_version,
+        release_id: release_id,
         options: {
           app_identifier: app_identifier, app_platform: platform, ipa: ipa,
           app_version: version, build_number: build_number.to_s, changelog: notes,
@@ -70,6 +73,18 @@ module PlozzTestflightPipeline
           actual = analyser.public_send(method, ipa).to_s
           expected = options.fetch(key).to_s
           raise "#{job.fetch(:name)}: IPA #{key} #{actual.inspect} != approved #{expected.inspect}" unless actual == expected
+        end
+        if job[:release_version] || job[:release_id]
+          plist = analyser.fetch_info_plist_file(ipa)
+          {
+            "PlozzReleaseVersion" => job.fetch(:release_version),
+            "PlozzReleaseID" => job.fetch(:release_id)
+          }.each do |key, expected|
+            actual = plist && plist[key]
+            unless expected && !expected.empty? && actual == expected
+              raise "#{job.fetch(:name)}: IPA #{key} does not match the approved release"
+            end
+          end
         end
       end
     end
@@ -113,6 +128,7 @@ module PlozzTestflightPipeline
         options = job.fetch(:options)
         {
           "name" => job.fetch(:name), "version" => options.fetch(:app_version),
+          "release_version" => job[:release_version], "release_id" => job[:release_id],
           "build_number" => options.fetch(:build_number),
           "log" => File.join(directory, "#{index}.log"),
           "result" => File.join(directory, "#{index}.json"), "outcome" => "not started"

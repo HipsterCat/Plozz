@@ -4,6 +4,7 @@ import Foundation
 public struct DiagnosticsReport {
     public let appVersion: String
     public let appBuild: String
+    public let marketingVersion: String?
     public let providers: String
     public let repoURL: String
     public let recentLogTail: String
@@ -13,10 +14,12 @@ public struct DiagnosticsReport {
         appBuild: String,
         providers: String,
         repoURL: String,
-        recentLogTail: String = ""
+        recentLogTail: String = "",
+        marketingVersion: String? = nil
     ) {
         self.appVersion = appVersion
         self.appBuild = appBuild
+        self.marketingVersion = marketingVersion
         self.providers = providers
         self.repoURL = repoURL
         self.recentLogTail = recentLogTail.count > 400
@@ -44,11 +47,14 @@ public struct DiagnosticsReport {
     }
 
     public var environmentBlock: String {  // l10n:content — developer-facing diagnostic (GitHub bug-report template)
-        """
+        let appleVersion = marketingVersion.flatMap {
+            $0 == appVersion ? nil : "\n- Apple version: \($0)"
+        } ?? ""
+        return """
         - Plozz: \(appVersion) (build \(appBuild))
         - \(systemVersion)
         - Device: \(deviceModel)
-        - Provider(s): \(providers)
+        - Provider(s): \(providers)\(appleVersion)
         """
     }
 

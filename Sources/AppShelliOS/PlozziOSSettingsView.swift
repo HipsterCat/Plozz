@@ -726,11 +726,7 @@ private struct PlozziOSAboutSettingsView: View {
         List {
             SettingsSectionGroup(verbatim: "Plozz") {
                 LabeledContent("Version") {
-                    Text(
-                        Bundle.main.infoDictionary?[
-                            "CFBundleShortVersionString"
-                        ] as? String ?? "—"
-                    )
+                    Text(AppVersionIdentity.current.displayVersion)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture(perform: handleVersionTap)
@@ -1145,7 +1141,7 @@ private struct PlozziOSSettingsCompactMenu: View {
                     Label(SettingsCopy.attributions, systemImage: "doc.text.magnifyingglass")
                 }
                 LabeledContent("Version") {
-                    Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
+                    Text(AppVersionIdentity.current.displayVersion)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture {

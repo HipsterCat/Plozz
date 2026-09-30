@@ -1,12 +1,14 @@
 import Foundation
+import CoreModels
 
 /// App metadata helpers.
 public enum AppInfo {
-    /// Marketing version from the app bundle, e.g. "1.0".
+    /// Plozz release label, falling back to Apple's version for local/older builds.
     public static var version: String {
-        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return short ?? "1.0"
+        AppVersionIdentity.current.displayVersion
     }
+
+    public static var marketingVersion: String { AppVersionIdentity.current.marketingVersion }
 
     /// Build number from the app bundle (CFBundleVersion). Baked into the
     /// generated project at project-generation time (see tools/generate-project.sh)
@@ -14,8 +16,7 @@ public enum AppInfo {
     /// fastlane `build` lane overrides it with (latest TestFlight build + 1) for
     /// App Store / TestFlight uploads.
     public static var build: String {
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
-        return build ?? "1"
+        AppVersionIdentity.current.build
     }
 
     /// Public source repository, encoded into the Settings "About" QR code so a
