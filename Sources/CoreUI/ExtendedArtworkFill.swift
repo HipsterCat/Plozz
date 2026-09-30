@@ -433,7 +433,7 @@ public enum ContinueWatchingCardShape {
     ///
     /// This is the value for artwork bright enough to actually need it; see
     /// ``artworkDim(logo:background:)`` for how much of it a given card spends.
-    public static let artworkDim: CGFloat = 0.33
+    public static let artworkDim: CGFloat = 0.36
 
     /// The share of the base dim that still applies to pure black artwork.
     ///

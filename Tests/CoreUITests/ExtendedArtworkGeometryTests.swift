@@ -776,6 +776,13 @@ final class ContinueWatchingAdaptiveDimTests: XCTestCase {
         dim(tone(0.85, 0.15, 0.12), backdrop(0.55, 0.62, 0.72))
     }
 
+    func testBrightArtworkUses36PercentDimWithAnUnchangedAdaptiveBoost() {
+        XCTAssertEqual(brightAndClear, 0.36, accuracy: 0.001)
+        let matching = dim(tone(0.85, 0.65, 0.30), backdrop(0.85, 0.65, 0.30))
+        XCTAssertEqual(matching, 0.60, accuracy: 0.001)
+        XCTAssertEqual(matching - brightAndClear, 0.24, accuracy: 0.001)
+    }
+
     /// **The case the whole thing exists for.** A logo sitting on artwork of its
     /// own colour gets real help.
     func testLogoOnArtworkOfItsOwnColourIsHelped() {
