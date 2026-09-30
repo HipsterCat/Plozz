@@ -692,6 +692,11 @@ Count-only changes insert/remove tail slots without resetting the collection.
 Catalog refreshes update existing `LibrarySlot` objects in place, including the
 pages visible when the refresh commits; they must not strand cell observers on
 discarded objects.
+The issue #15 regression uses 2,178 items and the default 28/42-item paging plan:
+load index 1,750, scroll away, refresh the catalog, and return without reopening.
+Both the shared model and the hosted native grid must refill the invalidated
+off-screen page; the native placeholder must update in place and select the
+refreshed item after its delayed page response arrives.
 
 The displayed grid's `contentGeneration` is separate from the first-page/refresh
 request token. Only replacing the browsing order invalidates cell callbacks.
