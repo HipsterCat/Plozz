@@ -58,8 +58,9 @@ fallback when the user's server has no attached trailer.
 
 ## Home loading
 
-Home uses a shared queue of at most five row/inventory operations, rather than waiting
-for every account and feed before publishing anything. Each global row arrives
+Home gives inventory, each global feed, and per-library rows independent queues
+of at most five operations each. Slow resume feeds cannot occupy the slots
+needed to start other row types. Each global row arrives
 once its own sources are complete, preserving cross-server deduplication and
 ordering. A slow Continue Watching feed therefore retains its own skeleton
 without holding up Watchlist, Recently Added, or per-library rows.

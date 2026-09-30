@@ -6,7 +6,7 @@ import CoreNetworking
 /// unified Home/Settings content, tagging each item/library with its owning
 /// account so callers can route a selection back to the right provider.
 ///
-/// Requests share a bounded queue and publish completed rows independently.
+/// Each row family has a bounded queue and publishes completed rows independently.
 /// Each merged row retains deterministic cross-server ordering; unrelated rows
 /// never wait for its slowest source. Queries remain indexed and limited.
 public struct HomeAggregator: Sendable {
@@ -317,10 +317,23 @@ public struct HomeAggregator: Sendable {
         }
     }
 
+    private enum RequestLane: Hashable, Sendable {
+        case global(HomeRowKind)
+        case libraryRows
+    }
+
     private enum Request: Sendable {
         case libraries(Int)
         case feed(Int, Feed, libraryIDs: [String]?)
         case library(Int, AggregatedLibrary, LibraryHomeRowKind)
+
+        var lane: RequestLane {
+            switch self {
+            case .libraries: .global(.libraries)
+            case .feed(_, let feed, _): .global(feed.row)
+            case .library: .libraryRows
+            }
+        }
     }
 
     private enum Response: Sendable {
@@ -394,15 +407,14 @@ public struct HomeAggregator: Sendable {
         })
 
         return await withTaskCancellationHandler {
-            await withTaskGroup(of: Response.self) { group in
+            await withTaskGroup(of: (RequestLane, Response).self) { group in
                 var requests = accounts.indices.map(Request.libraries)
                 for index in accounts.indices {
                     for feed in Feed.allCases where feed == .watchlist || !scopedAccounts.contains(index) {
                         requests.append(.feed(index, feed, libraryIDs: nil))
                     }
                 }
-                var nextRequest = 0
-                var running = 0
+                var running: [RequestLane: Int] = [:]
                 var perAccount = accounts.map { _ in AccountContent() }
                 var perLibrary: [String: LibraryContent] = [:]
                 var publishedRows: Set<HomeRowKind> = []
@@ -410,25 +422,28 @@ public struct HomeAggregator: Sendable {
                 var failures: [HomeRowKind: AppError] = [:]
 
                 func enqueueAvailable() {
-                    while running < accountFanoutLimit, nextRequest < requests.count, !Task.isCancelled {
-                        let request = requests[nextRequest]
-                        nextRequest += 1
-                        running += 1
+                    while !Task.isCancelled, let index = requests.firstIndex(where: {
+                        running[$0.lane, default: 0] < accountFanoutLimit
+                    }) {
+                        let request = requests.remove(at: index)
+                        let lane = request.lane
+                        running[lane, default: 0] += 1
                         group.addTask {
-                            await perform(
+                            let response = await perform(
                                 request, accounts: accounts, policy: policy,
                                 continueWatchingLimit: continueWatchingLimit,
                                 latestLimit: latestLimit, perLibraryLimit: perLibraryLimit ?? 20,
                                 seriesIdentities: seriesIdentities,
                                 onContinueWatching: onContinueWatching
                             )
+                            return (lane, response)
                         }
                     }
                 }
 
                 enqueueAvailable()
-                while let response = await group.next() {
-                    running -= 1
+                while let (lane, response) = await group.next() {
+                    running[lane, default: 0] -= 1
                     guard !Task.isCancelled else {
                         group.cancelAll()
                         break

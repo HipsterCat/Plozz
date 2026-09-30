@@ -93,14 +93,56 @@ final class HomeViewModelSnapshotHydrationTests: XCTestCase {
         XCTAssertEqual(home.state.value?.librarySections.first?.library.key, "a:library-0",
                        "The first ready library row must appear with nineteen other libraries still loading.")
         XCTAssertTrue(home.isRefreshing)
-        XCTAssertLessThanOrEqual(provider.requestedPages.count, 5,
+        XCTAssertLessThanOrEqual(provider.maximumActivePageRequests, 5,
                                  "Additional rows must stay queued instead of launching twenty requests at once.")
+        XCTAssertLessThan(provider.requestedPages.count, 20)
         resumeGate.open()
         libraryGate.open()
         await load.value
         XCTAssertEqual(home.state.value?.librarySections.count, 20)
         XCTAssertEqual(provider.librariesCallCount, 1)
         XCTAssertEqual(provider.requestedPages.count, 20)
+    }
+
+    func testSlowResumeFeedsCannotOccupyEverySlotNeededByOtherRows() async {
+        for merged in [true, false] {
+            let gate = HomeRefreshGate()
+            defer { gate.open() }
+            var visibility = HomeLibraryVisibility(mergeLibrariesOnHome: merged)
+            let accounts = (0..<5).map { index -> ResolvedAccount in
+                let id = "source-\(index)"
+                let movie = MediaItem(id: "movie-\(index)", title: "Movie \(index)", kind: .movie)
+                let provider = FakeMediaProvider(allItems: [movie])
+                provider.continueWatchingGate = { await gate.wait() }
+                provider.latestItems = [movie]
+                provider.libraryItems = [MediaLibrary(id: "movies", title: "Movies", kind: .movie)]
+                visibility.setLibraryRowEnabled(true, libraryKey: "\(id):movies", kind: .recentlyAdded)
+                return resolved(provider, accountID: id)
+            }
+            let home = HomeViewModel(
+                accounts: accounts, layoutStore: InMemoryHomeLayoutStore(),
+                currentVisibility: { visibility }
+            )
+            let load = Task { await home.load() }
+            let deadline = Date().addingTimeInterval(1)
+            while Date() < deadline {
+                let content = home.state.value
+                if content?.latest.count == 5,
+                   merged || content?.librarySections.filter({ $0.cardCount == 1 }).count == 5 {
+                    break
+                }
+                await Task.yield()
+            }
+            XCTAssertEqual(home.state.value?.latest.count, 5,
+                           "Five stalled resume feeds must not consume the queue for other global rows.")
+            if !merged {
+                XCTAssertEqual(home.state.value?.librarySections.filter { $0.cardCount == 1 }.count, 5,
+                               "The library-row queue must remain independent of stalled global feeds.")
+            }
+            XCTAssertTrue(home.loadingRows.contains(.continueWatching))
+            gate.open()
+            await load.value
+        }
     }
 
     func testMergedRowsKeepAccountOrderAndUserActionsWhileAnotherRowLoads() async {

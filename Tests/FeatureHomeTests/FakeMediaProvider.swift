@@ -79,6 +79,9 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
     var alwaysFail = false
     private var _requestedPages: [PageRequest] = []
     var requestedPages: [PageRequest] { withLock { _requestedPages } }
+    private var activePageRequests = 0
+    private var maximumPageRequests = 0
+    var maximumActivePageRequests: Int { withLock { maximumPageRequests } }
     /// The `kind` each `items(in:kind:page:)` call asked for, in order. The
     /// combined browse gives every source its OWN kind, so this is how a test
     /// proves a movie library was never asked for series.
@@ -210,7 +213,10 @@ final class FakeMediaProvider: MediaProvider, InteractiveBrowseActivityReporting
         withLock {
             _requestedPages.append(page)
             _requestedKinds.append(kind)
+            activePageRequests += 1
+            maximumPageRequests = max(maximumPageRequests, activePageRequests)
         }
+        defer { withLock { activePageRequests -= 1 } }
         if alwaysFail { throw AppError.serverUnreachable }
         await containerGates[containerID]?()
         if let error = containerErrors[containerID] { throw error }
