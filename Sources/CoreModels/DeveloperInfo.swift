@@ -59,7 +59,7 @@ public enum DeveloperInfo {
         case .production: channelLabel = "App Store"
         }
 
-        return [
+        var items = [
             DeveloperInfoItem(id: "app", label: "App", value: appName),
             DeveloperInfoItem(id: "build-kind", label: "Build", value: isBranded ? "Branded (side-by-side)" : "Canonical"),
             DeveloperInfoItem(id: "bundle-id", label: "Bundle ID", value: bundleID),
@@ -69,6 +69,10 @@ public enum DeveloperInfo {
             DeveloperInfoItem(id: "app-group", label: "App Group", value: appGroupAvailable ? "Available" : "Unavailable (Top Shelf off)"),
             DeveloperInfoItem(id: "crash-endpoint", label: "Crash Endpoint", value: crashConfigured ? "Configured" : "Not configured"),
         ]
+        if let release = AppVersionIdentity(infoDictionary: bundle.infoDictionary ?? [:]).releaseVersion {
+            items.insert(DeveloperInfoItem(id: "release-version", label: "Release", value: release), at: 3)
+        }
+        return items
     }
 
     /// A plain-text rendering of the snapshot suitable for the iOS "Copy" action

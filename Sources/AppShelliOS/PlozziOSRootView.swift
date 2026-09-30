@@ -2,6 +2,7 @@
 import AppRuntime
 import CoreModels
 import PlozzCoreUI
+import CrashReporting
 import FeatureHomeCore
 import FeatureProfiles
 import FeatureSettings
@@ -150,6 +151,7 @@ public struct PlozziOSRootView: View {
         }
         .task { appModel.resumeProfileOnboardingIfNeeded() }
         .onAppear { PlozziOSScreenshotSeed.applyIfRequested(to: appModel) }
+        .background(PlozziOSCrashScreenObserver(controller: appModel.crashReportingController))
         .task {
             // Detect on cold launch: fire immediately if the pending set is already
             // warm, and close the cold-launch window after a short grace period so a
@@ -363,6 +365,18 @@ public struct PlozziOSRootView: View {
                 onClose: { appModel.pendingPairingInvite = nil }
             )
             .preferredColorScheme(resolvedPalette.isLight ? .light : .dark)
+        }
+    }
+
+    private struct PlozziOSCrashScreenObserver: View {
+        let controller: CrashReportingController
+
+        var body: some View {
+            Color.clear
+                .frame(width: 0, height: 0)
+                .onReceive(NotificationCenter.default.publisher(for: MainThreadStallProbe.contextDidChange)) { _ in
+                    controller.setScreen(CrashReportScreen(context: MainThreadStallProbe.context))
+                }
         }
     }
 
@@ -1085,6 +1099,7 @@ private struct PlozziOSTabShell: View {
             if showingMore { heroTrailerController.stop() }
         }
         .onChange(of: selectedDestination, initial: true) { _, destination in
+            MainThreadStallProbe.context = destination.rawValue
             if destination == .settings {
                 showSettings()
             } else {
@@ -1143,6 +1158,7 @@ private struct PlozziOSTabShell: View {
         // and from the root when it isn't — see `ProfileOnboardingOrigin`. That
         // decision reads this.
         .onChange(of: showingSettings) { _, presented in
+            MainThreadStallProbe.context = presented ? "settings" : selectedDestination.rawValue
             // Only the RISING edge here. Dismissal is animated, and publishing
             // false the moment Close is tapped lets the root ask for the identity
             // sheet while Settings is still covering it — SwiftUI drops that, and

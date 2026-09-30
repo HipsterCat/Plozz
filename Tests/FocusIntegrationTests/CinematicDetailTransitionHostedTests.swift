@@ -227,6 +227,7 @@ final class CinematicDetailTransitionHostedTests: XCTestCase {
         fixture.model.open(in: fixture.window, usesCard: true)
         try await waitUntil { fixture.model.session != nil }
         let session = try XCTUnwrap(fixture.model.session)
+        try await waitUntil { session.returnArtwork != nil }
         session.finishImmediately()
         XCTAssertEqual(session.stage, .complete)
         XCTAssertTrue(overlays(in: fixture.window).isEmpty)

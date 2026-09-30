@@ -140,6 +140,28 @@ final class ProfileSettingsModelTests: XCTestCase {
         XCTAssertTrue(model.navigationStyleModel.preventsAccidentalExit)
     }
 
+    func testHomeLayoutSelectionSurvivesProfileSwitchWithoutChangingNavigation() {
+        let primary = "HomeLayout.primary.\(UUID().uuidString)"
+        let other = "HomeLayout.other.\(UUID().uuidString)"
+        defer {
+            for namespace in [primary, other] {
+                UserDefaults.standard.removeObject(forKey: SettingsKey.scoped("com.plozz.heroSettings", namespace: namespace))
+            }
+        }
+        let model = ProfileSettingsModel(namespace: primary)
+        let navigation = model.navigationStyleModel.style
+        model.heroSettingsModel.settings.style = .followsFocus
+        model.heroSettingsModel.settings.showsCardCaptions = true
+
+        model.rebuild(namespace: other)
+        XCTAssertEqual(model.heroSettingsModel.settings.style, .carousel)
+        XCTAssertFalse(model.heroSettingsModel.settings.showsCardCaptions)
+        model.rebuild(namespace: primary)
+        XCTAssertEqual(model.heroSettingsModel.settings.style, .followsFocus)
+        XCTAssertTrue(model.heroSettingsModel.settings.showsCardCaptions)
+        XCTAssertEqual(model.navigationStyleModel.style, navigation)
+    }
+
     /// The three models that previously had no injection parameter
     /// (`subtitlePolicyModel`, `audioPolicyModel`, `heroSettingsModel`) are now
     /// injectable and preserved as-is, mirroring the other injected models.

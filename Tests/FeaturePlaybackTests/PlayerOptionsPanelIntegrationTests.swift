@@ -31,7 +31,7 @@ final class PlayerOptionsPanelIntegrationTests: XCTestCase {
         XCTAssertFalse(Screen.sync.isStyleFamily)
         XCTAssertEqual(
             String(localized: PlayerOptionsPanel.headerTitle(for: .subtitles, subtitleScreen: .styleSystemFont)),
-            String(localized: LocalizedStringResource("System"))
+            String(localized: LocalizedStringResource("System Fonts"))
         )
         XCTAssertEqual(
             String(localized: PlayerOptionsPanel.headerTitle(for: .subtitles, subtitleScreen: .styleFileFormatting)),
@@ -241,7 +241,7 @@ final class PlayerOptionsPanelIntegrationTests: XCTestCase {
             }
             let rows = try XCTUnwrap(captured)
             XCTAssertEqual(rows.map(\.slot), Array(0..<rows.count))
-            XCTAssertEqual(rows.first?.title, LocalizedStringResource("Use System Caption Style"))
+            XCTAssertEqual(rows.first?.title, SystemCaptionStyleCopy.optionTitle)
             XCTAssertFalse(rows.contains { $0.title == LocalizedStringResource("Use File Positions") })
             XCTAssertFalse(rows.contains { $0.title == LocalizedStringResource("Use File Colors") })
             XCTAssertFalse(rows.contains { $0.title == LocalizedStringResource("Use Bold and Italic") })

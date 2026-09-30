@@ -4,6 +4,7 @@ import AppRuntime
 import CoreModels
 import CoreNetworking
 import PlozzCoreUI
+import CrashReporting
 import FeatureHomeCore
 import FeatureHome
 import FeatureMusic
@@ -366,7 +367,7 @@ struct MainTabView: View {
     /// because switching "watching as" changes whose rows these are without
     /// changing the profile or the account list.
     let plexIdentityGeneration: Int
-    let askProfileOnStartup: Bool
+    let automaticSignIn: AutomaticSignInSettings
     /// Session-scoped handles for the Home tab, assembled by `RootView`. Stored
     /// rather than computed here on purpose: this view's body is a `TabView`
     /// with four large tabs, and it sits close enough to the Swift
@@ -375,7 +376,6 @@ struct MainTabView: View {
     let homeRuntime: HomeTabRuntime
     let isAccountIncludedInActiveProfile: (String) -> Bool
     let onSetAccountIncluded: (String, Bool) -> Void
-    let onSetAskProfileOnStartup: (Bool) -> Void
     let onSaveProfile: (ProfileDraft) -> Void
     var onCreateProfile: (ProfileDraft) -> Void = { _ in }
     /// Live cosmetics-only persistence for editing an existing profile (see
@@ -474,6 +474,7 @@ struct MainTabView: View {
     /// user backed all the way out to Home. HomeTab/SearchTab write these bindings.
     @State private var playRequest: PlayRequest?
     @State private var resumePrompt: MediaItem?
+    @State private var pendingPlaylistOrigin: VideoPlaylistPlaybackOrigin?
     @Environment(\.colorScheme) private var systemColorScheme
 
     /// The selected root tab, persisted so it survives MainTabView being torn
@@ -1002,7 +1003,7 @@ struct MainTabView: View {
                 profiles: profiles,
                 activeProfile: activeProfile,
                 liveTVPreferencesNamespace: liveTVPreferencesNamespace,
-                askProfileOnStartup: askProfileOnStartup,
+                automaticSignIn: automaticSignIn,
                 appVersion: AppInfo.version,
                 appBuild: AppInfo.build,
                 repoURL: AppInfo.repoURLString,
@@ -1011,7 +1012,6 @@ struct MainTabView: View {
                     onSetAccountIncluded(accountID, included)
                     scheduleLibraryReloadFromCurrentScope(changedAccountID: accountID)
                 },
-                onSetAskProfileOnStartup: onSetAskProfileOnStartup,
                 onSwitchProfile: openProfileSwitcher,
                 onSaveProfile: onSaveProfile,
                 onCreateProfile: onCreateProfile,
@@ -1112,6 +1112,7 @@ struct MainTabView: View {
                 onSubtitleStyleChanged: { subtitleStyleModel.style = $0 },
                 playRequest: $playRequest,
                 resumePrompt: $resumePrompt,
+                pendingPlaylistOrigin: $pendingPlaylistOrigin,
                 pendingPersonRoute: $pendingPersonRoute,
                 pendingTitleRoute: $pendingTitleRoute,
                 isActiveTab: isActive ?? isActiveTab(.home),
@@ -1641,6 +1642,7 @@ struct MainTabView: View {
             if let selected = NavigationRailDestination(storageValue: destination) {
                 releaseExplicitLiveTVEntry(ifLeavingFor: selected)
             }
+            MainThreadStallProbe.context = CrashReportScreen(context: destination).rawValue
             BrowseDiagnostics.event("screen tab=\(destination)")
             // Keeps person tracing alive across relaunches once it has been
             // asked for, so restoring the live stream never costs the repro.
@@ -1681,6 +1683,7 @@ struct MainTabView: View {
         .playerHost(
             playRequest: $playRequest,
             resumePrompt: $resumePrompt,
+            pendingPlaylistOrigin: $pendingPlaylistOrigin,
             accounts: accounts,
             networkFileResolver: networkFileResolver,
             authenticatedHTTPResolver: authenticatedHTTPResolver,

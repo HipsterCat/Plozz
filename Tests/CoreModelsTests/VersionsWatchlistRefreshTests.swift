@@ -219,6 +219,52 @@ final class MediaItemMutationOptionalTests: XCTestCase {
         XCTAssertFalse(applied.sources[0].hasBeenPlayed)
         XCTAssertTrue(applied.sources[1].hasBeenPlayed)
     }
+
+    func testStandaloneSourceMutationMatchesAccountAndPreservesMetadata() {
+        let source = MediaSourceRef(
+            accountID: "share", itemID: "42", libraryID: "movies", kind: .movie,
+            providerKind: .mediaShare, serverName: "Share",
+            versions: [MediaVersion(id: "version", height: 2160)],
+            edition: "Extended", isFavorite: true
+        )
+        var peer = source
+        peer.accountID = "plex"
+        let mutation = MediaItemMutation(
+            itemIDs: ["42"], scopedItemIDs: ["share:42"],
+            resumePosition: 120, playedPercentage: 0.12
+        )
+        let updated = mutation.applied(to: source)
+        XCTAssertEqual(updated.id, source.id)
+        XCTAssertEqual(updated.versions, source.versions)
+        XCTAssertEqual(updated.edition, source.edition)
+        XCTAssertEqual(updated.libraryID, source.libraryID)
+        XCTAssertTrue(updated.isFavorite)
+        XCTAssertEqual(updated.resumePosition, 120)
+        XCTAssertEqual(updated.playedPercentage, 0.12)
+        XCTAssertEqual(mutation.applied(to: peer), peer)
+    }
+
+    func testStandaloneSourceCompletionUnwatchAndFavoriteUseTheSameFieldRules() {
+        let source = MediaSourceRef(
+            accountID: "share", itemID: "movie",
+            resumePosition: 120, playedPercentage: 0.12, isFavorite: true
+        )
+        let finished = MediaItemMutation(
+            itemIDs: ["movie"], scopedItemIDs: ["share:movie"],
+            played: true, resumePosition: 0, playedPercentage: 1
+        ).applied(to: source)
+        XCTAssertTrue(finished.isPlayed)
+        XCTAssertTrue(finished.hasBeenPlayed)
+        XCTAssertNil(finished.resumePosition)
+        XCTAssertTrue(finished.isFavorite)
+
+        let unfavorited = MediaItemMutation(itemIDs: ["movie"], favorite: false).applied(to: finished)
+        XCTAssertTrue(unfavorited.isPlayed)
+        XCTAssertFalse(unfavorited.isFavorite)
+        let unwatched = MediaItemMutation(itemIDs: ["movie"], played: false).applied(to: unfavorited)
+        XCTAssertFalse(unwatched.isPlayed)
+        XCTAssertFalse(unwatched.hasBeenPlayed)
+    }
 }
 
 // MARK: - Action catalog: watchlist + refresh gating

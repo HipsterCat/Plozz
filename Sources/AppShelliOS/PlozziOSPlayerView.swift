@@ -9,6 +9,7 @@ struct PlozziOSPlaybackRequest: Identifiable {
     let id = UUID()
     let item: MediaItem
     let startPosition: TimeInterval
+    let playlist: VideoPlaylistPlaybackContext?
 
     /// Resolves the show's remembered version HERE, so no play path can skip it.
     /// See `PlayRequest` on tvOS — same reasoning, and the same four paths had
@@ -17,7 +18,8 @@ struct PlozziOSPlaybackRequest: Identifiable {
         item: MediaItem,
         startPosition: TimeInterval,
         versionPreferences: any VersionPreferenceStoring,
-        capabilities: MediaCapabilities = .detected()
+        capabilities: MediaCapabilities = .detected(),
+        playlist: VideoPlaylistPlaybackContext? = nil
     ) {
         self.item = DetailPlaybackSelection.playbackReady(
             item,
@@ -25,6 +27,7 @@ struct PlozziOSPlaybackRequest: Identifiable {
             capabilities: capabilities
         )
         self.startPosition = startPosition
+        self.playlist = playlist
     }
 }
 
@@ -47,6 +50,7 @@ struct PlozziOSPlayerView: View {
     @State private var streamingConnection: StreamingConnection?
     @State private var presentsStreamingQuality = false
     @State private var activeItem: MediaItem?
+    @State private var activePlaylist: VideoPlaylistPlaybackContext?
     @State private var presentsVersions = false
     @State private var showsSDRVersions = false
     @State private var selectedSDRAlternative = false
@@ -56,6 +60,12 @@ struct PlozziOSPlayerView: View {
 
     let request: PlozziOSPlaybackRequest
     let provider: any MediaProvider
+
+    init(request: PlozziOSPlaybackRequest, provider: any MediaProvider) {
+        self.request = request
+        self.provider = provider
+        _activePlaylist = State(initialValue: request.playlist)
+    }
 
     var body: some View {
         ZStack {
@@ -177,6 +187,11 @@ struct PlozziOSPlayerView: View {
             let prefetched = outgoing.consumePrefetchedNext(matching: next.id)
             handoffTask = Task { @MainActor in
                 await outgoing.stop()
+                guard !Task.isCancelled, isPresented, viewModel === outgoing else {
+                    handoffTask = nil
+                    return
+                }
+                activePlaylist = nil
                 let incoming = makeViewModel(
                     item: next,
                     startPosition: 0,
@@ -186,6 +201,26 @@ struct PlozziOSPlayerView: View {
                     await incoming.stop()
                     return
                 }
+                viewModel = incoming
+                activeItem = next
+                selectedSDRAlternative = false
+                playerIdentity = UUID()
+                handoffTask = nil
+            }
+        }
+        .onChange(of: viewModel?.pendingPlaylistSelection?.index) { _, index in
+            guard let index, let playlist = activePlaylist,
+                  let outgoing = viewModel,
+                  let next = outgoing.pendingPlaylistSelection?.item,
+                  handoffTask == nil else { return }
+            handoffTask = Task { @MainActor in
+                await outgoing.stop()
+                guard !Task.isCancelled, isPresented, viewModel === outgoing else {
+                    handoffTask = nil
+                    return
+                }
+                playlist.advance(to: index)
+                let incoming = makeViewModel(item: next, startPosition: 0)
                 viewModel = incoming
                 activeItem = next
                 selectedSDRAlternative = false
@@ -216,7 +251,8 @@ struct PlozziOSPlayerView: View {
     }
 
     private var usesStreamingQuality: Bool {
-        provider is any StreamingQualityProviding && [.movie, .episode].contains(request.item.kind)
+        provider is any StreamingQualityProviding
+            && [.movie, .episode].contains((activeItem ?? request.item).kind)
     }
 
     private func resolvedStreamingConnection() -> StreamingConnection {
@@ -325,6 +361,7 @@ struct PlozziOSPlayerView: View {
             ),
             authenticatedHTTPResolver: resolver,
             neighborResolver: neighborResolver,
+            playlistContext: activePlaylist,
             seriesIDResolver: seriesIDResolver,
             onPlaybackStopped: { [weak model] position, watchedPercent in
                 Task { @MainActor in

@@ -18,11 +18,10 @@ and the diagnostics overlay.
     selection, scrub state, resume, and progress reporting.
   - `PlayerView` + `CustomPlayerContainer` host the engine's vended
     bare video surface and overlay the shared transport chrome.
-- **Subtitle rendering** — `SubtitleStyleRules` translates
-  `CoreModels.SubtitleStyle` (font, size, colour, opacity, background,
-  edge / outline) into `AVPlayer` text style rules for the native draw path;
-  the custom `SubtitleOverlayView` renders the full styled look (including
-  dual subtitles) on the overlay path.
+- **Subtitle rendering** — `SubtitleOverlayView` draws in-app captions from
+  sidecars, Plozzigen decoders, and `NativeSubtitleCueOutput` for native legible
+  tracks. `SubtitleStyleRules` remains the reduced AVPlayer styling adapter
+  for system-owned external presentation.
 - **Subtitles** — `SubtitleHLSComposer`, `SubtitleInjectingResourceLoader`,
   `WebVTTNormalizer`: inject external sidecar subtitles into the
   AVPlayer pipeline as a synthesized HLS variant and normalize timing /
@@ -52,9 +51,52 @@ and the diagnostics overlay.
 - **No secrets in URLs logged.** Stream URLs frequently embed tokens —
   `PlayerViewModel` redacts before logging.
 
+WebVTT sidecars distinguish caption class names from literal CSS colors.
+An unstyled `<c.green>` is a compatibility alias for bright `lime` (`#00FF00`),
+while CSS `color: green` and SRT `<font color="green">` retain `#008000`.
+Header `STYLE` foreground colors support global `::cue`, cue-element/class
+selectors (including compound classes and selector lists), common named colors,
+hex and RGB/RGBA values, inheritance, specificity, source order and `!important`.
+Explicit rules override class defaults; nested spans restore their parent color.
+CCExtractor's blank line after `STYLE` is tolerated. External stylesheets,
+conditional/complex selectors and other CSS properties are not interpreted.
+All resulting colors still obey the viewer's existing source-color preference;
+unstyled text retains the viewer's chosen color. Native/engine-decoded attributed
+captions keep their decoder-supplied colors rather than reinterpreting them.
+
+Foreground recovery captures a request- and engine-scoped position before
+suspension can reset the decoder clock. An internal engine recovery at zero is
+not proof that the correct position survived. Restoration uses the normal
+latest-wins seek queue and verifies the landing before reconciling play/pause;
+an explicit user seek supersedes the saved point. Continuing PiP/background-audio
+sessions are not rewound. Paused/recovering heartbeat callbacks cannot report
+false playback at zero, and a stop retains the saved position even after load
+generation invalidation.
+
+Diagnostics resolve the active internal AVPlayer on each sample, including
+Plozzigen player/item replacements. The player buffer, engine cache frontier,
+stall count, and dropped-frame count are separate measurements; unavailable
+values remain unknown. A ready player with no contiguous loaded range reports
+zero buffered seconds. Loopback delivery throughput is not labelled as media
+server/network throughput, and encoded stream bitrate is not a network rate.
+The instance counter labels native adapters rather than claiming to count every
+AVPlayer hidden inside third-party engines. New stall records retain measured
+player/engine buffer context in the existing playback journal.
+
+Diagnostic builds also journal cached Plozzigen pipeline snapshots at most once
+every two seconds, independent of whether Playback Info is open. These read the
+engine's existing off-main telemetry rather than issuing additional synchronous
+AVFoundation reads. The record separates source bytes fetched, muxed bytes,
+served bytes, reader-window bytes, and cached media; the native consumer's
+loopback throughput must not be called the media server's network rate.
+`audio POLICY` records language/default-selection inputs and `audio SELECTED`
+plus the pipeline snapshot identify the engine's actual audio track and delivery
+path. None of these diagnostics change the audio selection policy.
+
 ## Subtitle appearance
 
-`Use System Caption Style` reads the device's caption appearance through
+`Match Apple TV Subtitle Style` (`Match Device Subtitle Style` on mobile)
+reads this device's subtitle appearance through
 MediaAccessibility and applies it to Plozz's text overlay, including Plozzigen
 playback. The actual system typeface is retained even when it is not in Plozz's
 font picker, including descriptor features such as small capitals. Text-line
@@ -63,6 +105,9 @@ also retains its corner radius. System appearance changes and foreground return
 refresh the overlay. All appearance controls remain visible and show effective
 system values. The first real edit freezes that complete appearance into the
 profile, applies the edit, and switches matching off; a no-op edit does not.
+The toggle and custom appearance remain profile-scoped and sync only with that
+same profile. Matching resolves against each device's own system settings; it
+does not copy one device's accessibility appearance to another profile/device.
 Turning matching back on resumes the current device settings. New/default styles
 start with matching enabled, while persisted choices and legacy custom migration
 retain their existing behavior.
@@ -71,6 +116,20 @@ matching off; it is intentionally different from the new-profile default.
 Enabling matching over a custom style requires confirmation in both editors;
 Cancel leaves the style untouched. Disabling matching and the first custom edit
 remain immediate.
+On tvOS, numeric and choice rows reserve Left/Right for adjustment, including
+at numeric bounds. The native focus scope prevents diagonal escapes to Back
+without changing Up/Down navigation. It consumes horizontal clicks and swipes
+directly instead of relying on SwiftUI's fallback move command. Each click/swipe
+starts with one fine step; held clicks repeat after a short delay and accelerate,
+stopping on release, cancellation, focus loss, dismissal, or app deactivation.
+The scope also declares horizontal input ownership so window-level sidebar
+observers cannot mistake an adjustment's unchanged focus for a page boundary.
+Right opens submenu rows, including the nested System Fonts list, once per
+click/swipe; Select remains available and holding Right does not repeat navigation.
+All subtitle-style screens retain the same native input scope so changing screens
+does not tear down the focus binding before the selected font receives focus.
+The matching option names the device directly, without a focus-dependent helper
+paragraph changing the rows' positions.
 Explicit system font, text-color and opacity overrides take precedence over
 the corresponding source formatting. Image-based subtitles retain their authored
 pixels. This maps Apple's public appearance settings, not its private layout
@@ -88,9 +147,12 @@ exposed as a long list of switches. The separate **Subtitle file formatting**
 page offers only supported controls: authored positions, colors, and bold/italic
 emphasis. The primary appearance page contains the viewer's own style controls.
 
-`Font > System` offers all eight native caption families plus the device's
-installed font families, discovered from UIKit rather than a fixed OS-specific
-list. The main list retains Plozz's curated fonts. Selecting a system font alone
+`Font > System Fonts` puts all eight Apple subtitle families first, separated from the
+device's installed font families by a divider on TV and native sections on mobile.
+Installed families come from UIKit rather than a fixed OS-specific list.
+The main list retains Plozz's curated fonts; its System Fonts submenu uses normal menu
+typography and a separate divider/section rather than another font preview.
+Selecting a system font alone
 does not enable system appearance or overwrite other style controls. Its choice
 persists per profile and independently for Live TV; a named font unavailable on
 another device logs a diagnostic and uses the saved Plozz fallback.
@@ -103,11 +165,58 @@ inheritance. This applies to IPTV and library-generated channels, including
 retained multiview panes. Saved edits update active panes without retuning.
 
 Live playback sends the selected style to both the owned overlay and the engine.
-AVPlayer-rendered captions use `SubtitleStyleRules`; following the system clears
-Plozz's native text overrides. Native rendering remains owned by the engine,
-not a user-selectable routing preference. Native text styling supports fewer
-effects than the overlay (one edge treatment rather than independent shadow
-and outline).
+In-app native captions are extracted rather than painted by AVPlayer. PiP and
+external presentation retain their native rendition handoff and
+`SubtitleStyleRules`; the app overlay must not draw a second copy. System-owned
+rendering supports fewer effects than the overlay.
+
+### Caption timing and control avoidance
+
+`NativeSubtitleCueOutput` receives complete caption presentation states from
+AVFoundation, including empty states that clear the display. They are scheduled
+at the supplied **item presentation time**, never callback arrival time or a
+timestamp guessed from the source file. Successive states close the preceding
+intervals, including overlapping lines. Selection replaces the output to fence
+old callbacks; seeks flush its state; teardown detaches it. In-app drawing is
+suppressed at the native output, with an explicit selected-rendition handoff
+for external presentation. The handoff restores the current item's last selected
+rendition if AVFoundation temporarily clears it; an explicit Off or track change
+discards that fallback. The Plozzigen remote-HLS bypass uses the same bridge
+for tracks it identifies as natively rendered; its decoded tracks keep their
+existing cue pipeline.
+
+`VideoEngine.subtitlePresentationTime` is separate from scrub/resume time:
+Plozzigen-decoded cues use the engine's source-picture clock, whereas native
+presentation events retain AVFoundation's item clock. Both VOD and Live TV use
+this contract, including scheduled-library wrappers.
+Visible live captions have a display-link clock independent of the 250ms
+transport/status monitor, so routing native events through the overlay does not
+introduce a quarter-second presentation delay.
+
+Presentation callbacks do not supply seekable subtitle history, and advance
+delivery is best-effort. They therefore **do not newly advertise manual subtitle
+offsets or dual native-track decoding**. Complete sidecar timelines and
+Plozzigen-decoded tracks retain those controls. An existing sidecar offset
+must not silently delay a native event stream. This preserves native timing
+while gaining the shared visual renderer instead of offering controls that fail
+after a seek.
+
+Visible control pieces are measured separately from the full-screen scrim,
+hidden Info/Cast transport rows, and parked cards. Their rectangles remain separate, so
+a left-aligned Info pill does not lift a centered caption above empty space.
+Only intersecting captions lift above those bounds: dialogue and dual
+lanes move together, while bitmap and authored-position cues are checked at
+their own positions. Ordinary track menus retain the normal title clearance
+while the title fades, preventing subtitles from dropping into its empty space.
+Info/Cast and full appearance editing release that reserved clearance.
+Hiding the controls restores normal placement; style
+editing, previews, and saved position values are unchanged. The normal dialogue
+percentage remains screen-relative. Captions already encoded into video pixels
+cannot be repositioned.
+
+Coverage: `NativeSubtitleCueOutputTests`, `SubtitleOverlayGeometryTests`,
+`SubtitleLineRenderingTests`, and the shared tvOS/iOS app-hosted
+`NativeSubtitlePresentationTests` / `SubtitleControlAvoidanceHostedTests`.
 
 ### Customizing without playback
 
@@ -357,6 +466,73 @@ Real-server playback automation is documented in
 [`docs/provider-playback-tests.md`](../../docs/provider-playback-tests.md).
 Its synthetic harness checks and real-server results are separate; neither a
 missing provider/configuration nor a skipped XCTest is a successful live run.
+
+The player's Playlist tab uses standalone, full-height media cards spaced like
+Cast. Episodes uses one continuous row across seasons in an Info-style panel,
+without season tabs or a width-limited season rail. Each numbered episode shows
+its season/episode code at the bottom leading edge of the rounded still, over the
+shared artwork scrim rather than a capsule. Only the current season loads on
+entry; adjacent seasons load as browsing reaches the row's edges. Empty seasons
+are skipped, and a failed adjacent load exposes a retry at that edge. Adjacent
+loads belong to the row and follow visible edges, not the lifecycle of lazy
+cards; once started they finish even if that edge scrolls offscreen. Task and
+transport cancellations do not become retry errors. On tvOS, a reusable native
+collection owns directional focus and realizes cells throughout held Left/Right
+input. Stable episode IDs and layout offset adjustments preserve the focused cell
+and its exact viewport position when earlier seasons or retry rows arrive,
+including during native focus transitions and in RTL. Native scroll targets use
+complete card slots constrained to fully reveal the focused cell. First-card
+entry and return share the same gutter, with no idle realignment. Mobile SwiftUI
+rows defer leading insertions until scrolling settles.
+tvOS resets artwork content when the row changes enabled state and when focus
+leaves the collection for a tab, without replacing cells or their viewport.
+The empty content configuration must complete a layout pass before reinstalling;
+otherwise UIKit keeps the old content view and its ancestor-focus projection.
+Horizontal episode moves retain their artwork views. Disabled cells immediately clear their
+native focus projection, caption offset and marquee, even before UIKit finishes
+moving focus out of the closing drawer. Episode activation does not leave a
+persistent collection selection. Episode browsing auto-hides after 15 seconds
+without navigation; each focus move restarts that window. Other cards retain
+their existing timeout.
+The playback focus surface and controls hosts are siblings under a nonfocusable
+root. TVUIKit also projects artwork when an ancestor is focused, so returning
+focus to a parent containing the drawer would highlight every parked episode,
+regardless of the cells' own focus state. Up from every bottom tab, including
+Episodes and Playlist, uses the same seek-surface exit as Info and Cast. Back
+exits every bottom card through the same drawer-close and playback-focus handoff.
+Initial loading
+uses nonfocusable artwork/caption skeletons with the loaded cards' dimensions,
+not a spinner or visible loading message. TVUIKit projects only the artwork;
+captions stay outside that projection and neighboring tiles keep their layout. Episode titles occupy one line,
+giving the reclaimed height to larger 16:9 stills, with matching top and bottom
+insets. Long tvOS titles use the same native marquee as Home posters: only the
+focused title scrolls, it resets on blur/reuse, and Reduce Motion disables it.
+Focused episode captions move down by half the Home caption travel (8 points at
+standard metrics) without changing the row layout.
+Overflowing native captions fade at both edges, with inset resting endpoints
+that keep the beginning and end readable. These episode insets are explicit;
+ordinary poster captions retain their edge-aligned resting position and
+directional overflow fade.
+Touch layouts truncate long titles. The shared scrim and episode
+text are rendered into that image at display scale so TVUIKit retains them on
+focus; this work is cached across focus changes. Panel glass is a separate
+background, not a compositor around the native row, so it cannot hide the
+focused artwork. The panel clips scrolling content and focus projection at its
+rounded boundary.
+Portrait layouts use vertical episode rows. Playlist entries retain server
+order and load only as they become visible.
+
+The episode browser resolves the playing episode through its owning provider
+before loading parents: a retargeted opening card can still carry another
+server's series and season IDs. The resolved identity must match the playing
+episode; missing or failed server metadata remains a retryable error.
+Both player layouts use `EpisodeArtworkSource`, matching the detail row's
+server/online preference, episode-specific fallback and prepared-image identity.
+Requests are isolated by episode, account, spoiler mode and artwork policy,
+even when several episodes share the same library fallback image.
+The active player's profile-scoped spoiler settings mask unwatched titles
+before captions or accessibility see them. Placeholder mode never loads the
+hidden episode still; blur mode blurs only the artwork, not its numbered badge.
 
 ## Siri Remote input
 

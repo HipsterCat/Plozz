@@ -14,7 +14,6 @@ public struct MobileSubtitleStyleEditor: View {
         Form {
             Section {
                 Toggle(
-                    "Use System Caption Style",
                     isOn: Binding(
                         get: { viewModel.controls.subtitleStyle.followsSystemStyle },
                         set: { enabled in
@@ -23,9 +22,9 @@ public struct MobileSubtitleStyleEditor: View {
                             ) { value in viewModel.editSubtitleStyle { $0.followsSystemStyle = value } }
                         }
                     )
-                )
-            } footer: {
-                Text("Matching shows the current values from Settings › Accessibility › Subtitles & Captioning. Editing a value keeps this appearance and turns matching off.")
+                ) {
+                    Text(SystemCaptionStyleCopy.optionTitle)
+                }
             }
 
             Section("Text") {
@@ -212,31 +211,39 @@ private struct MobileSubtitleFontView: View {
                     }
                 }
             }
-            NavigationLink("System") {
-                List {
-                    ForEach(SubtitleSystemFonts.all) { entry in
-                        Button {
-                            viewModel.editSubtitleStyle {
-                                $0.systemFont = entry.id
-                                $0.fontDescriptor = nil
-                            }
-                        } label: {
-                            HStack {
-                                entry.name.font(entry.preview)
-                                Spacer()
-                                if viewModel.effectiveStyle.systemFont == entry.id {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
+            Section {
+                NavigationLink("System Fonts") {
+                    List {
+                        Section { systemFontRows(SubtitleSystemFonts.captionFonts) }
+                        Section { systemFontRows(SubtitleSystemFonts.installedFonts) }
                     }
+                    .navigationTitle("System Fonts")
+                    .navigationBarTitleDisplayMode(.inline)
                 }
-                .navigationTitle("System")
-                .navigationBarTitleDisplayMode(.inline)
+                .font(.body)
             }
         }
         .navigationTitle("Font")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func systemFontRows(_ entries: [SubtitleSystemFonts.Entry]) -> some View {
+        ForEach(entries) { entry in
+            Button {
+                viewModel.editSubtitleStyle {
+                    $0.systemFont = entry.id
+                    $0.fontDescriptor = nil
+                }
+            } label: {
+                HStack {
+                    entry.name.font(entry.preview)
+                    Spacer()
+                    if viewModel.effectiveStyle.systemFont == entry.id {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -378,7 +385,7 @@ private struct MobileSubtitleBackgroundView: View {
                 } header: {
                     Text("Window")
                 } footer: {
-                    Text("Window padding is set by Plozz. Apple does not expose caption padding or line spacing.")
+                    Text("Window padding is set by Plozz. Apple does not expose subtitle padding or line spacing.")
                 }
             Section("Line Background") {
                 subtitleColorPicker("Color", viewModel: viewModel, keyPath: \.glyphBackground, options: SubtitleColor.presets)

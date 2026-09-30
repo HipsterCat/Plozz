@@ -281,7 +281,7 @@ final class NativeLibraryRefreshHostedTests: XCTestCase {
                 model: model, total: model.totalCount, generation: model.contentGeneration,
                 spoilerSettings: .default, environment: EnvironmentValues(),
                 leadingInset: 40, trailingInset: 40, header: AnyView(Text("Library")),
-                hidesScrollIndicator: false, onSelect: { _ in }, onLoaded: { _ in }
+                hidesScrollIndicator: false, onSelect: { _, _ in }, onLoaded: { _ in }
             )
         }
         update()

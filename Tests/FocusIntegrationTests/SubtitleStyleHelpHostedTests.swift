@@ -9,7 +9,7 @@ import XCTest
 
 @MainActor
 final class SubtitleStyleHelpHostedTests: XCTestCase {
-    func testSystemStyleHelpSitsBelowItsToggleAndHidesWhenFocusMoves() async throws {
+    func testSystemStyleLabelExplainsTheDeviceWithoutAChangingHelperRow() async throws {
         try await waitUntil {
             UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
         }
@@ -27,25 +27,28 @@ final class SubtitleStyleHelpHostedTests: XCTestCase {
             previous?.makeKeyAndVisible()
         }
         try await waitUntil { model.focused == 0 && self.focusFrame(in: window) != nil }
+        try await Task.sleep(for: .milliseconds(300))
         var observations = try recognize(window)
         let toggle = try XCTUnwrap(observations.first {
-            $0.topCandidates(1).first?.string.contains("Use System Caption Style") == true
+            $0.topCandidates(1).first?.string.contains("Match Apple TV Subtitle Style") == true
         })
-        let help = try XCTUnwrap(observations.first {
-            $0.topCandidates(1).first?.string.contains("Matching shows") == true
+        XCTAssertFalse(observations.contains {
+            $0.topCandidates(1).first?.string.contains("Matches the subtitle style") == true
         })
-        XCTAssertLessThan(help.boundingBox.maxY, toggle.boundingBox.minY)
-        XCTAssertLessThan(toggle.boundingBox.minY - help.boundingBox.maxY, 0.08)
+        let firstFont = try XCTUnwrap(observations.first { $0.topCandidates(1).first?.string == "Font" })
+        XCTAssertLessThan(firstFont.boundingBox.maxY, toggle.boundingBox.minY)
 
         model.requested = 1
         try await waitUntil { model.focused == 1 }
-        await Task.yield()
+        try await Task.sleep(for: .milliseconds(300))
         window.layoutIfNeeded()
         observations = try recognize(window)
         XCTAssertFalse(observations.contains {
-            $0.topCandidates(1).first?.string.contains("Matching shows") == true
+            $0.topCandidates(1).first?.string.contains("Matches the subtitle style") == true
         })
         let font = try XCTUnwrap(observations.first { $0.topCandidates(1).first?.string == "Font" })
+        XCTAssertEqual(font.boundingBox.midY, firstFont.boundingBox.midY, accuracy: 0.002,
+                       "Font must stay in place when focus leaves the matching option: \(firstFont.boundingBox) -> \(font.boundingBox)")
         let center = CGPoint(x: font.boundingBox.midX * window.bounds.width,
                              y: (1 - font.boundingBox.midY) * window.bounds.height)
         XCTAssertTrue(try XCTUnwrap(focusFrame(in: window)).contains(center))

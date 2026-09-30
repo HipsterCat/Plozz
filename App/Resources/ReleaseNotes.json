@@ -2,6 +2,155 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/045",
+      "version": "2026.9.29",
+      "marketingVersion": "2026.9.25",
+      "build": 45,
+      "releasedAt": "2026-09-29",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Playlists support",
+            "Browse episodes within the player"
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            "Smoother Live TV scrolling and up to seven days of guide listings, when available.",
+            {
+              "text": "Smoother Showcase navigation.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Improved series-page transitions and layout.",
+              "platforms": ["tvOS"]
+            },
+            "Brighter green subtitles and improved WebVTT color support.",
+            "The app shows the release date and build number independently of TestFlight's version."
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            {
+              "text": "Missing native sidebar button in Showcase.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Showcase rows shifting after sidebar navigation.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Clipped episode artwork on series pages.",
+              "platforms": ["tvOS"]
+            },
+            "Incorrect title logos.",
+            {
+              "text": "Hidden trailers continuing to play.",
+              "platforms": ["tvOS"]
+            },
+            "Subtitle positioning and jumping caption backgrounds.",
+            "Subtitles disappearing during renderer handoffs."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "release/044",
+      "version": "2026.9.25",
+      "build": 44,
+      "releasedAt": "2026-09-27",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            {
+              "text": "Showcase: A new layout option for the Home page.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            {
+              "text": "More consistent poster alignment, loading placeholders, and native focus spacing.",
+              "platforms": ["tvOS"]
+            },
+            "Clearer device subtitle-style matching and font lists, with Apple's subtitle fonts grouped separately.",
+            {
+              "text": "Hold Left or Right to repeat subtitle adjustments, and press Right to open subtitle submenus.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            {
+              "text": "Left and Right no longer jump from subtitle adjustments to Back.",
+              "platforms": ["tvOS"]
+            },
+            "Stopped old watch updates from resurfacing titles in Continue Watching or undoing watched status while another server is offline."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "release/043",
+      "version": "2026.9.25",
+      "build": 43,
+      "releasedAt": "2026-09-25",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Customize subtitles from Settings with live previews, system fonts, and an HDR10 scene for checking subtitle brightness. Live TV can share your profile's style or use its own.",
+            {
+              "text": "Open subtitle previews full screen.",
+              "platforms": ["tvOS"]
+            },
+            {
+              "text": "Use supported remotes' Guide button to open Live TV or its in-player guide.",
+              "platforms": ["tvOS"]
+            },
+            "Set separate skip behavior for intros, credits, recaps, previews, and commercials. New profiles show Skip buttons by default; existing skip choices are kept.",
+            "Community markers from IntroDB and TheIntroDB fill gaps in server markers. They are enabled by default and can be turned off in Settings.",
+            "Support for M3U channel links with their own User-Agent or Referer."
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            "More consistent text-subtitle styling across playback engines, with supported file formatting, 20-400% text sizes in 1% steps, and placement that stays clear of player controls.",
+            "System subtitle styling follows each device's own appearance settings. New profiles use it by default; existing custom styles are preserved, and each profile keeps its own preferences.",
+            "Live TV now has movie-style playback controls, Audio and Subtitles menus, program information, On Now, and an in-player guide, plus settings for previews after watching and recently watched channels. Live TV remains experimental.",
+            {
+              "text": "A denser iPhone/iPad Live TV guide with synchronized timeline scrolling, clearer channel logos, and tap-to-preview program details before watching.",
+              "platforms": ["iOS"]
+            },
+            "Improved text-subtitle delivery and track switching during Plex transcoding.",
+            "Thanks to @tresby for contributing to this release."
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            "Returning after switching apps restores the saved playback position instead of jumping back to the beginning.",
+            "Corrected HTTP connections that could be blocked despite allowing unencrypted servers and streams.",
+            "Playback Info follows the active player and shows separate player and engine buffers instead of missing or misleading measurements.",
+            "Live TV no longer briefly shows empty-source setup while channels are still loading.",
+            {
+              "text": "Live TV stays in place during pinned-navigation focus changes, and scrolling navigation labels fade cleanly at the list edges.",
+              "platforms": ["tvOS"]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/042",
       "version": "2026.9.23",
       "build": 42,

@@ -1,7 +1,9 @@
 import CoreModels
 import PlozzCoreUI
+import notify
 import FeatureHome
 import FeatureHomeCore
+import MetadataKit
 import SwiftUI
 import UIKit
 @testable import AppShell
@@ -97,9 +99,17 @@ struct ProductionHomeFixture: View {
                     }
                 }
                 .overlay(alignment: .topTrailing) {
-                    Text("Production Home ready")
-                        .font(.caption2)
-                        .allowsHitTesting(false)
+                    VStack {
+                        Text("Production Home ready")
+                        if ProcessInfo.processInfo.arguments.contains("--progressive-home-load") {
+                            Text(verbatim: fixture.model.loadingRows.contains(.continueWatching) ? "pending" : "ready")
+                                .accessibilityIdentifier("home-fixture-resume-state")
+                            Text(verbatim: fixture.model.loadingRows.contains(.recentlyAdded) ? "pending" : "ready")
+                                .accessibilityIdentifier("home-fixture-latest-state")
+                        }
+                    }
+                    .font(.caption2)
+                    .allowsHitTesting(false)
                 }
             } else {
                 ProgressView("Preparing local Home data")
@@ -146,7 +156,8 @@ private struct ProductionHomeContent: View {
                 heroRuntime: fixture.runtime,
                 heroArtworkProvider: { $0.backdropURL },
                 heroArtworkValidator: { _ in true },
-                navigationStyle: isPinned ? .rail : .default,
+                navigationStyle: isPinned ? .rail
+                    : (ProcessInfo.processInfo.arguments.contains("--native-sidebar-home") ? .sidebar : .default),
                 onSelectItem: { item in withCinematicDetailNavigation(for: item) { path.append(item) } },
                 onPlayItem: { _ in },
                 onSelectLibrary: { _ in }
@@ -208,10 +219,27 @@ private final class ProductionHomeState {
             id: "home-fixture", server: provider.session.server,
             userID: "fixture", userName: "Fixture", deviceID: "fixture"
         )
+        let visibility = self.visibility
+        visibility.setContinueWatchingShowsSeriesArtwork(
+            !ProcessInfo.processInfo.arguments.contains("--episode-home-artwork")
+        )
+        let libraryRows = ProcessInfo.processInfo.arguments.contains("--progressive-library-rows")
+        visibility.setMergeLibrariesOnHome(!libraryRows)
+        for row in HomeGlobalRow.allCases {
+            visibility.setGlobalRowEnabled(!libraryRows || row == .continueWatching, for: row)
+        }
+        if libraryRows {
+            for index in 0..<20 {
+                visibility.setLibraryRowEnabled(
+                    true, libraryKey: "home-fixture:fixture-library-\(index)", kind: .recentlyAdded
+                )
+            }
+        }
         model = HomeViewModel(
             accounts: [ResolvedAccount(account: account, provider: provider)],
             layoutStore: InMemoryHomeLayoutStore(),
-            contentStore: InMemoryHomeContentStore()
+            contentStore: InMemoryHomeContentStore(),
+            currentVisibility: { visibility.visibility }
         )
         var settings = heroSettings.settings
         settings.isEnabled = !ProcessInfo.processInfo.arguments.contains("--hero-disabled-home")
@@ -238,9 +266,18 @@ private final class ProductionHomeState {
         settingsStore.save(settings)
         let poster = await artwork(name: "poster", size: CGSize(width: 240, height: 360), color: .systemIndigo)
         let backdrop = await artwork(name: "backdrop", size: CGSize(width: 960, height: 540), color: .systemBlue)
-        let logo = await artwork(name: "logo", size: CGSize(width: 320, height: 100), color: .white)
+        let scheduleFixture = ProcessInfo.processInfo.arguments.contains("--showcase-schedule-fixture")
+        let logo = await artwork(
+            name: "logo", size: scheduleFixture ? CGSize(width: 180, height: 320) : CGSize(width: 320, height: 100),
+            color: .white
+        )
         let state = ProductionHomeState(poster: poster, backdrop: backdrop, logo: logo)
-        if ProcessInfo.processInfo.arguments.contains("--slow-home-load") {
+        if ProcessInfo.processInfo.arguments.contains("--cached-home-hero") {
+            state.model.cacheHeroItems([state.provider.heroSeed], for: state.heroSettings.settings)
+            await state.model.waitForHeroPersistence()
+        }
+        if ProcessInfo.processInfo.arguments.contains("--slow-home-load")
+            || ProcessInfo.processInfo.arguments.contains("--progressive-home-load") {
             // Show Home at once and let its rows arrive late, over the skeleton.
             Task { await state.model.load() }
         } else {
@@ -253,7 +290,12 @@ private final class ProductionHomeState {
         let url = URL(string: "https://production-home.example.test/\(name).png")!
         let complex = ProcessInfo.processInfo.arguments.contains("--complex-home-artwork")
         let image = UIGraphicsImageRenderer(size: size).image { context in
-            if complex, name == "logo" {
+            if name == "logo", ProcessInfo.processInfo.arguments.contains("--showcase-schedule-fixture") {
+                UIColor.systemGreen.setFill()
+                context.fill(CGRect(x: 20, y: 10, width: 40, height: 300))
+                context.fill(CGRect(x: 50, y: 10, width: 110, height: 40))
+                context.fill(CGRect(x: 50, y: 140, width: 70, height: 40))
+            } else if complex, name == "logo" {
                 for index in 0..<8 {
                     UIColor(hue: CGFloat(index) / 8, saturation: 0.85, brightness: 0.95, alpha: 1).setFill()
                     UIBezierPath(roundedRect: CGRect(
@@ -299,9 +341,12 @@ private struct ProductionHomeProvider: MediaProvider {
     let poster: URL
     let backdrop: URL
     let logo: URL
+    private let progressiveGate = ProductionHomeRowsGate()
+    private let recentGate = ProductionHomeRowsGate(notificationKey: "PLOZZ_HOME_RECENT_RELEASE_NOTIFICATION")
     private var rowCount: Int {
         ProcessInfo.processInfo.arguments.contains("--home-performance-fixture") ? 75 : 24
     }
+    var heroSeed: MediaItem { movie(rowCount + 10) }
 
     static func artworkURL(_ base: URL, index: Int) -> URL {
         base.appending(queryItems: [URLQueryItem(name: "fixture-item", value: String(index))])
@@ -323,7 +368,8 @@ private struct ProductionHomeProvider: MediaProvider {
         let poster = reference(self.poster, index: index)
         let backdrop = reference(self.backdrop, index: index)
         var item = MediaItem(
-            id: "home-movie-\(index)", title: "Fixture movie \(index)", kind: .movie,
+            id: "home-movie-\(index)", title: "Fixture movie \(index)",
+            kind: ProcessInfo.processInfo.arguments.contains("--showcase-schedule-fixture") ? .series : .movie,
             posterURL: poster, backdropURL: backdrop
         )
         item.sourceAccountID = "home-fixture"
@@ -335,12 +381,38 @@ private struct ProductionHomeProvider: MediaProvider {
         return item
     }
 
-    func libraries() async throws -> [MediaLibrary] { [] }
+    func libraries() async throws -> [MediaLibrary] {
+        guard ProcessInfo.processInfo.arguments.contains("--progressive-library-rows") else { return [] }
+        return (0..<20).map {
+            MediaLibrary(id: "fixture-library-\($0)", title: "Fixture library \($0)", kind: .movie)
+        }
+    }
     func continueWatching(limit: Int) async throws -> [MediaItem] {
+        if ProcessInfo.processInfo.arguments.contains("--progressive-home-load") {
+            await progressiveGate.wait()
+        }
+        if ProcessInfo.processInfo.arguments.contains("--empty-home-resume") { return [] }
         try await holdForSlowLoad()
-        return Array((0..<rowCount).prefix(limit).map(movie))
+        let items = Array((0..<rowCount).prefix(limit).map(movie))
+        if ProcessInfo.processInfo.arguments.contains("--showcase-schedule-fixture") {
+            let now = Date()
+            for item in items {
+                await SeriesScheduleStore.shared.store(SeriesScheduleRecord(
+                    seriesKey: MetadataQuery(item).seriesScoped.enrichmentCacheKey,
+                    upcomingEpisode: UpcomingEpisode(
+                        seriesIdentity: .external(source: "fixture", value: item.id),
+                        airDate: now.addingTimeInterval(20 * 86_400),
+                        datePrecision: .dateOnly, source: .tvdb, refreshedAt: now
+                    ),
+                    cadence: AirCadence(weekdays: [6]),
+                    refreshedAt: now, refreshDueAt: now.addingTimeInterval(3_600)
+                ))
+            }
+        }
+        return items
     }
     func latest(limit: Int) async throws -> [MediaItem] {
+        await recentGate.wait()
         try await holdForSlowLoad()
         return Array((rowCount..<(rowCount * 2)).prefix(limit).map(movie))
     }
@@ -350,14 +422,73 @@ private struct ProductionHomeProvider: MediaProvider {
         try await Task.sleep(for: .seconds(6))
     }
     func item(id: String) async throws -> MediaItem {
-        guard let index = Int(id.split(separator: "-").last ?? ""), (0..<(rowCount * 2)).contains(index) else {
+        let count = ProcessInfo.processInfo.arguments.contains("--progressive-library-rows")
+            ? rowCount + 400 : rowCount * 2
+        guard let index = Int(id.split(separator: "-").last ?? ""), (0..<count).contains(index) else {
             throw AppError.notFound
         }
         return movie(index)
     }
     func children(of itemID: String) async throws -> [MediaItem] { [] }
     func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
-        MediaPage(items: [], startIndex: page.startIndex, totalCount: 0)
+        guard containerID.hasPrefix("fixture-library-"),
+              let index = Int(containerID.split(separator: "-").last ?? "") else {
+            return MediaPage(items: [], startIndex: page.startIndex, totalCount: 0)
+        }
+        if index > 0 {
+            await progressiveGate.wait()
+        } else {
+            await recentGate.wait()
+        }
+        let start = rowCount + index * 20
+        return MediaPage(
+            items: Array((start..<(start + 20)).prefix(page.limit).map(movie)),
+            startIndex: page.startIndex, totalCount: 20
+        )
+    }
+
+    private final class ProductionHomeRowsGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var opened = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+        private var token: Int32 = -1
+
+        init(notificationKey: String = "PLOZZ_HOME_ROWS_RELEASE_NOTIFICATION") {
+            guard let name = ProcessInfo.processInfo.environment[notificationKey] else {
+                opened = true
+                return
+            }
+            let status = notify_register_dispatch(name, &token, .main) { [weak self] _ in self?.open() }
+            precondition(status == UInt32(NOTIFY_STATUS_OK), "The progressive Home fixture needs its release notification.")
+        }
+
+        deinit { if token >= 0 { notify_cancel(token) } }
+
+        private func open() {
+            lock.lock()
+            opened = true
+            let pending = waiters
+            waiters = []
+            lock.unlock()
+            pending.forEach { $0.resume() }
+        }
+
+        func wait() async {
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    lock.lock()
+                    if opened {
+                        lock.unlock()
+                        continuation.resume()
+                    } else {
+                        waiters.append(continuation)
+                        lock.unlock()
+                    }
+                }
+            } onCancel: {
+                self.open()
+            }
+        }
     }
     func search(query: String, limit: Int) async throws -> [MediaItem] { [] }
     func playbackInfo(for itemID: String) async throws -> PlaybackRequest { throw AppError.notFound }

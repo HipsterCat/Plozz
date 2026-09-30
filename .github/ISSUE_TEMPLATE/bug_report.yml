@@ -6,79 +6,61 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for helping make Plozz better. Please search [existing issues](https://github.com/thatcube/Plozz/issues) first, then fill in what you can. Never paste tokens, passwords, or server URLs with credentials.
+        Check [existing issues](https://github.com/brandomoore/Plozz/issues) first. Never share passwords, tokens, or server URLs with credentials.
   - type: textarea
     id: summary
     attributes:
-      label: Summary
-      description: A clear, concise description of the bug.
-      placeholder: When I open a Plex library, posters never load...
+      label: What went wrong?
+      description: Tell us what happened and what you expected instead.
+      placeholder: Episodes marked as watched become unwatched again after restarting Plozz.
     validations:
       required: true
   - type: textarea
     id: steps
     attributes:
       label: Steps to reproduce
-      description: What did you do, step by step?
+      description: If you can reproduce it, tell us how.
       placeholder: |
         1. Go to '...'
         2. Select '...'
         3. See error
     validations:
-      required: true
-  - type: textarea
-    id: expected
-    attributes:
-      label: Expected behavior
-      description: What did you expect to happen?
-    validations:
-      required: true
-  - type: textarea
-    id: actual
-    attributes:
-      label: Actual behavior
-      description: What actually happened?
-    validations:
-      required: true
+      required: false
   - type: dropdown
     id: backend
     attributes:
-      label: Affected backend(s)
-      description: Plozz treats Jellyfin and Plex as co-equal backends, so this helps narrow the bug down.
+      label: Media source
+      multiple: true
       options:
         - Jellyfin
+        - Emby
         - Plex
+        - Silo
         - SMB share
-        - All backends
+        - IPTV / M3U
+        - All sources
         - Not applicable / not sure
     validations:
-      required: true
+      required: false
   - type: input
     id: app-version
     attributes:
       label: Plozz version & build
-      description: Find it in Settings → About (e.g. 0.3 build 42).
-      placeholder: 0.3 build 42
-    validations:
-      required: true
-  - type: input
-    id: tvos-version
-    attributes:
-      label: tvOS version
-      placeholder: tvOS 18.2
+      description: Find it in Settings → About.
+      placeholder: 2026.9.29 (45)
     validations:
       required: true
   - type: input
     id: device
     attributes:
-      label: Apple TV model
-      placeholder: Apple TV 4K (3rd gen)
+      label: Device & OS version
+      placeholder: Apple TV 4K, tvOS 27 / iPhone, iOS 27 / iPad, iPadOS 27
     validations:
       required: true
   - type: textarea
     id: logs
     attributes:
-      label: Logs / screenshots
-      description: Optional. Attach screenshots or paste relevant logs — remove any secrets first.
+      label: Anything else?
+      description: Server version, last working Plozz build, screenshots, or logs. Remove any secrets.
     validations:
       required: false

@@ -52,6 +52,23 @@ registry.
   rebuilt on profile change (`rebuildSettingsModels`) so settings,
   Trakt, and watched-state stay isolated.
 
+## Appearance onboarding
+
+Apple TV first-run and new-profile setup share Theme, Navigation, and Home Layout
+choices in that order. Each selection writes to the active profile's existing
+settings model. Continue or Menu accepts the current selection; profile setup
+is not complete until Home Layout is accepted.
+
+Existing installations receive a device-local, one-time Home Layout chooser
+after any pending navigation introduction and before release notes. The current
+layout is preselected; dismissing does not reset it or change other profiles.
+Finishing setup also completes these introductions, preventing a duplicate
+prompt on first entry. iPhone and iPad retain their existing carousel layout.
+
+`CoreUI.HomeLayoutOptionCard` supplies the same names and previews to onboarding
+and Settings. Its illustrations omit navigation chrome, since Home layout and
+navigation style are independent choices.
+
 ## Pinned sidebar remote navigation
 
 `NavigationRailEdgeCatcher` passively observes arrow presses and indirect-touch
@@ -59,6 +76,11 @@ swipes. Left at an unresolved content edge opens the sidebar; Right at an
 unresolved sidebar edge returns to the page. Both paths wait for native focus to
 settle and do nothing if it moved or the sidebar's focus state changed. The Home
 hero disables this fallback and requests entry at its own logical leading edge.
+Unchanged focus is not sufficient evidence of unused input. Focus environments
+conforming to `HorizontalNavigationInputOwning` keep horizontal adjustments,
+and presented screens keep input away from the background rail. The native
+Search controller remains eligible for its keyboard-edge handoff. Press, swipe,
+and deferred Search callbacks recheck ownership before requesting navigation.
 
 On tvOS, indirect touch-down and subsequent movement can use different coordinate
 frames inside wide scrolling rows. `SwipeTravel` anchors at the first movement

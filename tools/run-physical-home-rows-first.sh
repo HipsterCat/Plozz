@@ -29,7 +29,7 @@ if [[ ! "$REPEATS" =~ ^[1-3]$ ]]; then
   echo "PLOZZ_HOME_REPEATS must be 1, 2, or 3." >&2
   exit 2
 fi
-if [[ $# -ne 1 || ( "$MODE" != "--build-runner" && "$MODE" != "--run" && "$MODE" != "--run-hero-off" && "$MODE" != "--run-vertical-only" && "$MODE" != "--run-horizontal-only" && "$MODE" != "--sweep-down" && "$MODE" != "--sweep-up" && "$MODE" != "--measure-right" && "$MODE" != "--measure-left" && "$MODE" != "--measure-down" && "$MODE" != "--measure-up" && "$MODE" != "--measure-hero-down" && "$MODE" != "--measure-hero-up" && "$MODE" != "--run-vertical-roundtrip" && "$MODE" != "--observe-home" && "$MODE" != "--measure-vertical-burst" ) ]]; then
+if [[ $# -ne 1 || ( "$MODE" != "--build-runner" && "$MODE" != "--run" && "$MODE" != "--run-hero-off" && "$MODE" != "--run-vertical-only" && "$MODE" != "--run-horizontal-only" && "$MODE" != "--sweep-down" && "$MODE" != "--sweep-up" && "$MODE" != "--measure-right" && "$MODE" != "--measure-left" && "$MODE" != "--measure-down" && "$MODE" != "--measure-up" && "$MODE" != "--measure-hero-down" && "$MODE" != "--measure-hero-up" && "$MODE" != "--run-vertical-roundtrip" && "$MODE" != "--observe-home" && "$MODE" != "--measure-vertical-burst" && "$MODE" != "--run-showcase-mixed" ) ]]; then
   echo "Usage: bash tools/run-physical-home-rows-first.sh --build-runner"
   echo "Then: PLOZZ_HOME_ROWS_FIRST=$DEVICE PLOZZ_HOME_RELEASE_APP_INSTALLED=1 bash tools/run-physical-home-rows-first.sh --run-hero-off"
   echo "--run is also a hero-off alias."
@@ -42,10 +42,11 @@ if [[ $# -ne 1 || ( "$MODE" != "--build-runner" && "$MODE" != "--run" && "$MODE"
   echo "Use --measure-vertical-burst for warm adjacent media-row pairs, NOT Hero/CW or cold first Down."
   echo "Use --run-vertical-roundtrip for observed Hero/CW paging and available lower rows, then return."
   echo "Use --observe-home for AX evidence only, without directional input."
+  echo "Use --run-showcase-mixed for deep mixed-speed Continue Watching and multi-row traversal."
   exit 2
 fi
 if [[ "$MODE" != "--build-runner" && ( "${PLOZZ_HOME_ROWS_FIRST:-}" != "$DEVICE" || "${PLOZZ_HOME_RELEASE_APP_INSTALLED:-}" != "1" ) ]]; then
-  echo "Requires exact physical-device opt-in and parent-confirmed running Release app." >&2
+  echo "Requires exact physical-device opt-in and parent-confirmed running optimized app." >&2
   exit 2
 fi
 
@@ -110,13 +111,18 @@ PY
 
 export TEST_RUNNER_PLOZZ_HOME_ROWS_FIRST="$DEVICE"
 export TEST_RUNNER_PLOZZ_HOME_TARGET_DEVICE="$DEVICE"
-export TEST_RUNNER_PLOZZ_HOME_APP_CONFIGURATION=Release
+export TEST_RUNNER_PLOZZ_HOME_APP_CONFIGURATION="${PLOZZ_HOME_APP_CONFIGURATION:-Release}"
+if [[ "$TEST_RUNNER_PLOZZ_HOME_APP_CONFIGURATION" != "Release" && "$TEST_RUNNER_PLOZZ_HOME_APP_CONFIGURATION" != "Debug-optimized" ]]; then
+  echo "PLOZZ_HOME_APP_CONFIGURATION must identify a confirmed Release or Debug-optimized app." >&2
+  exit 2
+fi
 export TEST_RUNNER_PLOZZ_HOME_APP_BUNDLE_ID="$APP_ID"
 export TEST_RUNNER_PLOZZ_HOME_HERO_OFF=1
 export TEST_RUNNER_PLOZZ_HOME_HERO_ON=0
 export TEST_RUNNER_PLOZZ_HOME_VERTICAL_ROUNDTRIP=0
 export TEST_RUNNER_PLOZZ_HOME_OBSERVE_ONLY=0
 export TEST_RUNNER_PLOZZ_HOME_VERTICAL_BURST=0
+export TEST_RUNNER_PLOZZ_SHOWCASE_MIXED_ROWS=0
 export TEST_RUNNER_PLOZZ_HOME_FIRST_DOWN_ONLY="${PLOZZ_HOME_FIRST_DOWN_ONLY:-0}"
 export TEST_RUNNER_PLOZZ_HOME_HERO_WARM_PAIRS="${PLOZZ_HOME_HERO_WARM_PAIRS:-0}"
 if [[ ! "$TEST_RUNNER_PLOZZ_HOME_HERO_WARM_PAIRS" =~ ^[0-6]$ ]]; then
@@ -174,7 +180,15 @@ TEST_METHOD=testHeroDisabledFocusedRowAndAvailableLowerRowsWarm
 RUNNER_LIMIT=120
 INPUT_BUDGET=100
 SCENARIO=hero-off
-if [[ "$MODE" == "--run-vertical-only" ]]; then
+if [[ "$MODE" == "--run-showcase-mixed" ]]; then
+  export TEST_RUNNER_PLOZZ_HOME_HERO_OFF=0
+  export TEST_RUNNER_PLOZZ_HOME_ALLOW_HERO=1
+  export TEST_RUNNER_PLOZZ_SHOWCASE_MIXED_ROWS=1
+  TEST_METHOD=testShowcaseMixedRowsWarm
+  SCENARIO=observed-rows
+  RUNNER_LIMIT=480
+  INPUT_BUDGET=390
+elif [[ "$MODE" == "--run-vertical-only" ]]; then
   export TEST_RUNNER_PLOZZ_HOME_VERTICAL_ONLY=1
   TEST_METHOD=testHeroDisabledVerticalRowsWarm
   RUNNER_LIMIT=60
@@ -364,7 +378,16 @@ if [[ "$SCENARIO" == "hero-off" && "$MODE" != "--run-horizontal-only" && -z "$TE
   echo "Missing verified vertical movement and return." >&2
   exit 1
 fi
-if [[ "$MODE" == "--observe-home" || "$MODE" == "--run-vertical-roundtrip" ]]; then
+if [[ "$MODE" == "--run-showcase-mixed" ]]; then
+  if ! grep -q 'PLZROWS .* mixed.coverage ' "$OUT/test.log"; then
+    echo "Missing verified mixed-speed Showcase coverage." >&2
+    exit 1
+  fi
+  xcrun xcresulttool get test-results summary --path "$OUT/RowsFirst.xcresult" > "$OUT/summary.json"
+  python3 tools/xcresult-summary.py verdict "$OUT/summary.json"
+  printf '{"nativeMetricsCollected":false,"performanceMeasured":false,"coverage":"mixed-speed Showcase navigation and anchors; inspect timeline"}\n' > "$OUT/validation.json"
+  exit 0
+elif [[ "$MODE" == "--observe-home" || "$MODE" == "--run-vertical-roundtrip" ]]; then
   REQUIRED_EVENT=observation.verified
   if [[ "$MODE" == "--run-vertical-roundtrip" ]]; then REQUIRED_EVENT=roundtrip.verified; fi
   if ! grep -q "PLZROWS .* $REQUIRED_EVENT " "$OUT/test.log"; then

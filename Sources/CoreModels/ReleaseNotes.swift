@@ -89,6 +89,7 @@ public struct ReleaseNotesSection: Codable, Equatable, Identifiable, Sendable {
 public struct ReleaseNotesRelease: Codable, Equatable, Identifiable, Sendable {
     public let id: String
     public let version: String
+    public let marketingVersion: String?
     public let build: Int
     public let releasedAt: String
     public let sections: [ReleaseNotesSection]
@@ -98,14 +99,18 @@ public struct ReleaseNotesRelease: Codable, Equatable, Identifiable, Sendable {
         version: String,
         build: Int,
         releasedAt: String,
-        sections: [ReleaseNotesSection]
+        sections: [ReleaseNotesSection],
+        marketingVersion: String? = nil
     ) {
         self.id = id
         self.version = version
         self.build = build
         self.releasedAt = releasedAt
         self.sections = sections
+        self.marketingVersion = marketingVersion
     }
+
+    public var appleVersion: String { marketingVersion ?? version }
 }
 
 public struct ReleaseNotesVersionGroup: Equatable, Identifiable, Sendable {
@@ -123,6 +128,7 @@ public enum ReleaseNotesCatalogError: LocalizedError, Equatable {
     case duplicateBuild(Int)
     case invalidReleaseID(String, build: Int)
     case invalidVersion(String)
+    case invalidMarketingVersion(String)
     case invalidReleaseDate(String)
     case missingSections(String)
     case invalidSectionOrder(String)
@@ -149,6 +155,8 @@ public enum ReleaseNotesCatalogError: LocalizedError, Equatable {
             return "Release id \(id) does not match build \(build)."
         case let .invalidVersion(version):
             return "ReleaseNotes.json contains invalid version \(version)."
+        case let .invalidMarketingVersion(version):
+            return "ReleaseNotes.json contains invalid Apple marketing version \(version)."
         case let .invalidReleaseDate(date):
             return "ReleaseNotes.json contains invalid release date \(date)."
         case let .missingSections(id):
@@ -315,10 +323,32 @@ public struct ReleaseNotesCatalog: Codable, Equatable, Sendable {
             guard
                 versionParts.count == 3,
                 versionParts.allSatisfy({
-                    !$0.isEmpty && $0.allSatisfy(\.isNumber)
+                    !$0.isEmpty && $0.allSatisfy({ $0.isASCII && $0.isNumber })
                 })
             else {
                 throw ReleaseNotesCatalogError.invalidVersion(release.version)
+            }
+            let appleParts = release.appleVersion.split(separator: ".", omittingEmptySubsequences: false)
+            guard appleParts.count == 3, appleParts.allSatisfy({
+                !$0.isEmpty && $0.allSatisfy({ $0.isASCII && $0.isNumber })
+            }) else {
+                throw ReleaseNotesCatalogError.invalidMarketingVersion(release.appleVersion)
+            }
+            if release.marketingVersion != nil {
+                let numbers = versionParts.compactMap { Int($0) }
+                guard numbers.count == 3, (1...9999).contains(numbers[0]),
+                      numbers.map(String.init).joined(separator: ".") == release.version else {
+                    throw ReleaseNotesCatalogError.invalidVersion(release.version)
+                }
+                let components = DateComponents(year: numbers[0], month: numbers[1], day: numbers[2])
+                let calendar = Calendar(identifier: .gregorian)
+                guard let date = calendar.date(from: components),
+                      calendar.component(.year, from: date) == numbers[0],
+                      calendar.component(.month, from: date) == numbers[1],
+                      calendar.component(.day, from: date) == numbers[2],
+                      release.releasedAt == String(format: "%04d-%02d-%02d", numbers[0], numbers[1], numbers[2]) else {
+                    throw ReleaseNotesCatalogError.invalidReleaseDate(release.releasedAt)
+                }
             }
             let dateParts = release.releasedAt.split(separator: "-", omittingEmptySubsequences: false)
             guard
@@ -383,7 +413,9 @@ public struct ReleaseNotesCatalog: Codable, Equatable, Sendable {
         guard zip(releases, releases.dropFirst()).allSatisfy({ pair in
             let newer = pair.0.version.split(separator: ".").compactMap { Int($0) }
             let older = pair.1.version.split(separator: ".").compactMap { Int($0) }
-            return !newer.lexicographicallyPrecedes(older)
+            let newerApple = pair.0.appleVersion.split(separator: ".").compactMap { Int($0) }
+            let olderApple = pair.1.appleVersion.split(separator: ".").compactMap { Int($0) }
+            return !newer.lexicographicallyPrecedes(older) && !newerApple.lexicographicallyPrecedes(olderApple)
         }) else {
             throw ReleaseNotesCatalogError.versionsNotNewestFirst
         }

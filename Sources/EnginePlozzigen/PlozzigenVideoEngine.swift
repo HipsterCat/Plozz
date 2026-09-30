@@ -81,6 +81,19 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     private var liveSourceResetCancellable: AnyCancellable?
 
     public var currentTime: TimeInterval { engine.currentTime }
+    public var subtitlePresentationTime: TimeInterval {
+        if usesNativeSubtitleCues, let time = engine.currentAVPlayer?.currentTime().seconds, time.isFinite {
+            return time
+        }
+        return engine.sourceTime
+    }
+    private var nativeSubtitleOutput: NativeSubtitleCueOutput?
+    private weak var nativeSubtitleItem: AVPlayerItem?
+    private var nativeSubtitleSelectionID: Int?
+    private var lastPipelineDiagnosticUptime: TimeInterval?
+    private var usesNativeSubtitleCues: Bool {
+        engine.subtitleTracks.first { $0.id == engine.activeSubtitleTrackIndex }?.isNativelyRenderedSubtitle == true
+    }
     public var hasPresentedVideoFrame: Bool {
         status == .ready && engine.isSessionReady && engine.hasFirstFrameReadyForDisplay
     }
@@ -133,15 +146,20 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         )
     }
 
-    /// Bridge AetherEngine's live telemetry into the diagnostics overlay so the
-    /// Plozzigen path shows real dropped frames / observed FPS / bitrate instead
-    /// of `-` (it has no `AVPlayer`, so the access-log path never fires).
+    /// Render telemetry and the engine's contiguous cache frontier complement
+    /// the internal AVPlayer's own buffer/access-log measurements.
     public var liveTelemetry: EngineLiveTelemetry? {
-        guard let t = engine.liveTelemetry else { return nil }
+        let t = engine.liveTelemetry
+        let buffered = engine.clock.bufferedPosition
+        let position = engine.currentTime
+        let bufferAhead: TimeInterval? = engine.isSessionReady && buffered.isFinite && position.isFinite
+            ? max(0, buffered - position) : nil
+        guard t != nil || bufferAhead != nil else { return nil }
         return EngineLiveTelemetry(
-            droppedFrameCount: t.droppedFrameCount,
-            observedFps: t.observedFps,
-            observedBitrate: t.instantBitrateMbps.map { $0 * 1_000_000 }
+            droppedFrameCount: t?.droppedFrameCount,
+            observedFps: t?.observedFps,
+            observedBitrate: t?.instantBitrateMbps.map { $0 * 1_000_000 },
+            bufferedSecondsAhead: bufferAhead
         )
     }
 
@@ -218,7 +236,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     public var displayName: String { "Plozzigen" }
 
     public var capabilities: PlayerEngineCapabilities {
-        [.playbackSpeed, .dualSubtitleDecode]
+        engine.videoRoute == .remoteBypass ? [.playbackSpeed] : [.playbackSpeed, .dualSubtitleDecode]
     }
 
     deinit {
@@ -318,14 +336,8 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
             let isFailureDetail = [
                 "failed", "failure", "error", "starved", "stalled", "watchdog"
             ].contains { lowered.contains($0) }
-            // Stall diagnostics (SMB/DV first-segment wedge after the DV switch):
-            //  • [LagDiag] — 1 Hz AVPlayer transport state (tcs / wait-reason /
-            //    dclk / req delta / buffer). The engine promotes it to the host
-            //    handler only while the player is NOT cleanly advancing (plus a
-            //    1-in-10 heartbeat), so this stays quiet during smooth playback.
-            //  • [HLSLocalServer] GET — every segment/playlist request AVPlayer
-            //    issues, so a stall shows whether it re-requests the reset segment
-            //    (server fault) or goes silent (AVPlayer wedge).
+            // Verbose LagDiag lines are not delivered to the host by the pinned
+            // engine. Cached telemetry is journaled separately below.
             let isStallDiag = line.contains("[LagDiag]")
                 || (line.contains("[HLSLocalServer]") && line.contains("GET "))
             if handoff,
@@ -788,9 +800,14 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         status = .loading
         do {
             try Task.checkCancellation()
-            try await engine.reloadAtCurrentPosition { options in
+            let resumesPlaying = !intendsPause
+            let correction = try await engine.reloadAtCurrentPosition { options in
                 Self.applyLiveOutputPolicy(outputPolicy, to: &options)
+                options.autoplay = resumesPlaying
             }
+            // Autoplay alone can be session-owned and return without rebuilding.
+            // This caller asked for actual recovery, not just an option change.
+            if !correction.rebuilt { try await engine.reloadAtCurrentPosition() }
             try Task.checkCancellation()
             // Custom-source reloads report failure through `state = .error` and
             // return normally. Drain the adapter's queued Combine delivery, then
@@ -849,6 +866,10 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     }
 
     private func stopEngine(resetDisplayCriteria: Bool) {
+        nativeSubtitleOutput?.detach()
+        nativeSubtitleOutput = nil
+        nativeSubtitleItem = nil
+        nativeSubtitleSelectionID = nil
         outputLoadGeneration = UUID()
         outputPolicyReload?.cancel()
         outputPolicyReload = nil
@@ -898,11 +919,21 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     }
 
     public func selectSubtitleTrack(_ track: MediaTrack?) {
+        synchronizeNativeSubtitleOutput()
+        if nativeSubtitleOutput != nil {
+            nativeSubtitleSelectionID = track?.id
+            let native = engine.subtitleTracks.first { $0.id == track?.id }?.isNativelyRenderedSubtitle == true
+            nativeSubtitleOutput?.select(enabled: native)
+        }
         if let track {
             engine.selectSubtitleTrack(index: track.id)
         } else {
             engine.clearSubtitle()
         }
+    }
+
+    public func supportsSubtitleTimingAdjustments(for track: MediaTrack) -> Bool {
+        engine.subtitleTracks.first { $0.id == track.id }?.isNativelyRenderedSubtitle != true
     }
 
     public func selectSecondarySubtitleTrack(_ track: MediaTrack?) {
@@ -985,6 +1016,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     /// the way out and then double-draws with the overlay on the way back.
     public func setNativeSubtitlesActive(_ active: Bool) {
         wantsNativeSubtitles = active
+        nativeSubtitleOutput?.setSystemPresentation(active)
         applyNativeSubtitleSelection()
     }
 
@@ -1010,10 +1042,17 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
     /// rules live on the player item and a reload replaces it.
     private func applyAVPlayerSubtitleStyle(to player: AVPlayer?) {
         guard let avPlayerSubtitleStyle, let item = player?.currentItem else { return }
+        if item === nativeSubtitleItem, let nativeSubtitleOutput {
+            nativeSubtitleOutput.updateStyle(avPlayerSubtitleStyle)
+            return
+        }
         item.textStyleRules = avPlayerSubtitleStyle.textStyleRules()
     }
 
     private func applyNativeSubtitleSelection() {
+        // The bypass's origin track remains selected to feed the cue output.
+        // PiP changes its drawing owner, not its language or identity.
+        if engine.videoRoute == .remoteBypass, nativeSubtitleOutput != nil { return }
         guard wantsNativeSubtitles else {
             engine.setNativeSubtitleSelected(track: nil)
             return
@@ -1080,7 +1119,97 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
 
     // MARK: - Engine Observation (Combine)
 
+    private func synchronizeNativeSubtitleOutput() {
+        guard engine.videoRoute == .remoteBypass,
+              let player = engine.currentAVPlayer, let item = player.currentItem else {
+            nativeSubtitleOutput?.detach()
+            nativeSubtitleOutput = nil
+            nativeSubtitleItem = nil
+            nativeSubtitleSelectionID = nil
+            return
+        }
+        if nativeSubtitleItem !== item {
+            nativeSubtitleOutput?.detach()
+            nativeSubtitleItem = item
+            nativeSubtitleSelectionID = nil
+            #if canImport(UIKit)
+            let style = avPlayerSubtitleStyle ?? .default
+            #else
+            let style = SubtitleStyle.default
+            #endif
+            nativeSubtitleOutput = NativeSubtitleCueOutput(player: player, item: item, style: style) { [weak self, weak item] cues in
+                guard let self, let item, self.nativeSubtitleItem === item,
+                      self.engine.currentAVPlayer?.currentItem === item,
+                      self.usesNativeSubtitleCues else { return }
+                self.onSubtitleCues?(cues)
+            }
+            #if canImport(UIKit)
+            nativeSubtitleOutput?.setSystemPresentation(wantsNativeSubtitles)
+            #endif
+        }
+        if nativeSubtitleSelectionID != engine.activeSubtitleTrackIndex {
+            nativeSubtitleSelectionID = engine.activeSubtitleTrackIndex
+            nativeSubtitleOutput?.select(enabled: usesNativeSubtitleCues)
+            if !usesNativeSubtitleCues { onSubtitleCues?([]) }
+        }
+    }
+
+    private func recordPipelineDiagnostic(_ telemetry: LiveTelemetry) {
+        guard HandoffDiagnostics.isEnabled, engine.videoRoute != .none, engine.state != .ended else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if let lastPipelineDiagnosticUptime, now - lastPipelineDiagnosticUptime < 2 { return }
+        lastPipelineDiagnosticUptime = now
+        let active = engine.activeAudioTrackIndex.flatMap { id in
+            audioTracks.first { $0.id == id }
+        }
+        HandoffDiagnostics.emit(Self.pipelineDiagnosticLine(
+            telemetry: telemetry,
+            instance: String(outputLoadGeneration.uuidString.prefix(8)),
+            phase: Self.livePhase(engine.playbackPhase).diagnosticCode,
+            route: engine.videoRoute.rawValue,
+            position: engine.currentTime,
+            engineBuffer: liveTelemetry?.bufferedSecondsAhead,
+            audio: active,
+            audioDelivery: engine.audioDelivery.rawValue,
+            subtitleID: engine.activeSubtitleTrackIndex
+        ))
+    }
+
+    nonisolated static func pipelineDiagnosticLine(
+        telemetry: LiveTelemetry, instance: String, phase: String, route: String, position: Double,
+        engineBuffer: Double?, audio: MediaTrack?, audioDelivery: String, subtitleID: Int?
+    ) -> String {
+        func number(_ value: Double?) -> String {
+            guard let value, value.isFinite else { return "unknown" }
+            return String(format: "%.3f", value)
+        }
+        return "playback PIPELINE instance=\(instance) phase=\(phase) route=\(route) sourcePosition=\(number(position))"
+            + " playerSpan=\(number(telemetry.forwardBufferSeconds)) engineBuffer=\(number(engineBuffer))"
+            + " readerAheadBytes=\(telemetry.readerWindowAheadBytes.map(String.init) ?? "unknown")"
+            + " sourceBytes=\(telemetry.demuxerBytesFetched) muxBytes=\(telemetry.muxedBytesLifetime)"
+            + " servedBytes=\(telemetry.serverBytesSentLifetime) cachedBytes=\(telemetry.cachedBytes.map(String.init) ?? "unknown")"
+            + " bridgeBytes=\(telemetry.audioBridgeLiveBytes) bridgeMbps=\(number(telemetry.audioBridgeBitrateMbps))"
+            + " restarts=\(telemetry.producerRestartCount) dropped=\(telemetry.droppedFrameCount.map(String.init) ?? "unknown")"
+            + " rssMB=\(telemetry.rssMb)"
+            + " audioID=\(audio.map { String($0.id) } ?? "unknown")"
+            + " audioCodec=\(HandoffDiagnostics.redactedDetail(audio?.codec ?? "unknown"))"
+            + " audioChannels=\(audio?.channels.map(String.init) ?? "unknown")"
+            + " audioDelivery=\(audioDelivery)"
+            + " engineSubtitleID=\(subtitleID.map(String.init) ?? "none")"
+    }
+
     private func observeEngine() {
+        engine.diagnostics.$liveTelemetry
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] telemetry in
+                guard let self, let telemetry, self.engine.liveTelemetry == telemetry else { return }
+                self.recordPipelineDiagnostic(telemetry)
+            }
+            .store(in: &cancellables)
+        engine.$currentAVPlayerItem.combineLatest(engine.$videoRoute, engine.$activeSubtitleTrackIndex)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.synchronizeNativeSubtitleOutput() }
+            .store(in: &cancellables)
         // AirPlay: opt the engine's AVPlayer into external playback as it is
         // (re)created. The engine republishes `currentAVPlayer` on every audio
         // track reload, so a one-shot assignment at load would go stale and the
@@ -1211,7 +1340,10 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
             .store(in: &cancellables)
         engine.$subtitleTracks
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.syncTracks() }
+            .sink { [weak self] _ in
+                self?.synchronizeNativeSubtitleOutput()
+                self?.syncTracks()
+            }
             .store(in: &cancellables)
 
         // AetherEngine resolves its active audio track asynchronously at load
@@ -1222,7 +1354,20 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         // what's playing.
         engine.$activeAudioTrackIndex
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.onTracksChanged?() }
+            .sink { [weak self] index in
+                guard let self else { return }
+                if let index, self.engine.activeAudioTrackIndex == index {
+                    let track = self.engine.audioTracks.first { $0.id == index }
+                    HandoffDiagnostics.emit(
+                        "audio SELECTED engine=plozzigen instance=\(self.outputLoadGeneration.uuidString.prefix(8)) id=\(index)"
+                            + " codec=\(HandoffDiagnostics.redactedDetail(track?.codec ?? "unknown"))"
+                            + " channels=\(track?.channels ?? 0)"
+                            + " language=\(HandoffDiagnostics.redactedDetail(track?.language ?? "unknown"))"
+                            + " delivery=\(self.engine.audioDelivery.rawValue)"
+                    )
+                }
+                self.onTracksChanged?()
+            }
             .store(in: &cancellables)
 
         // Bridge AetherEngine's decoded cues into Plozz's owned overlay.
@@ -1234,7 +1379,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         engine.$subtitleCues
             .receive(on: DispatchQueue.main)
             .sink { [weak self] cues in
-                guard let self else { return }
+                guard let self, !self.usesNativeSubtitleCues else { return }
                 // Map AetherEngine cues → Plozz's cue model inline so the
                 // element type is inferred (the module and the engine class share
                 // the name `AetherEngine`, so naming `AetherEngine.SubtitleCue`
@@ -1264,6 +1409,7 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
                             canvasSize: image.canvasSize
                         ))
                     }
+
                     return CoreModels.SubtitleCue(
                         id: cue.id,
                         start: cue.startTime,
@@ -1333,8 +1479,10 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
         }
     }
 
-    private func syncTracks() {
-        audioTracks = engine.audioTracks.map { track in
+    nonisolated static func selectableAudioTracks(from tracks: [TrackInfo], route: VideoRoute) -> [MediaTrack] {
+        // Aether 7.22 publishes bypass tracks for diagnostics, not selection.
+        guard route != .remoteBypass else { return [] }
+        return tracks.map { track in
             MediaTrack(
                 id: track.id,
                 kind: .audio,
@@ -1349,6 +1497,10 @@ public final class PlozzigenVideoEngine: VideoEngine, LiveChannelEngine {
                 isCommentary: track.isCommentary
             )
         }
+    }
+
+    private func syncTracks() {
+        audioTracks = Self.selectableAudioTracks(from: engine.audioTracks, route: engine.videoRoute)
         subtitleTracks = engine.subtitleTracks.map { track in
             MediaTrack(
                 id: track.id,

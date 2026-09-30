@@ -113,7 +113,7 @@ struct PlayerOptionsPanel: View {
         offersDualSubtitles: Bool = true
     ) -> FocusSlot? {
         switch panel {
-        case .info, .cast:
+        case .info, .cast, .episodes, .playlist:
             // The tab, not the card: the row above the card behaves like a
             // segmented control, so opening lands there and a further Down press
             // steps into the card's actions.
@@ -387,7 +387,7 @@ struct PlayerOptionsPanel: View {
         case .speed: SpeedPaneView(model: model, palette: palette, actions: actions, focus: $focus)
         case .sync: SyncPaneView(model: model, actions: actions, focus: $focus)
         // Card tabs render in the bottom card, never in the floating menu.
-        case .info, .cast: EmptyView()
+        case .info, .cast, .episodes, .playlist: EmptyView()
         }
     }
 
@@ -470,7 +470,7 @@ struct PlayerOptionsPanel: View {
         )
         case .style: return "Subtitle Style"
         case .styleFont: return "Font"
-        case .styleSystemFont: return "System"
+        case .styleSystemFont: return "System Fonts"
         case .styleOutline: return "Shadow & Outline"
         case .styleBackground: return "Background"
         case .styleDual: return "Dual Subtitles"
@@ -683,7 +683,7 @@ struct PlayerOptionsPanel: View {
             return PlayerControls.speedPresets.firstIndex(where: { abs(model.playbackSpeed - $0) < 0.001 }) ?? 0
         case .sync:
             return 0
-        case .info, .cast:
+        case .info, .cast, .episodes, .playlist:
             return 0
         }
     }

@@ -3,6 +3,7 @@ import AppRuntime
 import CoreModels
 import PlozzCoreUI
 import FeatureHomeCore
+import FeaturePlayback
 import MediaDownloads
 import MetadataKit
 import RatingsService
@@ -17,6 +18,7 @@ struct PlozziOSItemDetailView: View {
     let item: MediaItem
     let seerService: SeerService?
     let originSourceAccountID: String?
+    let playlistOrigin: VideoPlaylistPlaybackOrigin?
     /// Show this episode as the page's own subject instead of redirecting to its
     /// series.
     ///
@@ -40,7 +42,8 @@ struct PlozziOSItemDetailView: View {
         item: MediaItem,
         seerService: SeerService? = nil,
         originSourceAccountID: String? = nil,
-        presentsEpisodeAsSubject: Bool = false
+        presentsEpisodeAsSubject: Bool = false,
+        playlistOrigin: VideoPlaylistPlaybackOrigin? = nil
     ) {
         self.appModel = appModel
         self.provider = provider
@@ -48,6 +51,7 @@ struct PlozziOSItemDetailView: View {
         self.seerService = seerService
         self.presentsEpisodeAsSubject = presentsEpisodeAsSubject
         self.originSourceAccountID = originSourceAccountID
+        self.playlistOrigin = playlistOrigin
     }
 
     var body: some View {
@@ -131,6 +135,7 @@ struct PlozziOSItemDetailView: View {
             continueWatching: homeViewModel?.continueWatchingForDetail ?? [],
             seerService: seerService,
             originSourceAccountID: originSourceAccountID,
+            playlistOrigin: playlistOrigin,
             initialSeasonID: contextItem.kind == .season
                 ? contextItem.id
                 : contextItem.seasonID,
@@ -214,6 +219,8 @@ private struct PlozziOSCanonicalItemDetailView: View {
     private let initialSources: [MediaSourceRef]
     private let initialSeasonID: String?
     private let initialEpisode: MediaItem?
+    private let playlistOrigin: VideoPlaylistPlaybackOrigin?
+    private let originProvider: any MediaProvider
     /// Whether the episode is this page's own subject rather than a season/series
     /// page's fronted child — see `showsEpisodeSubjectHero`.
     private let presentsEpisodeAsSubject: Bool
@@ -226,6 +233,7 @@ private struct PlozziOSCanonicalItemDetailView: View {
         continueWatching: [MediaItem] = [],
         seerService: SeerService? = nil,
         originSourceAccountID: String? = nil,
+        playlistOrigin: VideoPlaylistPlaybackOrigin? = nil,
         initialSeasonID: String? = nil,
         initialEpisode: MediaItem? = nil,
         presentsEpisodeAsSubject: Bool = false
@@ -233,6 +241,8 @@ private struct PlozziOSCanonicalItemDetailView: View {
         self.seerService = seerService
         self.initialSeasonID = initialSeasonID
         self.initialEpisode = initialEpisode
+        self.playlistOrigin = playlistOrigin
+        self.originProvider = provider
         self.presentsEpisodeAsSubject = presentsEpisodeAsSubject
         let identitySources = appModel.identityIndex.identitySourcesProvider
         let isDiscoveryItem = DetailOpenEnvironment.isDiscovery(
@@ -911,13 +921,20 @@ private struct PlozziOSCanonicalItemDetailView: View {
     }
 
     private func play(_ item: MediaItem, fromBeginning: Bool = false) {
+        let origin = playlistOrigin?.containsSelection(item) == true ? playlistOrigin : nil
+        let playlist = origin.map {
+            VideoPlaylistPlaybackContext(
+                origin: $0, provider: originProvider
+            )
+        }
         // A series can't be played directly (see `playbackTarget`), so resolve
         // its next-up episode first. Every other kind plays as-is.
         guard item.kind == .series else {
             playbackRequest = PlozziOSPlaybackRequest(
                 item: item,
                 startPosition: fromBeginning ? 0 : (item.resumePosition ?? 0),
-                versionPreferences: appModel.versionPreferences
+                versionPreferences: appModel.versionPreferences,
+                playlist: playlist
             )
             return
         }

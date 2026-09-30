@@ -680,6 +680,7 @@ private func makePlayerViewModel(
         provider: episodeProvider,
         itemID: request.item.id,
         mediaSourceID: request.item.selectedVersionID,
+        episodeItem: request.item,
         continuation: continuation,
         offlinePlaybackResolver: offlinePlaybackResolver,
         behavior: behavior,
@@ -698,6 +699,7 @@ private func makePlayerViewModel(
         ),
         authenticatedHTTPResolver: authenticatedHTTPResolver,
         neighborResolver: neighborResolver,
+        playlistContext: request.playlist,
         seriesIDResolver: seriesIDResolver,
         onPlaybackStopped: makePlaybackStoppedHandler(
             convergingItem: convergingItem,
@@ -836,6 +838,7 @@ extension View {
     func playerHost(
         playRequest: Binding<PlayRequest?>,
         resumePrompt: Binding<MediaItem?>,
+        pendingPlaylistOrigin: Binding<VideoPlaylistPlaybackOrigin?>,
         accounts: [ResolvedAccount],
         networkFileResolver: any MediaTransportNetworkFileResolving,
         authenticatedHTTPResolver: any AuthenticatedHTTPResourceResolving,
@@ -908,9 +911,18 @@ extension View {
             )
         }
         .resumePrompt(item: resumePrompt) { item, startPosition in
+            let origin = pendingPlaylistOrigin.wrappedValue
+                .flatMap { $0.containsSelection(item) ? $0 : nil }
+            let playlist = origin.map {
+                VideoPlaylistPlaybackContext(
+                    origin: $0, provider: resolveProvider($0.accountID, in: accounts)
+                )
+            }
+            pendingPlaylistOrigin.wrappedValue = nil
             let request = PlayRequest(
                 item: item,
-                startPosition: startPosition
+                startPosition: startPosition,
+                playlist: playlist
             )
             HandoffDiagnostics.emit(
                 "tap RESUME_CHOICE trace=\(request.traceID.uuidString.prefix(8)) "

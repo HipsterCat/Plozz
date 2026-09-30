@@ -42,6 +42,73 @@ final class HomeRowTests: XCTestCase {
         XCTAssertTrue(rows.isEmpty)
     }
 
+    func testPendingRowsKeepTheirSlotsWithoutExposingCachedCards() {
+        let cached = content(continueWatching: [item("old-resume")], latest: [item("fresh-latest")])
+        let pending = HomeRow.rows(
+            for: cached, isLibraryVisible: { _ in true },
+            loadingRows: [.continueWatching],
+            skeletonLayout: [HomeRowLayout(kind: .continueWatching, count: 3)]
+        )
+        XCTAssertEqual(pending.map(\.kind), [.continueWatching, .recentlyAdded])
+        XCTAssertEqual(pending[0].loadingPlaceholderCount, 3)
+        XCTAssertTrue(pending[0].items.isEmpty)
+        XCTAssertEqual(pending[1].items.map(\.id), ["fresh-latest"])
+        XCTAssertFalse(pending[0].isEmptyOnHome)
+
+        let ready = HomeRow.rows(
+            for: content(continueWatching: [item("fresh-resume")], latest: [item("fresh-latest")]),
+            isLibraryVisible: { _ in true }
+        )
+        XCTAssertEqual(pending.map(\.id), ready.map(\.id))
+        XCTAssertEqual(ready[0].loadingPlaceholderCount, 0)
+    }
+
+    func testHeroOnlyConsumesCompletedFreshRowInputs() {
+        let source = content(
+            continueWatching: [item("live-resume")], latest: [item("cached-latest")],
+            watchlist: [item("cached-watchlist")], libraries: [library(account: "a", id: "movies")]
+        )
+        let live = HomeHeroLaunchPolicy.content(
+            source, awaitingLiveContinueWatching: false,
+            loadingRows: [.recentlyAdded, .watchlist, .libraries]
+        )
+        XCTAssertEqual(live.continueWatching.map(\.id), ["live-resume"])
+        XCTAssertTrue(live.latest.isEmpty)
+        XCTAssertTrue(live.watchlist.isEmpty)
+        XCTAssertTrue(live.libraries.isEmpty)
+        XCTAssertFalse(source.latest.isEmpty, "Hero filtering must not mutate the row's own fallback snapshot.")
+        XCTAssertTrue(HomeHeroLaunchPolicy.content(
+            source, awaitingLiveContinueWatching: true
+        ).continueWatching.isEmpty)
+    }
+
+    func testDisabledRowsNeverGainAPlaceholderOrFailureRow() {
+        let rows = HomeRow.rows(
+            for: content(latest: [item("latest")]), isLibraryVisible: { _ in true },
+            isGlobalRowEnabled: { $0 == .recentlyAdded },
+            loadingRows: [.continueWatching],
+            failures: [.watchlist: .serverUnreachable]
+        )
+        XCTAssertEqual(rows.map(\.kind), [.recentlyAdded])
+    }
+
+    func testLibraryRowUsesOneIdentityFromLoadingThroughContentOrFailure() {
+        let library = library(account: "a", id: "movies")
+        let pending = HomeLibrarySectionGroup(library: library, sections: [], loadingRows: [.recentlyAdded])
+        let ready = HomeLibrarySectionGroup(
+            library: library,
+            sections: [LibrarySection(id: "recentlyAdded", title: "Recent", style: .poster, items: [item("movie")])]
+        )
+        let failed = HomeLibrarySectionGroup(library: library, sections: [], failures: [.recentlyAdded: .serverUnreachable])
+        XCTAssertEqual(pending.rows.map(\.id), ready.rows.map(\.id))
+        XCTAssertEqual(pending.rows.map(\.id), failed.rows.map(\.id))
+        XCTAssertTrue(pending.rows[0].isLoading)
+        XCTAssertFalse(failed.rows[0].isLoading)
+        XCTAssertEqual(failed.rows[0].failure, .serverUnreachable)
+        XCTAssertFalse(failed.isEmpty)
+        XCTAssertTrue(HomeLibrarySectionGroup(library: library, sections: []).rows.isEmpty)
+    }
+
     func testRowsAppearInFixedOrder() {
         let c = content(
             continueWatching: [item("cw")],

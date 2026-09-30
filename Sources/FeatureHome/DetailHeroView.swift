@@ -1806,7 +1806,7 @@ struct DetailHeroView: View, Equatable {
     /// Last-resort title art for the hero: look the show/movie up on TMDb and use
     /// its logo. TV uses the *series* title (never an episode name); inert when no
     /// TMDb token is configured.
-    private var tmdbLogoFallback: (@Sendable () async -> URL?)? {
+    private var tmdbLogoFallback: HeroLogoFallback? {
         let source = backdrop
         switch source.kind {
         case .folder, .collection, .unknown:
@@ -1814,7 +1814,7 @@ struct DetailHeroView: View, Equatable {
         default:
             break
         }
-        return {
+        return HeroLogoFallback(for: source) {
             await ArtworkRouter.shared.artworkURL(.logo, for: source)
         }
     }
@@ -2068,6 +2068,7 @@ private struct SeriesDetailHeroBackdrop: View {
     let recedeModel: SeriesHeroRecedeModel?
     let trailerController: HeroTrailerController
     let showsTrailer: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     #if os(tvOS)
     @Environment(\.detailEntranceSession) private var detailEntrance
     #endif
@@ -2111,10 +2112,10 @@ private struct SeriesDetailHeroBackdrop: View {
             if showing { detailEntrance?.resolvedDestinationVideo() }
         }
         #endif
-        // Match Home's slower parallax track, but transform the completed backdrop
-        // layer so its mask/artwork do not re-render on every animation frame.
+        // Keep parallax on the browser's clock and transform the completed layer
+        // so its mask/artwork do not re-render on every animation frame.
         .offset(y: receded ? -SeriesEpisodeBrowserLayout.heroBackdropRecedeLift : 0)
-        .animation(.smooth(duration: 0.9), value: receded)
+        .animation(reduceMotion ? nil : SeriesHeroRevealTransition.ambient, value: receded)
     }
 }
 

@@ -42,7 +42,7 @@ struct SubtitleStylePanel: View {
     private var effectiveStyle: SubtitleStyle { SystemCaptionStyle.shared.resolved(model.subtitleStyle) }
 
     var body: some View {
-        Group {
+        styleInputScope(styleInputRows) {
             switch screen {
             case .style:
                 // Image-based captions cannot be restyled.
@@ -67,6 +67,16 @@ struct SubtitleStylePanel: View {
         ))
     }
 
+    private var styleInputRows: [StyleRowSpec] {
+        switch screen {
+        case .style: styleMainRows.rows
+        case .styleFont: [systemFontRow]
+        case .styleOutline: styleOutlineRows
+        case .styleBackground: styleBackgroundRows
+        case .styleDual where offersDualSubtitles: styleDualRows
+        default: []
+        }
+    }
 
     struct StyleRowSpec: Identifiable {
         enum Kind {
@@ -77,7 +87,7 @@ struct SubtitleStylePanel: View {
             case choice(value: Text, prev: () -> Void, next: () -> Void)
             /// On/off: Select flips.
             case toggle(isOn: Bool, flip: () -> Void)
-            /// Opens a detail sub-screen: Select opens; shows a `›` chevron.
+            /// Opens a detail sub-screen: Select or Right opens; shows a `›` chevron.
             case submenu(summary: Text, open: () -> Void)
             /// One-shot: Select runs it.
             case action(run: () -> Void)
@@ -92,13 +102,51 @@ struct SubtitleStylePanel: View {
     /// tweak previews instantly on the real subtitles behind the panel. Each row is
     /// a single full-width Button (one focus target spanning the width, so vertical
     /// focus lands predictably), value right-aligned. Steppers reveal −/+ glyphs
-    /// only while focused (press ←/→ on the remote to adjust); the container's
-    /// `.onMoveCommand` — attached to the non-focusable VStack so children keep
-    /// native up/down nav — dispatches those left/right steps to the focused row.
+    /// only while focused (press ←/→ on the remote to adjust). A native focus
+    /// scope consumes horizontal clicks/swipes and repeats held clicks while
+    /// Up/Down stay native.
     /// Edits funnel through `updateStyle` → `actions.setSubtitleStyle` (live overlay
     /// + profile persistence). Back lives in the panel header.
     @ViewBuilder
     private func styleScreen(_ rows: [StyleRowSpec], dividerBefore: Int? = nil) -> some View {
+        styleRows(rows, dividerBefore: dividerBefore)
+    }
+
+    @ViewBuilder
+    private func styleInputScope<Content: View>(
+        _ rows: [StyleRowSpec], @ViewBuilder content: () -> Content
+    ) -> some View {
+        #if os(tvOS)
+        SubtitleStyleFocusScope(
+            content: content(),
+            screen: screen,
+            adjustableRow: {
+                guard case let .row(slot)? = focus,
+                      let row = rows.first(where: { $0.slot == slot }) else { return nil }
+                switch row.kind {
+                case .number, .choice: return slot
+                default: return nil
+                }
+            },
+            submenuRow: {
+                guard case let .row(slot)? = focus,
+                      let row = rows.first(where: { $0.slot == slot }),
+                      case .submenu = row.kind else { return nil }
+                return slot
+            },
+            onMove: { direction, isRepeat in
+                if !isRepeat {
+                    styleAccelerator = SubtitleStyleAccelerator()
+                }
+                handleStyleMove(direction, rows: rows)
+            }
+        )
+        #else
+        content()
+        #endif
+    }
+
+    private func styleRows(_ rows: [StyleRowSpec], dividerBefore: Int?) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(rows) { row in
                 if let d = dividerBefore, row.slot == d {
@@ -108,21 +156,13 @@ struct SubtitleStylePanel: View {
                 }
                 styleRow(row)
                 if screen == .style, row.slot == 0 {
-                    if focus == .row(0) {
-                        Text("Matching shows your device’s caption appearance. Editing a value keeps this look and turns system matching off.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                    }
                     PlozzDivider()
                         .padding(.horizontal, 16)
                         .padding(.vertical, 6)
                 }
             }
             if screen == .styleBackground {
-                Text("Window padding is set by Plozz. Apple does not expose caption padding or line spacing.")
+                Text("Window padding is set by Plozz. Apple does not expose subtitle padding or line spacing.")
                     .font(.footnote).playerMenuRowSecondary().padding(16)
             } else if screen == .styleOutline {
                 Text("Apple supplies the text edge style, including Uniform Outline, but not its color or thickness. Those are Plozz rendering values.")
@@ -132,9 +172,6 @@ struct SubtitleStylePanel: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .top)
-        .plozzMoveCommand { direction in
-            handleStyleMove(direction, rows: rows)
-        }
     }
 
     /// One rendered row, laid out to match the track/audio rows exactly: a full-width
@@ -158,7 +195,10 @@ struct SubtitleStylePanel: View {
             // checkmark uses. Title and trailing element therefore carry equal edge
             // gutters (no extra leading slot pushing the title in).
             HStack(spacing: 10) {
-                Text(row.title).font(.body).lineLimit(1)
+                Text(row.title)
+                    .font(.body)
+                    .lineLimit(screen == .style && row.slot == 0 ? 2 : 1)
+                    .multilineTextAlignment(.leading)
                 Spacer(minLength: 8)
                 styleRowTrailing(row, isFocused: isFocused)
             }
@@ -215,9 +255,6 @@ struct SubtitleStylePanel: View {
         }
     }
 
-    /// Container-level ←/→ handler: looks up the focused slot's row and steps it.
-    /// Up/down are left to the native focus engine (single column → left/right
-    /// find no sibling, so focus stays put and this handler fires instead).
     private func handleStyleMove(_ direction: PlozzMoveCommandDirection, rows: [StyleRowSpec]) {
         guard case let .row(slot)? = focus,
               let row = rows.first(where: { $0.slot == slot }) else { return }
@@ -230,6 +267,8 @@ struct SubtitleStylePanel: View {
             prev()
         case let (.right, .choice(_, _, next)):
             next()
+        case let (.right, .submenu(_, open)):
+            open()
         default:
             break
         }
@@ -247,7 +286,7 @@ struct SubtitleStylePanel: View {
         var rows: [StyleRowSpec] = []
         var slot = 0
 
-        rows.append(StyleRowSpec(slot: slot, title: "Use System Caption Style", kind: .toggle(
+        rows.append(StyleRowSpec(slot: slot, title: SystemCaptionStyleCopy.optionTitle, kind: .toggle(
             isOn: s.followsSystemStyle,
             flip: {
                 systemStyleConfirmation.request(!s.followsSystemStyle, currentlyMatching: s.followsSystemStyle) { enabled in
@@ -335,18 +374,26 @@ struct SubtitleStylePanel: View {
             ForEach(Array(SubtitleFontFamily.allCases.enumerated()), id: \.offset) { idx, family in
                 fontChoiceRow(family, index: idx, isSelected: effectiveStyle.fontDescriptor == nil && effectiveStyle.systemFont == nil && family == current)
             }
-            styleRow(StyleRowSpec(
-                slot: SubtitleFontFamily.allCases.count, title: "System",
-                kind: .submenu(
-                    summary: effectiveStyle.fontDescriptor.map { Text(verbatim: $0.displayName) }
-                        ?? effectiveStyle.systemFont.map(SubtitleSystemFonts.displayName) ?? Text(verbatim: ""),
-                    open: { openScreen(.styleSystemFont) }
-                )
-            ))
+            PlozzDivider()
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+            styleRow(systemFontRow)
+                .font(.body)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .top)
+    }
+
+    private var systemFontRow: StyleRowSpec {
+        StyleRowSpec(
+            slot: SubtitleFontFamily.allCases.count, title: "System Fonts",
+            kind: .submenu(
+                summary: effectiveStyle.fontDescriptor.map { Text(verbatim: $0.displayName) }
+                    ?? effectiveStyle.systemFont.map(SubtitleSystemFonts.displayName) ?? Text(verbatim: ""),
+                open: { openScreen(.styleSystemFont) }
+            )
+        )
     }
 
     @ViewBuilder
@@ -377,6 +424,11 @@ struct SubtitleStylePanel: View {
     private var systemFontScreen: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(SubtitleSystemFonts.all.enumerated()), id: \.element.id) { index, entry in
+                if index == SubtitleSystemFonts.captionFonts.count {
+                    PlozzDivider()
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                }
                 Button {
                     updateStyle { $0.systemFont = entry.id; $0.fontDescriptor = nil }
                     openScreen(.style)

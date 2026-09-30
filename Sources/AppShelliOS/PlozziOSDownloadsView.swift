@@ -628,7 +628,7 @@ struct DownloadTileContent: View {
             return "tv"
         case .movie, .video:
             return "film"
-        case .collection, .folder, .unknown:
+        case .collection, .playlist, .folder, .unknown:
             return "photo"
         }
     }
@@ -925,7 +925,7 @@ struct DownloadArtwork: View {
             return "tv"
         case .movie, .video:
             return "film"
-        case .collection, .folder, .unknown:
+        case .collection, .playlist, .folder, .unknown:
             return "photo"
         }
     }

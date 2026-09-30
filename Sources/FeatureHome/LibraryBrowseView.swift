@@ -37,6 +37,7 @@ public struct LibraryBrowseView: View {
     private let title: Text
     private let spoilerSettings: SpoilerSettings
     private let onSelect: (MediaItem) -> Void
+    private let onSelectAtIndex: ((MediaItem, VideoPlaylistPlaybackOrigin?) -> Void)?
 
     @Environment(\.plozzMetrics) private var metrics
     /// Custom pinned-sidebar clearance. Native top/sidebar styles publish zero.
@@ -62,12 +63,14 @@ public struct LibraryBrowseView: View {
         viewModel: LibraryBrowseViewModel,
         title: Text,
         spoilerSettings: SpoilerSettings = .default,
-        onSelect: @escaping (MediaItem) -> Void
+        onSelect: @escaping (MediaItem) -> Void,
+        onSelectAtIndex: ((MediaItem, VideoPlaylistPlaybackOrigin?) -> Void)? = nil
     ) {
         _viewModel = State(initialValue: viewModel)
         self.title = title
         self.spoilerSettings = spoilerSettings
         self.onSelect = onSelect
+        self.onSelectAtIndex = onSelectAtIndex
     }
 
     public var body: some View {
@@ -188,7 +191,8 @@ public struct LibraryBrowseView: View {
                 scanBanner
             }
             .padding(.top, PlozzTheme.Spacing.large),
-            onSelect: onSelect, onLoaded: { prefetchArtwork(aheadFrom: $0) }
+            onSelect: { item, index in select(item, at: index) },
+            onLoaded: { prefetchArtwork(aheadFrom: $0) }
         )
         .overlay(alignment: .trailing) {
             LibraryRailLayer(
@@ -212,6 +216,14 @@ public struct LibraryBrowseView: View {
     }
     #endif
 
+    private func select(_ item: MediaItem, at index: Int) {
+        if let onSelectAtIndex {
+            onSelectAtIndex(item, viewModel.playlistOrigin(at: index))
+        } else {
+            onSelect(item)
+        }
+    }
+
     private func swiftUIGrid(total: Int, generation: Int, columns: [GridItem]) -> some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
@@ -229,7 +241,7 @@ public struct LibraryBrowseView: View {
                                     $0.focusesItem && $0.index == index ? $0.id : nil
                                 },
                                 onFocusRequestHandled: viewModel.alphabet.completeDestination,
-                                onSelect: onSelect,
+                                onSelect: { select($0, at: index) },
                                 onAppear: { idx in
                                     await viewModel.itemAppeared(at: idx, generation: generation)
                                     prefetchArtwork(aheadFrom: idx)
@@ -241,6 +253,7 @@ public struct LibraryBrowseView: View {
                             .id(index)
                             .focused($focusedGridIndex, equals: index)
                         }
+
                     }
                     .padding(.leading, contentLeadingPadding)
                     .padding(.trailing, HomeLayout.horizontalPadding)
@@ -318,14 +331,15 @@ public struct LibraryBrowseView: View {
     /// The library title and controls scroll with the loaded grid.
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
-            title
-                .font(.largeTitle.bold())
+            if viewModel.browseScope != .library {
+                title.font(.largeTitle.bold())
+            }
+            if viewModel.availableContentModes.count > 1 {
+                LibraryContentModeControl(viewModel: viewModel, buttonHeight: sortButtonHeight)
+            }
             Spacer(minLength: PlozzTheme.Spacing.large)
             if let library = viewModel.fileBrowserLibrary {
                 LibraryFileBrowseButton(library: library, onSelect: onSelect)
-            }
-            if viewModel.supportsCollections {
-                LibraryContentModeControl(viewModel: viewModel, buttonHeight: sortButtonHeight)
             }
             if viewModel.alphabet.isVisible {
                 LibraryAlphabetMenu(entries: viewModel.letterEntries, isLoading: viewModel.alphabet.isLoading,
@@ -454,7 +468,7 @@ private struct LibraryContentModeControl: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            ForEach(LibraryContentMode.allCases, id: \.self) { mode in
+            ForEach(viewModel.availableContentModes, id: \.self) { mode in
                 let isSelected = viewModel.contentMode == mode
                 Button {
                     Task { await viewModel.setContentMode(mode) }

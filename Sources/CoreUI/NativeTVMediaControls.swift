@@ -423,7 +423,8 @@ struct NativeTVPoster<Overlay: View>: UIViewRepresentable {
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
         override var intrinsicContentSize: CGSize {
-            CGSize(width: poster.contentSize.width, height: poster.intrinsicContentSize.height)
+            // SwiftUI must not round a fractional artwork height down into its caption.
+            CGSize(width: poster.contentSize.width, height: ceil(poster.contentSize.height))
         }
 
         override var preferredFocusEnvironments: [any UIFocusEnvironment] { [poster] }
@@ -432,18 +433,18 @@ struct NativeTVPoster<Overlay: View>: UIViewRepresentable {
             let intrinsic = poster.intrinsicContentSize
             let size = CGSize(width: ceil(intrinsic.width), height: ceil(intrinsic.height))
             guard poster.bounds.size != size else { return }
-            // TVUIKit can settle its focus clearance during the first native layout.
-            invalidateIntrinsicContentSize()
+            // Focus clearance settles after realization, but is drawing overflow,
+            // not a change to the artwork slot in the containing lazy row.
             setNeedsLayout()
         }
 
         override func layoutSubviews() {
             super.layoutSubviews()
-            // Native focus margins are drawing clearance, not more artwork width.
-            // Feeding them back through a SwiftUI stack enlarges every card.
+            // Keep both native focus margins outside the artwork's layout slot.
             let intrinsic = poster.intrinsicContentSize
             let size = CGSize(width: ceil(intrinsic.width), height: ceil(intrinsic.height))
-            poster.frame = CGRect(x: (bounds.width - size.width) / 2, y: 0,
+            poster.frame = CGRect(x: (bounds.width - size.width) / 2,
+                                  y: (bounds.height - size.height) / 2,
                                   width: size.width, height: size.height)
         }
     }
@@ -603,11 +604,13 @@ struct NativeTVCardButtonStyle: PrimitiveButtonStyle {
 /// A loading placeholder drawn by a real native poster of the card's shape, so
 /// it takes the same room (TVUIKit keeps clearance around the artwork for focus
 /// growth) and has the same corners as the poster that replaces it. The poster is
-/// disabled, so it never takes focus.
+/// disabled unless the caller supplies the explicit loading-entry focus binding.
 struct NativePosterPlaceholder: UIViewRepresentable {
     let aspectRatio: CGFloat
     let fallbackWidth: CGFloat
     let fill: Color
+    var focus: PlozzCardFocus.Binding?
+    var showsProgress = false
 
     typealias Container = NativeTVPoster<EmptyView>.Container
 
@@ -615,25 +618,27 @@ struct NativePosterPlaceholder: UIViewRepresentable {
     /// matched to within a pixel of the native one.
     static let cornerRadius: CGFloat = 21
 
+    func makeCoordinator() -> NativeTVMediaCoordinator? {
+        focus.map { NativeTVMediaCoordinator(focus: $0, action: {}) }
+    }
+
     func makeUIView(context: Context) -> Container {
         let size = CGSize(width: fallbackWidth, height: fallbackWidth / aspectRatio)
         // TVUIKit sizes the clearance from the image, so it needs one of the
         // artwork's size from the start.
         let poster = NativeTVPoster<EmptyView>.Poster(image: Self.blank(size))
         poster.contentSize = size
-        poster.isEnabled = false
-        poster.isUserInteractionEnabled = false
-        poster.isAccessibilityElement = false
+        poster.isEnabled = focus != nil && context.environment.isEnabled
+        poster.isUserInteractionEnabled = focus != nil
+        poster.isAccessibilityElement = focus != nil
+        poster.onFocus = { [weak coordinator = context.coordinator] in coordinator?.observe($0) }
+        poster.onAvailable = { [weak coordinator = context.coordinator, weak poster] in
+            if let poster { coordinator?.requestFocusIfReady(in: poster) }
+        }
         // TVUIKit rounds a poster's image itself and leaves its overlay square,
         // so the fill carries TVUIKit's corner.
-        let sheen = UIHostingConfiguration {
-            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .fill(fill)
-                .shimmering()
-                .environment(\.self, context.environment)
-        }
-        .margins(.all, 0)
-        .makeContentView()
+        let sheen = configuration(in: context).makeContentView()
+        poster.hostedOverlay = sheen
         let container = poster.imageView.overlayContentView
         container.addSubview(sheen)
         sheen.translatesAutoresizingMaskIntoConstraints = false
@@ -646,7 +651,28 @@ struct NativePosterPlaceholder: UIViewRepresentable {
         return Container(poster: poster)
     }
 
-    func updateUIView(_ container: Container, context: Context) {}
+    func updateUIView(_ container: Container, context: Context) {
+        let poster = container.poster
+        poster.hostedOverlay?.configuration = configuration(in: context)
+        poster.isEnabled = focus != nil && context.environment.isEnabled
+        poster.isAccessibilityElement = focus != nil
+        poster.accessibilityLabel = focus == nil
+            ? nil : NativePosterText.localized("Loading").resolve(locale: context.environment.locale)
+        if let focus { context.coordinator?.update(focus: focus, action: {}, view: poster) }
+    }
+
+    private func configuration(in context: Context) -> any UIContentConfiguration {
+        UIHostingConfiguration {
+            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
+                .fill(fill)
+                .shimmering()
+                .overlay {
+                    SkeletonLoadingIndicator(isVisible: showsProgress)
+                }
+                .environment(\.self, context.environment)
+        }
+        .margins(.all, 0)
+    }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: Container, context: Context) -> CGSize? {
         let width = proposal.width ?? fallbackWidth

@@ -7,7 +7,13 @@ import CoreModels
 struct FocusHostApp: App {
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--library-held-scroll-fixture") {
+            if ProcessInfo.processInfo.arguments.contains("--episode-row-fixture") {
+                EpisodeRowRemoteFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--subtitle-style-input-fixture") {
+                SubtitleStyleInputFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--home-layout-onboarding-fixture") {
+                HomeLayoutOnboardingFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--library-held-scroll-fixture") {
                 LibraryHeldScrollFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--family-guidance-fixture") {
                 FamilyGuidanceFixture()

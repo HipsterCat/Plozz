@@ -726,11 +726,7 @@ private struct PlozziOSAboutSettingsView: View {
         List {
             SettingsSectionGroup(verbatim: "Plozz") {
                 LabeledContent("Version") {
-                    Text(
-                        Bundle.main.infoDictionary?[
-                            "CFBundleShortVersionString"
-                        ] as? String ?? "—"
-                    )
+                    Text(AppVersionIdentity.current.displayVersion)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture(perform: handleVersionTap)
@@ -1145,7 +1141,7 @@ private struct PlozziOSSettingsCompactMenu: View {
                     Label(SettingsCopy.attributions, systemImage: "doc.text.magnifyingglass")
                 }
                 LabeledContent("Version") {
-                    Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
+                    Text(AppVersionIdentity.current.displayVersion)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -1257,6 +1253,16 @@ private struct PlozziOSProfilesView: View {
 
     private var orderedProfiles: [Profile] { appModel.profiles.profilesByRecency }
 
+    private var automaticSignIn: AutomaticSignInSettings {
+        AutomaticSignInSettings(
+            isEnabled: Binding(
+                get: { appModel.plexHomeUsers.automaticallySignIn },
+                set: { appModel.setAutomaticallySignIn($0) }
+            ),
+            error: appModel.plexHomeUsers.automaticSignInError
+        )
+    }
+
     /// One optional route owned by this page. A row cannot activate another
     /// row's destination, and there is no per-row NavigationLink state for
     /// SwiftUI's split-view reconciliation to accidentally stack.
@@ -1267,21 +1273,10 @@ private struct PlozziOSProfilesView: View {
     var body: some View {
         List {
             SettingsSectionGroup {
-                Toggle(
-                    "Ask Who’s Watching on Startup",
-                    isOn: Binding(
-                        get: {
-                            appModel.profiles.askProfileOnStartup
-                        },
-                        set: {
-                            appModel.profiles.setAskProfileOnStartup($0)
-                        }
-                    )
-                )
+                AutomaticSignInToggle(settings: automaticSignIn)
             } footer: {
-                Text("Profiles keep Home, settings, and downloads personal. Watch history belongs to the account each profile watches as.")
+                AutomaticSignInErrorMessage(settings: automaticSignIn)
             }
-
             SettingsSectionGroup(isEditingProfiles ? "Edit Profiles" : "Who’s watching?") {
                 // Tapping a row switches; in editing mode it opens that
                 // profile's settings instead. Long-press does the same without
@@ -2388,6 +2383,7 @@ private struct PlozziOSPlaybackSettingsView: View {
                 // Autoplay first: whether the next episode starts at all, then
                 // whether the card announces it. Independent switches.
                 Toggle("Autoplay next episode", isOn: $model.settings.autoPlayNextEpisode)
+                Toggle("Autoplay next playlist item", isOn: $model.settings.autoPlayNextPlaylistItem)
                 Toggle("Show Up Next card", isOn: $model.settings.showUpNextCard)
                 if model.settings.showUpNextCard {
                     Picker("Up Next lead time", selection: $model.settings.upNextLeadSeconds) {

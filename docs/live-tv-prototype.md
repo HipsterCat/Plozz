@@ -282,9 +282,13 @@ is no prior in-memory history to migrate on the first updated launch.
   A focused missing-listing row can show a loading, failed or not-yet-requested
   state. Program details identify the selected guide source.
 - On wide screens, the station/logo column stays fixed while program rows scroll
-  horizontally through a shared six-hour window. The time ruler stays above the
-  vertical list and follows the same horizontal offset. Its leading label
-  identifies the visible channel group instead of showing a date and buttons.
+  horizontally through a shared timeline. It starts at six hours and adds six
+  more as the viewer nears the end, up to seven days. Rows render nearby
+  programmes; guide data loads around the viewed time, not all seven days at
+  once. Returning from Search restores the browsed time and its extended span.
+  The time ruler stays above the vertical list and follows the same horizontal
+  offset, with day labels after midnight. Its leading label identifies the
+  visible channel group instead of showing a date and buttons.
   Guide time in the context menu retains the date and Earlier/Now/Later controls.
   Earlier/Later shifts the
   window from one day back through seven days ahead, subject to source coverage.

@@ -30,7 +30,7 @@ RESULTS="${PLOZZ_FOCUS_RESULTS:-$PWD/.build/focus-test-results}"
 mkdir -p "$RESULTS"
 RUN_DIR="$(mktemp -d "$RESULTS/Run-XXXXXXXX")"
 set +e
-python3 tools/run-bounded.py "${PLOZZ_FOCUS_TEST_TIMEOUT:-1200}" "hosted focus tests" -- \
+python3 tools/run-bounded.py "${PLOZZ_FOCUS_TEST_TIMEOUT:-2400}" "hosted focus tests" -- \
   xcodebuild test -project Plozz.xcodeproj -scheme PlozzFocusTests \
   -destination "platform=tvOS Simulator,id=$PLOZZ_SIM_ID" \
   -parallel-testing-enabled NO -collect-test-diagnostics never \

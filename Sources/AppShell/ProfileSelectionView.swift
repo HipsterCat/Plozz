@@ -6,9 +6,8 @@ import FeatureProfiles
 
 /// Hosts the profile picker — the "Who's watching?" screen.
 ///
-/// Used at launch (when "Ask which profile on startup" is on, the household has
-/// more than one profile, or the profile we'd restore is locked) and from
-/// Settings → "Switch Profile".
+/// Used at launch when automatic sign-in cannot restore a session and there are
+/// multiple profiles or a locked profile, and from Settings → "Switch Profile".
 ///
 /// Adding and editing happen here now, not only in Settings. This is where
 /// people already are when they think about profiles, and where a household's

@@ -34,7 +34,8 @@ struct HelpDiagnosticsDetailView: View {
             appBuild: appBuild,
             providers: providerSummary,
             repoURL: repoURL,
-            recentLogTail: PlozzLog.recentLogText(limit: 8)
+            recentLogTail: PlozzLog.recentLogText(limit: 8),
+            marketingVersion: AppVersionIdentity.current.marketingVersion
         )
     }
 

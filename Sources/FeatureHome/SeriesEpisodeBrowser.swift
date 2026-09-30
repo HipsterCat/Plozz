@@ -85,7 +85,9 @@ enum SeriesHeroRevealTransition {
     /// site wraps its state change in `withAnimation(ambient)` and every moving
     /// part inherits it — a per-view `.animation` overrides the transaction and
     /// desyncs that part from the rest.
-    static var ambient: Animation { .smooth(duration: 0.9) }
+    // A spring's logical completion leaves a visible tail on this 588pt travel.
+    // Slow earlier for a gentle landing, while still ending at the declared time.
+    static var ambient: Animation { .timingCurve(0.4, 0, 0.2, 1, duration: 0.9) }
 
     /// The one deliberate exception: the receded logo leaves faster than it
     /// arrives, so it is out of the way before the hero lands rather than
@@ -366,6 +368,72 @@ struct SeriesRecedeReveal<Content: View>: View {
     }
 }
 
+#if os(tvOS)
+/// While the browser moves into place, native focus must not reveal its moving
+/// cards by scrolling the page as well. Only the outer scroll view is gated;
+/// horizontal episode navigation and the page's explicit scrollTo remain live.
+struct SeriesBrowserRevealScrollGuard: UIViewRepresentable {
+    let isActive: Bool
+
+    func makeUIView(context: Context) -> GuardView {
+        let view = GuardView()
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ view: GuardView, context: Context) {
+        view.isActive = isActive
+        view.apply()
+    }
+
+    static func dismantleUIView(_ view: GuardView, coordinator: ()) {
+        view.restore()
+    }
+
+    final class GuardView: UIView {
+        var isActive = false
+        private weak var scrollView: UIScrollView?
+        private var wasScrollEnabled: Bool?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            apply()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            apply()
+        }
+
+        func apply() {
+            guard window != nil, isActive else {
+                restore()
+                return
+            }
+            var ancestor = superview
+            while let view = ancestor {
+                if let scroll = view as? UIScrollView {
+                    if scrollView !== scroll {
+                        restore()
+                        scrollView = scroll
+                        wasScrollEnabled = scroll.isScrollEnabled
+                    }
+                    scroll.isScrollEnabled = false
+                    return
+                }
+                ancestor = view.superview
+            }
+        }
+
+        func restore() {
+            if let wasScrollEnabled { scrollView?.isScrollEnabled = wasScrollEnabled }
+            scrollView = nil
+            wasScrollEnabled = nil
+        }
+    }
+}
+#endif
+
 private struct SeriesRecededLogo: View {
     let series: MediaItem
     let recedeModel: SeriesHeroRecedeModel
@@ -379,7 +447,8 @@ private struct SeriesRecededLogo: View {
             asyncFallbackURL: logoFallback,
             backgroundSample: backgroundSample,
             maxWidth: 620,
-            maxHeight: 200,
+            maxHeight: SeriesEpisodeBrowserLayout.recededLogoHeight,
+            constrainsToBounds: true,
             alignment: .center
         ) {
             Text(series.title)
@@ -389,7 +458,7 @@ private struct SeriesRecededLogo: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 1200, alignment: .center)
         }
-        .frame(width: 620, height: 200, alignment: .center)
+        .frame(width: 620, height: SeriesEpisodeBrowserLayout.recededLogoHeight, alignment: .center)
         .opacity(revealed ? 1 : 0)
         .offset(y: revealed || reduceMotion ? 0 : SeriesEpisodeBrowserLayout.logoParallaxDrop)
         // Arriving restates the ambient animation exactly, so the logo still
@@ -407,9 +476,9 @@ private struct SeriesRecededLogo: View {
         .accessibilityHidden(!revealed)
     }
 
-    private var logoFallback: (@Sendable () async -> URL?)? {
+    private var logoFallback: HeroLogoFallback? {
         let source = series
-        return {
+        return HeroLogoFallback(for: source) {
             await ArtworkRouter.shared.artworkURL(.logo, for: source)
         }
     }

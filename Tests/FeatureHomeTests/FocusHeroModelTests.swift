@@ -1,5 +1,6 @@
 #if os(tvOS)
 import XCTest
+import UIKit
 import CoreModels
 @testable import FeatureHome
 
@@ -13,7 +14,7 @@ final class FocusHeroModelTests: XCTestCase {
     }
 
     private func row(_ id: String, _ items: [String]) -> FocusHeroRow {
-        FocusHeroRow(id: id, itemIDs: items, leadItem: items.first.map(item))
+        FocusHeroRow(id: id, itemIDs: items, leadItem: items.first.map(item), items: items.map(item))
     }
 
     func testTheFirstRowStandsInUntilSomethingIsFocused() {
@@ -26,6 +27,39 @@ final class FocusHeroModelTests: XCTestCase {
         let continueWatching = row("continue", ["tbate", "arcane"])
         model.seed(from: [continueWatching, watchlist])
         XCTAssertEqual(model.subject?.item?.id, "tbate", "Nothing focused yet, so the hero follows the new first row")
+    }
+
+    func testEarlierLoadingRowKeepsTheInitialAnchorUntilTheViewerNavigates() {
+        let model = FocusHeroModel()
+        var resume = row("continue", [])
+        resume.isPlaceholder = true
+        var watchlist = row("watchlist", [])
+        watchlist.isPlaceholder = true
+        let latest = row("latest", ["first", "second"])
+        let loading = [resume, watchlist, latest]
+        model.seed(from: loading)
+        XCTAssertEqual(model.resolvedActiveRowID(in: loading), resume.id)
+        XCTAssertNil(model.subject, "A ready lower row must not choose the starting title or scroll position.")
+
+        let resumeReady = [row("continue", ["resume"]), watchlist, latest]
+        model.seed(from: resumeReady)
+        XCTAssertEqual(model.resolvedActiveRowID(in: resumeReady), resume.id)
+        XCTAssertEqual(model.subject?.item?.id, "resume")
+    }
+
+    func testManualNavigationToReadyRowSurvivesAnEarlierRowFinishing() {
+        let model = FocusHeroModel()
+        var resume = row("continue", [])
+        resume.isPlaceholder = true
+        let latest = row("latest", ["first", "second"])
+        let loading = [resume, latest]
+        model.seed(from: loading)
+        model.activate(latest, in: loading)
+        model.show(.item(item("second")), in: latest)
+        let settled = [row("continue", ["resume"]), latest]
+        model.seed(from: settled)
+        XCTAssertEqual(model.resolvedActiveRowID(in: settled), latest.id)
+        XCTAssertEqual(model.subject?.item?.id, "second")
     }
 
     func testAFocusedRowKeepsThePinWhenARowArrivesAboveIt() {
@@ -62,6 +96,14 @@ final class FocusHeroModelTests: XCTestCase {
             "The details end above the pinned row, not a taller one elsewhere"
         )
         model.activate(watchlist, in: rows)
+        XCTAssertEqual(
+            model.slotTop(in: rows, rowSpacing: 28),
+            max(FocusHeroLayout.lowestSlotTop, bottom - 406),
+            "The details leave with the rows, not ahead of them"
+        )
+        model.advanceRows(to: 0.5)
+        XCTAssertEqual(model.slotTop(in: rows, rowSpacing: 28), max(FocusHeroLayout.lowestSlotTop, bottom - 473))
+        model.advanceRows(to: 1)
         XCTAssertEqual(model.slotTop(in: rows, rowSpacing: 28), max(FocusHeroLayout.lowestSlotTop, bottom - 540))
     }
 
@@ -70,6 +112,121 @@ final class FocusHeroModelTests: XCTestCase {
         model.record(height: 540, for: "watchlist")
         model.record(height: 540.3, for: "watchlist")
         XCTAssertEqual(model.rowHeights["watchlist"], 540)
+    }
+
+    func testScrollOriginKeepsTheFirstRowAtZeroWithoutMovingRowAnchors() {
+        let model = FocusHeroModel()
+        let rows = [row("continue", ["one"]), row("recent", ["two"])]
+        XCTAssertEqual(model.scrollOrigin(in: rows), 0)
+        model.record(height: 340, for: rows[0].id)
+        model.record(height: 540, for: rows[1].id)
+        let spacing = FocusHeroLayout.rowSpacing
+        let bottom = FocusHeroLayout.rowsBottom(rowSpacing: spacing)
+        let origin = model.scrollOrigin(in: rows)
+        XCTAssertEqual(origin, 340)
+        XCTAssertEqual(model.activeHeight(in: rows) - origin, 0)
+        for index in rows.indices {
+            model.activate(rows[index], in: rows)
+            let rowTop = model.top(ofRowAt: index, in: rows, rowSpacing: spacing)
+            let destination = rowTop + model.activeHeight(in: rows) - origin
+            XCTAssertEqual(bottom - origin + rowTop - destination, bottom - model.activeHeight(in: rows))
+        }
+        XCTAssertEqual(model.scrollOrigin(in: Array(rows.reversed())), 540)
+        XCTAssertEqual(model.scrollOrigin(in: []), 0)
+        model.record(height: bottom + 100, for: rows[0].id)
+        XCTAssertEqual(model.scrollOrigin(in: rows), bottom, "The initial spacer cannot have negative height.")
+    }
+
+    func testNativeScrollOwnsRowMovementWithoutRestartingAnUnchangedDestination() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080))
+        let controller = UIViewController()
+        window.rootViewController = controller
+        let viewport = ScrollRecorder(frame: window.bounds)
+        viewport.contentSize = CGSize(width: 1920, height: 3000)
+        controller.view.addSubview(viewport)
+        let horizontal = UIScrollView()
+        viewport.addSubview(horizontal)
+        let position = FocusHeroNativeScrollPosition.PositionView()
+        viewport.addSubview(position)
+        window.isHidden = false
+        defer {
+            position.stop()
+            window.isHidden = true
+        }
+
+        position.move(to: 340, rowID: "continue")
+        XCTAssertEqual(viewport.contentOffset.y, 340)
+        XCTAssertEqual(viewport.requests.last?.animated, false)
+        XCTAssertFalse(viewport.isScrollEnabled)
+        XCTAssertTrue(horizontal.isScrollEnabled, "Pinning must not disable native horizontal navigation.")
+
+        position.move(to: 840, rowID: "posters")
+        position.move(to: 840, rowID: "posters")
+        settle(viewport, at: 840)
+        if !UIAccessibility.isReduceMotionEnabled {
+            XCTAssertGreaterThan(viewport.steps.count, 3, "Row changes move a frame at a time on the rows' spring.")
+            XCTAssertEqual(viewport.steps, viewport.steps.sorted(), "An unchanged destination does not restart the move.")
+        }
+
+        position.move(to: 340, rowID: "continue")
+        settle(viewport, at: 340)
+        XCTAssertEqual(viewport.contentOffset.y, 340, "Reversals retarget the same native viewport.")
+        position.move(to: 356, rowID: "continue")
+        XCTAssertEqual(viewport.contentOffset.y, 356)
+        XCTAssertEqual(viewport.requests.last?.animated, false, "New measurements preserve the settled anchor.")
+        position.stop()
+        XCTAssertTrue(viewport.isScrollEnabled, "Teardown restores the viewport's original policy.")
+    }
+
+    private func settle(_ viewport: UIScrollView, at y: CGFloat) {
+        // Long enough for the spring to finish, past the last sub-pixel steps
+        // the viewport rounds away.
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(viewport.contentOffset.y, y)
+    }
+
+    private final class ScrollRecorder: UIScrollView {
+        var requests: [(point: CGPoint, animated: Bool)] = []
+        /// Offsets set directly, as the row spring does a frame at a time.
+        var steps: [CGFloat] = []
+
+        override var contentOffset: CGPoint {
+            didSet { steps.append(contentOffset.y) }
+        }
+
+        override func setContentOffset(_ contentOffset: CGPoint, animated: Bool) {
+            requests.append((contentOffset, animated))
+            super.setContentOffset(contentOffset, animated: animated)
+        }
+    }
+
+    func testFocusedSubjectTakesFreshRowStateWithoutAnotherFocusMove() {
+        let model = FocusHeroModel()
+        var episode = MediaItem(id: "episode", title: "Episode", kind: .episode)
+        episode.isPlayed = true
+        let initial = FocusHeroRow(id: "row", itemIDs: [episode.stablePresentationID], leadItem: episode, items: [episode])
+        model.activate(initial, in: [initial])
+        model.show(.item(episode), in: initial)
+        episode.isPlayed = false
+        let fresh = FocusHeroRow(id: "row", itemIDs: [episode.stablePresentationID], leadItem: episode, items: [episode])
+        model.seed(from: [fresh])
+        XCTAssertEqual(model.subject?.item?.isPlayed, false)
+        XCTAssertEqual(model.activeRowID, "row")
+    }
+
+    func testSameProviderIDOnDifferentAccountsDoesNotKeepRemovedSubject() {
+        let model = FocusHeroModel()
+        var first = item("shared-id")
+        first.sourceAccountID = "first"
+        var second = first
+        second.sourceAccountID = "second"
+        let initial = FocusHeroRow(id: "row", itemIDs: [first.stablePresentationID], leadItem: first, items: [first])
+        model.activate(initial, in: [initial])
+        model.show(.item(first), in: initial)
+        let fresh = FocusHeroRow(id: "row", itemIDs: [second.stablePresentationID], leadItem: second, items: [second])
+        model.seed(from: [fresh])
+        XCTAssertEqual(model.subject?.item?.sourceAccountID, "second")
+        XCTAssertNotEqual(FocusHeroSubject.item(first).id, FocusHeroSubject.item(second).id)
     }
 
     func testEveryTitleGetsTheSameFilledInDetails() async {

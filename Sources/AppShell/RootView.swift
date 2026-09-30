@@ -207,6 +207,7 @@ public struct RootView: View {
     /// diagnostics pattern.
     private func reconcileCrashReporting() {
         let forced = ProcessInfo.processInfo.environment["PLOZZ_FORCE_CRASH_REPORTING"] == "1"
+        crashReporting.setScreen(CrashReportScreen(context: MainThreadStallProbe.context))
         crashReporting.apply(
             enabled: appState.crashReportingModel.settings.isEnabled || forced,
             context: makeCrashContext()
@@ -222,7 +223,7 @@ public struct RootView: View {
             .filter { seen.insert($0).inserted }
         return CrashReportContext.make(
             bundleIdentifier: Bundle.main.bundleIdentifier ?? "com.thatcube.Plozz",
-            version: AppInfo.version,
+            version: AppInfo.marketingVersion,
             build: AppInfo.build,
             providers: providers,
             environment: AppReleaseChannel.current.crashReportEnvironment
@@ -258,14 +259,32 @@ public struct RootView: View {
     private var featureIntroductionStartupReady: Bool {
         startupPresentationReady
             && pendingFeatureIntroduction == nil
-            && featureIntroductionStore.needsPresentation(.navigationStyles)
+            && !isDismissingFeatureIntroduction
+            && nextFeatureIntroduction != nil
+    }
+
+    private var nextFeatureIntroduction: FeatureIntroduction? {
+        [.navigationStyles, .homeLayout].first {
+            featureIntroductionStore.needsPresentation($0)
+        }
     }
 
     private var releaseNotesStartupReady: Bool {
         startupPresentationReady
             && pendingFeatureIntroduction == nil
             && !isDismissingFeatureIntroduction
-            && !featureIntroductionStore.needsPresentation(.navigationStyles)
+            && nextFeatureIntroduction == nil
+    }
+
+    private func completeAppearanceIntroductions() {
+        featureIntroductionStore.markCompleted(.navigationStyles)
+        featureIntroductionStore.markCompleted(.homeLayout)
+    }
+
+    private func dismissFeatureIntroduction(_ introduction: FeatureIntroduction) {
+        featureIntroductionStore.markCompleted(introduction)
+        isDismissingFeatureIntroduction = true
+        pendingFeatureIntroduction = nil
     }
 
     private func makeLibraryChannelCompletionHandler(
@@ -336,9 +355,7 @@ public struct RootView: View {
                     profile: setupProfile,
                     librariesStore: setupLibraries,
                     deviceColorScheme: systemColorScheme,
-                    onNavigationSelected: {
-                        featureIntroductionStore.markCompleted(.navigationStyles)
-                    }
+                    onAppearanceSelected: completeAppearanceIntroductions
                 )
             } else {
                 switch appState.state {
@@ -352,9 +369,7 @@ public struct RootView: View {
                     canReturnToApp: canReturnToApp,
                     deviceColorScheme: systemColorScheme,
                     onSetUpFromAnotherDevice: canReturnToApp ? nil : { showSyncReceive = true },
-                    onNavigationSelected: {
-                        featureIntroductionStore.markCompleted(.navigationStyles)
-                    }
+                    onAppearanceSelected: completeAppearanceIntroductions
                 )
                 .fullScreenCover(isPresented: $showSyncReceive) {
                     SyncSetupReceiveView(appState: appState) { showSyncReceive = false }
@@ -479,7 +494,13 @@ public struct RootView: View {
                         activeProfile: appState.profilesModel.activeProfile,
                         liveTVPreferencesNamespace: appState.profilesModel.activeNamespace,
                         plexIdentityGeneration: appState.plexHomeUsers.plexIdentityGeneration,
-                        askProfileOnStartup: appState.profilesModel.askProfileOnStartup,
+                        automaticSignIn: AutomaticSignInSettings(
+                            isEnabled: Binding(
+                                get: { appState.plexHomeUsers.automaticallySignIn },
+                                set: { appState.profileFlow.setAutomaticallySignIn($0) }
+                            ),
+                            error: appState.plexHomeUsers.automaticSignInError
+                        ),
                         homeRuntime: HomeTabRuntime(
                             homeViewModel: homeViewModelBox,
                             // The key that governs the Home VIEW MODEL, which
@@ -501,7 +522,6 @@ public struct RootView: View {
                         ),
                         isAccountIncludedInActiveProfile: { appState.profileFlow.isAccountIncludedInActiveProfile($0) },
                         onSetAccountIncluded: { appState.profileFlow.setAccount($0, includedInActiveProfile: $1) },
-                        onSetAskProfileOnStartup: { appState.profileFlow.setAskProfileOnStartup($0) },
                         onSaveProfile: { appState.profileFlow.saveProfile($0) },
                         onCreateProfile: createProfileForSetup,
                         onUpdateProfileCosmetics: { appState.profileFlow.updateProfileCosmetics($0) },
@@ -705,7 +725,7 @@ public struct RootView: View {
         }
         .task(id: featureIntroductionStartupReady) {
             if featureIntroductionStartupReady {
-                pendingFeatureIntroduction = .navigationStyles
+                pendingFeatureIntroduction = nextFeatureIntroduction
             }
         }
         .fullScreenCover(
@@ -717,9 +737,14 @@ public struct RootView: View {
                 SelectNavigationStyleView(
                     appState: appState,
                     onContinue: {
-                        featureIntroductionStore.markCompleted(introduction)
-                        isDismissingFeatureIntroduction = true
-                        pendingFeatureIntroduction = nil
+                        dismissFeatureIntroduction(introduction)
+                    }
+                )
+            case .homeLayout:
+                SelectHomeLayoutView(
+                    hero: appState.profileSettings.heroSettingsModel,
+                    onContinue: {
+                        dismissFeatureIntroduction(introduction)
                     }
                 )
             default:
@@ -745,7 +770,7 @@ public struct RootView: View {
             ReleaseNotesStartupView(model: releaseNotes)
         }
         // One-time appearance flow for a profile just created in-app. The app has
-        // already switched profiles, so both choices write to its namespace.
+        // already switched profiles, so all choices write to its namespace.
         .fullScreenCover(
             isPresented: Binding(
                 get: { appState.profileFlow.isPickingAppearanceForNewProfile },
@@ -759,7 +784,7 @@ public struct RootView: View {
                 appState: appState,
                 deviceColorScheme: systemColorScheme,
                 onComplete: {
-                    featureIntroductionStore.markCompleted(.navigationStyles)
+                    completeAppearanceIntroductions()
                     appState.finishNewProfileAppearanceSelection()
                 }
             )
@@ -832,6 +857,9 @@ public struct RootView: View {
             // maintainer marker changes the reporter's environment, and that only
             // takes effect on a restart the controller performs from here.
             reconcileCrashReporting()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: MainThreadStallProbe.contextDidChange)) { _ in
+            crashReporting.setScreen(CrashReportScreen(context: MainThreadStallProbe.context))
         }
         // Scene-phase side effects live in a zero-size child, NOT here.
         //
@@ -914,6 +942,7 @@ private enum OnboardingPage: Equatable {
     case selectSeerr
     case selectTheme
     case selectNavigation
+    case selectHomeLayout
 
     init(
         step: OnboardingStep,
@@ -937,6 +966,8 @@ private enum OnboardingPage: Equatable {
             self = .selectTheme
         case .selectNavigation:
             self = .selectNavigation
+        case .selectHomeLayout:
+            self = .selectHomeLayout
         }
     }
 
@@ -950,6 +981,7 @@ private enum OnboardingPage: Equatable {
         case .selectSeerr: 5
         case .selectTheme: 6
         case .selectNavigation: 7
+        case .selectHomeLayout: 8
         }
     }
 
@@ -971,6 +1003,8 @@ private enum OnboardingPage: Equatable {
             "selectTheme"
         case .selectNavigation:
             "selectNavigation"
+        case .selectHomeLayout:
+            "selectHomeLayout"
         }
     }
 }
@@ -981,7 +1015,7 @@ private struct OnboardingFlowView: View {
     let canReturnToApp: Bool
     let deviceColorScheme: ColorScheme
     var onSetUpFromAnotherDevice: (() -> Void)?
-    var onNavigationSelected: (() -> Void)?
+    var onAppearanceSelected: (() -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var displayedPage: OnboardingPage
@@ -995,14 +1029,14 @@ private struct OnboardingFlowView: View {
         canReturnToApp: Bool,
         deviceColorScheme: ColorScheme,
         onSetUpFromAnotherDevice: (() -> Void)? = nil,
-        onNavigationSelected: (() -> Void)? = nil
+        onAppearanceSelected: (() -> Void)? = nil
     ) {
         self.appState = appState
         self.step = step
         self.canReturnToApp = canReturnToApp
         self.deviceColorScheme = deviceColorScheme
         self.onSetUpFromAnotherDevice = onSetUpFromAnotherDevice
-        self.onNavigationSelected = onNavigationSelected
+        self.onAppearanceSelected = onAppearanceSelected
         _displayedPage = State(initialValue: OnboardingPage(
             step: step,
             canReturnToApp: canReturnToApp,
@@ -1017,7 +1051,7 @@ private struct OnboardingFlowView: View {
                 appState: appState,
                 deviceColorScheme: deviceColorScheme,
                 onSetUpFromAnotherDevice: onSetUpFromAnotherDevice,
-                onNavigationSelected: onNavigationSelected
+                onAppearanceSelected: onAppearanceSelected
             )
             .id(displayedPage.transitionID)
             .geometryGroup()
@@ -1090,7 +1124,7 @@ private struct OnboardingPageContent: View {
     let appState: AppState
     let deviceColorScheme: ColorScheme
     var onSetUpFromAnotherDevice: (() -> Void)?
-    var onNavigationSelected: (() -> Void)?
+    var onAppearanceSelected: (() -> Void)?
 
     @ViewBuilder
     var body: some View {
@@ -1217,9 +1251,14 @@ private struct OnboardingPageContent: View {
         case .selectNavigation:
             SelectNavigationStyleView(
                 appState: appState,
+                onContinue: { appState.finishNavigationSelection() }
+            )
+        case .selectHomeLayout:
+            SelectHomeLayoutView(
+                hero: appState.profileSettings.heroSettingsModel,
                 onContinue: {
-                    onNavigationSelected?()
-                    appState.finishNavigationSelection()
+                    onAppearanceSelected?()
+                    appState.finishHomeLayoutSelection()
                 }
             )
         }
@@ -1238,7 +1277,7 @@ private struct ProfileSetupFlowView: View {
     let profile: Profile
     let librariesStore: ProfileSetupLibrariesLoader
     let deviceColorScheme: ColorScheme
-    let onNavigationSelected: () -> Void
+    let onAppearanceSelected: () -> Void
     @State private var stage: ProfileSetupStage = .libraries
     @StateObject private var librariesNavigation = ProfileSetupNavigationState()
 
@@ -1329,9 +1368,14 @@ private struct ProfileSetupFlowView: View {
         case .navigation:
             SelectNavigationStyleView(
                 appState: appState,
+                onContinue: { stage = .homeLayout }
+            )
+        case .homeLayout:
+            SelectHomeLayoutView(
+                hero: appState.profileSettings.heroSettingsModel,
                 onContinue: {
                     appState.completeProfileAppearanceSetup(for: profile.id)
-                    onNavigationSelected()
+                    onAppearanceSelected()
                     stage = .lock
                 }
             )
@@ -1360,6 +1404,7 @@ private enum ProfileSetupStage {
     case seerr
     case theme
     case navigation
+    case homeLayout
     case lock
 }
 

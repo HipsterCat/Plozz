@@ -4,8 +4,8 @@ import notify
 #endif
 
 /// Warm-only, unbound runner: never launches, activates, terminates, or installs Plozz.
-/// Existing Home has no row accessibility IDs. Recognize section text followed by
-/// a leaf horizontal scroll view containing enabled media buttons, not skeletons.
+/// Pair identified section headings geometrically
+/// with a leaf horizontal scroll view containing real media buttons, not skeletons.
 /// Hero-off coverage and explicit hero-aware workloads preserve the observed setting.
 /// Vertical discovery advances only from a positively identified media row and
 /// verifies the destination before allowing another input.
@@ -45,6 +45,14 @@ final class PhysicalHomeRowsFirstTests: XCTestCase {
             rows: [priorContinueWatching, shiftedContinueWatching]
         )
         XCTAssertTrue(matchingRows(priorContinueWatching, in: duplicateContinueWatching).isEmpty)
+        let masked = Scene(
+            frame: .zero, heroPresent: false, heroFocused: false, railFocused: false,
+            rows: [Row(title: "", cards: first.cards)]
+        )
+        XCTAssertEqual(matchingRows(priorContinueWatching, in: masked).count, 1,
+                       "A clipped outgoing heading must still match its unchanged media window.")
+        XCTAssertTrue(matchingRows(shiftedContinueWatching, in: masked).isEmpty,
+                      "A missing heading alone is not evidence of row identity.")
     }
 
     func testVerticalDiscoveryUsesAdjacentSourceDespiteSharedLibraryTitles() {
@@ -164,11 +172,19 @@ final class PhysicalHomeRowsFirstTests: XCTestCase {
         try runRows(observeOnly: true)
     }
 
+    func testShowcaseMixedRowsWarm() throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["PLOZZ_SHOWCASE_MIXED_ROWS"] == "1",
+            "Requires explicit mixed Showcase traversal opt-in."
+        )
+        try runRows(heroAllowed: true, mixedRows: true)
+    }
+
     private func runRows(
         verticalOnly: Bool = false, horizontalOnly: Bool = false,
         sweep: Bool = false, nativeMetric: Bool = false,
         heroAllowed: Bool = false, verticalRoundtrip: Bool = false, observeOnly: Bool = false,
-        verticalBurst: Bool = false
+        verticalBurst: Bool = false, mixedRows: Bool = false
     ) throws {
         #if !os(tvOS) || targetEnvironment(simulator)
         throw XCTSkip("Physical tvOS only.")
@@ -180,12 +196,16 @@ final class PhysicalHomeRowsFirstTests: XCTestCase {
             "Requires explicit physical-device opt-in matching the driver's destination."
         )
         try XCTSkipUnless(
-            ProcessInfo.processInfo.environment["PLOZZ_HOME_APP_CONFIGURATION"] == "Release",
-            "Parent must confirm the already-running Release app; this test does not launch it."
+            ["Release", "Debug-optimized"].contains(environment["PLOZZ_HOME_APP_CONFIGURATION"] ?? ""),
+            "Parent must confirm the already-running optimized app; this test does not launch it."
         )
         continueAfterFailure = false
         executionTimeAllowance = sweep || nativeMetric || verticalRoundtrip ? 150 : (verticalOnly || horizontalOnly ? 60 : 120)
         inputBudget = sweep || nativeMetric || verticalRoundtrip ? 130 : (verticalOnly || horizontalOnly ? 45 : 100)
+        if mixedRows {
+            executionTimeAllowance = 420
+            inputBudget = 390
+        }
         started = ProcessInfo.processInfo.systemUptime
         event("scenario hero=\(heroAllowed || observeOnly ? "observed" : "disabled") verticalOnly=\(verticalOnly) lifecycle=warm-existing relaunch=false causalComparison=false")
         addTeardownBlock { @MainActor [weak self] in
@@ -257,6 +277,10 @@ final class PhysicalHomeRowsFirstTests: XCTestCase {
         var scene = ready
         event("\(heroAllowed ? "observed" : "hero-off").row-ready title=\(title.debugDescription)")
 
+        if mixedRows {
+            try runShowcaseMixedRows(from: scene, app: app)
+            return
+        }
         if verticalBurst {
             try measureVerticalBurst(from: scene, app: app)
             return
@@ -284,6 +308,102 @@ final class PhysicalHomeRowsFirstTests: XCTestCase {
         }
         try runVerticalRows(from: scene, app: app)
         #endif
+    }
+
+    private func runShowcaseMixedRows(from initial: Scene, app: XCUIApplication) throws {
+        let title = ProcessInfo.processInfo.environment["PLOZZ_HOME_CONTINUE_WATCHING_LABEL"] ?? "Continue Watching"
+        try requireFocused(title, in: initial)
+        let heading = app.staticTexts.matching(NSPredicate(format: "label == %@", title))
+            .allElementsBoundByIndex.filter { initial.frame.contains($0.frame) }
+        guard heading.count == 1 else { try fail(.notReady, "Continue Watching heading is not uniquely on screen.") }
+        let initialY = heading[0].frame.minY
+        var positions = [initialY]
+        var focusedLabels = Set([try XCTUnwrap(initial.focusedRow?.focusedCard?.label)])
+        var scene = initial
+        let phases: [(XCUIRemote.Button, Int, TimeInterval)] = [
+            (.right, 12, 0.08), (.right, 8, 0.2), (.right, 8, 0.65),
+            (.left, 8, 0.08), (.right, 4, 0), (.left, 24, 0.16),
+        ]
+        for (index, phase) in phases.enumerated() {
+            for _ in 0..<phase.1 {
+                try input(phase.0, phase: "mixed.horizontal.\(index)", app: app)
+                if phase.2 > 0 { Thread.sleep(forTimeInterval: phase.2) }
+                if phase.2 >= 0.65 {
+                    positions.append(heading[0].frame.minY)
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.8)
+            scene = try observeSettledFocus(app, phase: "mixed.horizontal.\(index).settled")
+            if scene.railFocused {
+                try input(.right, phase: "mixed.horizontal.boundary-return", app: app)
+                scene = try observeSettledFocus(app, phase: "mixed.horizontal.boundary-returned")
+            }
+            try requireFocused(title, in: scene)
+            focusedLabels.insert(try XCTUnwrap(scene.focusedRow?.focusedCard?.label))
+            positions.append(heading[0].frame.minY)
+            event("mixed.horizontal.anchor phase=\(index) y=\(heading[0].frame.minY) initialY=\(initialY)")
+        }
+        guard focusedLabels.count >= 4 else {
+            try fail(.inputFailed, "Deep paging did not expose four distinct phase destinations; button counts alone are not coverage.")
+        }
+        for _ in 0..<12 { try input(.right, phase: "mixed.reversals.prepare", app: app) }
+        for trip in 0..<12 {
+            for direction in [XCUIRemote.Button.left, .right] {
+                for _ in 0..<2 { try input(direction, phase: "mixed.reversals.\(trip)", app: app) }
+            }
+        }
+        Thread.sleep(forTimeInterval: 1)
+        scene = try observeSettledFocus(app, phase: "mixed.reversals.settled")
+        try requireFocused(title, in: scene)
+        positions.append(heading[0].frame.minY)
+
+        for (index, direction) in [XCUIRemote.Button.right, .right, .left, .left].enumerated() {
+            try input(direction, duration: 6, phase: "mixed.deep-hold.\(index)", app: app)
+            scene = try observeSettledFocus(app, phase: "mixed.deep-hold.\(index).settled")
+            if scene.railFocused {
+                try input(.right, phase: "mixed.deep-hold.boundary-return", app: app)
+                scene = try observeSettledFocus(app, phase: "mixed.deep-hold.boundary-returned")
+            }
+            try requireFocused(title, in: scene)
+            positions.append(heading[0].frame.minY)
+            event("mixed.deep-hold.anchor phase=\(index) y=\(heading[0].frame.minY) initialY=\(initialY)")
+        }
+
+        var visited = [try XCTUnwrap(scene.focusedRow)]
+        for index in 0..<5 {
+            let source = try XCTUnwrap(scene.focusedRow)
+            try input(.down, phase: "mixed.vertical.slow.down.\(index)", app: app)
+            Thread.sleep(forTimeInterval: 0.65)
+            scene = try observeSettledFocus(app, phase: "mixed.vertical.slow.down.\(index).settled")
+            if !hasAdvancedDown(from: source, in: scene) { break }
+            visited.append(try XCTUnwrap(scene.focusedRow))
+            if index == 0 {
+                let screenshot = XCTAttachment(screenshot: app.screenshot())
+                screenshot.name = "showcase-first-lower-row-edge"
+                screenshot.lifetime = .keepAlways
+                add(screenshot)
+            }
+        }
+        guard visited.count >= 3 else { try fail(.notReady, "The mixed tour requires at least three populated media rows.") }
+        for index in stride(from: visited.count - 2, through: 0, by: -1) {
+            try input(.up, phase: "mixed.vertical.slow.up.\(index)", app: app)
+            Thread.sleep(forTimeInterval: 0.65)
+            scene = try observeSettledFocus(app, phase: "mixed.vertical.slow.up.\(index).settled")
+            try requireFocused(visited[index], in: scene)
+        }
+        let depth = min(3, visited.count - 1)
+        for trip in 0..<3 {
+            for _ in 0..<depth { try input(.down, phase: "mixed.vertical.fast.down.\(trip)", app: app) }
+            scene = try observeSettledFocus(app, phase: "mixed.vertical.fast.down.\(trip).settled")
+            try requireFocused(visited[depth], in: scene)
+            for _ in 0..<depth { try input(.up, phase: "mixed.vertical.fast.up.\(trip)", app: app) }
+            scene = try observeSettledFocus(app, phase: "mixed.vertical.fast.up.\(trip).settled")
+            try requireFocused(visited[0], in: scene)
+        }
+        event("mixed.coverage horizontalRight=68 horizontalLeft=56 rapidReversals=24 deepHolds=4 requestedHoldSeconds=6 slowRows=\(visited.count) fastDepth=\(depth) fastTrips=3 anchorY=\(positions)")
+        let drift = (positions.max() ?? initialY) - (positions.min() ?? initialY)
+        XCTAssertLessThanOrEqual(drift, 0.5, "Horizontal navigation must not move the Continue Watching row vertically.")
+        event("complete")
     }
 
     private func pageHorizontally(from initial: Scene, app: XCUIApplication) throws -> Scene {
@@ -906,13 +1026,26 @@ final class PhysicalHomeRowsFirstTests: XCTestCase {
         }
         var rows: [Row] = []
         var unavailableRows: [CGRect] = []
-        var latestHeading = ""
 
         func descendants(_ node: XCUIElementSnapshot) -> [XCUIElementSnapshot] {
             node.children.flatMap { [$0] + descendants($0) }
         }
         func containsFocus(_ node: XCUIElementSnapshot) -> Bool {
             node.hasFocus || node.children.contains(where: containsFocus)
+        }
+        let headings = descendants(root).filter {
+            $0.elementType == .staticText && $0.identifier == "media-row-title" && !$0.label.isEmpty
+        }
+        guard !headings.isEmpty else {
+            let tree = XCTAttachment(string: app.debugDescription)
+            tree.name = "home-missing-headings"
+            tree.lifetime = .keepAlways
+            add(tree)
+            let screenshot = XCTAttachment(screenshot: app.screenshot())
+            screenshot.name = "home-missing-headings"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+            try fail(.notReady, "No identified Home row headings; refusing to infer a row from hero text.")
         }
         func mediaButtons(_ node: XCUIElementSnapshot) -> [Card] {
             if node.elementType == .button || node.elementType == .cell {
@@ -928,10 +1061,7 @@ final class PhysicalHomeRowsFirstTests: XCTestCase {
             }
             return node.children.flatMap(mediaButtons)
         }
-        func walk(_ node: XCUIElementSnapshot, insideButton: Bool = false) {
-            if node.elementType == .staticText, !insideButton, !node.label.isEmpty {
-                latestHeading = node.label
-            }
+        func walk(_ node: XCUIElementSnapshot) {
             if node.elementType == .scrollView || node.elementType == .collectionView,
                node.frame.width > root.frame.width * 0.45,
                node.frame.height < root.frame.height * 0.85 {
@@ -940,21 +1070,28 @@ final class PhysicalHomeRowsFirstTests: XCTestCase {
                     $0.elementType == .scrollView || $0.elementType == .collectionView
                 }) {
                     let cards = mediaButtons(node)
+                    // Drawing offsets can put a header after its scroll view in
+                    // AX traversal order. Native button frames include focus
+                    // margins above the actual artwork, so use the card center.
+                    let artworkCenter = cards.map(\.frame.midY).min() ?? node.frame.midY
+                    let title = headings.filter { $0.frame.maxY <= artworkCenter }
+                        .max { $0.frame.maxY < $1.frame.maxY }?.label ?? ""
                     if !cards.isEmpty {
-                        rows.append(Row(title: latestHeading, cards: cards,
+                        rows.append(Row(title: title, cards: cards,
                                         isCollection: node.elementType == .collectionView, frame: node.frame))
                     } else {
                         unavailableRows.append(node.frame)
-                        event("\(phase) unavailableRow title=\(latestHeading.debugDescription) type=\(node.elementType.rawValue) frame=\(node.frame)")
+                        event("\(phase) unavailableRow title=\(title.debugDescription) type=\(node.elementType.rawValue) frame=\(node.frame)")
                     }
                     return
                 }
             }
             for child in node.children {
-                walk(child, insideButton: insideButton || node.elementType == .button)
+                walk(child)
             }
         }
         walk(root)
+        rows.sort { $0.frame.minY < $1.frame.minY }
         let elements = descendants(root)
         let collections = elements.filter { $0.elementType == .collectionView }
         let guideIdentifiers = elements.map(\.identifier).filter {
@@ -1076,12 +1213,13 @@ final class PhysicalHomeRowsFirstTests: XCTestCase {
     private func matchingRows(_ expected: Row, in scene: Scene) -> [Row] {
         // Different libraries can use the same section heading.
         let labels = Set(expected.cards.map(\.label))
-        let candidates = scene.rows.filter { $0.title == expected.title }.map {
+        let titled = scene.rows.filter { $0.title == expected.title }
+        let candidates = (titled.isEmpty ? scene.rows.filter { $0.title.isEmpty } : titled).map {
             (row: $0, sharedLabels: labels.intersection($0.cards.map(\.label)).count)
         }
         let continueWatchingTitle = ProcessInfo.processInfo.environment["PLOZZ_HOME_CONTINUE_WATCHING_LABEL"] ?? "Continue Watching"
         // This unique Home section can expose a different card window after horizontal paging.
-        if expected.title == continueWatchingTitle {
+        if expected.title == continueWatchingTitle, !titled.isEmpty {
             return candidates.count == 1 ? candidates.map(\.row) : []
         }
         guard let strongest = candidates.map(\.sharedLabels).max(),

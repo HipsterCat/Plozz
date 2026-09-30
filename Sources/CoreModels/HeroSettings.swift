@@ -62,9 +62,6 @@ public struct HeroSettings: Codable, Equatable, Sendable {
     /// a layout choice, not a hero option: Showcase has no hero section at all.
     public var style: HeroStyle
 
-    /// How the backdrop changes between titles when the hero follows focus.
-    public var backdropTransition: HeroBackdropTransition
-
     /// Whether cards keep their title lines when the hero follows focus. Off by
     /// default: the hero already names whatever is focused.
     public var showsCardCaptions: Bool
@@ -107,7 +104,6 @@ public struct HeroSettings: Codable, Equatable, Sendable {
         autoAdvance: Bool,
         autoAdvanceSeconds: Int,
         style: HeroStyle = .carousel,
-        backdropTransition: HeroBackdropTransition = .crossfade,
         showsCardCaptions: Bool = false,
         showsDiscoverRow: Bool = false
     ) {
@@ -128,7 +124,6 @@ public struct HeroSettings: Codable, Equatable, Sendable {
         self.autoAdvance = autoAdvance
         self.autoAdvanceSeconds = autoAdvanceSeconds.clamped(to: HeroSettings.autoAdvanceRange)
         self.style = style
-        self.backdropTransition = backdropTransition
         self.showsCardCaptions = showsCardCaptions
         self.showsDiscoverRow = showsDiscoverRow
     }
@@ -139,7 +134,7 @@ public struct HeroSettings: Codable, Equatable, Sendable {
         case discoverySources, showsDiscoverySources
         case ratingPreferences
         case randomLibraryKeys, autoAdvance, autoAdvanceSeconds
-        case style, backdropTransition, showsCardCaptions, showsDiscoverRow
+        case style, showsCardCaptions, showsDiscoverRow
         case offeredSourcesVersion
     }
 
@@ -177,7 +172,6 @@ public struct HeroSettings: Codable, Equatable, Sendable {
             autoAdvance: value(Bool.self, .autoAdvance, d.autoAdvance),
             autoAdvanceSeconds: value(Int.self, .autoAdvanceSeconds, d.autoAdvanceSeconds),
             style: value(HeroStyle.self, .style, d.style),
-            backdropTransition: value(HeroBackdropTransition.self, .backdropTransition, d.backdropTransition),
             showsCardCaptions: value(Bool.self, .showsCardCaptions, d.showsCardCaptions),
             showsDiscoverRow: value(Bool.self, .showsDiscoverRow, d.showsDiscoverRow)
         )
@@ -237,7 +231,6 @@ public struct HeroSettings: Codable, Equatable, Sendable {
         try c.encode(autoAdvance, forKey: .autoAdvance)
         try c.encode(autoAdvanceSeconds, forKey: .autoAdvanceSeconds)
         try c.encode(style, forKey: .style)
-        try c.encode(backdropTransition, forKey: .backdropTransition)
         try c.encode(showsCardCaptions, forKey: .showsCardCaptions)
         try c.encode(showsDiscoverRow, forKey: .showsDiscoverRow)
         try c.encode(Self.currentOfferedSourcesVersion, forKey: .offeredSourcesVersion)
@@ -292,14 +285,6 @@ public enum HeroStyle: String, Codable, CaseIterable, Sendable {
     case carousel
     /// Whatever title is focused in the rows fills the screen; rows hold one position.
     case followsFocus
-}
-
-/// How the full-screen backdrop moves from one focused title to the next.
-public enum HeroBackdropTransition: String, Codable, CaseIterable, Sendable {
-    /// A gentle dissolve.
-    case crossfade
-    /// The carousel's sideways wipe, entering from the direction of travel.
-    case slide
 }
 
 private extension Comparable {

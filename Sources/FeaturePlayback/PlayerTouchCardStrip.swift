@@ -20,6 +20,7 @@ import PlozzCoreUI
 @available(tvOS, unavailable, message: "tvOS drives this from PlayerControls, which owns the focus choreography")
 public struct PlayerTouchCardStrip: View {
     private let model: PlayerControlsModel
+    private let player: PlayerViewModel?
     private let onRestart: () -> Void
     private let onNextEpisode: () -> Void
     private let onPreviousEpisode: () -> Void
@@ -60,11 +61,13 @@ public struct PlayerTouchCardStrip: View {
         model: PlayerControlsModel,
         availableSize: CGSize,
         isCardOpen: Binding<Bool>,
+        player: PlayerViewModel? = nil,
         onRestart: @escaping () -> Void,
         onNextEpisode: @escaping () -> Void,
         onPreviousEpisode: @escaping () -> Void
     ) {
         self.model = model
+        self.player = player
         self.availableSize = availableSize
         self._isCardOpen = isCardOpen
         self.onRestart = onRestart
@@ -77,6 +80,7 @@ public struct PlayerTouchCardStrip: View {
             tabRow
             if let openPanel {
                 card(for: openPanel)
+                    .reportSubtitleControlsFrame(in: model.subtitleLayout, region: .card)
                     // Grows upward out of the tabs, matching tvOS. The card is
                     // laid out ABOVE its strip in the enclosing bottom-anchored
                     // stack, so a bottom anchor is what makes it read as opening
@@ -144,6 +148,12 @@ public struct PlayerTouchCardStrip: View {
             if !model.infoCard.cast.isEmpty {
                 tab(.cast, title: Text(PlayerControls.Category.cast.title))
             }
+            if player?.episodeBrowser != nil {
+                tab(.episodes, title: Text(PlayerControls.Category.episodes.title))
+            }
+            if player?.playlistContext != nil {
+                tab(.playlist, title: Text(PlayerControls.Category.playlist.title))
+            }
             Spacer(minLength: 20)
         }
     }
@@ -159,6 +169,7 @@ public struct PlayerTouchCardStrip: View {
             title
         }
         .buttonStyle(PlayerTabButtonStyle(focused: false, selected: openPanel == category))
+        .reportSubtitleControlsFrame(in: model.subtitleLayout, region: .tab(String(describing: category)))
         // Makes the whole pill tappable, including its padding.
         //
         // Without it only the glyph-sized label takes the tap and everything
@@ -182,6 +193,14 @@ public struct PlayerTouchCardStrip: View {
                     isCardOpen: true,
                     revealClock: .easeInOut(duration: 0.24)
                 )
+            case .episodes, .playlist:
+                if let player {
+                    PlayerSequencePanel(
+                        player: player,
+                        source: category == .playlist ? .playlist : .episodes,
+                        focus: $focus
+                    )
+                }
             default:
                 InfoPanelView(
                     model: model,

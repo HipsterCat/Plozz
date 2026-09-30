@@ -15,16 +15,17 @@ struct PlozziOSDiagnosticsSettingsView: View {
     @State private var sendStatus: String?
 
     private var report: DiagnosticsReport {
-        let info = Bundle.main.infoDictionary
+        let version = AppVersionIdentity.current
         let providers = Set(appModel.accounts.map(\.server.provider.displayName))
             .sorted()
             .joined(separator: ", ")
         return DiagnosticsReport(
-            appVersion: info?["CFBundleShortVersionString"] as? String ?? "Unknown",
-            appBuild: info?["CFBundleVersion"] as? String ?? "Unknown",
+            appVersion: version.displayVersion,
+            appBuild: version.build,
             providers: providers.isEmpty ? "None" : providers,
             repoURL: "https://github.com/thatcube/Plozz",
-            recentLogTail: PlozzLog.recentLogText(limit: 8)
+            recentLogTail: PlozzLog.recentLogText(limit: 8),
+            marketingVersion: version.marketingVersion
         )
     }
 

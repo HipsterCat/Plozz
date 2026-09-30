@@ -15,9 +15,11 @@ struct LiveChannelSubtitleSurface: View {
                 videoRect: SubtitleOverlayGeometry.aspectFitRect(
                     in: CGRect(origin: .zero, size: geometry.size),
                     aspectRatio: model.engine.videoAspectRatio.map { CGFloat($0) }
-                )
+                ),
+                controlsFrames: model.subtitles.controlsLayout.frames
             )
         }
+        .background(SubtitleDisplayClock(engine: model.engine, subtitles: model.subtitles))
     }
 }
 

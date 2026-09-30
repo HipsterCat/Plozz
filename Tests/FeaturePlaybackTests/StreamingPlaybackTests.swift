@@ -9,6 +9,54 @@ import UIKit
 
 @MainActor
 final class StreamingPlaybackTests: XCTestCase {
+    func testStoppingAfterBackgroundClockResetReportsThePreservedPosition() async {
+        let (model, engine, provider) = make(options: .init(quality: .original))
+        await model.load()
+        engine.currentTime = 123
+        model.suspendForBackground()
+        engine.currentTime = 0.07
+        await model.stop()
+        let reports = await provider.playbackReports
+        XCTAssertEqual(reports.last { $0.event == .stop }?.progress.positionSeconds, 123)
+    }
+
+    func testBackgroundReturnPreservesPositionAcrossClockResetAndLateSourceProbe() async {
+        let (model, engine, _) = make(options: .init(quality: .original))
+        await model.load()
+        engine.currentTime = 123
+        engine.onPause = { [weak engine] in
+            engine?.currentTime = 0
+            engine?.onPause = nil
+        }
+        model.suspendForBackground()
+        XCTAssertEqual(engine.currentTime, 0)
+        let diagnosticsBeforeProbe = model.diagnosticsToken
+        engine.onProbedSourceFactsChanged?(.init(range: .hdr10))
+        XCTAssertNotEqual(model.diagnosticsToken, diagnosticsBeforeProbe)
+        XCTAssertEqual(model.continuationForVersionChange().position, 123)
+        model.didEnterBackground()
+        await model.resumeAfterBackground()
+        XCTAssertEqual(engine.currentTime, 123)
+        XCTAssertTrue(engine.isPaused)
+        XCTAssertTrue(model.controls.intendsPause)
+        XCTAssertEqual(model.phase, .ready)
+        await model.stop()
+    }
+
+    func testCueArrivalUsesThePresentationClockBeforeTheNextDisplayTick() async {
+        let (model, engine, _) = make(options: .init(quality: .original))
+        await model.load()
+        model.selectSubtitleOption(id: 6)
+        model.liveSubtitles.tick(0)
+        engine.currentTime = 75
+        engine.onSubtitleCues?([
+            .init(id: 1, start: 74, end: 76, body: .text(.init("Current picture"))),
+            .init(id: 2, start: 0, end: 2, body: .text(.init("Previous clock")))
+        ])
+        XCTAssertEqual(model.liveSubtitles.primary.compactMap(\.text), ["Current picture"])
+        await model.stop()
+    }
+
     func testCustomSelectionRetainsTracksPositionPauseSpeedAndVersionContinuation() async throws {
         let quality = try StreamingQuality.custom(maximumHeight: 1080, bitrateKbps: 2_000)
         let (model, engine, provider) = make()
@@ -522,6 +570,48 @@ final class StreamingPlaybackTests: XCTestCase {
         await model.stop()
     }
 
+    func testPlexEmbeddedSubtitleSelectionPreparesRenditionWithoutLosingContinuation() async {
+        let provider = QualityPlaybackProvider()
+        await provider.setPlexSubtitleRenditions()
+        let (model, engine, _) = make(provider: provider)
+        await model.load()
+        engine.currentTime = 123
+        model.setPaused(true)
+        model.setPlaybackSpeed(1.5)
+        model.selectSubtitleOption(id: 6)
+        await wait { engine.positions.count == 2 && model.phase == .ready }
+        XCTAssertEqual(engine.positions.last, 123)
+        XCTAssertTrue(engine.isPaused)
+        XCTAssertEqual(model.controls.playbackSpeed, 1.5)
+        XCTAssertEqual(engine.selectedSubtitleID, 6)
+        var calls = await provider.calls
+        XCTAssertEqual(calls.last?.options.subtitleTrack?.id, 6)
+        XCTAssertEqual(calls.last?.options.quality, .hd720)
+        XCTAssertEqual(calls.last?.source, "version")
+
+        model.selectSubtitleOption(id: PlayerTrackOption.offID)
+        XCTAssertNil(engine.selectedSubtitleID)
+        model.selectSubtitleOption(id: 6)
+        XCTAssertEqual(engine.selectedSubtitleID, 6)
+        calls = await provider.calls
+        XCTAssertEqual(calls.count, 2, "Off and the prepared rendition switch locally")
+
+        engine.currentTime = 150
+        model.selectSubtitleOption(id: 7)
+        await wait { engine.positions.count == 3 && model.phase == .ready }
+        XCTAssertEqual(engine.positions.last, 150)
+        XCTAssertTrue(engine.isPaused)
+        XCTAssertEqual(model.controls.playbackSpeed, 1.5)
+        XCTAssertEqual(engine.selectedSubtitleID, 7)
+        calls = await provider.calls
+        XCTAssertEqual(calls.last?.options.subtitleTrack?.id, 7)
+        XCTAssertEqual(calls.map { $0.options.quality }, [.hd720, .hd720, .hd720])
+        XCTAssertEqual(calls.map(\.source), ["version", "version", "version"])
+        let released = await provider.released
+        XCTAssertEqual(released, ["quality-1", "quality-2"])
+        await model.stop()
+    }
+
     func testRefusedQualitySurfacesSpecificErrorWithoutOriginalRetry() async {
         let provider = QualityPlaybackProvider()
         await provider.setRefusesQuality()
@@ -623,6 +713,7 @@ private actor QualityDecisionGate {
 
 private actor QualityPlaybackProvider: StreamingQualityProviding {
     struct Call: Sendable { let item: String; let source: String?; let options: StreamingPlaybackOptions }
+    struct Report: Sendable { let progress: PlaybackProgress; let event: PlaybackEvent }
     nonisolated let kind: ProviderKind = .plex
     nonisolated let session = UserSession(
         server: .init(id: "server", name: "Server", baseURL: URL(string: "https://fixture.test")!, provider: .plex),
@@ -631,10 +722,12 @@ private actor QualityPlaybackProvider: StreamingQualityProviding {
     private(set) var calls: [Call] = []
     private(set) var ordinaryCalls = 0
     private(set) var released: [String] = []
+    private(set) var playbackReports: [Report] = []
     private var refusesQuality = false
     private var hevcFailure: (any Error & Sendable)?
     private var negotiatedCodec: DirectPlayVideoCodec?
     private var sourceRange: String?
+    private var plexSubtitleRenditions = false
     private var gate: QualityDecisionGate?
     init(gate: QualityDecisionGate? = nil) { self.gate = gate }
     func installGate(_ gate: QualityDecisionGate) { self.gate = gate }
@@ -642,6 +735,7 @@ private actor QualityPlaybackProvider: StreamingQualityProviding {
     func setHEVCFailure(_ error: any Error & Sendable) { hevcFailure = error }
     func setNegotiatedCodec(_ codec: DirectPlayVideoCodec) { negotiatedCodec = codec }
     func setSourceRange(_ range: String) { sourceRange = range }
+    func setPlexSubtitleRenditions() { plexSubtitleRenditions = true }
     func playbackInfo(for itemID: String) async throws -> PlaybackRequest {
         ordinaryCalls += 1
         return baseRequest()
@@ -670,9 +764,13 @@ private actor QualityPlaybackProvider: StreamingQualityProviding {
                             .init(id: 3, kind: .audio, displayTitle: "English", language: "eng", isDefault: true),
                             .init(id: 4, kind: .audio, displayTitle: "Japanese", language: "jpn")
                         ],
-                        subtitleTracks: [.init(id: 6, kind: .subtitle, displayTitle: "English", language: "eng")],
+                        subtitleTracks: plexSubtitleRenditions ? [
+                            .init(id: 6, kind: .subtitle, displayTitle: "English", language: "eng"),
+                            .init(id: 7, kind: .subtitle, displayTitle: "French", language: "fra")
+                        ] : [.init(id: 6, kind: .subtitle, displayTitle: "English", language: "eng")],
                         isTranscoding: true,
-                        sourceMetadata: sourceRange.map { .init(video: .init(videoRangeType: $0)) })
+                        sourceMetadata: sourceRange.map { .init(video: .init(videoRangeType: $0)) },
+                        sourceProvider: plexSubtitleRenditions ? .plex : nil)
     }
     func libraries() async throws -> [MediaLibrary] { [] }
     func continueWatching(limit: Int) async throws -> [MediaItem] { [] }
@@ -683,7 +781,9 @@ private actor QualityPlaybackProvider: StreamingQualityProviding {
         .init(items: [], startIndex: 0, totalCount: 0)
     }
     func search(query: String, limit: Int) async throws -> [MediaItem] { [] }
-    func reportPlayback(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {}
+    func reportPlayback(_ progress: PlaybackProgress, event: PlaybackEvent) async throws {
+        playbackReports.append(.init(progress: progress, event: event))
+    }
     nonisolated func imageURL(itemID: String, kind: ImageKind, maxWidth: Int?) -> URL? { nil }
 }
 
@@ -704,6 +804,8 @@ private final class QualityEngine: VideoEngine {
     var subtitleTracks: [MediaTrack] = []
     var currentAudioTrackID: Int?
     var selectedSubtitleID: Int?
+    var onPause: (@MainActor () -> Void)?
+    var isPlaybackPositionReady: Bool { status == .ready }
     var positions: [TimeInterval] = []
     var loadedQualities: [StreamingQuality] = []
     var onProgress: (@MainActor () -> Void)?
@@ -727,7 +829,7 @@ private final class QualityEngine: VideoEngine {
         status = .ready
     }
     func play() { isPaused = false }
-    func pause() { isPaused = true }
+    func pause() { isPaused = true; onPause?() }
     func seek(to seconds: TimeInterval) async { currentTime = seconds }
     func stop() { status = .idle; currentTime = 0; isPaused = true }
     func selectAudioTrack(_ track: MediaTrack?) { currentAudioTrackID = track?.id }

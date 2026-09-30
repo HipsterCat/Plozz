@@ -7,6 +7,81 @@ import XCTest
 
 @MainActor
 final class EpisodeArtworkPreparationTests: XCTestCase {
+    func testEpisodeResolutionKeepsServerArtworkWhenOnlineSourcesAreUnavailable() async throws {
+        let store = MetadataProviderSettingsStore()
+        let original = store.load()
+        defer {
+            store.save(original)
+            ArtworkImageCache.shared.configure(networkFileService: nil)
+        }
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 16, height: 9)).image {
+            UIColor.green.setFill()
+            $0.fill(CGRect(x: 0, y: 0, width: 16, height: 9))
+        }
+        let loader = EpisodeArtworkLoader(data: try XCTUnwrap(image.pngData()))
+        ArtworkImageCache.shared.configure(networkFileService: ArtworkNetworkFileService(loader: loader))
+        for online in [false, true] {
+            store.save(.init(
+                orderMode: .custom, preferOnlineArtwork: online,
+                disabledOrder: MetadataSourceAttribution.all.map(\.source.rawValue)
+            ))
+            let reference = try NetworkArtworkReference(
+                accountID: UUID().uuidString, credentialRevision: CredentialRevision(),
+                catalogArtworkID: UUID().uuidString,
+                representation: RemoteFileRepresentation(
+                    size: 1_024,
+                    identity: RemoteFileIdentity(kind: .modificationTime, modifiedAt: .distantPast),
+                    consistency: .changeDetecting
+                ),
+                sourceRevision: UUID().uuidString
+            )
+            var item = MediaItem(id: UUID().uuidString, title: "Episode", kind: .episode)
+            item.artworkSelections = [
+                ArtworkSelection(placement: .episodeThumbnail, references: [.networkFile(reference)])
+            ]
+            let source = EpisodeArtworkSource(item: item, spoilerSettings: .default)
+            XCTAssertNil(source.preparedArtwork)
+            let resolved = await source.resolve()
+            XCTAssertEqual(resolved?.reference, .networkFile(reference))
+            XCTAssertTrue(source.preparedArtwork?.image === resolved?.image)
+            XCTAssertGreaterThan(try centerPixel(XCTUnwrap(resolved?.image))[1], 240)
+        }
+    }
+
+    func testNativeResolutionReusesTheDetailWinnersWithoutConflatingSharedFallbacks() async throws {
+        let shared = URL(string: "https://art.example.test/\(UUID())/shared.jpg")!
+        let first = MediaItem(id: UUID().uuidString, title: "First", kind: .episode, posterURL: shared)
+        var second = first
+        second.id = UUID().uuidString
+        let sources = [
+            EpisodeArtworkSource(item: first.taggingSource("one"), spoilerSettings: .default),
+            EpisodeArtworkSource(item: second.taggingSource("one"), spoilerSettings: .default),
+            EpisodeArtworkSource(item: first.taggingSource("two"), spoilerSettings: .default)
+        ]
+        XCTAssertEqual(Set(sources.map(\.requestIdentity)).count, 3)
+        let images = [UIColor.red, .green, .blue].map { color in
+            UIGraphicsImageRenderer(size: CGSize(width: 16, height: 9)).image {
+                color.setFill()
+                $0.fill(CGRect(x: 0, y: 0, width: 16, height: 9))
+            }
+        }
+        for (index, source) in sources.enumerated() {
+            XCTAssertEqual(source.requestIdentity, key(source))
+            ArtworkSeedMemo.store(
+                FirstPaintArtwork(
+                    image: images[index],
+                    reference: .remote(URL(string: "https://art.example.test/\(UUID())/still.jpg")!),
+                    variant: .landscapeCard
+                ),
+                for: key(source)
+            )
+        }
+        for (index, source) in sources.enumerated() {
+            let resolved = await source.resolve()
+            XCTAssertTrue(resolved?.image === images[index])
+        }
+    }
+
     func testPrewarmerUsesTheCardsExplicitReferenceBeforeLegacyURLs() {
         let explicit = URL(string: "https://art.example.test/selected.jpg")!
         let legacy = URL(string: "https://art.example.test/legacy.jpg")!
@@ -142,5 +217,11 @@ final class EpisodeArtworkPreparationTests: XCTestCase {
         }
         return pixel
     }
+}
+
+private actor EpisodeArtworkLoader: ArtworkNetworkFileLoading {
+    let data: Data
+    init(data: Data) { self.data = data }
+    func loadArtwork(_ reference: NetworkArtworkReference, maximumBytes: Int) async throws -> Data { data }
 }
 #endif

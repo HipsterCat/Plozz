@@ -69,6 +69,7 @@ struct SearchBoundaryNavigationObserver: UIViewRepresentable {
                 guard !Task.isCancelled, let self, self.isEnabled,
                       self.window === window,
                       DetailTransitionNavigation.navigationInputEpoch(in: window) == epoch,
+                      NavigationRailEdgeCatcher.permitsNavigationFallback(from: current),
                       UIFocusSystem.focusSystem(for: window)?.focusedItem === current else { return }
                 HeroFocusDiagnostics.emit("search.native-boundary left")
                 self.onOpenNavigation?()

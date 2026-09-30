@@ -97,12 +97,11 @@ final class HeroSettingsTests: XCTestCase {
 
     // MARK: Hero style
 
-    func testExistingSettingsKeepTheCarouselAndCrossfade() throws {
+    func testExistingSettingsKeepTheCarousel() throws {
         let decoded = try JSONDecoder().decode(
             HeroSettings.self, from: Data(#"{"isEnabled":true,"maxItems":4}"#.utf8)
         )
         XCTAssertEqual(decoded.style, .carousel)
-        XCTAssertEqual(decoded.backdropTransition, .crossfade)
         XCTAssertFalse(decoded.followsFocus)
         XCTAssertFalse(decoded.showsCardCaptions, "The hero names the focused title, so cards start without one")
         XCTAssertFalse(decoded.showsDiscoverRow)
@@ -112,14 +111,12 @@ final class HeroSettingsTests: XCTestCase {
         let data = Data(#"{"maxItems":4,"style":"someday","backdropTransition":"spin"}"#.utf8)
         let decoded = try JSONDecoder().decode(HeroSettings.self, from: data)
         XCTAssertEqual(decoded.style, .carousel)
-        XCTAssertEqual(decoded.backdropTransition, .crossfade)
         XCTAssertEqual(decoded.maxItems, 4)
     }
 
     func testFollowingFocusRoundTripsAndNeedsOnlyTheSwitch() {
         var settings = HeroSettings.default
         settings.style = .followsFocus
-        settings.backdropTransition = .slide
         settings.showsCardCaptions = true
         settings.showsDiscoverRow = true
         settings.sources = []
@@ -127,7 +124,6 @@ final class HeroSettingsTests: XCTestCase {
         store.save(settings)
         let loaded = store.load()
         XCTAssertEqual(loaded.style, .followsFocus)
-        XCTAssertEqual(loaded.backdropTransition, .slide)
         XCTAssertTrue(loaded.showsCardCaptions)
         XCTAssertTrue(loaded.showsDiscoverRow)
         XCTAssertTrue(loaded.followsFocus, "Its titles come from the rows, not the carousel's sources")
@@ -142,6 +138,18 @@ final class HeroSettingsTests: XCTestCase {
         let s = HeroSettings(isEnabled: true, sources: [.continueWatching], maxItems: 2, trailersEnabled: false, randomLibraryKeys: [], autoAdvance: true, autoAdvanceSeconds: 8)
         store.save(s)
         XCTAssertEqual(store.load(), s)
+    }
+
+    func testRetiredSlideTransitionDoesNotResetOrPersistAlongsideHomeChoices() throws {
+        let data = Data(#"{"style":"followsFocus","backdropTransition":"slide","showsCardCaptions":true,"maxItems":4}"#.utf8)
+        let decoded = try JSONDecoder().decode(HeroSettings.self, from: data)
+        XCTAssertEqual(decoded.style, .followsFocus)
+        XCTAssertTrue(decoded.showsCardCaptions)
+        XCTAssertEqual(decoded.maxItems, 4)
+
+        let encoded = try JSONEncoder().encode(decoded)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertNil(object["backdropTransition"])
     }
     // MARK: Adopting a newly-added source
 

@@ -5,6 +5,43 @@ import CoreModels
 import PlozzCoreUI
 
 enum SubtitleOverlayGeometry {
+    static var controlsClearance: CGFloat {
+        #if os(tvOS)
+        24
+        #else
+        12
+        #endif
+    }
+
+    static func upwardOffset(
+        for subtitle: CGRect, avoiding controls: CGRect?, in bounds: CGRect,
+        clearance: CGFloat = controlsClearance
+    ) -> CGFloat {
+        upwardOffset(for: subtitle, avoiding: controls.map { [$0] } ?? [], in: bounds, clearance: clearance)
+    }
+
+    static func upwardOffset(
+        for subtitle: CGRect, avoiding controls: [CGRect], in bounds: CGRect,
+        clearance: CGFloat = controlsClearance
+    ) -> CGFloat {
+        func valid(_ rect: CGRect) -> Bool {
+            !rect.isNull && !rect.isEmpty && rect.minX.isFinite && rect.minY.isFinite
+                && rect.width.isFinite && rect.height.isFinite
+        }
+        guard valid(subtitle), valid(bounds) else { return 0 }
+        let visible = controls.filter(valid).map { $0.intersection(bounds) }.filter(valid)
+        var moved = subtitle
+        var total: CGFloat = 0
+        for _ in visible {
+            guard let top = visible.filter({ moved.intersects($0) }).map(\.minY).min() else { break }
+            let lift = min(0, max(top - max(0, clearance) - moved.maxY, bounds.minY - moved.minY))
+            guard lift < 0 else { break }
+            moved = moved.offsetBy(dx: 0, dy: lift)
+            total += lift
+        }
+        return total
+    }
+
     static func aspectFitRect(
         in bounds: CGRect,
         aspectRatio: CGFloat?
@@ -37,6 +74,60 @@ enum SubtitleOverlayGeometry {
             width: size.width,
             height: size.height
         )
+    }
+
+    /// Top-left of a source-anchored cue. The box's `alignment` point sits on
+    /// `anchor` (top-left for ASS `\an7` or WebVTT `line:` with left alignment,
+    /// top-centre for a centred WebVTT cue), and the result is kept inside
+    /// `limits`, as WebVTT keeps positioned cues inside the title area. A source
+    /// box width only sets where the text wraps: the text is justified to the
+    /// same edge the box is pinned by, so that edge lands on the anchor either way.
+    static func anchoredOrigin(
+        anchor: CGPoint, alignment: SubtitleAlignment,
+        contentSize: CGSize, videoRect: CGRect, limits: CGRect
+    ) -> CGPoint {
+        let horizontal: CGFloat = switch alignment.horizontal {
+        case .leading: 0
+        case .center: 0.5
+        case .trailing: 1
+        }
+        let vertical: CGFloat = switch alignment.vertical {
+        case .top: 0
+        case .middle: 0.5
+        case .bottom: 1
+        }
+        let point = CGPoint(
+            x: videoRect.minX + anchor.x * videoRect.width,
+            y: videoRect.minY + anchor.y * videoRect.height
+        )
+        let x = point.x - contentSize.width * horizontal
+        let y = point.y - contentSize.height * vertical
+        func clamp(_ value: CGFloat, _ length: CGFloat, _ lower: CGFloat, _ upper: CGFloat) -> CGFloat {
+            upper - lower < length ? lower : min(max(value, lower), upper - length)
+        }
+        return CGPoint(
+            x: clamp(x, contentSize.width, limits.minX, limits.maxX),
+            y: clamp(y, contentSize.height, limits.minY, limits.maxY)
+        )
+    }
+
+    /// Widest a source-anchored cue may wrap to without its pinned edge having to
+    /// move: the room between the anchor and the `limits` edge(s) its text grows
+    /// towards. A left-pinned roll-up line then grows rightwards only, however
+    /// long the next row is, and only a centred cue grows both ways. An anchor
+    /// too close to an edge to hold readable text keeps `minimum` and is clamped
+    /// back inside instead.
+    static func anchoredWrapWidth(
+        anchor: CGPoint, alignment: SubtitleAlignment, preferred: CGFloat,
+        videoRect: CGRect, limits: CGRect, minimum: CGFloat
+    ) -> CGFloat {
+        let x = videoRect.minX + anchor.x * videoRect.width
+        let room: CGFloat = switch alignment.horizontal {
+        case .leading: limits.maxX - x
+        case .trailing: x - limits.minX
+        case .center: 2 * min(x - limits.minX, limits.maxX - x)
+        }
+        return min(preferred, max(room, min(minimum, preferred)))
     }
 
     static func bitmapRect(
@@ -80,6 +171,7 @@ private struct SubtitlePositionLayout: Layout {
     let verticalPosition: Double
     let verticalAnchor: SubtitleStyle.VerticalAnchor
     let spacing: CGFloat
+    let controlsFrames: [CGRect]
 
     private var anchorFraction: CGFloat {
         switch verticalAnchor {
@@ -119,12 +211,93 @@ private struct SubtitlePositionLayout: Layout {
             let anchored = bounds.height * (1 - verticalPosition) - height * anchorFraction
             origin = min(max(anchored, min(0, travel)), max(0, travel))
         }
-        var y = bounds.minY + origin - topInset
+        var visibleBlock = CGRect.null
+        var naturalY = origin - topInset
+        for index in sizes.indices {
+            if sizes[index].width > 0, sizes[index].height > 0 {
+                visibleBlock = visibleBlock.union(CGRect(
+                    x: (bounds.width - sizes[index].width) / 2,
+                    y: naturalY + (heights[index] - sizes[index].height) * anchorFraction,
+                    width: sizes[index].width, height: sizes[index].height
+                ))
+            }
+            naturalY += heights[index] + spacing
+        }
+        let lift = SubtitleOverlayGeometry.upwardOffset(
+            for: visibleBlock, avoiding: controlsFrames,
+            in: CGRect(origin: .zero, size: bounds.size)
+        )
+        var y = bounds.minY + origin - topInset + lift
         for (index, subview) in subviews.enumerated() {
             let inset = (heights[index] - sizes[index].height) * anchorFraction
             subview.place(at: CGPoint(x: bounds.midX, y: y + inset), anchor: .top, proposal: contentProposal)
             y += heights[index] + spacing
         }
+    }
+}
+
+private struct SubtitleSourcePositionLayout: Layout {
+    let layout: SubtitleCueLayout
+    let videoRect: CGRect
+    let controlsFrames: [CGRect]
+    let titleSafeFraction: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let subview = subviews.first else { return }
+        let safe = CGRect(
+            x: videoRect.minX + videoRect.width * (titleSafeFraction + layout.margins.leading),
+            y: videoRect.minY + videoRect.height * (titleSafeFraction + layout.margins.top),
+            width: max(0, videoRect.width * (1 - 2 * titleSafeFraction - layout.margins.leading - layout.margins.trailing)),
+            height: max(0, videoRect.height * (1 - 2 * titleSafeFraction - layout.margins.top - layout.margins.bottom))
+        )
+        let titleSafe = videoRect.insetBy(
+            dx: videoRect.width * titleSafeFraction, dy: videoRect.height * titleSafeFraction
+        )
+        let width: CGFloat
+        if let anchor = layout.anchor {
+            width = SubtitleOverlayGeometry.anchoredWrapWidth(
+                anchor: anchor, alignment: layout.alignment,
+                preferred: layout.boxWidth.map { videoRect.width * CGFloat($0) } ?? videoRect.width * 0.92,
+                videoRect: videoRect, limits: titleSafe, minimum: videoRect.width * 0.25
+            )
+        } else {
+            width = min(safe.width, videoRect.width * 0.92)
+        }
+        let contentProposal = ProposedViewSize(width: width, height: nil)
+        let size = subview.sizeThatFits(contentProposal)
+        let origin: CGPoint
+        if let anchor = layout.anchor {
+            origin = SubtitleOverlayGeometry.anchoredOrigin(
+                anchor: anchor, alignment: layout.alignment,
+                contentSize: size, videoRect: videoRect, limits: titleSafe
+            )
+        } else {
+            let x: CGFloat
+            switch layout.alignment.horizontal {
+            case .leading: x = safe.minX
+            case .center: x = safe.midX - size.width / 2
+            case .trailing: x = safe.maxX - size.width
+            }
+            let y: CGFloat
+            switch layout.alignment.vertical {
+            case .top: y = safe.minY
+            case .middle: y = safe.midY - size.height / 2
+            case .bottom: y = safe.maxY - size.height
+            }
+            origin = CGPoint(x: x, y: y)
+        }
+        let lift = SubtitleOverlayGeometry.upwardOffset(
+            for: CGRect(origin: origin, size: size), avoiding: controlsFrames,
+            in: CGRect(origin: .zero, size: bounds.size)
+        )
+        subview.place(
+            at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y + lift),
+            anchor: .topLeading, proposal: contentProposal
+        )
     }
 }
 
@@ -167,6 +340,9 @@ public struct SubtitleOverlayView: View {
     /// The on-screen rect of the video image, used to place bitmap cues. `nil`
     /// means "fill the container" (fine for text and for the harness).
     public var videoRect: CGRect?
+    /// Visible bottom controls in global coordinates; never a persisted position.
+    public var controlsFrame: CGRect?
+    public var controlsFrames: [CGRect]
 
     public init(
         primary: [SubtitleCue],
@@ -174,7 +350,9 @@ public struct SubtitleOverlayView: View {
         secondaryActive: Bool = false,
         style: SubtitleStyle,
         isHDR: Bool = false,
-        videoRect: CGRect? = nil
+        videoRect: CGRect? = nil,
+        controlsFrame: CGRect? = nil,
+        controlsFrames: [CGRect] = []
     ) {
         self.primary = primary
         self.secondary = secondary
@@ -182,6 +360,8 @@ public struct SubtitleOverlayView: View {
         self.style = style
         self.isHDR = isHDR
         self.videoRect = videoRect
+        self.controlsFrame = controlsFrame
+        self.controlsFrames = controlsFrames
     }
 
     /// Platform baseline at `fontScale == 1.0`: 42 points for the 10-foot tvOS
@@ -200,9 +380,12 @@ public struct SubtitleOverlayView: View {
     public var body: some View {
         GeometryReader { geo in
             let rect = videoRect ?? CGRect(origin: .zero, size: geo.size)
+            let origin = geo.frame(in: .global).origin
+            let controls = (controlsFrames + (controlsFrame.map { [$0] } ?? []))
+                .map { $0.offsetBy(dx: -origin.x, dy: -origin.y) }
             ZStack {
-                bitmapLayer(in: rect)
-                textLayer(in: geo.size, videoRect: rect)
+                bitmapLayer(in: rect, bounds: CGRect(origin: .zero, size: geo.size), controls: controls)
+                textLayer(in: geo.size, videoRect: rect, controls: controls)
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
@@ -214,7 +397,7 @@ public struct SubtitleOverlayView: View {
     // MARK: - Bitmap cues (PGS / DVB / DVD)
 
     @ViewBuilder
-    private func bitmapLayer(in rect: CGRect) -> some View {
+    private func bitmapLayer(in rect: CGRect, bounds: CGRect, controls: [CGRect]) -> some View {
         ForEach(primary.filter(\.isImage)) { cue in
             if case .image(let img) = cue.body {
                 let frame = SubtitleOverlayGeometry.bitmapRect(
@@ -224,13 +407,14 @@ public struct SubtitleOverlayView: View {
                 )
                 let w = max(1, frame.width)
                 let h = max(1, frame.height)
+                let lift = SubtitleOverlayGeometry.upwardOffset(for: frame, avoiding: controls, in: bounds)
                 Image(decorative: img.cgImage, scale: 1)
                     .resizable()
                     .interpolation(.high)
                     .frame(width: w, height: h)
                     .position(
                         x: frame.midX,
-                        y: frame.midY
+                        y: frame.midY + lift
                     )
                     // HDR-only luminance clamp on the bitmap (white-multiply dims).
                     .colorMultiply(Color(white: lumaScale))
@@ -245,7 +429,7 @@ public struct SubtitleOverlayView: View {
     private static let titleSafeFraction: CGFloat = 0.05
 
     @ViewBuilder
-    private func textLayer(in size: CGSize, videoRect: CGRect) -> some View {
+    private func textLayer(in size: CGSize, videoRect: CGRect, controls: [CGRect]) -> some View {
         let text = primary.filter { !$0.isImage }
         // A cue whose layout is source-positioned is a sign/caption placed
         // independently in its own plane (against the video rect). Everything
@@ -258,7 +442,10 @@ public struct SubtitleOverlayView: View {
             SubtitlePositionLayout(
                 verticalPosition: style.verticalPosition,
                 verticalAnchor: style.verticalAnchor,
-                spacing: secondaryActive ? style.secondary?.gap ?? 0 : 0
+                spacing: secondaryActive ? style.secondary?.gap ?? 0 : 0,
+                controlsFrames: controls.map {
+                    $0.offsetBy(dx: -size.width * 0.04 - style.horizontalOffset * (size.width * 0.25), dy: 0)
+                }
             ) {
                 dialogueStack(dialogue)
             }
@@ -269,7 +456,7 @@ public struct SubtitleOverlayView: View {
             // Positioned cues (ASS signs / captions): each honours its own
             // layout independently, placed against the video rect.
             ForEach(positioned) { cue in
-                positionedCue(cue, videoRect: videoRect)
+                positionedCue(cue, videoRect: videoRect, bounds: CGRect(origin: .zero, size: size), controls: controls)
             }
         }
     }
@@ -278,10 +465,12 @@ public struct SubtitleOverlayView: View {
     /// normalized `anchor` when present (ASS `\pos`, VTT position), otherwise on
     /// its `\an` plane inset by the title-safe margin plus any source margins.
     @ViewBuilder
-    private func positionedCue(_ cue: SubtitleCue, videoRect: CGRect) -> some View {
+    private func positionedCue(
+        _ cue: SubtitleCue, videoRect: CGRect, bounds: CGRect, controls: [CGRect]
+    ) -> some View {
         if case .text(let t) = cue.body, let layout = t.layout {
             let a = layout.alignment
-            let styled = StyledCueText(
+            let text = StyledCueText(
                 text: t,
                 fontSize: Self.baseFontSize * style.fontScale,
                 fillColor: scaled(style.textColor),
@@ -289,27 +478,11 @@ public struct SubtitleOverlayView: View {
                 style: style,
                 colorScale: lumaScale
             )
-            .frame(maxWidth: videoRect.width * 0.92, alignment: a.frameTextAlignment)
-
-            if let anchor = layout.anchor {
-                // Explicit point placement: pin the box on the normalized anchor
-                // against the video rect. (Centre-on-point today; corner-accurate
-                // pinning per `alignment` is a future measured-size refinement.)
-                styled.position(
-                    x: videoRect.minX + anchor.x * videoRect.width,
-                    y: videoRect.minY + anchor.y * videoRect.height
-                )
-            } else {
-                // Plane placement inside the video rect, inset by the title-safe
-                // margin plus any source-declared margins.
-                styled
-                    .padding(.leading, videoRect.width * (Self.titleSafeFraction + layout.margins.leading))
-                    .padding(.trailing, videoRect.width * (Self.titleSafeFraction + layout.margins.trailing))
-                    .padding(.top, videoRect.height * (Self.titleSafeFraction + layout.margins.top))
-                    .padding(.bottom, videoRect.height * (Self.titleSafeFraction + layout.margins.bottom))
-                    .frame(width: videoRect.width, height: videoRect.height, alignment: a.planeAlignment)
-                    .position(x: videoRect.midX, y: videoRect.midY)
-            }
+            SubtitleSourcePositionLayout(
+                layout: layout, videoRect: videoRect, controlsFrames: controls,
+                titleSafeFraction: Self.titleSafeFraction
+            ) { text }
+            .frame(width: bounds.width, height: bounds.height)
         }
     }
 
@@ -408,37 +581,11 @@ public struct SubtitleOverlayView: View {
     }
 }
 
-// MARK: - ASS `\an` plane → SwiftUI placement
+// MARK: - ASS `\an` plane → text justification
 
 private extension SubtitleAlignment {
-    /// The container-fill alignment that pins a positioned cue to its `\an` plane.
-    var planeAlignment: Alignment {
-        let h: HorizontalAlignment
-        switch horizontal {
-        case .leading: h = .leading
-        case .center: h = .center
-        case .trailing: h = .trailing
-        }
-        let v: VerticalAlignment
-        switch vertical {
-        case .top: v = .top
-        case .middle: v = .center
-        case .bottom: v = .bottom
-        }
-        return Alignment(horizontal: h, vertical: v)
-    }
-
     /// Multi-line justification within a positioned cue's own box.
     var textAlignment: TextAlignment {
-        switch horizontal {
-        case .leading: return .leading
-        case .center: return .center
-        case .trailing: return .trailing
-        }
-    }
-
-    /// Horizontal seat of the cue box inside its max-width frame.
-    var frameTextAlignment: Alignment {
         switch horizontal {
         case .leading: return .leading
         case .center: return .center

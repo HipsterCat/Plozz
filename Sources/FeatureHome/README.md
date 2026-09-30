@@ -19,12 +19,144 @@ fallback when the user's server has no attached trailer.
 - **Series** — `SeriesDetailView` + `SeriesResume` provide one stable
   series backdrop with focus-driven season tabs and an episode rail; the
   hero text updates as focus moves without distracting backdrop swaps.
+  The compact logo above Seasons fits wholly inside its 200pt slot, including
+  tall wordmarks; it does not use the full hero's flexible height allowance.
+  This changes only artwork sizing, not season/episode focus geometry.
+  While the browser reveals, only the outer page's native scrolling is held:
+  horizontal episode focus stays live without provoking a second vertical
+  scroll that lifts the logo. The page restores normal scrolling when the
+  reveal finishes or is cancelled. Season pills, resting episode artwork,
+  loading cards, and About share the same leading keyline; card spacing stays
+  on the trailing side rather than indenting the artwork.
+  The shared hero/browser motion uses a finite 0.9-second curve with an earlier
+  slowdown and gentle landing, including logo and backdrop parallax.
+  A spring's logical completion leaves
+  several points of upward travel after the apparent landing, even when the
+  outer page never scrolls.
+  When pinned navigation hides on detail pages, horizontal rows draw through
+  the empty side gutter to the screen edge, including focused episode artwork.
+  The sidebar's mask changes without replacing the scroll view, preserving
+  browse position and restoring the normal feather when navigation returns.
 - **Library browsing** — `LibraryBrowseView` + `LibraryBrowseViewModel`
-  for the per-library grid behind a Home row.
+  for the per-library grid behind a Home row. Video libraries can switch
+  among Browse, Collections, and Playlists when their provider advertises
+  those capabilities. Plex, Jellyfin, and Emby discover existing video
+  playlists by actual member/library intersection; a mixed playlist appears
+  in each matching library but opens with its full authored order. Music
+  playlists remain in `MusicProvider`. Unsupported sources (including Silo)
+  do not advertise a video-playlist mode. Snapshots are bound to the provider
+  account and refreshed on the first page, not during poster scrolling.
 - **Trailers** — `OnlineTrailerSource` and `TrailerResolutionCache`
   handle the TMDb → YouTube fallback when the server has no attached
   trailer, by routing through `ProviderTrailers.YouTubeTrailerProvider`
   to surface a real `PlaybackRequest`.
+  Background hero trailers use one shared player. Detail departure stops its
+  trailer unless the router is returning directly to a rendered, unreceded Home
+  hero showing the same title with trailers enabled. Library, Watchlist, pushed
+  grids, and covered detail pages cannot retain background audio. A cancelled
+  or no-longer-frontmost detail resolver cannot start a trailer after departure.
+
+## Home loading
+
+Home gives inventory, each global feed, and per-library rows independent queues
+of at most five operations each. Slow resume feeds cannot occupy the slots
+needed to start other row types. Each global row arrives
+once its own sources are complete, preserving cross-server deduplication and
+ordering. A slow Continue Watching feed therefore retains its own skeleton
+without holding up Watchlist, Recently Added, or per-library rows.
+
+Enabled library rows start as soon as their inventory is known. Recently Added
+and recommendation requests complete independently, in stable library/row slots.
+Both shells use the same loading/error state; failed rows can be retried without
+removing successful rows. Cancellation stops queued requests. Parent-series
+identity lookups are coalesced per account and load, and incomplete Home content
+does not overwrite the durable snapshot.
+
+Showcase keeps its first-row anchor while that row loads; a lower row finishing
+does not choose focus or scroll the page. Its leading loading card has a visible
+progress indicator and can hold focus without making the other skeletons
+interactive. The waiting card uses the loaded cards' shared focus treatment:
+native TVUIKit for System, lighting/lift for Highlight, and glass for Outline.
+Borderless effects belong to the artwork, not its wider layout/caption slot;
+framed cards use the same concentric card surface as loaded content.
+After the viewer navigates, it keeps the focused card when an earlier row finishes.
+Carousel rows share a native focus
+section so Down can cross a loading row to reach usable content. Placeholder and
+resolved heroes use the same row-recede geometry. The `PLZBOOT` row-ready events distinguish first usable
+data from completion of the entire Home load.
+
+## Showcase
+
+`FocusHeroHomeView` keeps focus-driven movement and hero updates outside the
+row-building view. Posters use the profile's full normal poster dimensions.
+Preview headings have a 16pt inter-row spacer above them and more room below
+before their cards. Only the active heading lifts, preserving its focus
+clearance. That movement is a title-only drawing offset, not a rail
+relayout. Native card/shadow drawing bounds remain intact.
+Vertical movement uses a real `ScrollView` and UIKit's content-offset animation,
+not a SwiftUI animation of the entire stack. Focus still chooses the row and its
+measured bottom edge determines the exact destination, preserving the hero,
+heading positions and next-row peek. Only the outer viewport's automatic
+scrolling is disabled to avoid a second competing focus-reveal animation;
+horizontal rows stay native and retain their focus and scroll state. The rows
+remain in the original SwiftUI hierarchy, including navigation and accessibility.
+Repeated updates to an unchanged destination never cancel an in-flight scroll,
+and Reduce Motion moves directly to the same anchor.
+The first row rests at native scroll offset zero. Its measured height is
+subtracted equally from the leading spacer and every scroll destination, keeping
+the pinned geometry unchanged while letting the system sidebar button recognize
+the top of Home. Native chrome still auto-hides farther down and returns at the
+first row. The UI regression checks actual painted chrome, not just its
+accessibility presence, including sidebar and detail returns.
+The schedule badge sits 16pt above the logo slot; Showcase
+constrains even tall logos to that slot rather than letting artwork grow into
+the badge. The outgoing row fades over 64pt, with its bottom edge trimmed so no
+strip remains above the next row. Earlier rows retain native Up eligibility;
+making their entire mask transparent would break that navigation. Showcase's
+backdrop uses wider leading and bottom gradients without lengthening its crossfade.
+Crossfade is the only Showcase backdrop transition. The retired slide preference
+is ignored when reading older settings without resetting the remaining choices.
+Showcase's optional titles under cards remain in Customize Home > Home Layout;
+they do not control title visibility elsewhere in the app.
+
+Native poster layout slots use artwork size on both axes, rounding fractional
+heights up so SwiftUI cannot round artwork down into its caption. TVUIKit's focus
+margins settle after realization and draw outside that slot; feeding their
+changing height into a lazy row shifts both the pinned row and hero during deep
+horizontal scrolling. Hosted native-poster coverage checks this before and
+after layout, and the Home UI regression traverses all 75 fixture cards.
+
+Metadata belongs to the current Home view-model identity (profile, account set,
+and credential generation), never a process-global cache. Cached details only
+fill presentation gaps in the current row record: watched/resume state, source
+identity, availability, and the selected series remain current. Background
+enrichment publishes batches of at most four, and focus-driven loads share the
+same deduplication. `FocusHeroMetadataTests` covers freshness and ownership;
+`ShowcaseNavigationTests` covers geometry and native presented-frame hitches.
+For existing-library coverage, the guarded physical driver supports
+`--run-showcase-mixed`: it verifies on-screen Continue Watching, deep mixed-speed
+paging, rapid reversals, sustained deep holds, stable vertical anchors, and
+slow/fast tours through multiple real rows.
+Its functional result is separate from `--measure-right` and
+`--measure-vertical-burst` native hitch measurements. The driver accepts an
+explicitly confirmed `PLOZZ_HOME_APP_CONFIGURATION=Debug-optimized` candidate
+as well as Release; it never rebuilds or replaces the app under measurement.
+Use optimized physical-device measurements for performance acceptance, not
+simulator timing or passing navigation assertions alone.
+
+## Detail watch-state updates
+
+The shared `ItemDetailViewModel` applies account-scoped watch mutations to both
+the displayed item and its separate source-picker records. Playing an SMB copy
+must update a Plex-backed merged detail even when cross-server synchronization
+is disabled, without changing the Plex copy's state. The next Play/Resume target
+uses those same updated records rather than a stale pre-play position.
+
+Local edits remain authoritative for the open page across delayed source
+enrichment, snapshot restoration, and source switches while provider writes
+converge. Metadata-only enrichment must not copy unified progress into an
+untargeted physical source. Regressions cover the production stop notification,
+source selection, completion, unwatch, and unrelated-account ID collisions.
 
 ## Invariants
 
@@ -33,6 +165,10 @@ fallback when the user's server has no attached trailer.
 - **Server art first.** External art (`MetadataKit`) is used as a
   fallback via `CoreUI.FallbackAsyncImage`, never as the default — the
   server's own backdrop/logo is always tried first.
+  Shared logo views pair fallback lookups with the source item/account and
+  metadata query. Memoized logos and in-flight tasks also distinguish artwork
+  preference, so a missing server logo never gives unrelated titles a shared
+  cache entry. A reused view rejects the previous title's image immediately.
 - **`LoadState` everywhere.** Loading / empty / failure rendering uses
   `CoreUI.ContentStateView` so all surfaces feel identical.
 - **No tokens in logs.** Provider calls log only opaque ids — never

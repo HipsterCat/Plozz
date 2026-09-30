@@ -131,7 +131,7 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
             wasInRail = railHasFocus
             inputEpoch = DetailTransitionNavigation.navigationInputEpoch(in: view)
             allowsFallback = inputEpoch != nil
-                && (wasInRail || NavigationRailEdgeCatcher.permitsNavigationFallback(from: before))
+                && NavigationRailEdgeCatcher.permitsNavigationFallback(from: before)
             travel = SwipeTravel()
         }
 
@@ -145,6 +145,7 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
             HeroFocusDiagnostics.emit("sidebar touch ended travel=\(travel.translation) rail=\(wasInRail)")
             if allowsFallback, let inputEpoch,
                DetailTransitionNavigation.navigationInputEpoch(in: view) == inputEpoch,
+               NavigationRailEdgeCatcher.permitsNavigationFallback(from: before),
                travel.direction == (wasInRail ? .right : .left) {
                 onSwipe?(before, wasInRail, inputEpoch)
             }
@@ -244,7 +245,7 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
             guard let before, let inputView = view,
                   let epoch = inputEpoch ?? DetailTransitionNavigation.navigationInputEpoch(in: view),
                   DetailTransitionNavigation.navigationInputEpoch(in: view) == epoch else { return }
-            guard wasInRail || NavigationRailEdgeCatcher.permitsNavigationFallback(from: before) else { return }
+            guard NavigationRailEdgeCatcher.permitsNavigationFallback(from: before) else { return }
             pendingCheck?.cancel()
             pendingCheck = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: Self.settleDelay)
@@ -255,7 +256,7 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
                 // Focus moved, so the press had a genuine use and neither the
                 // navigation nor the page needs to intervene.
                 guard NavigationRailEdgeCatcher.focusedItem(in: self.view) === before else { return }
-                guard wasInRail || NavigationRailEdgeCatcher.permitsNavigationFallback(from: before) else { return }
+                guard NavigationRailEdgeCatcher.permitsNavigationFallback(from: before) else { return }
                 HeroFocusDiagnostics.emit("sidebar fallback \(wasInRail ? "leave" : "open")")
                 if wasInRail {
                     self.onLeaveNavigation?()
@@ -270,18 +271,31 @@ struct NavigationRailEdgeCatcher: UIViewRepresentable {
 
     }
 
-    /// Cursor movement does not change UIKit focus. Only offer navigation when
-    /// a text input was already at its leading edge, with no selected text.
+    /// Unchanged focus does not mean unused input: steppers, text editing and
+    /// presentations own their input independently of the background rail.
     static func permitsNavigationFallback(from item: UIFocusItem?) -> Bool {
         guard let item else { return false }
-        var view = item as? UIView
-        while let current = view {
-            if let input = current as? any UITextInput {
-                guard let selection = input.selectedTextRange else { return false }
-                return selection.isEmpty
-                    && input.compare(selection.start, to: input.beginningOfDocument) == .orderedSame
+        var environment: (any UIFocusEnvironment)? = item
+        var window: UIWindow?
+        while let current = environment {
+            if let owner = current as? any HorizontalNavigationInputOwning,
+               owner.ownsHorizontalNavigationInput { return false }
+            if window == nil {
+                window = (current as? UIWindow) ?? (current as? UIView)?.window
             }
-            view = current.superview
+            if let input = current as? any UITextInput {
+                guard let selection = input.selectedTextRange, selection.isEmpty,
+                      input.compare(selection.start, to: input.beginningOfDocument) == .orderedSame else {
+                    return false
+                }
+            }
+            environment = current.parentFocusEnvironment
+        }
+        var presented = window?.rootViewController?.presentedViewController
+        while let controller = presented {
+            // Search's native keyboard deliberately hands its left edge to the rail.
+            guard controller is UISearchController else { return false }
+            presented = controller.presentedViewController
         }
         return true
     }

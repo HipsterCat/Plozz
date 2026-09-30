@@ -197,7 +197,7 @@ private struct TelevisionSubtitleStyleEditor: View {
     private var title: LocalizedStringResource {
         switch screen {
         case .styleFont: "Font"
-        case .styleSystemFont: "System"
+        case .styleSystemFont: "System Fonts"
         case .styleOutline: "Shadow & Outline"
         case .styleBackground: "Background"
         case .styleDual: "Dual Subtitles"

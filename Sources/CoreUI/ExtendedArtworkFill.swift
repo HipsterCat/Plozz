@@ -433,7 +433,7 @@ public enum ContinueWatchingCardShape {
     ///
     /// This is the value for artwork bright enough to actually need it; see
     /// ``artworkDim(logo:background:)`` for how much of it a given card spends.
-    public static let artworkDim: CGFloat = 0.33
+    public static let artworkDim: CGFloat = 0.40
 
     /// The share of the base dim that still applies to pure black artwork.
     ///
@@ -458,7 +458,7 @@ public enum ContinueWatchingCardShape {
     /// Fett's metallic wordmark on its own warm tan scene), and no amount of
     /// sizing or shadow fixes that. Darkening what sits behind it is the only
     /// lever left, so where it is genuinely needed it is spent properly.
-    public static let artworkDimBoost: CGFloat = 0.24
+    public static let artworkDimBoost: CGFloat = 0.25
 
     /// How far apart in brightness a logo and its backdrop must be to count as
     /// separated **on a card**.

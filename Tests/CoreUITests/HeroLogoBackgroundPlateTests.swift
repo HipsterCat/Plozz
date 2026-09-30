@@ -46,7 +46,8 @@ final class HeroLogoBackgroundPlateTests: XCTestCase {
     func testAnalysisAndMemoPreserveThePlateReportedToTheHost() throws {
         let prepared = try prepare(background: .blue)
         let processed = HeroLogoAnalysis.analyze(prepared, backgroundSample: nil)
-        let key = "logo-plate-test-\(UUID())"
+        let url = try XCTUnwrap(URL(string: "https://logo-plate.example.test/\(UUID()).png"))
+        let key = HeroLogoMemo.key(for: [.remote(url)])
         HeroLogoMemo.store(processed, for: key)
         let cached = try XCTUnwrap(HeroLogoMemo.value(for: key))
         XCTAssertNotNil(cached.tone.backgroundPlate)

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import json
 import re
 import sys
@@ -19,6 +20,19 @@ PLATFORMS = ("tvOS", "iOS")
 
 def fail(message: str) -> None:
     raise ValueError(message)
+
+
+def marketing_version(release: dict[str, Any]) -> str:
+    return release.get("marketingVersion", release["version"])
+
+
+def version_parts(value: Any, counts: tuple[int, ...]) -> tuple[int, ...]:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", value):
+        fail(f"invalid version: {value}")
+    parts = tuple(int(part) for part in value.split("."))
+    if len(parts) not in counts:
+        fail(f"invalid version: {value}")
+    return parts
 
 
 def normalized_item(item: Any, release_id: str) -> tuple[str, list[str] | None]:
@@ -56,7 +70,8 @@ def load_catalog(path: Path) -> dict[str, Any]:
     ids: set[str] = set()
     builds: set[int] = set()
     previous_build: int | None = None
-    previous_version: tuple[int, int, int] | None = None
+    previous_version: tuple[int, ...] | None = None
+    previous_marketing_version: tuple[int, ...] | None = None
     for release in releases:
         if not isinstance(release, dict):
             fail("every release must be an object")
@@ -76,11 +91,19 @@ def load_catalog(path: Path) -> dict[str, Any]:
             fail(f"duplicate release build: {build}")
         if previous_build is not None and build >= previous_build:
             fail("releases must be sorted by descending build")
-        if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+", version):
-            fail(f"{release_id} has an invalid version")
-        version_tuple = tuple(int(part) for part in version.split("."))
+        version_tuple = version_parts(version, (3,))
+        apple_version = version_parts(marketing_version(release), (3,))
+        if "marketingVersion" in release:
+            if version != ".".join(map(str, version_tuple)):
+                fail(f"{release_id} has an invalid release date version")
+            if not 1 <= version_tuple[0] <= 9999:
+                fail(f"{release_id} has an invalid release year")
+            if date(*version_tuple).isoformat() != released_at:
+                fail(f"{release_id} version date must match releasedAt")
         if previous_version is not None and version_tuple > previous_version:
             fail("release versions must be sorted newest first")
+        if previous_marketing_version is not None and apple_version > previous_marketing_version:
+            fail("Apple marketing versions must be sorted newest first")
         if not isinstance(released_at, str) or not re.fullmatch(
             r"\d{4}-\d{2}-\d{2}", released_at
         ):
@@ -109,6 +132,7 @@ def load_catalog(path: Path) -> dict[str, Any]:
         builds.add(build)
         previous_build = build
         previous_version = version_tuple
+        previous_marketing_version = apple_version
 
     return catalog
 
@@ -125,10 +149,10 @@ def selected_release(
     )
     if release is None:
         fail(f"release id {release_id} is not in the catalog")
-    if version is not None and release["version"] != version:
+    if version is not None and marketing_version(release) != version:
         fail(
-            f"{release_id} is version {release['version']}, "
-            f"but the build is version {version}"
+            f"{release_id} uses Apple version {marketing_version(release)}, "
+            f"but the build is Apple version {version}"
         )
     if build is not None and release["build"] != build:
         fail(
@@ -138,7 +162,34 @@ def selected_release(
     return release
 
 
-def render(release: dict[str, Any], platform: str | None = None) -> str:
+def build_identity(
+    catalog: dict[str, Any], release_id: str | None, version: str | None, build: int | None
+) -> dict[str, str]:
+    if not catalog["releases"]:
+        fail("A committed release is required to determine the stable Apple version")
+    if release_id:
+        release = selected_release(catalog, release_id, version, build)
+        return {
+            "marketingVersion": marketing_version(release),
+            "releaseVersion": release["version"],
+            "releaseID": release["id"],
+        }
+    apple_version = version or marketing_version(catalog["releases"][0])
+    version_parts(apple_version, (3,))
+    return {"marketingVersion": apple_version, "releaseVersion": "", "releaseID": ""}
+
+
+def next_release_version(catalog: dict[str, Any], day: date) -> str:
+    version = (day.year, day.month, day.day)
+    for release in catalog["releases"]:
+        if version_parts(release["version"], (3,)) > version:
+            fail("Release date precedes an existing release version")
+    return ".".join(map(str, version))
+
+
+def render(
+    release: dict[str, Any], platform: str | None = None, empty_text: str | None = None
+) -> str:
     blocks = []
     for section in release["sections"]:
         visible = []
@@ -150,7 +201,10 @@ def render(release: dict[str, Any], platform: str | None = None) -> str:
             continue
         items = "\n".join(f"• {item}" for item in visible)
         blocks.append(f"{section['category']}\n{items}")
-    return "\n\n".join(blocks)
+    text = "\n\n".join(blocks) if blocks else empty_text or ""
+    if text and "marketingVersion" in release:
+        return f"Plozz {release['version']} ({release['build']})\n\n{text}"
+    return text
 
 
 def parser() -> argparse.ArgumentParser:
@@ -160,12 +214,19 @@ def parser() -> argparse.ArgumentParser:
 
     validate = subparsers.add_parser("validate")
     validate.add_argument("--release-id")
-    validate.add_argument("--version")
+    validate.add_argument("--version", help="Expected Apple marketing version")
     validate.add_argument("--build", type=int)
 
     render_command = subparsers.add_parser("render")
     render_command.add_argument("--release-id", required=True)
     render_command.add_argument("--platform", choices=PLATFORMS)
+    render_command.add_argument("--empty-text", help="Explicit no-change fallback for an empty platform")
+    identity = subparsers.add_parser("identity")
+    identity.add_argument("--release-id")
+    identity.add_argument("--version", help="Explicit Apple marketing version override")
+    identity.add_argument("--build", type=int)
+    next_version = subparsers.add_parser("next-version")
+    next_version.add_argument("--date", type=date.fromisoformat, default=date.today())
     return result
 
 
@@ -187,9 +248,13 @@ def main() -> int:
                 )
             else:
                 print(f"Validated {len(catalog['releases'])} releases")
+        elif args.command == "identity":
+            print(json.dumps(build_identity(catalog, args.release_id, args.version, args.build)))
+        elif args.command == "next-version":
+            print(next_release_version(catalog, args.date))
         else:
             release = selected_release(catalog, args.release_id, None, None)
-            rendered = render(release, args.platform)
+            rendered = render(release, args.platform, args.empty_text)
             if args.platform is not None and not rendered:
                 print(
                     f"warning: {release['id']} has no {args.platform} notes",

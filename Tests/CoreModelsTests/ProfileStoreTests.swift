@@ -211,52 +211,13 @@ final class ProfilesModelTests: XCTestCase {
         XCTAssertFalse(relaunched.hasRememberedSelection)
     }
 
-    // MARK: Household preferences (opt-in profiles + startup picker)
-
-    func testAskOnStartupRemainsTrueEvenAfterPickIsRemembered() {
-        // The "Ask on startup" toggle is the single source of truth for the
-        // launch picker. Picking a profile must not silently flip it off, and
-        // it must not be suppressed by the system-user "remembered selection"
-        // path on its own — that path provides the picker's *initial* focus,
-        // not a reason to skip the picker entirely.
+    func testDebugResetRemovesRetiredStartupPickerPreference() {
         let defaults = makeDefaults()
-        let model = ProfilesModel(store: ProfileStore(defaults: defaults))
-        let kid = model.add(name: "Kid")
-        XCTAssertTrue(model.askProfileOnStartup)
-        model.select(kid.id)
-        XCTAssertTrue(model.hasRememberedSelection)
-        XCTAssertTrue(model.askProfileOnStartup, "Picking a profile must not turn off the launch toggle")
-        // Survives relaunch.
-        let relaunched = ProfilesModel(store: ProfileStore(defaults: defaults))
-        XCTAssertTrue(relaunched.hasRememberedSelection)
-        XCTAssertTrue(relaunched.askProfileOnStartup)
-    }
-
-    func testSoloHouseholdDoesNotAskOnStartup() {
-        // A brand-new install with the single migrated default profile must NOT
-        // pop the launch picker — there is nothing to choose between.
-        let model = ProfilesModel(store: ProfileStore(defaults: makeDefaults()))
-        XCTAssertEqual(model.profiles.count, 1)
-        XCTAssertFalse(model.askProfileOnStartup)
-    }
-
-    func testAddingASecondProfileTurnsOnTheLaunchPicker() {
-        // Adding a second profile is what makes the picker meaningful, so it
-        // flips on by default (the user doesn't have to dig through Settings
-        // after creating Profile #2).
-        let model = ProfilesModel(store: ProfileStore(defaults: makeDefaults()))
-        _ = model.add(name: "Kid")
-        XCTAssertTrue(model.askProfileOnStartup)
-    }
-
-    func testAskOnStartupTogglePersists() {
-        let defaults = makeDefaults()
-        let model = ProfilesModel(store: ProfileStore(defaults: defaults))
-        model.setAskProfileOnStartup(true)
-        XCTAssertTrue(model.askProfileOnStartup)
-        // Survives a relaunch.
-        let relaunched = ProfilesModel(store: ProfileStore(defaults: defaults))
-        XCTAssertTrue(relaunched.askProfileOnStartup)
+        let key = "com.plozz.profiles.askOnStartup"
+        defaults.set(Data("false".utf8), forKey: key)
+        let store = ProfileStore(defaults: defaults)
+        store.resetForDebugging()
+        XCTAssertNil(defaults.object(forKey: key))
     }
 
     // MARK: Plex Home user mapping

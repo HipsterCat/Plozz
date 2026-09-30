@@ -99,10 +99,9 @@ final class ProfileFlowModelTests: XCTestCase {
         XCTAssertFalse(profiles.profiles.contains { $0.id == removed.id })
     }
 
-    func testPrepareLaunchPickerShownWhenAskOnStartupWithMultipleProfiles() {
+    func testPrepareLaunchPickerShownWithMultipleProfiles() {
         let (model, profiles) = makeModel()
         _ = profiles.add(name: "Second", avatarSymbol: "person", colorIndex: 1)
-        profiles.setAskProfileOnStartup(true)
 
         model.prepareLaunchPicker()
         XCTAssertTrue(model.isChoosingProfile)
@@ -471,14 +470,12 @@ extension ProfileFlowModelTests {
         XCTAssertFalse(model.isProfileSelectionCancelable)
     }
 
-    /// Regression: a locked profile restored at launch would otherwise open with
-    /// no prompt when "ask on startup" is off.
+    /// A single locked profile still needs a launch gate without trusted sign-in.
     func testLaunchPickerIsForcedWhenTheRestoredProfileIsLocked() {
         let (model, profiles) = makeModel()
         var active = profiles.activeProfile
         active.lock = Self.lock(pin: "4821")
         profiles.update(active)
-        profiles.setAskProfileOnStartup(false)
 
         model.prepareLaunchPicker()
         XCTAssertTrue(model.isChoosingProfile)

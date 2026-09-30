@@ -56,6 +56,7 @@ struct PlayerOptionsActions {
 /// in its scrub state because the host disables its interaction then.
 struct PlayerControls: View {
     let model: PlayerControlsModel
+    var player: PlayerViewModel? = nil
     let palette: ThemePalette
     let actions: PlayerOptionsActions
     /// Called when the viewer backs out of the button row (Up, or Menu with no
@@ -63,7 +64,7 @@ struct PlayerControls: View {
     let onExitToSurface: () -> Void
 
     enum Category: Hashable {
-        case subtitles, audio, speed, sync, info, cast, version
+        case subtitles, audio, speed, sync, info, cast, episodes, playlist, version
 
         var title: LocalizedStringResource {
             switch self {
@@ -105,6 +106,8 @@ struct PlayerControls: View {
                     defaultValue: "Cast",
                     comment: "Tab beneath the in-player scrub bar listing the cast of what is playing."
                 )
+            case .episodes: return "Episodes"
+            case .playlist: return "Playlist"
             }
         }
 
@@ -117,6 +120,8 @@ struct PlayerControls: View {
             case .sync: return "slider.horizontal.below.square.and.square.filled"
             case .info: return "info.circle"
             case .cast: return "person.2"
+            case .episodes: return "rectangle.stack"
+            case .playlist: return "text.line.first.and.arrowtriangle.forward"
             }
         }
     }
@@ -132,6 +137,8 @@ struct PlayerControls: View {
         case infoStats      // Info panel: Playback Info (diagnostics) toggle
         /// One face in the Cast card, by position in the row.
         case castMember(Int)
+        case sequenceItem(Int)
+        case episodeItem(PlayerEpisodeEntry.ID)
         /// Back out of a cast member's details to the row.
         case castBack
         /// One title in a cast member's credits row, by position.
@@ -346,10 +353,11 @@ struct PlayerControls: View {
                 model.controlsVisible = true
                 model.isPanelOpen = true
                 openPanel = .version
-            case .subtitleStyle:
+            case .subtitleStyle, .subtitleTracks:
                 model.controlsVisible = true
                 model.isPanelOpen = true
                 openPanel = .subtitles
+                guard panel == .subtitleStyle else { return }
                 // A turn later, because opening a panel resets the subtitle
                 // sub-screen to the track list — setting both together lands the
                 // reset *after* the write and photographs the track list.
@@ -466,6 +474,8 @@ struct PlayerControls: View {
             // the transport up forever after every Down entry. The card behaves like
             // the old control bar instead: idle for the timeout and it hides.
             model.isPanelOpen = panel != nil && panel != .info
+                && panel != .episodes && panel != .playlist
+            model.controlBar.episodeBrowserOpen = panel == .episodes
             // ANY card tab, not just Info.
             //
             // This holds the scrub bar in its focused shape for the whole reveal.
@@ -501,7 +511,7 @@ struct PlayerControls: View {
             // (see `titleBlock`). Flipping it here would fade the title on the menus'
             // curve at the same time, which is exactly the kind of near-miss timing
             // that made the transport look like separate pieces.
-            if panel != .info { titleVisible = false }
+            if !Self.usesBottomCard(panel) { titleVisible = false }
             // (The panel seeds its own height from `cachedPanelHeight`.)
             // Land initial focus on the active/selected row. This MUST be deferred to
             // the next runloop tick: opening a panel simultaneously inserts the panel's
@@ -572,6 +582,7 @@ struct PlayerControls: View {
         // closing quickly. Clearing it stays with the `onChange`, where being a
         // beat late is exactly what the closing travel wants.
         model.controlBar.infoCardOpen = true
+        model.controlBar.episodeBrowserOpen = category == .episodes
         withAnimation(revealClock) { openPanel = category }
     }
 
@@ -609,6 +620,10 @@ struct PlayerControls: View {
             VStack(alignment: .leading, spacing: 18) {
                 titleAndControlsRow
                 scrubberRow
+                    .reportSubtitleControlsFrame(
+                        in: model.subtitleLayout, region: .timeline,
+                        isVisible: model.controlsVisible && !chromeHidden && !infoMode
+                    )
                     // The transport steps aside for the Info card: faded in
                     // place rather than removed, so the tab and its card never
                     // shift as it goes.
@@ -655,6 +670,10 @@ struct PlayerControls: View {
             // reflows, so no part can arrive on its own clock. (Same approach as the
             // series-detail hero/browser reveal; see SeriesEpisodeBrowserLayout.)
             infoCard
+                .reportSubtitleControlsFrame(
+                    in: model.subtitleLayout, region: .card,
+                    isVisible: model.controlsVisible && !chromeHidden && infoMode
+                )
                 .plozzFocusSection()
                 // Widen the stack's 18pt gap to the cluster's bottom margin. That
                 // equality is load-bearing: it's what makes ONE offset put the
@@ -779,6 +798,12 @@ struct PlayerControls: View {
     private var titleAndControlsRow: some View {
         HStack(alignment: .bottom, spacing: 32) {
             titleBlock
+                .reportSubtitleControlsFrame(
+                    in: model.subtitleLayout, region: .title,
+                    isVisible: model.controlsVisible && !chromeHidden && !infoMode
+                )
+                // Ordinary menus fade this row without changing its clearance.
+                // Info/Cast and the style editor release it explicitly.
                 // Two separate reasons to hide, each on its own clock. Opening a MENU
                 // fades the title on the menus' curve (`titleVisible`); the Info
                 // reveal is a different motion and the title must travel with the
@@ -834,6 +859,10 @@ struct PlayerControls: View {
                 }
             }
         }
+        .reportSubtitleControlsFrame(
+            in: model.subtitleLayout, region: .trackControls,
+            isVisible: model.controlsVisible && !model.isScrubbing && !chromeHidden && !infoMode
+        )
         .opacity(model.isScrubbing ? 0 : 1)
         .offset(y: model.isScrubbing ? 8 : 0)
         .animation(Self.transportFadeAnimation(scrubbing: model.isScrubbing), value: model.isScrubbing)
@@ -911,7 +940,7 @@ struct PlayerControls: View {
     /// clock. A sibling tab therefore switches the card's *content*; it never
     /// mounts a second card, which would reflow the stage and break that.
     static func usesBottomCard(_ category: Category?) -> Bool {
-        category == .info || category == .cast
+        category == .info || category == .cast || category == .episodes || category == .playlist
     }
 
     /// `openPanel` with Info masked out, so the options panels' own animation can be
@@ -1010,6 +1039,10 @@ struct PlayerControls: View {
                     .labelStyle(.titleOnly)
             }
             .buttonStyle(PlayerTabButtonStyle(focused: focus == .button(.info), selected: openPanel == .info))
+            .reportSubtitleControlsFrame(
+                in: model.subtitleLayout, region: .tab("info"),
+                isVisible: model.controlsVisible && !model.isScrubbing && !chromeHidden
+            )
             .focused($focus, equals: .button(.info))
             .disabled(!tabFocusable(.info))
             .onChange(of: focus) { _, slot in selectCardTab(focusedTo: slot) }
@@ -1025,8 +1058,32 @@ struct PlayerControls: View {
                         .labelStyle(.titleOnly)
                 }
                 .buttonStyle(PlayerTabButtonStyle(focused: focus == .button(.cast), selected: openPanel == .cast))
+                .reportSubtitleControlsFrame(
+                    in: model.subtitleLayout, region: .tab("cast"),
+                    isVisible: model.controlsVisible && !model.isScrubbing && !chromeHidden
+                )
                 .focused($focus, equals: .button(.cast))
                 .disabled(!tabFocusable(.cast))
+            }
+            if isTabVisible(.episodes) {
+                Button { toggle(.episodes) } label: {
+                    Text(Category.episodes.title)
+                }
+                .buttonStyle(PlayerTabButtonStyle(
+                    focused: focus == .button(.episodes), selected: openPanel == .episodes
+                ))
+                .focused($focus, equals: .button(.episodes))
+                .disabled(!tabFocusable(.episodes))
+            }
+            if isTabVisible(.playlist) {
+                Button { toggle(.playlist) } label: {
+                    Text(Category.playlist.title)
+                }
+                .buttonStyle(PlayerTabButtonStyle(
+                    focused: focus == .button(.playlist), selected: openPanel == .playlist
+                ))
+                .focused($focus, equals: .button(.playlist))
+                .disabled(!tabFocusable(.playlist))
             }
 
             Spacer(minLength: 20)
@@ -1128,7 +1185,12 @@ struct PlayerControls: View {
     /// Cast hides itself when what is playing has no cast to show — a tab that
     /// opens an empty card is worse than an absent one.
     private func isTabVisible(_ tab: Category) -> Bool {
-        tab == .cast ? !model.infoCard.cast.isEmpty : true
+        switch tab {
+        case .cast: !model.infoCard.cast.isEmpty
+        case .episodes: player?.episodeBrowser != nil
+        case .playlist: player?.playlistContext != nil
+        default: true
+        }
     }
 
     /// The floating options menu (Speed · Audio · Subtitles), including the Subtitle
@@ -1160,6 +1222,9 @@ struct PlayerControls: View {
                     close: { openPanel = nil }, backRequest: panelBackRequest,
                     maximumHeight: max(0, availableHeight - Self.horizontalMargin
                         - (styleEditing ? Self.horizontalMargin : menuBottomInset))
+                )
+                .reportSubtitleControlsFrame(
+                    in: model.subtitleLayout, region: .menu, isVisible: model.controlsVisible && !styleEditing
                 )
                 // A fresh panel per menu, seeded from that menu's remembered height.
                 .id(panel)
@@ -1248,8 +1313,9 @@ struct PlayerControls: View {
         // business, and leaving the whole card mid-detail would strand it.
         if castDetailPerson != nil { return false }
         switch focus {
-        case .button(.info), .button(.cast),
-             .infoNext, .infoPrev, .infoRestart, .infoStats:
+        case .button(let tab):
+            return Self.usesBottomCard(tab)
+        case .infoNext, .infoPrev, .infoRestart, .infoStats:
             return true
         default:
             return false
@@ -1270,7 +1336,13 @@ struct PlayerControls: View {
     /// one.
     @ViewBuilder
     private var cardContent: some View {
-        if parkedCardTab == .cast {
+        if (parkedCardTab == .playlist || parkedCardTab == .episodes), let player {
+            PlayerSequencePanel(
+                player: player,
+                source: parkedCardTab == .playlist ? .playlist : .episodes,
+                focus: $focus
+            )
+        } else if parkedCardTab == .cast {
             // Deliberately NOT clipped, unlike Info. The cast row is a set of
             // separate cards that GROW on focus, and clipping to the stage sliced
             // the lift — the leading card lost its outline and part of itself
@@ -1487,7 +1559,7 @@ struct PlayerControls: View {
             castCloseRequest &+= 1
             return
         }
-        if openPanel == .info {
+        if Self.usesBottomCard(openPanel) {
             // The card leaves with its tab, straight back to the scrub bar.
             closeInfoCard()
         } else if openPanel != nil {

@@ -105,6 +105,14 @@ public protocol MediaProvider: Sendable {
     /// `page.sort` is deliberately ignored. Do not filter members to collections.
     func collectionMembers(of collectionID: String, page: PageRequest) async throws -> MediaPage
 
+    /// Video playlists with at least one member in this library. A playlist
+    /// spanning libraries appears in each matching library.
+    func videoPlaylists(in libraryID: String, page: PageRequest) async throws -> MediaPage
+
+    /// Full playlist in the server's authored order, including other libraries.
+    /// `page.sort` is ignored. Music playlists use `MusicProvider` instead.
+    func videoPlaylistMembers(of playlistID: String, page: PageRequest) async throws -> MediaPage
+
     /// The alphabet fast-scroll index for a container browsed by **name**: for
     /// each present letter, the 0-based index of its first item in the current
     /// sort. Powers the trailing A–Z rail on the library grid.
@@ -342,6 +350,10 @@ public enum MediaProviderURLIdentity {
               let urlHost = url.host,
               let baseScheme = baseURL.scheme,
               let baseHost = baseURL.host,
+              // Nearly every call compares against a base on another host.
+              // Hosts that differ this way can't normalize to the same origin,
+              // so that's settled without building and validating either one.
+              Self.hostsMayMatch(urlHost, baseHost),
               let urlOrigin = try? NetworkOrigin(
                   scheme: urlScheme,
                   host: urlHost,
@@ -369,6 +381,20 @@ public enum MediaProviderURLIdentity {
         }
         let relative = String(path.dropFirst(basePath.count))
         return relative.isEmpty ? "/" : relative
+    }
+
+    /// False only when two hosts cannot normalize alike: ``NetworkOrigin``
+    /// trims whitespace, drops IPv6 brackets and lowercases, so hosts that
+    /// still differ ignoring case and brackets never share an origin.
+    static func hostsMayMatch(_ lhs: String, _ rhs: String) -> Bool {
+        func bare(_ host: String) -> Substring {
+            host.hasPrefix("[") && host.hasSuffix("]") && host.count >= 2
+                ? host.dropFirst().dropLast()
+                : host[...]
+        }
+        if bare(lhs).lowercased() == bare(rhs).lowercased() { return true }
+        // Whitespace is trimmed before comparison; leave those to the full check.
+        return lhs.contains(where: \.isWhitespace) || rhs.contains(where: \.isWhitespace)
     }
 
     public static func isPlexArtworkResourcePath(_ path: String) -> Bool {
@@ -406,6 +432,14 @@ public extension MediaProvider {
             startIndex: page.startIndex,
             totalCount: members.count
         )
+    }
+
+    func videoPlaylists(in libraryID: String, page: PageRequest) async throws -> MediaPage {
+        throw AppError.notFound
+    }
+
+    func videoPlaylistMembers(of playlistID: String, page: PageRequest) async throws -> MediaPage {
+        throw AppError.notFound
     }
 
     func reauthenticatedImageURL(

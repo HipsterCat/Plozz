@@ -144,7 +144,8 @@ final class JellyfinStreamingQualityTests: XCTestCase {
             let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
             XCTAssertEqual((object["PlaybackPositionTicks"] as? NSNumber)?.int64Value, Int64(position * 10_000_000))
             XCTAssertEqual(object["LastPlayedDate"] as? String, JellyfinDate.iso8601(from: capturedAt))
-            XCTAssertEqual(Set(object.keys), ["PlaybackPositionTicks", "LastPlayedDate"])
+            XCTAssertEqual(object["Played"] as? Bool, false)
+            XCTAssertEqual(Set(object.keys), ["PlaybackPositionTicks", "LastPlayedDate", "Played"])
         }
         XCTAssertEqual(http.method(forPathSuffix: path), .post)
         XCTAssertEqual(http.queryItems(forPathSuffix: path), [])
@@ -168,6 +169,7 @@ final class JellyfinStreamingQualityTests: XCTestCase {
     func testEmbyCheckpointFailureRemainsDurableWhileAnotherItemOnServerIsPlaying() async throws {
         let (provider, http) = fixture(kind: .emby, rendition: true)
         http.stub(pathSuffix: "/Sessions/Playing", json: "{}")
+        http.stub(pathSuffix: "/Users/user/Items/other", json: #"{"Id":"other","UserData":{"Played":false}}"#)
         http.stub(pathSuffix: "/Users/user/Items/other/UserData", json: "{}")
         try await provider.reportPlayback(.init(
             itemID: "movie", playSessionID: "active-session", positionSeconds: 30, isPaused: false
@@ -446,7 +448,7 @@ final class JellyfinStreamingQualityTests: XCTestCase {
 
     private func fixture(kind: ProviderKind, rendition: Bool, bitrate: Int = 30_000_000) -> (JellyfinProvider, StubHTTPClient) {
         let http = StubHTTPClient()
-        http.stub(pathSuffix: "/Users/user/Items/movie", json: #"{"Id":"movie","Name":"Movie","Type":"Movie"}"#)
+        http.stub(pathSuffix: "/Users/user/Items/movie", json: #"{"Id":"movie","Name":"Movie","Type":"Movie","UserData":{"Played":false}}"#)
         http.stub(pathSuffix: "/Videos/ActiveEncodings", json: "{}")
         let url = rendition ? #""TranscodingUrl":"/Videos/movie/master.m3u8?VideoCodec=hevc&VideoBitrate=30000000&AudioBitrate=384000&MaxHeight=2160","# : ""
         http.stub(pathSuffix: "/Items/movie/PlaybackInfo", json: """

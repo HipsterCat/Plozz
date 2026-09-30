@@ -10,6 +10,72 @@ import UIKit
 
 @MainActor
 final class PlayerViewModelEOFTests: XCTestCase {
+    func testSequenceCardsFillThePlayerBandWithRoomForArtworkAndTitles() {
+        for metrics in [PlayerCardMetrics.tv, .horizontalWide, .horizontalNarrow] {
+            let layout = PlayerSequenceLayout(
+                metrics: metrics, cardMetrics: .standard, contained: false,
+                hasError: false
+            )
+            XCTAssertEqual(layout.rowHeight, metrics.cardHeight)
+            XCTAssertGreaterThan(layout.cardWidth, metrics.castCardWidth)
+            XCTAssertGreaterThan(layout.imageHeight, metrics.castHeadshot * 0.9)
+            XCTAssertGreaterThanOrEqual(
+                layout.titleHeight, metrics.castNameSize * (layout.compact ? 1 : 2)
+            )
+            XCTAssertEqual(layout.cardWidth - layout.imageWidth, layout.cardMetrics.cardInset * 2)
+            XCTAssertEqual(
+                layout.imageHeight + layout.titleHeight + layout.cardMetrics.cardInset * 2
+                    + layout.cardMetrics.landscapeCaptionInset
+                    + layout.cardMetrics.landscapeCaptionTopSpacing,
+                layout.rowHeight
+            )
+
+            let episodes = PlayerSequenceLayout(
+                metrics: metrics, cardMetrics: .standard, contained: true,
+                hasError: false
+            )
+            XCTAssertEqual(
+                episodes.rowHeight + episodes.containerVerticalInset * 2,
+                metrics.cardHeight
+            )
+            XCTAssertEqual(
+                episodes.columnSpacing,
+                metrics.columnSpacing + metrics.contentPadding / 2
+            )
+            XCTAssertGreaterThan(episodes.imageHeight, metrics.castHeadshot * 0.85)
+            #if canImport(UIKit)
+            XCTAssertEqual(
+                episodes.titleHeight,
+                ceil(UIFont.systemFont(ofSize: metrics.castNameSize, weight: .semibold).lineHeight)
+            )
+            #endif
+            XCTAssertEqual(episodes.bottomInset, episodes.cardMetrics.cardInset)
+            XCTAssertEqual(
+                episodes.imageHeight + episodes.titleHeight + episodes.cardMetrics.landscapeCaptionTopSpacing
+                    + episodes.cardMetrics.cardInset + episodes.bottomInset,
+                episodes.rowHeight
+            )
+        }
+        let portrait = PlayerSequenceLayout(
+            metrics: .verticalNarrow, cardMetrics: .standard, contained: true,
+            hasError: false
+        )
+        XCTAssertEqual(
+            portrait.rowHeight + portrait.containerVerticalInset * 2,
+            portrait.metrics.cardHeight
+        )
+        let tv = PlayerSequenceLayout(
+            metrics: .tv, cardMetrics: .standard, contained: false,
+            hasError: false
+        )
+        XCTAssertGreaterThan(tv.imageHeight, 175)
+        let tvEpisodes = PlayerSequenceLayout(
+            metrics: .tv, cardMetrics: .standard, contained: true, hasError: false
+        )
+        XCTAssertGreaterThan(tvEpisodes.imageHeight, 205)
+        XCTAssertGreaterThan(tvEpisodes.imageWidth, 365)
+    }
+
     func testMobileWakeIntentCoversStartupAndBufferingButRespectsPause() async {
         let (viewModel, engine, _) = makeViewModel()
         XCTAssertEqual(viewModel.phase, .loading)
@@ -133,6 +199,562 @@ final class PlayerViewModelEOFTests: XCTestCase {
         engine.onEnded?()
         XCTAssertTrue(viewModel.shouldDismiss)
         XCTAssertFalse(publisher.isActive)
+        await viewModel.stop()
+    }
+
+    func testPlaylistOrderOverridesEpisodeAutoplayAtNaturalEnd() async {
+        let first = MediaItem(id: "first", title: "First", kind: .episode, seriesID: "series", seasonID: "season")
+        let second = MediaItem(id: "second", title: "Second", kind: .movie)
+        let request = PlaybackRequest(
+            item: first, streamURL: URL(string: "https://example.test/first.m3u8")!
+        )
+        let provider = RecordingPlaybackProvider(request: request, playlistMembers: [first, second])
+        let origin = VideoPlaylistPlaybackOrigin(
+            playlistID: "playlist", accountID: "account", index: 0, totalCount: 2,
+            item: first.taggingSource("account")
+        )
+        let context = VideoPlaylistPlaybackContext(origin: origin, provider: provider)
+        let engine = SpyVideoEngine()
+        let viewModel = PlayerViewModel(
+            provider: provider, itemID: first.id, episodeItem: first,
+            playbackSettings: .init(autoPlayNextEpisode: false, autoPlayNextPlaylistItem: true),
+            engineFactory: EngineFactory(makeNative: { _ in engine }),
+            neighborResolver: { (nil, second) },
+            playlistContext: context
+        )
+        await viewModel.load()
+        engine.onEnded?()
+        for _ in 0..<100 where viewModel.pendingPlaylistSelection == nil {
+            await Task.yield()
+        }
+        XCTAssertEqual(viewModel.pendingPlaylistSelection?.index, 1)
+        XCTAssertEqual(viewModel.pendingPlaylistSelection?.item.id, second.id)
+        XCTAssertEqual(viewModel.pendingPlaylistSelection?.item.sourceAccountID, "account")
+        XCTAssertNil(viewModel.pendingNextEpisode)
+        XCTAssertFalse(viewModel.shouldDismiss)
+        await viewModel.stop()
+    }
+
+    func testPlaylistAutoplayOffDoesNotFallThroughToEpisodeAutoplay() async {
+        let first = MediaItem(id: "first", title: "First", kind: .episode, seriesID: "series", seasonID: "season")
+        let next = MediaItem(id: "second", title: "Second", kind: .episode)
+        let request = PlaybackRequest(
+            item: first, streamURL: URL(string: "https://example.test/first.m3u8")!
+        )
+        let provider = RecordingPlaybackProvider(request: request, playlistMembers: [first, next])
+        let context = VideoPlaylistPlaybackContext(
+            origin: .init(playlistID: "playlist", accountID: "account", index: 0, totalCount: 2,
+                          item: first.taggingSource("account")),
+            provider: provider
+        )
+        let engine = SpyVideoEngine()
+        let viewModel = PlayerViewModel(
+            provider: provider, itemID: first.id, episodeItem: first,
+            playbackSettings: .init(autoPlayNextEpisode: true, autoPlayNextPlaylistItem: false),
+            engineFactory: EngineFactory(makeNative: { _ in engine }),
+            neighborResolver: { (nil, next) },
+            playlistContext: context
+        )
+        await viewModel.load()
+        engine.onEnded?()
+        XCTAssertTrue(viewModel.shouldDismiss)
+        XCTAssertNil(viewModel.pendingNextEpisode)
+        XCTAssertNil(viewModel.pendingPlaylistSelection)
+        await viewModel.stop()
+    }
+
+    func testPlaylistContextPagesByIndexSoRepeatedMembersKeepTheirPositions() async throws {
+        let repeated = MediaItem(id: "repeat", title: "Repeated", kind: .movie)
+        let entries = (0..<50).map { index in
+            index == 24 || index == 25
+                ? repeated
+                : MediaItem(id: "\(index)", title: "Movie \(index)", kind: .movie)
+        }
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: repeated, streamURL: URL(string: "https://example.test/repeat.m3u8")!
+            ),
+            playlistMembers: entries
+        )
+        let context = VideoPlaylistPlaybackContext(
+            origin: .init(
+                playlistID: "playlist", accountID: "account", index: 0,
+                totalCount: entries.count, item: entries[0].taggingSource("account")
+            ),
+            provider: provider
+        )
+        let seeded = try await context.item(at: 0)
+        let initialRequests = await provider.playlistMemberRequests
+        let firstRepeat = try await context.item(at: 24)
+        let secondRepeat = try await context.item(at: 25)
+        let pageRequests = await provider.playlistMemberRequests
+        XCTAssertEqual(seeded?.id, "0")
+        XCTAssertEqual(initialRequests, 0)
+        XCTAssertEqual(firstRepeat?.id, "repeat")
+        XCTAssertEqual(secondRepeat?.id, "repeat")
+        XCTAssertEqual(pageRequests, 1)
+        XCTAssertEqual(context.items[24]?.sourceAccountID, "account")
+        context.advance(to: 25)
+        XCTAssertEqual(context.currentIndex, 25)
+        let last = try await context.item(at: 49)
+        let finalRequests = await provider.playlistMemberRequests
+        XCTAssertEqual(last?.id, "49")
+        XCTAssertEqual(finalRequests, 2)
+    }
+
+    func testPlaylistContextFillsShortServerPagesWithoutReordering() async throws {
+        let entries = (0..<28).map {
+            MediaItem(id: "\($0)", title: "Movie \($0)", kind: .movie)
+        }
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: entries[0], streamURL: URL(string: "https://example.test/movie.m3u8")!
+            ),
+            playlistMembers: entries,
+            playlistPageLimit: 7
+        )
+        let context = VideoPlaylistPlaybackContext(
+            origin: .init(
+                playlistID: "playlist", accountID: "account", index: 0,
+                totalCount: entries.count, item: entries[0].taggingSource("account")
+            ),
+            provider: provider
+        )
+        let nearEnd = try await context.item(at: 23)
+        let last = try await context.item(at: 27)
+        let requests = await provider.playlistMemberRequests
+        XCTAssertEqual(nearEnd?.id, "23")
+        XCTAssertEqual(last?.id, "27")
+        XCTAssertEqual(requests, 5)
+        XCTAssertEqual(context.items[27]?.sourceAccountID, "account")
+    }
+
+    func testEpisodeBrowserUsesThePlayingServersHierarchyInsteadOfRetargetedParents() async {
+        for staleParentExists in [false, true] {
+            let playing = MediaItem(
+                id: "plex-episode", title: "Playing", kind: .episode,
+                seriesID: "plex-series", seasonID: "plex-season"
+            )
+            var opened = playing.taggingSource("plex-account")
+            opened.seriesID = "old-series"
+            opened.seasonID = "old-season"
+            let season = MediaItem(id: "plex-season", title: "Season", kind: .season)
+            let provider = RecordingPlaybackProvider(
+                request: PlaybackRequest(
+                    item: playing, streamURL: URL(string: "https://example.test/episode.m3u8")!
+                ),
+                kind: .plex,
+                childrenByParent: [
+                    "plex-series": [season], "plex-season": [playing],
+                    "old-series": [MediaItem(id: "unrelated", title: "Wrong show", kind: .episode)]
+                ]
+            )
+            if !staleParentExists { await provider.setChildError(AppError.notFound, for: "old-series") }
+            let browser = PlayerEpisodeBrowser(item: opened, provider: provider)
+            await browser.loadIfNeeded()
+            await browser.loadIfNeeded()
+            XCTAssertNil(browser.loadError)
+            XCTAssertEqual(browser.episodes.map(\.item.id), [playing.id])
+            XCTAssertEqual(browser.initialEntryID?.seasonID, "plex-season")
+            XCTAssertEqual(browser.episodes.first?.item.sourceAccountID, "plex-account")
+            let children = await provider.requestedChildIDs()
+            let metadataRequests = await provider.itemCallCount
+            XCTAssertEqual(children, ["plex-series", "plex-season"])
+            XCTAssertEqual(metadataRequests, 1)
+        }
+    }
+
+    func testEpisodeBrowserDoesNotBrowseMetadataForADifferentEpisode() async {
+        let opened = MediaItem(id: "playing", title: "Playing", kind: .episode, seriesID: "series")
+        let unrelated = MediaItem(id: "different", title: "Wrong episode", kind: .episode, seriesID: "other")
+        let provider = RecordingPlaybackProvider(request: PlaybackRequest(
+            item: unrelated, streamURL: URL(string: "https://example.test/episode.m3u8")!
+        ))
+        let browser = PlayerEpisodeBrowser(item: opened, provider: provider)
+        await browser.loadIfNeeded()
+        XCTAssertEqual(browser.loadError, .invalidResponse)
+        XCTAssertFalse(browser.hasLoaded)
+        let children = await provider.requestedChildIDs()
+        XCTAssertTrue(children.isEmpty)
+    }
+
+    func testEpisodeBrowserResolvesMissingOpeningParentsAndRetriesMetadataFailures() async throws {
+        let playing = MediaItem(id: "episode", title: "Playing", kind: .episode, seriesID: "series")
+        var opened = playing
+        opened.seriesID = nil
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: playing, streamURL: URL(string: "https://example.test/episode.m3u8")!
+            ),
+            childrenByParent: ["series": [playing]]
+        )
+        let player = PlayerViewModel(provider: provider, itemID: opened.id, episodeItem: opened)
+        let browser = try XCTUnwrap(player.episodeBrowser)
+        for error: any Error in [CancellationError(), AppError.cancelled, URLError(.cancelled)] {
+            await provider.setItemError(error)
+            await browser.loadIfNeeded()
+            XCTAssertNil(browser.loadError)
+            XCTAssertFalse(browser.isLoading)
+            XCTAssertFalse(browser.hasLoaded)
+        }
+        await provider.setItemError(AppError.serverUnreachable)
+        await browser.loadIfNeeded()
+        XCTAssertEqual(browser.loadError, .serverUnreachable)
+        XCTAssertFalse(browser.hasLoaded)
+        await provider.setItemError(nil)
+        await browser.loadIfNeeded()
+        XCTAssertNil(browser.loadError)
+        XCTAssertEqual(browser.episodes.map(\.item.id), [playing.id])
+        await player.stop()
+    }
+
+    func testEpisodeBrowserShowsLooseEpisodesAndAvoidsRepeatedDiscovery() async {
+        let episode = MediaItem(
+            id: "loose", title: "Special", kind: .episode,
+            seriesID: "series", seasonID: nil
+        ).taggingSource("account")
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: episode, streamURL: URL(string: "https://example.test/special.m3u8")!
+            ),
+            childrenByParent: ["series": [episode]]
+        )
+        let browser = PlayerEpisodeBrowser(item: episode, provider: provider)
+        await browser.loadIfNeeded()
+        await browser.loadIfNeeded()
+        XCTAssertTrue(browser.seasons.isEmpty)
+        XCTAssertEqual(browser.episodes.map(\.item.id), ["loose"])
+        XCTAssertEqual(browser.episodes.first?.item.sourceAccountID, "account")
+        let requests = await provider.childRequests
+        XCTAssertEqual(requests, 1)
+    }
+
+    func testOneSeasonBrowserShowsEpisodesWithoutLoadingOtherSeasons() async {
+        let season = MediaItem(
+            id: "only-season", title: "Book One: A Very Long Season Name",
+            kind: .season, seasonNumber: 1
+        )
+        let episode = MediaItem(
+            id: "first", title: "Opening", kind: .episode,
+            episodeNumber: 1, seriesID: "series", seasonID: season.id
+        )
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: episode, streamURL: URL(string: "https://example.test/episode.m3u8")!
+            ),
+            childrenByParent: ["series": [season], season.id: [episode]]
+        )
+        let browser = PlayerEpisodeBrowser(item: episode, provider: provider)
+        await browser.loadIfNeeded()
+        await browser.loadPrevious()
+        await browser.loadNext()
+        XCTAssertEqual(browser.episodes.map(\.badge), ["S1 · E1"])
+        XCTAssertNil(browser.previousSeasonIndex)
+        XCTAssertNil(browser.nextSeasonIndex)
+        let requests = await provider.requestedChildIDs()
+        XCTAssertEqual(requests, ["series", "only-season"])
+    }
+
+    func testLoadingEarlierSeasonKeepsRenderedEpisodeValuesAndFocusStable() async {
+        let seasonOne = MediaItem(id: "season-one", title: "Season 1", kind: .season)
+        let seasonTwo = MediaItem(id: "season-two", title: "Season 2", kind: .season)
+        let episode = MediaItem(
+            id: "two-1", title: "First", kind: .episode,
+            seriesID: "series", seasonID: seasonTwo.id
+        )
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: episode, streamURL: URL(string: "https://example.test/episode.m3u8")!
+            ),
+            childrenByParent: [
+                "series": [seasonOne, seasonTwo],
+                seasonOne.id: [MediaItem(id: "one-1", title: "Pilot", kind: .episode)],
+                seasonTwo.id: (1...3).map {
+                    MediaItem(id: "two-\($0)", title: "Episode \($0)", kind: .episode)
+                }
+            ]
+        )
+        let browser = PlayerEpisodeBrowser(item: episode, provider: provider)
+        await browser.loadIfNeeded()
+        let visibleEntries = browser.episodes
+        let initialID = browser.initialEntryID
+        XCTAssertEqual(visibleEntries.map(\.item.id), ["two-1", "two-2", "two-3"])
+
+        await browser.loadPrevious()
+        XCTAssertEqual(browser.episodes.map(\.item.id), ["one-1", "two-1", "two-2", "two-3"])
+        XCTAssertEqual(visibleEntries[2].item.id, "two-3",
+                       "An in-flight SwiftUI row must keep captured values after prepending")
+        XCTAssertEqual(browser.initialEntryID, initialID)
+        XCTAssertEqual(browser.previousSeasonIndex, nil)
+        XCTAssertEqual(browser.nextSeasonIndex, nil)
+    }
+
+    func testLongRunningShowLoadsOnlyAdjacentSeasonsAndKeepsNumberedCardsDistinct() async {
+        let seasons = (1...30).map { (number: Int) in
+            MediaItem(
+                id: "season-\(number)", title: "Book \(number): A Very Long Season Name",
+                kind: .season, seasonNumber: number
+            )
+        }
+        let playing = MediaItem(
+            id: "shared-episode", title: "Chapter", kind: .episode,
+            episodeNumber: 1, seriesID: "series", seasonID: seasons[14].id
+        )
+        var children: [String: [MediaItem]] = ["series": seasons]
+        for season in seasons {
+            children[season.id] = [
+                MediaItem(
+                    id: "shared-episode", title: "Chapter", kind: .episode,
+                    episodeNumber: 1, seriesID: "series", seasonID: season.id
+                )
+            ]
+        }
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: playing, streamURL: URL(string: "https://example.test/episode.m3u8")!
+            ),
+            childrenByParent: children
+        )
+        let browser = PlayerEpisodeBrowser(item: playing, provider: provider)
+        await browser.loadIfNeeded()
+        XCTAssertEqual(browser.episodes.map(\.badge), ["S15 · E1"])
+        let initialRequests = await provider.requestedChildIDs()
+        XCTAssertEqual(initialRequests, ["series", "season-15"])
+
+        let initialID = browser.initialEntryID
+        await browser.loadPrevious()
+        await browser.loadNext()
+        XCTAssertEqual(browser.episodes.map(\.badge), ["S14 · E1", "S15 · E1", "S16 · E1"])
+        XCTAssertEqual(Set(browser.episodes.map(\.id)).count, 3)
+        XCTAssertEqual(browser.initialEntryID, initialID)
+        let requests = await provider.requestedChildIDs()
+        XCTAssertEqual(
+            requests,
+            ["series", "season-15", "season-14", "season-16"]
+        )
+
+        for _ in 17...30 { await browser.loadNext() }
+        for _ in 1...13 { await browser.loadPrevious() }
+        XCTAssertEqual(browser.episodes.map(\.badge),
+                       (1...30).map { "S\($0) · E1" })
+        XCTAssertNil(browser.previousSeasonIndex)
+        XCTAssertNil(browser.nextSeasonIndex)
+        let allRequests = await provider.requestedChildIDs()
+        XCTAssertEqual(allRequests.count, 31)
+    }
+
+    func testEpisodeBrowserSkipsEmptySeasonsAndRetriesFailedNeighbor() async {
+        let seasons = (1...4).map {
+            MediaItem(id: "season-\($0)", title: "Season \($0)", kind: .season)
+        }
+        let episode = MediaItem(
+            id: "first", title: "First", kind: .episode,
+            seriesID: "series", seasonID: seasons[0].id
+        )
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: episode, streamURL: URL(string: "https://example.test/episode.m3u8")!
+            ),
+            childrenByParent: [
+                "series": seasons,
+                seasons[1].id: [episode],
+                seasons[3].id: [MediaItem(id: "last", title: "Last", kind: .episode)]
+            ]
+        )
+        let browser = PlayerEpisodeBrowser(item: episode, provider: provider)
+        await browser.loadIfNeeded()
+        XCTAssertEqual(browser.episodes.map(\.item.id), ["first"])
+        XCTAssertEqual(browser.nextSeasonIndex, 2)
+
+        await provider.setChildError(AppError.serverUnreachable, for: seasons[2].id)
+        await browser.loadNext()
+        XCTAssertEqual(browser.nextLoadError, .serverUnreachable)
+        XCTAssertEqual(browser.nextSeasonIndex, 2)
+        await provider.setChildError(nil, for: seasons[2].id)
+        await browser.retryNext()
+        XCTAssertNil(browser.nextLoadError)
+        XCTAssertEqual(browser.episodes.map(\.item.id), ["first", "last"])
+        XCTAssertNil(browser.nextSeasonIndex)
+        let requests = await provider.requestedChildIDs()
+        XCTAssertEqual(
+            requests,
+            ["series", "season-1", "season-2", "season-3", "season-3", "season-4"]
+        )
+    }
+
+    func testEpisodeCancellationNeverBecomesAnErrorOrBlocksLaterLoading() async {
+        let seasons = (1...3).map {
+            MediaItem(id: "season-\($0)", title: "Season", kind: .season)
+        }
+        let playing = MediaItem(
+            id: "middle", title: "Middle", kind: .episode,
+            seriesID: "series", seasonID: seasons[1].id
+        )
+        let cancellations: [any Error] = [
+            CancellationError(), AppError.cancelled, URLError(.cancelled)
+        ]
+        for cancellation in cancellations {
+            let provider = RecordingPlaybackProvider(
+                request: PlaybackRequest(
+                    item: playing, streamURL: URL(string: "https://example.test/episode.m3u8")!
+                ),
+                childrenByParent: [
+                    "series": seasons,
+                    seasons[0].id: [MediaItem(id: "earlier", title: "Earlier", kind: .episode)],
+                    seasons[1].id: [playing],
+                    seasons[2].id: [MediaItem(id: "later", title: "Later", kind: .episode)]
+                ]
+            )
+            let browser = PlayerEpisodeBrowser(item: playing, provider: provider)
+            XCTAssertFalse(browser.hasLoaded)
+            await provider.setChildError(cancellation, for: "series")
+            await browser.loadIfNeeded()
+            XCTAssertNil(browser.loadError)
+            XCTAssertFalse(browser.isLoading)
+            XCTAssertFalse(browser.hasLoaded)
+            await provider.setChildError(nil, for: "series")
+            await browser.loadIfNeeded()
+            XCTAssertTrue(browser.hasLoaded)
+            XCTAssertEqual(browser.episodes.map(\.item.id), ["middle"])
+
+            await provider.setChildError(cancellation, for: seasons[0].id)
+            await provider.setChildError(cancellation, for: seasons[2].id)
+            await browser.loadPrevious()
+            await browser.loadNext()
+            XCTAssertNil(browser.previousLoadError)
+            XCTAssertNil(browser.nextLoadError)
+            XCTAssertFalse(browser.isLoadingPrevious)
+            XCTAssertFalse(browser.isLoadingNext)
+            XCTAssertEqual(browser.previousSeasonIndex, 0)
+            XCTAssertEqual(browser.nextSeasonIndex, 2)
+            XCTAssertEqual(browser.episodes.map(\.item.id), ["middle"])
+
+            await provider.setChildError(nil, for: seasons[0].id)
+            await provider.setChildError(nil, for: seasons[2].id)
+            await browser.loadPrevious()
+            await browser.loadNext()
+            XCTAssertEqual(browser.episodes.map(\.item.id), ["earlier", "middle", "later"])
+        }
+    }
+
+    func testCancelledEdgeTaskPreservesProgressPastEmptySeasonsAndCanResume() async {
+        let seasons = (1...5).map {
+            MediaItem(id: "season-\($0)", title: "Season", kind: .season)
+        }
+        let playing = MediaItem(
+            id: "middle", title: "Middle", kind: .episode,
+            seriesID: "series", seasonID: seasons[2].id
+        )
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: playing, streamURL: URL(string: "https://example.test/episode.m3u8")!
+            ),
+            childrenByParent: [
+                "series": seasons,
+                seasons[0].id: [MediaItem(id: "earlier", title: "Earlier", kind: .episode)],
+                seasons[2].id: [playing],
+                seasons[4].id: [MediaItem(id: "later", title: "Later", kind: .episode)]
+            ]
+        )
+        let browser = PlayerEpisodeBrowser(item: playing, provider: provider)
+        await browser.loadIfNeeded()
+        let previous = PreCommitYieldGate()
+        let next = PreCommitYieldGate()
+        await provider.setChildGate(previous, for: seasons[0].id)
+        await provider.setChildGate(next, for: seasons[4].id)
+        let previousTask = Task { await browser.loadPrevious() }
+        let nextTask = Task { await browser.loadNext() }
+        await waitForGate(previous, entries: 1)
+        await waitForGate(next, entries: 1)
+        XCTAssertEqual(browser.previousSeasonIndex, 0)
+        XCTAssertEqual(browser.nextSeasonIndex, 4)
+        previousTask.cancel()
+        nextTask.cancel()
+        previous.releaseNext()
+        next.releaseNext()
+        await previousTask.value
+        await nextTask.value
+        XCTAssertNil(browser.previousLoadError)
+        XCTAssertNil(browser.nextLoadError)
+        XCTAssertFalse(browser.isLoadingPrevious)
+        XCTAssertFalse(browser.isLoadingNext)
+        XCTAssertEqual(browser.episodes.map(\.item.id), ["middle"])
+        XCTAssertEqual(browser.previousSeasonIndex, 0)
+        XCTAssertEqual(browser.nextSeasonIndex, 4)
+
+        await provider.setChildGate(nil, for: seasons[0].id)
+        await provider.setChildGate(nil, for: seasons[4].id)
+        await browser.loadPrevious()
+        await browser.loadNext()
+        XCTAssertEqual(browser.episodes.map(\.item.id), ["earlier", "middle", "later"])
+        let requests = await provider.requestedChildIDs()
+        XCTAssertEqual(requests.filter { $0 == seasons[1].id }.count, 1)
+        XCTAssertEqual(requests.filter { $0 == seasons[3].id }.count, 1)
+    }
+
+    func testPlaylistPageFailureCanRetryWithoutLosingSeededSelection() async throws {
+        let first = MediaItem(id: "first", title: "First", kind: .movie)
+        let second = MediaItem(id: "second", title: "Second", kind: .movie)
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: first, streamURL: URL(string: "https://example.test/first.m3u8")!
+            ),
+            playlistMembers: [first, second]
+        )
+        let context = VideoPlaylistPlaybackContext(
+            origin: .init(
+                playlistID: "playlist", accountID: "account", index: 0,
+                totalCount: 2, item: first.taggingSource("account")
+            ),
+            provider: provider
+        )
+        await provider.setPlaylistMemberError(.serverUnreachable)
+        do {
+            _ = try await context.item(at: 1)
+            XCTFail("A failed page must not look like the end of the playlist")
+        } catch {
+            XCTAssertEqual(error as? AppError, .serverUnreachable)
+        }
+        XCTAssertEqual(context.loadError, .serverUnreachable)
+        XCTAssertEqual(context.items[0]?.id, "first")
+        await provider.setPlaylistMemberError(nil)
+        context.retry()
+        let recovered = try await context.item(at: 1)
+        let requestCount = await provider.playlistMemberRequests
+        XCTAssertEqual(recovered?.id, second.id)
+        XCTAssertNil(context.loadError)
+        XCTAssertEqual(requestCount, 2)
+    }
+
+    func testPlaylistAutoplayFailureDismissesEndedPlayerInsteadOfFreezing() async {
+        let first = MediaItem(id: "first", title: "First", kind: .movie)
+        let request = PlaybackRequest(
+            item: first, streamURL: URL(string: "https://example.test/first.m3u8")!
+        )
+        let provider = RecordingPlaybackProvider(request: request)
+        await provider.setPlaylistMemberError(.serverUnreachable)
+        let context = VideoPlaylistPlaybackContext(
+            origin: .init(
+                playlistID: "playlist", accountID: "account", index: 0,
+                totalCount: 2, item: first.taggingSource("account")
+            ),
+            provider: provider
+        )
+        let engine = SpyVideoEngine()
+        let viewModel = PlayerViewModel(
+            provider: provider, itemID: first.id,
+            playbackSettings: .init(autoPlayNextPlaylistItem: true),
+            engineFactory: EngineFactory(makeNative: { _ in engine }),
+            playlistContext: context
+        )
+        await viewModel.load()
+        engine.onEnded?()
+        for _ in 0..<100 where !viewModel.shouldDismiss {
+            await Task.yield()
+        }
+        XCTAssertTrue(viewModel.shouldDismiss)
+        XCTAssertEqual(context.loadError, .serverUnreachable)
+        XCTAssertNil(viewModel.pendingNextEpisode)
         await viewModel.stop()
     }
 
@@ -335,6 +957,7 @@ final class PlayerViewModelEOFTests: XCTestCase {
         for _ in 0..<10 { await Task.yield() }
 
         XCTAssertEqual(engine.reloadAfterForegroundCount, 1)
+        XCTAssertEqual(engine.currentTime, 30)
         XCTAssertTrue(engine.isPaused)
         XCTAssertTrue(viewModel.controls.isPaused)
         let reports = await provider.reports
@@ -1237,6 +1860,16 @@ private actor RecordingPlaybackProvider: MediaProvider {
 
     private let request: PlaybackRequest
     private let requestsByItemID: [String: PlaybackRequest]
+    private let playlistMembers: [MediaItem]
+    private let playlistPageLimit: Int?
+    private let childrenByParent: [String: [MediaItem]]
+    private var childErrors: [String: any Error] = [:]
+    private var itemError: (any Error)?
+    private var childGates: [String: PreCommitYieldGate] = [:]
+    private var childIDs: [String] = []
+    private var playlistMemberError: AppError?
+    private(set) var playlistMemberRequests = 0
+    private(set) var childRequests = 0
     private(set) var reports: [Report] = []
     private(set) var playbackInfoCallCount = 0
     private(set) var itemCallCount = 0
@@ -1244,11 +1877,17 @@ private actor RecordingPlaybackProvider: MediaProvider {
     init(
         request: PlaybackRequest,
         kind: ProviderKind = .jellyfin,
-        requestsByItemID: [String: PlaybackRequest] = [:]
+        requestsByItemID: [String: PlaybackRequest] = [:],
+        playlistMembers: [MediaItem] = [],
+        playlistPageLimit: Int? = nil,
+        childrenByParent: [String: [MediaItem]] = [:]
     ) {
         self.request = request
         self.kind = kind
         self.requestsByItemID = requestsByItemID
+        self.playlistMembers = playlistMembers
+        self.playlistPageLimit = playlistPageLimit
+        self.childrenByParent = childrenByParent
     }
 
     func libraries() async throws -> [MediaLibrary] { [] }
@@ -1256,12 +1895,35 @@ private actor RecordingPlaybackProvider: MediaProvider {
     func latest(limit: Int) async throws -> [MediaItem] { [] }
     func item(id: String) async throws -> MediaItem {
         itemCallCount += 1
+        if let itemError { throw itemError }
         return requestsByItemID[id]?.item ?? request.item
     }
-    func children(of itemID: String) async throws -> [MediaItem] { [] }
+    func setItemError(_ error: (any Error)?) { itemError = error }
+    func children(of itemID: String) async throws -> [MediaItem] {
+        childRequests += 1
+        childIDs.append(itemID)
+        if let gate = childGates[itemID] { await gate.suspend() }
+        if let error = childErrors[itemID] { throw error }
+        return childrenByParent[itemID] ?? []
+    }
+    func requestedChildIDs() -> [String] { childIDs }
+    func setChildGate(_ gate: PreCommitYieldGate?, for id: String) { childGates[id] = gate }
+    func setChildError(_ error: (any Error)?, for id: String) { childErrors[id] = error }
     func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
         MediaPage(items: [], startIndex: page.startIndex, totalCount: 0)
     }
+    func videoPlaylistMembers(of playlistID: String, page: PageRequest) async throws -> MediaPage {
+        playlistMemberRequests += 1
+        if let playlistMemberError { throw playlistMemberError }
+        return MediaPage(
+            items: Array(
+                playlistMembers.dropFirst(page.startIndex)
+                    .prefix(min(page.limit, playlistPageLimit ?? page.limit))
+            ),
+            startIndex: page.startIndex, totalCount: playlistMembers.count
+        )
+    }
+    func setPlaylistMemberError(_ error: AppError?) { playlistMemberError = error }
     func search(query: String, limit: Int) async throws -> [MediaItem] { [] }
     func playbackInfo(for itemID: String) async throws -> PlaybackRequest {
         playbackInfoCallCount += 1

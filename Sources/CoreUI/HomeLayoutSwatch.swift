@@ -19,7 +19,8 @@ private enum HomeLayoutPreviewColors {
 }
 
 /// A drawing of Home in one ``HeroStyle``, laid out in the TV's own 1920 × 1080
-/// points and scaled to fit, so every piece sits where it does on screen.
+/// points and scaled to fit. Navigation chrome is omitted so the illustrations
+/// describe the Home layout independently of the profile's navigation style.
 ///
 /// - `.carousel` ("Fullscreen Hero"): full-screen art, the wordmark, details, Play and
 ///   the round actions low on the left, paging dots, and Continue Watching
@@ -47,7 +48,6 @@ public struct HomeLayoutSwatch: View {
                 case .carousel: spotlight
                 case .followsFocus: immersive
                 }
-                rail
             }
             .frame(width: Self.screen.width, height: Self.screen.height, alignment: .topLeading)
             .scaleEffect(scale, anchor: .topLeading)
@@ -182,23 +182,6 @@ public struct HomeLayoutSwatch: View {
                     path.closeSubpath()
                 }
                 .fill(HomeLayoutPreviewColors.artBottom)
-            }
-        }
-    }
-
-    /// Plozz's rail: the profile, then its column of destination icons, Home lit.
-    private var rail: some View {
-        ZStack(alignment: .topLeading) {
-            Circle().fill(HomeLayoutPreviewColors.wordmark).frame(width: 40, height: 40).offset(x: 40, y: 98)
-            ForEach(0..<10, id: \.self) { index in
-                let y = 196 + CGFloat(index) * 78
-                if index == 1 {
-                    Circle().fill(HomeLayoutPreviewColors.control).frame(width: 62, height: 62).offset(x: 29, y: y - 17)
-                }
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(index == 1 ? HomeLayoutPreviewColors.wordmark : HomeLayoutPreviewColors.icon)
-                    .frame(width: 28, height: 28)
-                    .offset(x: 46, y: y)
             }
         }
     }

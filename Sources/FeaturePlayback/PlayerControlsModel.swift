@@ -129,6 +129,8 @@ public final class ControlBarEntryModel {
     /// True while the Info card is open. The scrub bar reads it so its focus
     /// appearance doesn't change underneath the card's reveal — see `ScrubBar`.
     public var infoCardOpen: Bool = false
+    /// Episode browsing gets a longer idle window than the other bottom cards.
+    public var episodeBrowserOpen: Bool = false
 
     public init() {}
 }
@@ -468,6 +470,8 @@ public final class PlayerControlsModel {
 
     // MARK: Transport UI state (written by the input controller)
     public var controlsVisible: Bool = false
+    /// Transient global bounds of visible bottom controls, excluding the scrim.
+    public let subtitleLayout = SubtitleControlsLayout()
     public var isScrubbing: Bool = false
     public var scrubSeconds: TimeInterval = 0
     /// The trickplay frame for `scrubSeconds`, shown above the scrub head.

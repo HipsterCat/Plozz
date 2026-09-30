@@ -8,9 +8,10 @@ import FeatureAuthCore
 /// lands. This is the cache that removes the startup double-load + its latency.
 ///
 /// ## Why only unprotected users
-/// PIN-protected Home users must re-prompt every launch (a persisted token would
-/// defeat the PIN), so their tokens are **never** written here. Callers gate
-/// this cache behind `binding.requiresPIN != true`. Unprotected users have no
+/// This cache is also read on manual switches, so protected tokens are never
+/// written here. Opt-in trusted startup uses the separate, device-only
+/// `AutomaticSignInStore`. Callers gate this cache behind
+/// `binding.requiresPIN != true`. Unprotected users have no
 /// PIN to bypass, and their token is no more sensitive than the admin token the
 /// `AccountStore` already persists in the same Keychain.
 ///

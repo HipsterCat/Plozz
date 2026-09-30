@@ -1,6 +1,24 @@
 import CoreModels
 import Foundation
 
+/// Hero curation must not consume stale rows while their live replacements load.
+public enum HomeHeroLaunchPolicy {
+    public static func content(
+        _ content: HomeViewModel.Content,
+        awaitingLiveContinueWatching: Bool,
+        loadingRows: Set<HomeRowKind> = []
+    ) -> HomeViewModel.Content {
+        var live = content
+        if awaitingLiveContinueWatching || loadingRows.contains(.continueWatching) {
+            live.continueWatching = []
+        }
+        if loadingRows.contains(.recentlyAdded) { live.latest = [] }
+        if loadingRows.contains(.watchlist) { live.watchlist = [] }
+        if loadingRows.contains(.libraries) { live.libraries = [] }
+        return live
+    }
+}
+
 /// Canonical text/facts/credits policy shared by Home and detail heroes.
 public enum HeroContentPolicy {
     public static func homeDescription(

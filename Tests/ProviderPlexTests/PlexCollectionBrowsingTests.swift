@@ -20,6 +20,47 @@ final class PlexCollectionBrowsingTests: XCTestCase {
         )
     }
 
+    func testVideoPlaylistsFollowActualLibraryMembershipAndKeepMemberOrder() async throws {
+        let http = StubHTTPClient()
+        http.stub(pathSuffix: "/playlists", json: """
+        {"MediaContainer":{"Metadata":[
+          {"ratingKey":"10","type":"playlist","title":"Mixed","composite":"/playlists/10/composite"},
+          {"ratingKey":"11","type":"playlist","title":"Shows Only"}
+        ]}}
+        """)
+        http.stub(pathSuffix: "/playlists/10/items", json: """
+        {"MediaContainer":{"totalSize":3,"Metadata":[
+          {"ratingKey":"a","type":"episode","title":"First","librarySectionID":2},
+          {"ratingKey":"b","type":"movie","title":"Second","librarySectionID":1},
+          {"ratingKey":"c","type":"episode","title":"Third","librarySectionID":2}
+        ]}}
+        """)
+        http.stub(pathSuffix: "/playlists/11/items", json: """
+        {"MediaContainer":{"totalSize":1,"Metadata":[
+          {"ratingKey":"d","type":"episode","title":"Show","librarySectionID":2}
+        ]}}
+        """)
+        let provider = provider(http)
+        XCTAssertTrue(provider.capabilities.contains(.videoPlaylists))
+        let movies = try await provider.videoPlaylists(in: "1", page: PageRequest(limit: 1))
+        XCTAssertEqual(movies.items.map(\.id), ["10"])
+        XCTAssertEqual(movies.items.first?.kind, .playlist)
+        XCTAssertEqual(movies.items.first?.libraryID, "1")
+        XCTAssertNotNil(movies.items.first?.posterURL)
+        let shows = try await provider.videoPlaylists(in: "2", page: PageRequest())
+        XCTAssertEqual(shows.items.map(\.id), ["10", "11"])
+        let members = try await provider.videoPlaylistMembers(
+            of: "10", page: PageRequest(sort: .init(field: .name, direction: .descending))
+        )
+        XCTAssertEqual(members.items.map(\.id), ["a", "b", "c"])
+        XCTAssertEqual(members.items.map(\.kind), [.episode, .movie, .episode])
+        XCTAssertEqual(members.totalCount, 3)
+        let query = try XCTUnwrap(http.queryItems(forPathSuffix: "/playlists"))
+        XCTAssertTrue(query.contains(URLQueryItem(name: "playlistType", value: "video")))
+        XCTAssertTrue(try XCTUnwrap(http.queryItems(forPathSuffix: "/playlists/10/items"))
+            .contains(URLQueryItem(name: "X-Plex-Container-Start", value: "0")))
+    }
+
     func testLibrariesContainOnlyActualServerSections() async throws {
         let http = StubHTTPClient()
         http.stub(pathSuffix: "/library/sections", json: """

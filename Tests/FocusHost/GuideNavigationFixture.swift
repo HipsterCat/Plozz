@@ -55,21 +55,32 @@ struct GuideNavigationFixture: View {
             )
         }
         let model = LiveTVPrototypeModel(now: now, channels: channels)
-        let programs = (0..<7).flatMap { row in
+        var programs: [LiveTVPrototypeProgram] = []
+        for row in 0..<7 {
             let currentEnd: TimeInterval = row == 0 || row == 4 ? 7_200 : 600
             let boundaries: [TimeInterval] = [currentEnd, currentEnd + 1_800, currentEnd + 3_600, 21_600]
-            return [
+            programs.append(
                 LiveTVPrototypeProgram(
                     id: "current-\(row)", channelID: channels[row].id, title: "Current \(row)", subtitle: "",
                     start: now.addingTimeInterval(-300), end: now.addingTimeInterval(currentEnd)
                 )
-            ] + (0..<3).map { index in
-                LiveTVPrototypeProgram(
+            )
+            for index in 0..<3 {
+                programs.append(LiveTVPrototypeProgram(
                     id: "future-\(row)-\(index)", channelID: channels[row].id,
                     title: "Future \(row).\(index + 1)", subtitle: "",
                     start: now.addingTimeInterval(boundaries[index]),
                     end: now.addingTimeInterval(boundaries[index + 1])
-                )
+                ))
+            }
+            // Hourly listings past the guide's first six hours.
+            for hour in 0..<42 {
+                programs.append(LiveTVPrototypeProgram(
+                    id: "later-\(row)-\(hour)", channelID: channels[row].id,
+                    title: "Later \(row).\(hour + 1)", subtitle: "",
+                    start: now.addingTimeInterval(21_600 + Double(hour) * 3_600),
+                    end: now.addingTimeInterval(21_600 + Double(hour + 1) * 3_600)
+                ))
             }
         }
         do { try model.replacePrograms(programs) }

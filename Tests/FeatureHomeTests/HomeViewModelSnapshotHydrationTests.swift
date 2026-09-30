@@ -27,6 +27,316 @@ final class HomeViewModelSnapshotHydrationTests: XCTestCase {
         }
     }
 
+    func testLatestPublishesBeforeSlowContinueWatchingCompletes() async {
+        let resumeGate = HomeRefreshGate()
+        defer { resumeGate.open() }
+        let provider = FakeMediaProvider(allItems: [])
+        provider.continueWatchingItems = [MediaItem(id: "resume", title: "Resume", kind: .movie)]
+        provider.continueWatchingGate = { await resumeGate.wait() }
+        provider.latestItems = [MediaItem(id: "latest", title: "Latest", kind: .movie)]
+        let store = InMemoryHomeContentStore()
+        let home = makeViewModel(provider: provider, contentStore: store)
+
+        let load = Task { await home.load() }
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline, home.state.value?.latest.first?.id != "latest" {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(home.state.value?.latest.first?.id, "latest",
+                       "A ready row must not wait for Continue Watching.")
+        XCTAssertTrue(home.isRefreshing)
+        XCTAssertTrue(home.loadingRows.contains(.continueWatching))
+        XCTAssertFalse(home.loadingRows.contains(.recentlyAdded))
+        XCTAssertNil(store.load(), "An incomplete Home must not replace the durable snapshot.")
+        await home.loadIfNeeded(for: .default)
+        resumeGate.open()
+        await load.value
+        XCTAssertEqual(home.state.value?.continueWatching.first?.id, "resume")
+        XCTAssertEqual(provider.librariesCallCount, 1, "Publishing a row must not restart the launch load.")
+    }
+
+    func testUnmergedRowsPublishBeforeSlowResumeAndRemainingLibraryRequests() async {
+        let resumeGate = HomeRefreshGate()
+        let libraryGate = HomeRefreshGate()
+        defer {
+            resumeGate.open()
+            libraryGate.open()
+        }
+        let provider = FakeMediaProvider(allItems: [
+            MediaItem(id: "recent", title: "Recent", kind: .movie)
+        ])
+        provider.continueWatchingGate = { await resumeGate.wait() }
+        provider.libraryItems = (0..<20).map {
+            MediaLibrary(id: "library-\($0)", title: "Library \($0)", kind: .movie)
+        }
+        for library in provider.libraryItems.dropFirst() {
+            provider.containerGates[library.id] = { await libraryGate.wait() }
+        }
+        var visibility = HomeLibraryVisibility(mergeLibrariesOnHome: false)
+        for library in provider.libraryItems {
+            visibility.setLibraryRowEnabled(true, libraryKey: "a:\(library.id)", kind: .recentlyAdded)
+        }
+        let home = HomeViewModel(
+            accounts: [resolved(provider, accountID: "a")],
+            layoutStore: InMemoryHomeLayoutStore(),
+            contentStore: InMemoryHomeContentStore(),
+            currentVisibility: { visibility }
+        )
+
+        let load = Task { await home.load() }
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline, home.state.value?.librarySections.first?.cardCount != 1 {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(home.state.value?.librarySections.first?.library.key, "a:library-0",
+                       "The first ready library row must appear with nineteen other libraries still loading.")
+        XCTAssertTrue(home.isRefreshing)
+        XCTAssertLessThanOrEqual(provider.maximumActivePageRequests, 5,
+                                 "Additional rows must stay queued instead of launching twenty requests at once.")
+        XCTAssertLessThan(provider.requestedPages.count, 20)
+        resumeGate.open()
+        libraryGate.open()
+        await load.value
+        XCTAssertEqual(home.state.value?.librarySections.count, 20)
+        XCTAssertEqual(provider.librariesCallCount, 1)
+        XCTAssertEqual(provider.requestedPages.count, 20)
+    }
+
+    func testSlowResumeFeedsCannotOccupyEverySlotNeededByOtherRows() async {
+        for merged in [true, false] {
+            let gate = HomeRefreshGate()
+            defer { gate.open() }
+            var visibility = HomeLibraryVisibility(mergeLibrariesOnHome: merged)
+            let accounts = (0..<5).map { index -> ResolvedAccount in
+                let id = "source-\(index)"
+                let movie = MediaItem(id: "movie-\(index)", title: "Movie \(index)", kind: .movie)
+                let provider = FakeMediaProvider(allItems: [movie])
+                provider.continueWatchingGate = { await gate.wait() }
+                provider.latestItems = [movie]
+                provider.libraryItems = [MediaLibrary(id: "movies", title: "Movies", kind: .movie)]
+                visibility.setLibraryRowEnabled(true, libraryKey: "\(id):movies", kind: .recentlyAdded)
+                return resolved(provider, accountID: id)
+            }
+            let home = HomeViewModel(
+                accounts: accounts, layoutStore: InMemoryHomeLayoutStore(),
+                currentVisibility: { visibility }
+            )
+            let load = Task { await home.load() }
+            let deadline = Date().addingTimeInterval(1)
+            while Date() < deadline {
+                let content = home.state.value
+                if content?.latest.count == 5,
+                   merged || content?.librarySections.filter({ $0.cardCount == 1 }).count == 5 {
+                    break
+                }
+                await Task.yield()
+            }
+            XCTAssertEqual(home.state.value?.latest.count, 5,
+                           "Five stalled resume feeds must not consume the queue for other global rows.")
+            if !merged {
+                XCTAssertEqual(home.state.value?.librarySections.filter { $0.cardCount == 1 }.count, 5,
+                               "The library-row queue must remain independent of stalled global feeds.")
+            }
+            XCTAssertTrue(home.loadingRows.contains(.continueWatching))
+            gate.open()
+            await load.value
+        }
+    }
+
+    func testMergedRowsKeepAccountOrderAndUserActionsWhileAnotherRowLoads() async {
+        let gate = HomeRefreshGate()
+        defer { gate.open() }
+        let first = FakeMediaProvider(allItems: [], kind: .plex)
+        first.latestItems = [MediaItem(id: "first-latest", title: "First latest", kind: .movie)]
+        first.continueWatchingItems = [MediaItem(id: "first-resume", title: "First resume", kind: .movie)]
+        let second = FakeMediaProvider(allItems: [], kind: .emby)
+        second.latestItems = [MediaItem(id: "second-latest", title: "Second latest", kind: .movie)]
+        second.continueWatchingItems = [MediaItem(id: "second-resume", title: "Second resume", kind: .movie)]
+        second.continueWatchingGate = { await gate.wait() }
+        let home = HomeViewModel(
+            accounts: [resolved(first, accountID: "first"), resolved(second, accountID: "second")],
+            layoutStore: InMemoryHomeLayoutStore(), contentStore: InMemoryHomeContentStore()
+        )
+        let load = Task { await home.load() }
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline, home.state.value?.latest.count != 2 {
+            await Task.yield()
+        }
+        XCTAssertEqual(home.state.value?.latest.map(\.id), ["first-latest", "second-latest"])
+        XCTAssertTrue(home.loadingRows.contains(.continueWatching))
+        XCTAssertTrue(home.state.value?.continueWatching.isEmpty ?? true,
+                      "A merged row arrives once, not as a succession of differently sorted partial feeds.")
+        home.applyWatchedState(MediaItemMutation(
+            itemIDs: ["first-latest"], scopedItemIDs: ["first:first-latest"], played: true
+        ))
+        gate.open()
+        await load.value
+        XCTAssertEqual(home.state.value?.latest.map(\.id), ["first-latest", "second-latest"])
+        XCTAssertEqual(home.state.value?.latest.first?.isPlayed, true,
+                       "Finishing another row must not undo an action on an already usable card.")
+        XCTAssertEqual(home.state.value?.continueWatching.map(\.id), ["first-resume", "second-resume"])
+    }
+
+    func testLibraryFailureIsExplicitAndDoesNotHideOtherRows() async {
+        let provider = FakeMediaProvider(allItems: [MediaItem(id: "movie", title: "Movie", kind: .movie)])
+        provider.latestItems = [MediaItem(id: "latest", title: "Latest", kind: .movie)]
+        provider.libraryItems = [
+            MediaLibrary(id: "ready", title: "Ready", kind: .movie),
+            MediaLibrary(id: "offline", title: "Offline", kind: .movie)
+        ]
+        provider.containerErrors["offline"] = .serverUnreachable
+        var visibility = HomeLibraryVisibility(mergeLibrariesOnHome: false)
+        for library in provider.libraryItems {
+            visibility.setLibraryRowEnabled(true, libraryKey: "a:\(library.id)", kind: .recentlyAdded)
+        }
+        let home = HomeViewModel(
+            accounts: [resolved(provider, accountID: "a")],
+            layoutStore: InMemoryHomeLayoutStore(),
+            currentVisibility: { visibility }
+        )
+        await home.load()
+        XCTAssertEqual(home.state.value?.latest.first?.id, "latest")
+        XCTAssertEqual(home.state.value?.librarySections.first?.cardCount, 1)
+        XCTAssertEqual(home.state.value?.librarySections.last?.failures[.recentlyAdded], .serverUnreachable)
+        XCTAssertTrue(home.state.value?.librarySections.last?.loadingRows.isEmpty ?? false)
+        XCTAssertFalse(home.isRefreshing)
+
+        provider.containerErrors = [:]
+        await home.load(showLoadingState: false)
+        XCTAssertEqual(home.state.value?.librarySections.map(\.cardCount), [1, 1])
+        XCTAssertTrue(home.state.value?.librarySections.allSatisfy { $0.failures.isEmpty } ?? false)
+    }
+
+    func testGlobalFailureLeavesUsableRowsAndNoPermanentLoadingState() async {
+        let provider = FakeMediaProvider(allItems: [])
+        provider.continueWatchingItems = [MediaItem(id: "resume", title: "Resume", kind: .movie)]
+        provider.latestError = .serverUnreachable
+        let home = makeViewModel(provider: provider, contentStore: InMemoryHomeContentStore())
+        await home.load()
+        XCTAssertEqual(home.state.value?.continueWatching.first?.id, "resume")
+        XCTAssertEqual(home.rowFailures[.recentlyAdded], .serverUnreachable)
+        XCTAssertTrue(home.loadingRows.isEmpty)
+        XCTAssertFalse(home.isRefreshing)
+    }
+
+    func testVisibilityChangeDuringCachedLaunchCancelsAndReplacesTheOldLoad() async {
+        let gate = HomeRefreshGate()
+        defer { gate.open() }
+        let provider = FakeMediaProvider(allItems: [])
+        provider.libraryItems = [
+            MediaLibrary(id: "old-library", title: "Old", kind: .movie),
+            MediaLibrary(id: "new-library", title: "New", kind: .movie)
+        ]
+        provider.latestItems = [
+            MediaItem(id: "old", title: "Old", kind: .movie, libraryID: "old-library")
+        ]
+        provider.continueWatchingGate = { await gate.wait() }
+        var visibility = HomeLibraryVisibility.default
+        let home = HomeViewModel(
+            accounts: [resolved(provider, accountID: "a")],
+            layoutStore: InMemoryHomeLayoutStore(),
+            contentStore: InMemoryHomeContentStore(snapshot(cwIDs: ["cached"])),
+            currentVisibility: { visibility }
+        )
+        let first = Task { await home.loadIfNeeded(for: visibility) }
+        let startedDeadline = Date().addingTimeInterval(1)
+        while Date() < startedDeadline, home.state.value?.latest.first?.id != "old" {
+            await Task.yield()
+        }
+        XCTAssertEqual(home.state.value?.latest.first?.id, "old")
+        visibility.setEnabled(false, for: "a:old-library")
+        provider.latestItems = [
+            MediaItem(id: "new", title: "New", kind: .movie, libraryID: "new-library")
+        ]
+        await home.loadIfNeeded(for: visibility)
+        gate.open()
+        await first.value
+        let finishedDeadline = Date().addingTimeInterval(2)
+        while Date() < finishedDeadline, home.isRefreshing || provider.librariesCallCount < 2 {
+            await Task.yield()
+        }
+        XCTAssertFalse(home.isRefreshing)
+        XCTAssertEqual(provider.librariesCallCount, 2)
+        XCTAssertEqual(home.state.value?.latest.map(\.id), ["new"])
+        XCTAssertTrue(home.loadingRows.isEmpty)
+    }
+
+    func testRestartedColdLoadStillPublishesRowsAfterResumeHadArrived() async {
+        let latestGate = HomeRefreshGate()
+        let secondResumeGate = HomeRefreshGate()
+        defer {
+            latestGate.open()
+            secondResumeGate.open()
+        }
+        let provider = FakeMediaProvider(allItems: [])
+        provider.continueWatchingItems = [MediaItem(id: "resume", title: "Resume", kind: .movie)]
+        provider.latestItems = [MediaItem(id: "latest", title: "Latest", kind: .movie)]
+        provider.latestGate = { await latestGate.wait() }
+        var visibility = HomeLibraryVisibility.default
+        let home = HomeViewModel(
+            accounts: [resolved(provider, accountID: "a")],
+            layoutStore: InMemoryHomeLayoutStore(), currentVisibility: { visibility }
+        )
+        let first = Task { await home.loadIfNeeded(for: visibility) }
+        let firstDeadline = Date().addingTimeInterval(1)
+        while Date() < firstDeadline, !home.hasLiveContinueWatching { await Task.yield() }
+        XCTAssertTrue(home.hasLiveContinueWatching)
+        visibility.setGlobalRowEnabled(false, for: .watchlist)
+        provider.continueWatchingGate = { await secondResumeGate.wait() }
+        await home.loadIfNeeded(for: visibility)
+        latestGate.open()
+        await first.value
+        let rowDeadline = Date().addingTimeInterval(1)
+        while Date() < rowDeadline, home.state.value?.latest.first?.id != "latest" { await Task.yield() }
+        XCTAssertEqual(provider.librariesCallCount, 2)
+        XCTAssertEqual(home.state.value?.latest.first?.id, "latest")
+        XCTAssertTrue(home.isRefreshing)
+        XCTAssertTrue(home.loadingRows.contains(.continueWatching))
+        secondResumeGate.open()
+        let finishDeadline = Date().addingTimeInterval(2)
+        while Date() < finishDeadline, home.isRefreshing { await Task.yield() }
+        XCTAssertFalse(home.isRefreshing)
+    }
+
+    func testCancellationDoesNotStartQueuedLibraryRequestsOrPublishMoreRows() async {
+        let gate = HomeRefreshGate()
+        defer { gate.open() }
+        let provider = FakeMediaProvider(allItems: [MediaItem(id: "movie", title: "Movie", kind: .movie)])
+        provider.libraryItems = (0..<20).map {
+            MediaLibrary(id: "library-\($0)", title: "Library \($0)", kind: .movie)
+        }
+        var visibility = HomeLibraryVisibility(mergeLibrariesOnHome: false)
+        for library in provider.libraryItems {
+            visibility.setLibraryRowEnabled(true, libraryKey: "a:\(library.id)", kind: .recentlyAdded)
+            provider.containerGates[library.id] = { await gate.wait() }
+        }
+        let accounts = [resolved(provider, accountID: "a")]
+        let progress = HomeProgressCounter()
+        let load = Task {
+            await HomeAggregator().unmergedContent(
+                from: accounts, visibility: visibility,
+                onProgress: { _ in await progress.record() }
+            )
+        }
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline {
+            let published = await progress.count
+            if provider.requestedPages.count == 5, published == 4 { break }
+            await Task.yield()
+        }
+        XCTAssertEqual(provider.requestedPages.count, 5)
+        let beforeCancellation = await progress.count
+        XCTAssertEqual(beforeCancellation, 4, "All initial feed callbacks must settle before cancellation.")
+        load.cancel()
+        gate.open()
+        _ = await load.value
+        let afterCancellation = await progress.count
+        XCTAssertEqual(provider.requestedPages.count, 5)
+        XCTAssertEqual(afterCancellation, beforeCancellation)
+    }
+
     func testFirstDetailCanResumeBeforeOtherServersAndHomeMetadataFinish() async {
         for merged in [true, false] {
             let show = MediaItem(id: "show", title: "Show", kind: .series, sourceAccountID: "fast")
@@ -52,7 +362,9 @@ final class HomeViewModelSnapshotHydrationTests: XCTestCase {
             let load = Task { await home.load() }
             await waitForResume(home, id: episode.id)
             XCTAssertTrue(home.isRefreshing, "The slow server and metadata are still blocked")
-            XCTAssertNil(home.state.value, "The visible Home rows still await complete aggregation")
+            XCTAssertTrue(home.loadingRows.contains(.continueWatching),
+                          "The merged resume row still waits for its other source, not unrelated rows.")
+            XCTAssertTrue(home.state.value?.continueWatching.isEmpty ?? true)
             let environment = DetailOpenEnvironment(
                 resolveProvider: { _ in fast },
                 resolveOptionalProvider: { _ in fast },
@@ -334,6 +646,11 @@ final class HomeViewModelSnapshotHydrationTests: XCTestCase {
             "An unreachable server must not blank a good snapshot"
         )
     }
+}
+
+private actor HomeProgressCounter {
+    private(set) var count = 0
+    func record() { count += 1 }
 }
 
 private final class HomeRefreshGate: @unchecked Sendable {

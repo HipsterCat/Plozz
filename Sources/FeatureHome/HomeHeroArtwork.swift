@@ -55,12 +55,12 @@ enum HomeHeroArtwork {
         }
     }
 
-    static func logoFallback(for item: MediaItem) -> (@Sendable () async -> URL?)? {
+    static func logoFallback(for item: MediaItem) -> HeroLogoFallback? {
         switch item.kind {
         case .folder, .collection, .unknown: return nil
         default: break
         }
-        return { await ArtworkRouter.shared.artworkURL(.logo, for: item) }
+        return HeroLogoFallback(for: item) { await ArtworkRouter.shared.artworkURL(.logo, for: item) }
     }
 
     static func backgroundSample(

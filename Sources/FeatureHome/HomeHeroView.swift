@@ -87,6 +87,7 @@ struct HomeHeroView: View {
     /// in without ever displacing what the viewer is looking at (see
     /// ``HeroLiveMerge``). Fires on appearance and on every page.
     var onPinnedItemsChanged: (Set<String>) -> Void = { _ in }
+    var onTrailerReturnItemChanged: (String?) -> Void = { _ in }
     var onItemExposed: (MediaItem) -> Void = { _ in }
     var exposureScopeID: ObjectIdentifier?
     /// Leaf-owned recede state. Passing the model reference keeps the high-frequency
@@ -580,9 +581,13 @@ struct HomeHeroView: View {
             withAnimation(.easeInOut(duration: 0.35)) { heroVisible = true }
         }
         .onDisappear {
+            onTrailerReturnItemChanged(nil)
             // Leaving Home means nobody can see this trailer, so it should stop
             // streaming and decoding rather than play on behind another screen.
             resetTrailer(stopPlayer: true)
+        }
+        .onChange(of: trailerReturnItemID, initial: true) { _, itemID in
+            onTrailerReturnItemChanged(itemID)
         }
         // Re-seat the fronted slide when the curated *set* changes under us — not
         // just when it shrinks. `HomeView` seeds the hero synchronously (Continue
@@ -910,6 +915,10 @@ struct HomeHeroView: View {
             mode: backgroundSettings.homeTrailerEnabled ? .trailer : .off,
             trailerDuration: activeTrailerDuration
         )
+    }
+
+    private var trailerReturnItemID: String? {
+        backgroundSettings.homeTrailerEnabled && !receded && heroVisible ? current?.id : nil
     }
 
     private var trailerTaskKey: String {

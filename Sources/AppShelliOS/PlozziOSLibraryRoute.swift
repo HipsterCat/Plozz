@@ -49,11 +49,11 @@ struct PlozziOSLibraryRoute: Hashable, Identifiable {
     init(collection: CollectionBrowseRoute) {
         title = collection.title
         containerID = collection.collectionID
-        containerKind = .collection
+        containerKind = collection.kind
         accountID = collection.accountID
         synthesizedName = nil
         collectionSourceTitle = nil
-        browseScope = .collectionMembers
+        browseScope = collection.kind == .playlist ? .playlistMembers : .collectionMembers
     }
 }
 

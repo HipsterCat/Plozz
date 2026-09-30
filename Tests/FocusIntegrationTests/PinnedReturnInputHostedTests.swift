@@ -5,6 +5,77 @@ import XCTest
 
 @MainActor
 final class PinnedReturnInputHostedTests: XCTestCase {
+    func testConsumedHorizontalInputCannotOpenRail() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        fixture.controller.ownsHorizontalNavigationInput = true
+        fixture.observer.checkFocusAfterInput(before: fixture.controller.contentButton, wasInRail: false)
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertEqual(fixture.openCount, 0)
+        XCTAssertTrue(fixture.controller.contentButton.isFocused)
+    }
+
+    func testQueuedBoundaryCheckRechecksInputOwnership() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        fixture.observer.checkFocusAfterInput(before: fixture.controller.contentButton, wasInRail: false)
+        fixture.controller.ownsHorizontalNavigationInput = true
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertEqual(fixture.openCount, 0)
+        XCTAssertTrue(fixture.controller.contentButton.isFocused)
+    }
+
+    func testSwipeRechecksInputOwnershipAtRelease() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let swipe = NavigationRailEdgeCatcher.BoundarySwipeRecognizer()
+        fixture.window.addGestureRecognizer(swipe)
+        var callbacks = 0
+        swipe.onSwipe = { _, _, _ in callbacks += 1 }
+        let touch = TestTouch()
+        let event = UIEvent()
+        swipe.touchesBegan([touch], with: event)
+        touch.point = CGPoint(x: 300, y: 100)
+        swipe.touchesMoved([touch], with: event)
+        fixture.controller.ownsHorizontalNavigationInput = true
+        touch.point = CGPoint(x: 100, y: 100)
+        swipe.touchesMoved([touch], with: event)
+        swipe.touchesEnded([touch], with: event)
+        XCTAssertEqual(callbacks, 0)
+    }
+
+    func testPresentedPlayerControlsCannotOpenBackgroundRail() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let player = Controller()
+        player.modalPresentationStyle = .overFullScreen
+        await withCheckedContinuation { continuation in
+            fixture.controller.present(player, animated: false) { continuation.resume() }
+        }
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !player.contentButton.isFocused, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(player.contentButton.isFocused)
+        fixture.observer.checkFocusAfterInput(before: player.contentButton, wasInRail: false)
+        let swipe = NavigationRailEdgeCatcher.BoundarySwipeRecognizer()
+        fixture.window.addGestureRecognizer(swipe)
+        var callbacks = 0
+        swipe.onSwipe = { _, _, _ in callbacks += 1 }
+        let touch = TestTouch()
+        let event = UIEvent()
+        swipe.touchesBegan([touch], with: event)
+        touch.point = CGPoint(x: 300, y: 100)
+        swipe.touchesMoved([touch], with: event)
+        touch.point = CGPoint(x: 100, y: 100)
+        swipe.touchesMoved([touch], with: event)
+        swipe.touchesEnded([touch], with: event)
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertEqual(fixture.openCount, 0)
+        XCTAssertEqual(callbacks, 0)
+        XCTAssertTrue(player.contentButton.isFocused)
+    }
+
     func testBlockedLeftCannotOpenRailAfterVisualReturnFinishes() async throws {
         let fixture = try await makeFixture()
         defer { fixture.close() }
@@ -215,10 +286,11 @@ final class PinnedReturnInputHostedTests: XCTestCase {
         }
     }
 
-    private final class Controller: UIViewController {
+    private final class Controller: UIViewController, HorizontalNavigationInputOwning {
         let contentButton = UIButton(type: .system)
         let navigationButton = UIButton(type: .system)
         var prefersNavigation = false
+        var ownsHorizontalNavigationInput = false
         override var preferredFocusEnvironments: [any UIFocusEnvironment] {
             [prefersNavigation ? navigationButton : contentButton]
         }

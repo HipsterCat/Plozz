@@ -94,6 +94,112 @@ final class MediaRowEpisodeEntryHostedTests: XCTestCase {
         try await assertEpisodeHandoff(focusStyle: .highlight)
     }
 
+    func testHiddenPinnedSidebarDoesNotClipEpisodesAtTheContentInset() async throws {
+        let image = try await seedImage()
+        await waitUntil { UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive } }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        defer { previous?.makeKeyAndVisible() }
+
+        for style in CardFocusStyle.allCases {
+            let model = EpisodeEntryFixture()
+            model.focusStyle = style
+            model.pinnedSidebarActive = true
+            model.resumeTarget = "episode-0"
+            model.items = (0..<20).map {
+                MediaItem(
+                    id: "episode-\($0)", title: "Episode \($0)", kind: .episode,
+                    episodeNumber: $0 + 1, posterURL: image
+                )
+            }
+            model.phase = .ready
+            let host = EpisodeEntryHost(model: model)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+            }
+            host.view.layoutIfNeeded()
+            await waitUntil { model.appeared && host.heroIsFocused }
+            let system = try XCTUnwrap(UIFocusSystem.focusSystem(for: window))
+            host.prefersRow = true
+            system.requestFocusUpdate(to: host)
+            system.updateFocusIfNeeded()
+            await waitUntil { model.events.contains("episode-0") }
+            XCTAssertFalse(host.heroIsFocused)
+            XCTAssertNotNil(system.focusedItem)
+            let rowFrame = host.row.view.convert(host.row.view.bounds, to: window)
+            let insetEdge = rowFrame.minX + host.row.view.safeAreaInsets.left
+            let y = Int(rowFrame.minY + EpisodeColumnCard.artworkSize.height / 2)
+            XCTAssertGreaterThan(insetEdge, 10, "This fixture must exercise an inset row viewport.")
+            try await assertRedPixel(
+                in: window, x: Int(insetEdge) - 4, y: y,
+                message: "Focused \(style) episode must extend into the empty page gutter."
+            )
+            capture(window, system: system, name: "episode-focused-page-gutter-\(style)")
+
+            host.prefersRow = false
+            system.requestFocusUpdate(to: host)
+            system.updateFocusIfNeeded()
+            await waitUntil { host.heroIsFocused }
+            let scroll = try XCTUnwrap(horizontalScroll(in: host.row.view))
+            scroll.setContentOffset(
+                CGPoint(x: scroll.contentOffset.x + 240, y: scroll.contentOffset.y),
+                animated: false
+            )
+            try await assertRedPixel(
+                in: window, x: 2, y: y,
+                message: "A scrolling \(style) episode must remain visible up to the physical screen edge."
+            )
+            capture(window, system: system, name: "episode-at-screen-edge-\(style)")
+
+            let offset = scroll.contentOffset
+            model.navigationInset = 64
+            try await assertRedPixel(
+                in: window, x: Int(insetEdge) + 2, y: y, present: false,
+                message: "The visible sidebar must still hide scrolling \(style) artwork under its icons."
+            )
+            try await assertRedPixel(
+                in: window, x: Int(insetEdge) + 64, y: y,
+                message: "The visible sidebar must keep \(style) artwork opaque past its feather."
+            )
+            XCTAssertTrue(horizontalScroll(in: host.row.view) === scroll)
+            model.navigationInset = 0
+            try await assertRedPixel(
+                in: window, x: 2, y: y,
+                message: "Hiding the sidebar again must restore edge-to-edge \(style) artwork."
+            )
+            XCTAssertTrue(horizontalScroll(in: host.row.view) === scroll)
+            XCTAssertEqual(scroll.contentOffset.x, offset.x, accuracy: 0.5)
+            XCTAssertEqual(scroll.contentOffset.y, offset.y, accuracy: 0.5)
+        }
+    }
+
+    private func horizontalScroll(in view: UIView) -> UIScrollView? {
+        if let scroll = view as? UIScrollView, scroll.contentSize.width > scroll.bounds.width {
+            return scroll
+        }
+        return view.subviews.lazy.compactMap { self.horizontalScroll(in: $0) }.first
+    }
+
+    private func assertRedPixel(
+        in window: UIWindow, x: Int, y: Int, present: Bool = true, message: String
+    ) async throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        var matches = false
+        while !matches, ContinuousClock.now < deadline {
+            let sample = try pixel(screenshot(window), x: x, y: y)
+            let isRed = sample[0] > 150 && sample[1] < 100 && sample[2] < 100
+            matches = isRed == present
+            if !matches { try await Task.sleep(for: .milliseconds(30)) }
+        }
+        XCTAssertTrue(matches, message)
+    }
+
     func testSystemFocusHandsOffAndRestoresTheBrowsedEpisode() async throws {
         try await assertEpisodeHandoff(focusStyle: .system)
     }
@@ -289,6 +395,8 @@ private final class EpisodeEntryFixture {
     var entryEnabled = true
     var resumeTarget = "episode-998"
     var focusStyle = CardFocusStyle.highlight
+    var pinnedSidebarActive = false
+    var navigationInset: CGFloat = 0
     @ObservationIgnored var appeared = false
     @ObservationIgnored var events: [String] = []
 }
@@ -312,6 +420,8 @@ private struct EpisodeEntryFixtureView: View {
         )
         .frame(height: 520)
         .environment(\.plozzCardFocusStyle, model.focusStyle)
+        .environment(\.plozzPinnedSidebarActive, model.pinnedSidebarActive)
+        .environment(\.plozzNavigationContentInset, model.navigationInset)
         .onAppear { model.appeared = true }
     }
 }

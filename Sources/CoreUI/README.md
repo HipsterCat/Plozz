@@ -21,6 +21,18 @@ cache that every feature module reuses. tvOS-only — guarded behind
   Settings card.
 - **Cast & metadata cards** — `CastRowView` and friends, used by Home /
   detail.
+- **Continue Watching logo contrast** — logo-overlay cards use a 40% base
+  artwork dim, reduced for dark artwork and increased by up to 25 percentage
+  points when the logo blends into its background (65% maximum). The dim sits
+  behind the logo; existing color-preserving logo treatments and Home/detail
+  hero shading are unchanged.
+- **Circadian Mode** — profile-scoped warmth/dimming still uses the window-wide
+  multiply tint while active. Disabled, daytime, and zero-strength states remove
+  the view and its filter rather than leave an opaque white layer above video.
+  Fading back to neutral removes it on completion; reactivation or a profile
+  change invalidates the old completion. The observer remains alive so schedules
+  and previews can reinstall the tint. Hosted tests cover both off and active
+  behavior; layer removal alone is not proof of HDR10+ HDMI passthrough.
 
 ## Invariants
 

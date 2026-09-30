@@ -9,6 +9,7 @@ public enum MediaItemKind: String, Codable, Sendable {
     case video
     case folder
     case collection
+    case playlist
     case unknown
 }
 

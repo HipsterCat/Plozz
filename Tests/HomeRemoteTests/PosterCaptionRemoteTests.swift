@@ -131,9 +131,12 @@ final class PosterCaptionRemoteTests: XCTestCase {
     }
 
     private func captionBands(below artwork: CGRect, image: CGImage, scale: CGFloat) throws -> [CGRect] {
+        // TVUIKit's accessibility frame includes focus clearance even at rest.
+        // The fixture's dark artwork lets us find both painted caption lines
+        // without mistaking that reserved frame for the image's bottom edge.
         let region = CGRect(
-            x: artwork.minX * scale, y: (artwork.maxY + 8) * scale,
-            width: artwork.width * scale, height: 100 * scale
+            x: artwork.minX * scale, y: (artwork.maxY - 24) * scale,
+            width: artwork.width * scale, height: 132 * scale
         ).integral.intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
         let crop = try XCTUnwrap(image.cropping(to: region))
         let bytes = try pixels(crop)
@@ -151,6 +154,12 @@ final class PosterCaptionRemoteTests: XCTestCase {
             }
         }
         if let start { bands.append(start..<crop.height) }
+        if bands.count != 2 {
+            let attachment = XCTAttachment(image: UIImage(cgImage: image))
+            attachment.name = "Caption geometry \(artwork), bands \(bands)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
         XCTAssertEqual(bands.count, 2, "Both caption lines must be painted below the native artwork.")
         guard bands.count == 2 else { throw NSError(domain: "PosterCaptionFixture", code: 1) }
         return bands.map {
@@ -166,8 +175,9 @@ final class PosterCaptionRemoteTests: XCTestCase {
         ).integral
         let crop = try XCTUnwrap(image.cropping(to: region))
         let bytes = try pixels(crop)
-        let luminance = stride(from: 0, to: bytes.count, by: 4).map {
-            (Double(bytes[$0]) + Double(bytes[$0 + 1]) + Double(bytes[$0 + 2])) / (3 * 255)
+        let luminance = stride(from: 0, to: bytes.count, by: 4).map { (index: Int) -> Double in
+            let sum: Double = Double(bytes[index]) + Double(bytes[index + 1]) + Double(bytes[index + 2])
+            return sum / (3 * 255)
         }.sorted()
         return luminance[min(luminance.count - 1, Int(Double(luminance.count) * 0.98))]
     }

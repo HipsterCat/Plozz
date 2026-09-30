@@ -57,16 +57,12 @@ struct ProfileDetailView: View {
     private var profilesListPanel: some View {
         SettingsPanel {
             VStack(alignment: .leading, spacing: 12) {
-                // Whether the "Who's watching?" picker appears at launch. Only
-                // meaningful with 2+ profiles; pinned to the top of the panel.
-                if context.profiles.count > 1 {
-                    Toggle("Ask who's watching on startup", isOn: Binding(
-                        get: { context.askProfileOnStartup },
-                        set: { context.onSetAskProfileOnStartup($0) }
-                    ))
+                AutomaticSignInToggle(settings: context.automaticSignIn)
                     .toggleStyle(SettingsSwitchToggleStyle())
-                    PlozzDivider()
-                }
+                AutomaticSignInErrorMessage(settings: context.automaticSignIn)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                PlozzDivider()
                 ForEach(orderedProfiles) { profile in
                     profileRow(profile)
                 }

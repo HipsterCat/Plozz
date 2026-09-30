@@ -78,7 +78,7 @@ enum OnlineTrailerSource {
             return (item.title, item.productionYear, false)
         case .series:
             return (item.title, nil, true)
-        case .season, .episode, .folder, .collection, .unknown:
+        case .season, .episode, .folder, .collection, .playlist, .unknown:
             return nil
         }
     }

@@ -67,6 +67,25 @@ final class RemotePlayPauseInputTests: XCTestCase {
     // MARK: Input controller
 
     #if canImport(UIKit)
+    #if os(tvOS)
+    func testPlaybackFocusSurfaceIsNotAnAncestorOfControlArtwork() throws {
+        let (controller, _, _) = makeInput()
+        defer { controller.viewDidDisappear(false) }
+        let surface = try XCTUnwrap(controller.preferredFocusEnvironments.first as? PlayerInputView)
+        XCTAssertTrue(surface.canBecomeFocused)
+        XCTAssertFalse(controller.view.canBecomeFocused)
+        XCTAssertTrue(surface.superview === controller.view)
+        XCTAssertFalse(controller.children.isEmpty)
+        for host in controller.children {
+            XCTAssertTrue(host.view.superview === controller.view)
+            XCTAssertFalse(host.view.isDescendant(of: surface),
+                           "Returning to playback must not apply TVUIKit ancestor-focus effects to parked controls.")
+        }
+        XCTAssertFalse(controller.view.gestureRecognizers?.isEmpty ?? true,
+                       "The common parent must still receive remote input from the focus surface.")
+    }
+    #endif
+
     func testSystemPlayPauseRevealsTheHiddenTransport() {
         let (controller, model, toggles) = makeInput()
         defer { controller.viewDidDisappear(false) }

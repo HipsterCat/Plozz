@@ -25,8 +25,8 @@ public struct EpisodeColumnCard: View, Equatable {
     }
 
     public static let artworkSize = CGSize(width: 480, height: 270)
-    public static let sideMargin: CGFloat = 8
-    public static let slotWidth = artworkSize.width + sideMargin * 2
+    public static let trailingSpacing: CGFloat = 16
+    public static let slotWidth = artworkSize.width + trailingSpacing
 
     private let item: MediaItem
     private let spoilerSettings: SpoilerSettings
@@ -98,7 +98,7 @@ public struct EpisodeColumnCard: View, Equatable {
             .offset(y: reduceMotion || focusStyle.usesSystemEffect || isFocused ? 0 : -metrics.focusCaptionPush)
         }
         .frame(width: Self.artworkSize.width, alignment: .leading)
-        .padding(.horizontal, Self.sideMargin)
+        .padding(.trailing, Self.trailingSpacing)
         .focusableCard(
             isFocused: $isFocused,
             cornerRadius: metrics.landscapeCardCornerRadius,

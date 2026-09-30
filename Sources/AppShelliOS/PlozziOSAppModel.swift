@@ -52,7 +52,7 @@ final class PlozziOSAppModel {
             && pendingIdentityAccount == nil && pendingLibrarySelection == nil
             && pendingFirstRunStep == nil && profileOnboardingStep == nil
             && plexHomeUsers.pendingPlexPINRequest == nil
-            && (!profile.isLocked || isUnlockedThisRun(profile.id))
+            && !activeProfileNeedsUnlock
             && !profile.awaitsIdentity(amongAccounts: accountsProviders.activeAccountIDs)
     }
     var allowsStandalonePlayback: Bool { admissionContext.explicitStandaloneChoice }
@@ -334,7 +334,7 @@ final class PlozziOSAppModel {
     let trackerScrobbler: PlozziOSTrackerScrobbler
     let crashReporting: CrashReportingSettingsModel
     let crashReportingController: CrashReportingController
-    let requiresLaunchProfileSelection: Bool
+    private(set) var requiresLaunchProfileSelection: Bool
     private(set) var settings: PlozziOSSettingsModel
     @ObservationIgnored
     private var applicationIsActive = true
@@ -585,7 +585,7 @@ final class PlozziOSAppModel {
         // ordinary `selectProfile(_:)` gate with the picker behind it.
         let requiresLaunchProfileSelection =
             profiles.activeProfile.isLocked
-            || (profiles.askProfileOnStartup && profiles.profiles.count > 1)
+            || profiles.profiles.count > 1
         let accountsProviders = AccountsProvidersModel(
             accountStore: hubAccountStore,
             registry: registry,
@@ -801,6 +801,9 @@ final class PlozziOSAppModel {
         }
         accountError = launchErrors.isEmpty ? nil : launchErrors.joined(separator: "\n")
         accountsProviders.reloadAccounts()
+        if plexHomeUsers.restoreAutomaticSignInAtLaunch() {
+            self.requiresLaunchProfileSelection = false
+        }
         // Self-heal any stale server names (shared path with tvOS).
         accountsProviders.refreshServerNames()
         if canEnterApp,
@@ -810,7 +813,7 @@ final class PlozziOSAppModel {
         identityIndex.warmIdentityIndex()
         let scanReporter = shareScanStatus.reporter()
         Task { await mediaShareRuntime.configure(reporter: scanReporter) }
-        if !requiresLaunchProfileSelection {
+        if !self.requiresLaunchProfileSelection {
             plexHomeUsers.ensurePlexIdentityForActiveProfile()
         }
         drainWatchOutbox()
@@ -872,6 +875,7 @@ final class PlozziOSAppModel {
     }
 
     func applyCrashReportingPreference() {
+        crashReportingController.setScreen(CrashReportScreen(context: MainThreadStallProbe.context))
         crashReportingController.apply(
             enabled: crashReporting.settings.isEnabled,
             context: crashReportContext
@@ -1374,6 +1378,14 @@ final class PlozziOSAppModel {
     var activeProfileNeedsUnlock: Bool {
         let active = profiles.activeProfile
         return active.isLocked && !unlockedProfileIDs.contains(active.id)
+            && !plexHomeUsers.isAutomaticallySignedIn(active)
+    }
+
+    func setAutomaticallySignIn(_ enabled: Bool) {
+        plexHomeUsers.setAutomaticallySignIn(
+            enabled,
+            profileIsUnlocked: !activeProfileNeedsUnlock && !mustChooseProfile
+        )
     }
 
     /// Switches to `id`, unless it's locked and unproven this run — in which case
@@ -1545,6 +1557,7 @@ final class PlozziOSAppModel {
         // profile the gate exists to withhold, so everything below is conditional
         // on the switch having actually landed.
         guard profiles.activeProfileID == id else { return }
+        plexHomeUsers.beginExplicitProfileActivation()
         // Past both gates, so the hold has done its job. Released here rather
         // than on PIN success so that switching into another Kids Profile (which
         // needs no PIN) also releases it.

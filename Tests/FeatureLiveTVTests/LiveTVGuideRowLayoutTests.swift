@@ -11,6 +11,24 @@ import XCTest
 final class LiveTVGuideRowLayoutTests: XCTestCase {
     private let start = Date(timeIntervalSince1970: 1_800_000_000)
 
+    func testRestoredTimelineOffsetRetainsEnoughGuideHours() {
+        for width: CGFloat in [320, 1_000] {
+            XCTAssertEqual(PrototypeLayout.hoursCoveringTimelineOffset(0, for: width), 6)
+            let offset = PrototypeLayout.timelineX(28 * 3_600, for: width)
+            let hours = PrototypeLayout.hoursCoveringTimelineOffset(offset, for: width)
+            XCTAssertEqual(hours, 30)
+            XCTAssertGreaterThanOrEqual(
+                PrototypeLayout.maximumTimelineOffset(for: width, span: TimeInterval(hours) * 3_600),
+                offset
+            )
+            XCTAssertEqual(
+                PrototypeLayout.hoursCoveringTimelineOffset(
+                    PrototypeLayout.timelineX(200 * 3_600, for: width), for: width),
+                168
+            )
+        }
+    }
+
     func testNarrowClippedProgramsDoNotStretchTheChannelRow() {
         let programs = [
             program("leading", from: -1_080, to: 660),
@@ -760,7 +778,7 @@ private struct GuideRowFixture: View {
         PrototypeGuideRow(
             channel: channel, programs: programs, start: start,
             now: start.addingTimeInterval(nowOffset), width: width,
-            timelineOffset: .constant(timelineOffset), focus: $focus, railActive: false,
+            timeline: PrototypeTimelineScroll(offset: timelineOffset), focus: $focus, railActive: false,
             returnTarget: nil, favorite: false, playing: false,
             toggleFavorite: {}, tune: {}, details: { _ in },
             controls: {}, top: {}, goToNow: {}

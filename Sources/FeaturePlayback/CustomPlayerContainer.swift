@@ -159,11 +159,9 @@ struct ThemePaletteBox {
     let makeUpNextCard: (PlayerControlsModel, @escaping () -> Void, @escaping () -> Void, @escaping () -> Void) -> AnyView
 }
 
-/// The focusable root view that receives Siri Remote presses and indirect-touch
-/// pans. The engine's video surface and the controls overlay are added as
-/// non-interactive subviews, so focus stays here while scrubbing. While the
-/// bottom control bar owns focus, `allowsFocus` is flipped off so the focus
-/// engine can't bounce back here (Up exits via the control bar instead).
+/// The playback focus surface. Controls must be siblings, not descendants:
+/// TVUIKit artwork projects whenever an ancestor receives focus, even when its
+/// cell is disabled. Returning to playback must not focus every parked card.
 final class PlayerInputView: UIView {
     var allowsFocus = true
     override var canBecomeFocused: Bool { allowsFocus }
@@ -280,7 +278,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     /// only republishes on cue-boundary crossings, so this stays cheap.
     private var subtitleClock: CADisplayLink?
 
-    private var playerInputView: PlayerInputView? { view as? PlayerInputView }
+    private let playerInputView = PlayerInputView()
 
     init(engine: any VideoEngine, model: PlayerControlsModel, actions: PlayerActions) {
         self.engine = engine
@@ -293,9 +291,12 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func loadView() {
-        let inputView = PlayerInputView()
-        inputView.backgroundColor = .black
-        view = inputView
+        let root = UIView()
+        root.backgroundColor = .black
+        playerInputView.frame = root.bounds
+        playerInputView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        root.addSubview(playerInputView)
+        view = root
     }
 
     override func viewDidLoad() {
@@ -405,7 +406,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
     /// display-link then drives the cue timeline off the engine clock.
     func attachSubtitleOverlay(_ model: LiveSubtitleModel) {
         subtitleModel = model
-        let host = UIHostingController(rootView: LiveSubtitleOverlay(model: model))
+        let host = UIHostingController(rootView: LiveSubtitleOverlay(model: model, controls: self.model))
         host.view.backgroundColor = .clear
         host.view.isUserInteractionEnabled = false
         host.view.frame = view.bounds
@@ -441,7 +442,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
 
     @objc private func tickSubtitleClock() {
         updateSubtitleVideoRect()
-        subtitleModel?.tick(engine.currentTime)
+        subtitleModel?.tick(engine.subtitlePresentationTime)
     }
 
     /// Hosts the combined transport + focusable control bar. It stays attached
@@ -687,7 +688,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         hideControls()
         setSurfaceRecognizers(enabled: false)
         skipButtonHost?.view.isUserInteractionEnabled = true
-        playerInputView?.allowsFocus = false
+        playerInputView.allowsFocus = false
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
     }
@@ -704,7 +705,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         // surface if the skip button was the focus owner.
         if focusContext == .skipButton {
             focusContext = .surface
-            playerInputView?.allowsFocus = true
+            playerInputView.allowsFocus = true
             setSurfaceRecognizers(enabled: true)
             setNeedsFocusUpdate()
             updateFocusIfNeeded()
@@ -790,7 +791,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         hideControls()
         setSurfaceRecognizers(enabled: false)
         upNextHost?.view.isUserInteractionEnabled = true
-        playerInputView?.allowsFocus = false
+        playerInputView.allowsFocus = false
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
     }
@@ -805,7 +806,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         upNextHost?.view.isUserInteractionEnabled = false
         if focusContext == .upNext {
             focusContext = .surface
-            playerInputView?.allowsFocus = true
+            playerInputView.allowsFocus = true
             setSurfaceRecognizers(enabled: true)
             setNeedsFocusUpdate()
             updateFocusIfNeeded()
@@ -848,7 +849,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         if focusContext == .controlBar, let controlBarHost {
             return [controlBarHost.view]
         }
-        return [view]
+        return [playerInputView]
     }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
@@ -1346,7 +1347,8 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
                 let hideAt = ControlsAutoHidePolicy.hideDate(
                     loadDoneAt: loadDoneAt,
                     inputAt: inputAt,
-                    infoCardOpen: self?.model.controlBar.infoCardOpen ?? false
+                    infoCardOpen: self?.model.controlBar.infoCardOpen ?? false,
+                    episodeBrowserOpen: self?.model.controlBar.episodeBrowserOpen ?? false
                 )
                 let wait = hideAt.timeIntervalSinceNow
                 if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
@@ -1418,7 +1420,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         model.controlBarVisible = true
         setSurfaceRecognizers(enabled: false)
         controlBarHost?.view.isUserInteractionEnabled = true
-        playerInputView?.allowsFocus = false
+        playerInputView.allowsFocus = false
         // Hand UIKit its focus update only once the controls have applied the focus
         // this entry direction asks for. The engine picks from whatever SwiftUI last
         // RENDERED, and none of the controls' entry logic — the target itself, or
@@ -1480,7 +1482,7 @@ final class PlayerInputViewController: UIViewController, UIGestureRecognizerDele
         model.controlBar.focusArmed = false
         model.controlBar.settled = false
         controlBarHost?.view.isUserInteractionEnabled = false
-        playerInputView?.allowsFocus = true
+        playerInputView.allowsFocus = true
         setSurfaceRecognizers(enabled: true)
         setNeedsFocusUpdate()
         updateFocusIfNeeded()

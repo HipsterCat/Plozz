@@ -24,9 +24,8 @@ settings:
     # Marketing version (CFBundleShortVersionString) fallback. Defined once here so
     # the app and Top Shelf extension share the same value (the extension's
     # CFBundleShortVersionString must match the parent app's). tools/generate-project.sh
-    # bakes the real value on every regenerate — a CalVer build date (YYYY.M.D) by
-    # default, or PLOZZ_MARKETING_VERSION when you want a hand-chosen release name
-    # (e.g. "1.0"). This literal only survives a bare `xcodegen generate`.
+    # reads the stable Apple version from the release catalog, or an explicitly
+    # validated PLOZZ_MARKETING_VERSION override. Never derive it from today's date.
     MARKETING_VERSION: "0.1"
     # Opt-in crash reporting endpoint (Sentry DSN). Empty by default so the app
     # is a true no-op unless a real DSN is provided. tools/generate-project.sh
@@ -45,6 +44,9 @@ settings:
     # Stable id of the release-notes catalog entry shipped in a TestFlight/App
     # Store binary. Local builds leave it empty and never show update notes.
     PLOZZ_RELEASE_ID: ""
+    # Display-only date/revision version from the selected catalog entry.
+    # Empty for local builds; never written to CFBundleShortVersionString.
+    PLOZZ_RELEASE_VERSION: ""
 
 # Local Swift package providing all modular feature/code libraries.
 packages:
@@ -104,6 +106,7 @@ targets:
         # for local builds, which fall back to runtime detection.
         PlozzReleaseChannel: "$(PLOZZ_RELEASE_CHANNEL)"
         PlozzReleaseID: "$(PLOZZ_RELEASE_ID)"
+        PlozzReleaseVersion: "$(PLOZZ_RELEASE_VERSION)"
         # Background audio keeps music playing while the user browses other
         # screens or the tvOS screensaver starts. Required for the music MVP's
         # background/Now-Playing behaviour (AVAudioSession .playback).
@@ -330,6 +333,7 @@ targets:
         PlozzSentryDSN: "$(PLOZZ_SENTRY_DSN)"
         PlozzReleaseChannel: "$(PLOZZ_RELEASE_CHANNEL)"
         PlozzReleaseID: "$(PLOZZ_RELEASE_ID)"
+        PlozzReleaseVersion: "$(PLOZZ_RELEASE_VERSION)"
         UILaunchScreen: {}
         UIRequiresFullScreen: false
         # remote-notification lets CloudKit (CKSyncEngine) wake the app to pull
@@ -484,6 +488,11 @@ targets:
     sources:
       - path: Tests/iOSPresentationTests
       - path: Tests/AuthPresentationSupport
+      - path: Tests/SubtitlePresentationSupport
+        excludes: ["Fixtures"]
+      - path: Tests/SubtitlePresentationSupport/Fixtures
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.PresentationTests
@@ -512,6 +521,11 @@ targets:
     sources:
       - path: Tests/FocusIntegrationTests
       - path: Tests/AuthPresentationSupport
+      - path: Tests/SubtitlePresentationSupport
+        excludes: ["Fixtures"]
+      - path: Tests/SubtitlePresentationSupport/Fixtures
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.thatcube.Plozz.FocusTests

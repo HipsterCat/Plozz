@@ -37,10 +37,20 @@ public enum MainThreadStallProbe {
     public static let printsChanges: Bool =
         ProcessInfo.processInfo.environment["PLZSTALL"] == "1"
 
+    /// The app shell listens for screen changes to update the opt-in crash
+    /// reporter's fixed-category tag, even when the local stall probe is off.
+    public static let contextDidChange = Notification.Name("PlozzScreenContextDidChange")
+
     /// What the app believes is on screen, so a stall can be attributed without
     /// a symbolicated stack. Set by screens that opt in; free-form and
     /// developer-facing only.
-    public static var context: String = "-"  // l10n:content — developer-facing diagnostic
+    public static var context: String = "startup" {  // l10n:content — developer-facing diagnostic
+        didSet {
+            if context != oldValue {
+                NotificationCenter.default.post(name: contextDidChange, object: nil)
+            }
+        }
+    }
 
     public static func startIfRequested() {
         guard ProcessInfo.processInfo.environment["PLZSTALL"] == "1", !running else { return }

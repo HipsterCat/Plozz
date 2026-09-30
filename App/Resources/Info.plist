@@ -69,12 +69,18 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Plozz uses your local network to discover Jellyfin and Emby servers and media shares automatically.</string>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>TVUserActivityTypeBrowsingChannelGuide</string>
+	</array>
 	<key>OMDBAPIKey</key>
 	<string>$(OMDB_API_KEY)</string>
 	<key>PlozzReleaseChannel</key>
 	<string>$(PLOZZ_RELEASE_CHANNEL)</string>
 	<key>PlozzReleaseID</key>
 	<string>$(PLOZZ_RELEASE_ID)</string>
+	<key>PlozzReleaseVersion</key>
+	<string>$(PLOZZ_RELEASE_VERSION)</string>
 	<key>PlozzSentryDSN</key>
 	<string>$(PLOZZ_SENTRY_DSN)</string>
 	<key>SimklClientID</key>
@@ -114,10 +120,6 @@
 		<string>OpenDyslexic-Italic.otf</string>
 		<string>OpenDyslexic-Bold.otf</string>
 		<string>OpenDyslexic-BoldItalic.otf</string>
-	</array>
-	<key>NSUserActivityTypes</key>
-	<array>
-		<string>TVUserActivityTypeBrowsingChannelGuide</string>
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>

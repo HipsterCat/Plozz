@@ -386,12 +386,16 @@ struct PlozziOSHomeView: View {
     private func loadedContent(_ content: HomeViewModel.Content) -> some View {
         let visibility = appModel.settings.homeVisibility
         let settings = appModel.settings.hero.settings
+        let heroContent = HomeHeroLaunchPolicy.content(
+            content, awaitingLiveContinueWatching: !viewModel.hasLiveContinueWatching,
+            loadingRows: viewModel.loadingRows
+        )
         let randomLibraries = HeroRandomLibrarySelection.resolve(
-            content.libraries, settings: settings,
+            heroContent.libraries, settings: settings,
             isVisible: visibility.isVisibleOnHome
         )
         let sourceEligibility = heroSourceEligibility(
-            content: content, randomLibraries: randomLibraries,
+            content: heroContent, randomLibraries: randomLibraries,
             candidates: heroItems, supportingCandidates: heroCandidatePool
         )
         let displayHeroItems = HeroCurator().reconcile(
@@ -403,7 +407,10 @@ struct PlozziOSHomeView: View {
             isLibraryVisible: visibility.isVisibleOnHome,
             isGlobalRowEnabled: visibility.isGlobalRowEnabled,
             includesEmptyWatchlist:
-                viewModel.watchlistLoadingPlaceholderCount > 0
+                viewModel.watchlistLoadingPlaceholderCount > 0,
+            loadingRows: viewModel.loadingRows,
+            failures: viewModel.rowFailures,
+            skeletonLayout: viewModel.skeletonLayout
         )
         let heroStyle: HeroArtworkStyle = horizontalSizeClass == .compact
             ? .compactPortrait
@@ -525,28 +532,19 @@ struct PlozziOSHomeView: View {
                                 viewModel.watchlistLoadingPlaceholderCount
                         )
                     }
-                    if content.librarySections.isEmpty {
-                        // The per-library blocks arrive after the global rows (a
-                        // cached snapshot paints the top of Home first, then the
-                        // full load fills in the libraries). Reserving their space
-                        // with placeholders stops the page from growing underneath
-                        // the viewer — which moved the scroll position and made the
-                        // whole page appear to jump when the libraries landed.
-                        // Keyed off `libraries`, which is known before the sections
-                        // are, so we know how many blocks to expect.
-                        ForEach(
-                            content.libraries.filter {
-                                visibility.isVisibleOnHome($0.key)
-                            }
-                        ) { library in
-                            PlozziOSHomeSkeletonRail(
-                                title: Text(verbatim: library.library.title),
-                                style: .poster
-                            )
-                        }
-                    } else {
-                        ForEach(content.librarySections) { group in
-                            ForEach(group.sections) { section in
+                    ForEach(content.librarySections) { group in
+                        ForEach(group.rows) { row in
+                            let section = row.section
+                            if let failure = row.failure {
+                                PlozziOSHomeRowFailure(
+                                    title: Text(verbatim: section.title),
+                                    error: failure, viewModel: viewModel
+                                )
+                            } else if row.isLoading {
+                                PlozziOSHomeSkeletonRail(
+                                    title: Text(verbatim: section.title), style: .poster
+                                )
+                            } else {
                                 PlozziOSHomeMediaRail(
                                     title: Text(verbatim: section.title),
                                     items: section.items,
@@ -596,7 +594,7 @@ struct PlozziOSHomeView: View {
         }
         .task(
             id: HeroCurationLoadKey(
-                content: content,
+                content: heroContent,
                 settings: appModel.settings.hero.settings,
                 visibility: appModel.settings.homeVisibility.visibility,
                 freshnessRevision: heroFreshnessRefresh.revision,
@@ -606,7 +604,7 @@ struct PlozziOSHomeView: View {
                 seerRevision: appModel.seerService.connectionRevision
             )
         ) {
-            await loadHero(from: content)
+            await loadHero(from: heroContent)
         }
     }
 
@@ -992,7 +990,11 @@ struct PlozziOSHomeView: View {
     }
 
     private func refreshHeroSourceEligibility() {
-        guard let content = viewModel.state.value else { return }
+        guard let snapshot = viewModel.state.value else { return }
+        let content = HomeHeroLaunchPolicy.content(
+            snapshot, awaitingLiveContinueWatching: !viewModel.hasLiveContinueWatching,
+            loadingRows: viewModel.loadingRows
+        )
         let randomLibraries = HeroRandomLibrarySelection.resolve(
             content.libraries, settings: appModel.settings.hero.settings,
             isVisible: appModel.settings.homeVisibility.isVisibleOnHome
@@ -2232,6 +2234,27 @@ private struct PlozziOSFeaturedRow: View {
     }
 }
 
+private struct PlozziOSHomeRowFailure: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    let title: Text
+    let error: AppError
+    let viewModel: HomeViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            title
+                .font(.title2.bold())
+                .padding(.horizontal, PlozziOSPageLayout.horizontalInset(for: horizontalSizeClass))
+            ContentStateView<Bool, EmptyView>(
+                state: .failed(error),
+                onRetry: { Task { await viewModel.load(showLoadingState: false) } }
+            ) { _ in EmptyView() }
+            .frame(minHeight: 220)
+            .disabled(viewModel.isRefreshing)
+        }
+    }
+}
+
 private struct PlozziOSHomeRowView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let row: HomeRow
@@ -2242,7 +2265,9 @@ private struct PlozziOSHomeRowView: View {
 
     var body: some View {
         Group {
-            if row.kind == .libraries {
+            if let failure = row.failure, row.items.isEmpty, row.libraries.isEmpty {
+                PlozziOSHomeRowFailure(title: Text(row.title), error: failure, viewModel: viewModel)
+            } else if row.kind == .libraries, row.loadingPlaceholderCount == 0 {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(row.title)
                         .font(.title2.bold())
@@ -2261,7 +2286,8 @@ private struct PlozziOSHomeRowView: View {
                 // page shifting.
                 PlozziOSHomeSkeletonRail(
                     title: Text(row.title),
-                    style: row.style == .landscape ? .landscape : .poster,
+                    style: row.kind == .libraries || row.style == .landscape ? .landscape : .poster,
+                    cardCount: row.loadingPlaceholderCount > 0 ? row.loadingPlaceholderCount : 8,
                     showsCaption: !(row.kind == .continueWatching
                         && appModel.settings.homeVisibility.continueWatchingShowsSeriesArtwork),
                     showsSeriesArtwork: row.kind == .continueWatching

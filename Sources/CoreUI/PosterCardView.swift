@@ -64,6 +64,7 @@ public struct PosterCardView: View {
     @State private var textlessAnswerRevision = 0
     @Environment(\.plozzReduceTransparency) private var reduceTransparency
     @Environment(\.plozzMetrics) private var metrics
+    @Environment(\.locale) private var locale
     /// Per-profile card presentation (framed glass card vs borderless artwork).
     @Environment(\.plozzCardStyle) private var cardStyle
     /// Per-profile focus treatment. With the outline off, a framed card keeps its
@@ -139,6 +140,14 @@ public struct PosterCardView: View {
     /// ink — the lift's white plate is what made dark text legible, and there is
     /// no plate now.
     private var surfaceFocused: Bool { isFocused && focusStyle.drawsFocusOutline }
+
+    private var cardAccessibilityTitle: String? {
+        #if os(tvOS)
+        nativePosterTitle.resolve(locale: locale)
+        #else
+        nil
+        #endif
+    }
 
     /// Title/subtitle colour, flipped to dark ink over a focused card's opaque
     /// "lift" surface. Centralised in `PlozzCardCaption` so every card type flips
@@ -371,7 +380,10 @@ public struct PosterCardView: View {
             cornerRadius: metrics.posterCardCornerRadius,
             outlineScale: PlozzTheme.Metrics.focusedCardScale
         )
-        .focusableCard(isFocused: $isFocused, cornerRadius: metrics.posterCardCornerRadius, action: selectCard)
+        .focusableCard(
+            isFocused: $isFocused, cornerRadius: metrics.posterCardCornerRadius,
+            accessibilityLabel: cardAccessibilityTitle, action: selectCard
+        )
         .plozzCardFocusTransition(isFocused: isFocused)
     }
 
@@ -427,7 +439,10 @@ public struct PosterCardView: View {
             cornerRadius: metrics.landscapeCardCornerRadius,
             outlineScale: PlozzTheme.Metrics.mediumFocusedCardScale
         )
-        .focusableCard(isFocused: $isFocused, cornerRadius: metrics.landscapeCardCornerRadius, action: selectCard)
+        .focusableCard(
+            isFocused: $isFocused, cornerRadius: metrics.landscapeCardCornerRadius,
+            accessibilityLabel: cardAccessibilityTitle, action: selectCard
+        )
         .plozzCardFocusTransition(isFocused: isFocused)
     }
 
@@ -465,6 +480,10 @@ public struct PosterCardView: View {
             }
         }
         .padding(.horizontal, metrics.borderlessCardSideMargin)
+        #if os(tvOS)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(verbatim: nativePosterTitle.resolve(locale: locale)))
+        #endif
         .focusableCard(isFocused: $isFocused, cornerRadius: borderlessCornerRadius, action: selectCard)
         // A borderless card's focus halo + scale bloom extend *beyond* the layout
         // bounds. `compositingGroup` composites them as one unit without clipping;
@@ -1230,10 +1249,10 @@ public struct PosterCardView: View {
     /// Router-resolved logo, for the many libraries whose server carries none.
     /// Bounded by the shared resolve limiter so a scrolling row can't fire one
     /// lookup per card at once.
-    private var seriesLogoFallback: (@Sendable () async -> URL?)? {
+    private var seriesLogoFallback: HeroLogoFallback? {
         guard enablesAsyncArtworkFallback else { return nil }
         let target = item.kind == .episode ? Self.seriesArtworkItem(for: item) : item
-        return {
+        return HeroLogoFallback(for: target) {
             await ArtworkSession.artworkResolveLimiter.run {
                 if Task.isCancelled { return nil }
                 return await ArtworkRouter.shared.artworkURL(.logo, for: target)
@@ -1266,7 +1285,7 @@ struct ContinueWatchingSeriesLogo: View {
     let logoReferences: [ArtworkReference]
     let artworkReferences: [ArtworkReference]
     let artworkVariant: ArtworkImageVariant
-    let asyncFallbackURL: (@Sendable () async -> URL?)?
+    let asyncFallbackURL: HeroLogoFallback?
 
     @Environment(\.plozzMetrics) private var metrics
     @State private var logoTone: ResolvedLogoTone?
