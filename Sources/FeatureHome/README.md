@@ -88,6 +88,8 @@ native TVUIKit for System, lighting/lift for Highlight, and glass for Outline.
 Borderless effects belong to the artwork, not its wider layout/caption slot;
 framed cards use the same concentric card surface as loaded content.
 After the viewer navigates, it keeps the focused card when an earlier row finishes.
+Classic Home preserves loaded cards' focus-binding hierarchy when an empty
+earlier row disappears, so the new first row does not recreate its focused card.
 Carousel rows share a native focus
 section so Down can cross a loading row to reach usable content. Placeholder and
 resolved heroes use the same row-recede geometry. The `PLZBOOT` row-ready events distinguish first usable

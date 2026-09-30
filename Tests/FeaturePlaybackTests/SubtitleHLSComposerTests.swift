@@ -17,7 +17,7 @@ final class SubtitleHLSComposerTests: XCTestCase {
 
     @MainActor
     final class AuthenticatedSubtitleResolutionTests: XCTestCase {
-        func testNativeEngineResolvesSubtitleAtLoadBoundary() async throws {
+        func testNativeEnginePreservesPlatformSpecificSubtitleDelivery() async throws {
             let locator = try AuthenticatedHTTPPlaybackLocator(
                 provider: .jellyfin,
                 accountID: "account",
@@ -59,9 +59,61 @@ final class SubtitleHLSComposerTests: XCTestCase {
 
             await engine.load(request: request, startPosition: 0)
 
+            let loadedURL = (engine.underlyingPlayer?.currentItem?.asset as? AVURLAsset)?.url
+            #if os(tvOS)
+            XCTAssertEqual(loadedURL, request.streamURL)
+            XCTAssertTrue(resolver.locators.isEmpty, "The overlay owns sidecar authorization at selection time")
+            #else
             XCTAssertEqual(resolver.locators, [locator])
+            XCTAssertEqual(loadedURL, SubtitleHLSComposer.masterURL())
+            #endif
+            XCTAssertEqual(engine.subtitleTracks, request.subtitleTracks)
+            XCTAssertTrue(engine.supportsSubtitleTimingAdjustments(for: request.subtitleTracks[0]))
+            XCTAssertEqual(engine.underlyingPlayer?.currentItem?.appliesPerFrameHDRDisplayMetadata, true)
             await engine.stop()
         }
+
+        #if os(tvOS)
+        func testDirectFileWithSidecarsNeverDependsOnProviderHDRHints() async {
+            let original = URL(fileURLWithPath: "/nonexistent/native-original.mp4")
+            let sidecar = MediaTrack(
+                id: 2, kind: .subtitle, displayTitle: "English", language: "en", codec: "srt",
+                deliverySource: .localFile(URL(fileURLWithPath: "/nonexistent/native-sidecar.srt"))
+            )
+            for range in [nil, "SDR", "HDR10", "HDR10Plus", "HLG", "DOVI"] as [String?] {
+                let engine = NativeVideoEngine(startsMuted: true)
+                let request = PlaybackRequest(
+                    item: MediaItem(id: "movie", title: "Movie", kind: .movie, runtime: 120),
+                    streamURL: original, subtitleTracks: [sidecar],
+                    sourceMetadata: .init(video: .init(codec: "hevc", videoRangeType: range))
+                )
+                await engine.load(request: request, startPosition: 0)
+                XCTAssertEqual((engine.underlyingPlayer?.currentItem?.asset as? AVURLAsset)?.url, original)
+                XCTAssertEqual(engine.subtitleTracks, [sidecar])
+                XCTAssertEqual(engine.underlyingPlayer?.currentItem?.appliesPerFrameHDRDisplayMetadata, true)
+                engine.stop()
+            }
+        }
+
+        func testProviderManifestIsNotWrappedOrResolvingUnusedSidecars() async throws {
+            let original = URL(string: "https://media.example/master.m3u8")!
+            let resolver = RecordingSubtitleResolver(resolvedURL: URL(fileURLWithPath: "/unused.vtt"))
+            let engine = NativeVideoEngine(authenticatedHTTPResolver: resolver, startsMuted: true)
+            let request = PlaybackRequest(
+                item: MediaItem(id: "movie", title: "Movie", kind: .movie, runtime: 120),
+                streamURL: original,
+                subtitleTracks: [.init(
+                    id: 2, kind: .subtitle, displayTitle: "English",
+                    deliverySource: .localFile(URL(fileURLWithPath: "/unused.vtt"))
+                )]
+            )
+            await engine.load(request: request, startPosition: 0)
+            defer { engine.stop() }
+            XCTAssertTrue(request.isManifestStream)
+            XCTAssertEqual((engine.underlyingPlayer?.currentItem?.asset as? AVURLAsset)?.url, original)
+            XCTAssertTrue(resolver.locators.isEmpty)
+        }
+        #endif
 
         func testSupersededAuthenticatedLoadCannotReplaceNewerPlayer() async throws {
             let locator = try AuthenticatedHTTPPlaybackLocator(

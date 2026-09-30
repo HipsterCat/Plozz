@@ -22,10 +22,12 @@ and the diagnostics overlay.
   sidecars, Plozzigen decoders, and `NativeSubtitleCueOutput` for native legible
   tracks. `SubtitleStyleRules` remains the reduced AVPlayer styling adapter
   for system-owned external presentation.
-- **Subtitles** — `SubtitleHLSComposer`, `SubtitleInjectingResourceLoader`,
-  `WebVTTNormalizer`: inject external sidecar subtitles into the
-  AVPlayer pipeline as a synthesized HLS variant and normalize timing /
-  encoding to WebVTT, AVPlayer's only timed-text format.
+- **Native video assets** — tvOS feeds the resolved original URL directly to
+  AVPlayer even when sidecars are available. Track menus still use provider
+  tracks; the owned overlay authorizes and fetches selected SRT/WebVTT sidecars.
+  Embedded captions retain native cue extraction. iOS keeps the existing
+  `SubtitleHLSComposer` / `SubtitleInjectingResourceLoader` path; real provider
+  HLS, trailer audio composition, and Plozzigen are unchanged.
 - **Trickplay scrubbing** — `ScrubGeometry`, `ScrubThumbnailProviding`,
   `TrickplayThumbnailLoader`, `PlexBIFThumbnailLoader`: focus-driven
   scrub bar with per-provider thumbnail loaders (Jellyfin "trickplay"
@@ -50,6 +52,11 @@ and the diagnostics overlay.
   AVPlayer text style — it all flows through `SubtitleStyleRules`.
 - **No secrets in URLs logged.** Stream URLs frequently embed tokens —
   `PlayerViewModel` redacts before logging.
+
+Native asset diagnostics identify `original-url`, `provider-manifest`,
+`subtitle-wrapper`, or `trailer-composition` without recording the URL or tokens.
+Bypassing the legacy tvOS wrapper preserves native media delivery; it is not
+proof of HDR10+ HDMI output, nor a change to the Plozzigen path.
 
 WebVTT sidecars distinguish caption class names from literal CSS colors.
 An unstyled `<c.green>` is a compatibility alias for bright `lime` (`#00FF00`),

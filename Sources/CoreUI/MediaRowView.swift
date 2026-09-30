@@ -206,6 +206,7 @@ public struct MediaRowView: View {
     @State private var pendingEntryHandoff = false
     @State private var alignedEntryTarget: String?
     @PlozzCardFocus private var loadingCardFocused: Bool
+    @State private var tracksLoadingFocus: Bool
 
     public init(
         title: Text?,
@@ -287,6 +288,7 @@ public struct MediaRowView: View {
         self.title = title
         self.loadingPlaceholderCount = max(loadingPlaceholderCount, 0)
         self.reservesLoadingFocus = reservesLoadingFocus
+        _tracksLoadingFocus = State(initialValue: reservesLoadingFocus)
         self.episodeEntry = episodeEntry
         let uniqueItems = Self.uniqued(items)
         self.items = uniqueItems
@@ -336,7 +338,7 @@ public struct MediaRowView: View {
     /// Whether each card needs an individual focus binding installed — required
     /// to drive initial/default focus and to report focus changes to the hero.
     private var tracksFocus: Bool {
-        reservesLoadingFocus || episodeEntry != nil || MediaRowFocusPolicy.observesFocus(
+        tracksLoadingFocus || episodeEntry != nil || MediaRowFocusPolicy.observesFocus(
             initialFocusID: initialFocusID,
             defaultFocusID: defaultFocusID,
             hasOnFocusEntered: onFocusEntered != nil,
@@ -628,6 +630,11 @@ public struct MediaRowView: View {
                     // opposite side" bug, commit f812fe64).
                     .focusSectionIf(gatesFocus || episodeEntry != nil)
                     .onAppear { applyInitialFocus(using: proxy) }
+                    .onChange(of: reservesLoadingFocus) { _, reserves in
+                        // Becoming the first row must not replace already-loaded
+                        // cards with a different focus-binding hierarchy.
+                        if reserves, items.isEmpty { tracksLoadingFocus = true }
+                    }
                     // The opening alignment usually CAN'T run on first layout: a
                     // season page loads its episodes asynchronously, so `onAppear`
                     // fires with an empty row and the target not yet in `itemIDSet`.
