@@ -954,7 +954,7 @@ actor ShareScanner {
                 scanGeneration: scanGeneration
             )
             await store.setLibraryAnimeContext(
-                libraryConfiguration?.isAnime == true,
+                libraryConfiguration?.usesAnimeMetadata == true,
                 scanGeneration: scanGeneration
             )
         }
@@ -1473,8 +1473,8 @@ actor ShareScanner {
             )
         case .episode(let ep):
             let anime = libraryConfiguration?.contentType == .tvShows
-                ? libraryConfiguration?.isAnime == true
-                : libraryConfiguration?.isAnime == true || isAnimePath(relPath)
+                ? libraryConfiguration?.usesAnimeMetadata == true
+                : libraryConfiguration?.usesAnimeMetadata == true || isAnimePath(relPath)
             let library: CatalogLibrary = anime ? .anime : .tv
             let fallback = "S\(ep.season)·E\(String(format: "%02d", ep.episode))"
             return CatalogAsset(
@@ -1511,8 +1511,9 @@ actor ShareScanner {
             return ancestors[0...idx].joined(separator: "/")
         }
         guard libraryConfiguration?.contentType == .tvShows
+                || libraryConfiguration?.contentType == .anime
                 || (libraryConfiguration?.contentType == .automatic
-                    && libraryConfiguration?.isAnime == true),
+                    && libraryConfiguration?.usesAnimeMetadata == true),
               let first = ancestors.first,
               !ShareMediaParser.isSeasonFolder(first) else {
             return nil
@@ -1541,7 +1542,7 @@ actor ShareScanner {
         guard let libraryConfiguration else { return "legacy" }
         return [
             libraryConfiguration.contentType.rawValue,
-            libraryConfiguration.isAnime ? "anime" : "standard",
+            libraryConfiguration.usesAnimeMetadata ? "anime" : "standard",
         ].joined(separator: ":")
     }
 

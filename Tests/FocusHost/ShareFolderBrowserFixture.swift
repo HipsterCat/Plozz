@@ -7,16 +7,23 @@ import SwiftUI
 
 struct ShareFolderBrowserFixture: View {
     @State private var model = UnifiedAddShareModel(webDAVProbe: FolderNavigationProbe())
+    @State private var savedContent: String?
 
     var body: some View {
         UnifiedAddShareView(
             isPageReady: false, onBack: {},
-            onSMBConfigured: { _ in }, onWebDAVConfigured: { _ in },
+            onSMBConfigured: { _ in },
+            onWebDAVConfigured: { savedContent = $0.libraryConfiguration?.contentType.rawValue },
             viewModel: model
         )
         .environment(\.themePalette, .pureBlack)
         .preferredColorScheme(.dark)
         .background(Color.black.ignoresSafeArea())
+        .overlay(alignment: .topLeading) {
+            if let savedContent {
+                Text(savedContent).accessibilityIdentifier("saved-share-content")
+            }
+        }
         .task {
             model.openManualConnect()
             model.applyTransport(.webDAV)

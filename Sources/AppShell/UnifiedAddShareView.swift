@@ -28,7 +28,7 @@ struct UnifiedAddShareView: View {
         case proto, address, port, portChip(Int)
         case authToggle, username, password, token, connect
         case approve, reject
-        case manualShare, displayName, contentType, anime, useFolder
+        case manualShare, displayName, contentType, useFolder
         case comingSoonBack
     }
 
@@ -404,9 +404,6 @@ struct UnifiedAddShareView: View {
                         ForEach(MediaShareLibraryConfiguration.ContentType.allCases, id: \.self) { type in
                             Button {
                                 viewModel.libraryContentType = type
-                                if type == .personalVideos {
-                                    viewModel.libraryIsAnime = false
-                                }
                             } label: {
                                 if type == viewModel.libraryContentType {
                                     Label { Text(libraryContentLabel(type)) } icon: {
@@ -429,16 +426,6 @@ struct UnifiedAddShareView: View {
                     }
                     .focused($focus, equals: .contentType)
                 }
-                if viewModel.libraryContentType != .personalVideos {
-                    Toggle(
-                        "Anime",
-                        isOn: Binding(
-                            get: { viewModel.libraryIsAnime },
-                            set: { viewModel.setLibraryIsAnime($0) }
-                        )
-                    )
-                    .focused($focus, equals: .anime)
-                }
             }
         }
         .focusSection()
@@ -451,6 +438,7 @@ struct UnifiedAddShareView: View {
         case .automatic: "Mixed (Automatic)"
         case .movies: "Movies"
         case .tvShows: "TV Shows"
+        case .anime: "Anime"
         case .personalVideos: "Personal Videos"
         }
     }

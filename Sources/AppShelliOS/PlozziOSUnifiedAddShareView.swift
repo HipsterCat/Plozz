@@ -466,20 +466,6 @@ struct PlozziOSUnifiedAddShareView: View {
                     Text(libraryContentLabel(type)).tag(type)
                 }
             }
-            .onChange(of: viewModel.libraryContentType) { _, type in
-                if type == .personalVideos {
-                    viewModel.libraryIsAnime = false
-                }
-            }
-            if viewModel.libraryContentType != .personalVideos {
-                Toggle(
-                    "Anime",
-                    isOn: Binding(
-                        get: { viewModel.libraryIsAnime },
-                        set: { viewModel.setLibraryIsAnime($0) }
-                    )
-                )
-            }
         }
     }
 
@@ -490,6 +476,7 @@ struct PlozziOSUnifiedAddShareView: View {
         case .automatic: "Mixed (Automatic)"
         case .movies: "Movies"
         case .tvShows: "TV Shows"
+        case .anime: "Anime"
         case .personalVideos: "Personal Videos"
         }
     }

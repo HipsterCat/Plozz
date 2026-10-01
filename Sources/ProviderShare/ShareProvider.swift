@@ -194,13 +194,13 @@ public struct ShareProvider: MediaProvider, MediaFileBrowsing, MediaSortFieldPro
             ))
         case .tvShows:
             result.append(MediaLibrary(
-                id: libraryConfiguration?.isAnime == true
+                id: libraryConfiguration?.usesAnimeMetadata == true
                     ? ShareCatalogID.animeLibrary
                     : ShareCatalogID.tvLibrary,
                 title: libraryConfiguration?.name ?? session.server.name,
                 kind: .series
             ))
-        case .automatic, nil:
+        case .automatic, .anime, nil:
             if counts.movies > 0 {
                 result.append(MediaLibrary(id: ShareCatalogID.moviesLibrary, title: "Movies", kind: .movie,
                                            synthesizedName: .movies))

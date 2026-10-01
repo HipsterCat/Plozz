@@ -3,6 +3,52 @@ import UIKit
 
 @MainActor
 final class ShareFolderNavigationTests: XCTestCase {
+    func testAnimeIsAContentMenuChoiceWithoutASeparateToggle() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.thatcube.Plozz.FocusHost")
+        app.launchArguments = ["--share-folder-fixture"]
+        app.launch()
+        defer { app.terminate() }
+        let mixed = app.buttons.containing(.staticText, identifier: "Mixed (Automatic)").firstMatch
+        XCTAssertTrue(mixed.waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertFalse(app.switches["Anime"].exists)
+        let focusedMenuContent = mixed.descendants(matching: .any)
+            .matching(NSPredicate(format: "hasFocus == true")).firstMatch
+        for _ in 0..<4 {
+            if mixed.hasFocus || focusedMenuContent.exists { break }
+            XCUIRemote.shared.press(.up)
+        }
+        XCTAssertTrue(mixed.hasFocus || focusedMenuContent.exists, app.debugDescription)
+        XCUIRemote.shared.press(.select)
+        let anime = app.collectionViews.cells.containing(.other, identifier: "Anime").firstMatch
+        XCTAssertTrue(anime.waitForExistence(timeout: 5), app.debugDescription)
+        for title in ["Mixed (Automatic)", "Movies", "TV Shows", "Anime", "Personal Videos"] {
+            XCTAssertTrue(app.collectionViews.cells.containing(.other, identifier: title).firstMatch.exists)
+        }
+        for _ in 0..<5 {
+            if anime.hasFocus { break }
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(anime.hasFocus)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.staticTexts["Anime"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.switches["Anime"].exists)
+        XCUIRemote.shared.press(.down)
+        XCTAssertTrue(app.buttons["Use This Folder"].hasFocus)
+        XCUIRemote.shared.press(.down)
+        let index = try XCTUnwrap(focusedIndex(in: app))
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.staticTexts[String(format: "/Movies/Movie%%20%04d%%20%%282026%%29", index)]
+            .waitForExistence(timeout: 5))
+        let confirmation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasFocus == true"), object: app.buttons["Use This Folder"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [confirmation], timeout: 5), .completed)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.staticTexts["saved-share-content"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["saved-share-content"].label, "anime")
+    }
+
     func testRepeatedDownAdvancesThroughLargeFolderAndRecordsNativeHitches() throws {
         guard #available(tvOS 26.0, *) else { throw XCTSkip("Native hitch metrics require tvOS 26.") }
         continueAfterFailure = false
