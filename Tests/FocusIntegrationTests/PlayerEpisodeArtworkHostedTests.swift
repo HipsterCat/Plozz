@@ -307,7 +307,7 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
                 let previous = try XCTUnwrap(self.nativePosters(in: window).first { $0.accessibilityLabel == "Season 2 Episode 1" })
                 let viewport = collection.convert(collection.bounds, to: window)
                 let artwork = previous.contentView.convert(previous.contentView.bounds, to: window)
-                XCTAssertEqual(artwork.intersection(viewport).width, 48, accuracy: 1)
+                XCTAssertEqual(artwork.intersection(viewport).width, 24, accuracy: 1)
                 model.target = browser.initialEntryID
                 try await self.waitUntil {
                     (UIFocusSystem.focusSystem(for: window)?.focusedItem as? PlayerEpisodeNativeCell)?
@@ -317,7 +317,7 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
                 let focused = try XCTUnwrap(self.nativePosters(in: window).first(where: \.isFocused))
                 XCTAssertTrue(viewport.contains(focused.convert(focused.bounds, to: window)))
                 XCTAssertEqual(previous.contentView.convert(previous.contentView.bounds, to: window)
-                    .intersection(viewport).width, 48, accuracy: 4)
+                    .intersection(viewport).width, 24, accuracy: 4)
             }
             await player.stop()
         }
@@ -567,7 +567,7 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
                         let collection = try XCTUnwrap(self.scrollView(in: window))
                         let viewport = collection.convert(collection.bounds, to: window)
                         let peek = previous.contentView.convert(previous.contentView.bounds, to: window).intersection(viewport)
-                        XCTAssertEqual(peek.width, 48, accuracy: 1)
+                        XCTAssertEqual(peek.width, 24, accuracy: 1)
                         let peekInk = try self.brightness(of: skeleton, at: CGPoint(x: peek.midX, y: peek.midY), in: window)
                         let gap = CGPoint(x: direction == .leftToRight ? peek.maxX + 8 : peek.minX - 8, y: peek.midY)
                         let gapInk = try self.brightness(of: skeleton, at: gap, in: window)

@@ -506,7 +506,7 @@ collection owns directional focus and realizes cells throughout held Left/Right
 input. Stable episode IDs and layout offset adjustments preserve the focused cell
 and its exact viewport position when earlier seasons or retry rows arrive,
 including during native focus transitions and in RTL. Native scroll targets use
-complete card slots constrained to fully reveal the focused cell, with a 48pt
+complete card slots constrained to fully reveal the focused cell, with a 24pt
 peek of preceding artwork when available. The first episode retains its normal
 gutter. Entry targets the current/last-focused episode, not the partial previous
 card. Loading uses the same artwork dimensions, spacing, and peek offset, including

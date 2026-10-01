@@ -42,7 +42,7 @@ struct PlayerSequenceLayout {
     var cardWidth: CGFloat {
         imageWidth + cardMetrics.cardInset * 2
     }
-    var previousArtworkPeek: CGFloat { 48 }
+    var previousArtworkPeek: CGFloat { 24 }
     var episodePeekInset: CGFloat {
         previousArtworkPeek + columnSpacing + cardMetrics.cardInset
     }
