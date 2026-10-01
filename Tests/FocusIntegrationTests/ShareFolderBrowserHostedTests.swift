@@ -45,6 +45,8 @@ final class ShareFolderBrowserHostedTests: XCTestCase {
         }
         try await Task.sleep(for: .milliseconds(250))
         window.layoutIfNeeded()
+        let rootTable = try XCTUnwrap(scrollViews(in: window).compactMap { $0 as? UITableView }.first)
+        XCTAssertLessThan(rootTable.bounds.height, 250, "Short lists must retain their natural height.")
 
         for _ in 0..<2 {
             let movies = try XCTUnwrap(model.locations.first { $0.name == "Movies" })
@@ -71,11 +73,17 @@ final class ShareFolderBrowserHostedTests: XCTestCase {
             let scroll = try XCTUnwrap(scrollViews(in: window).first {
                 $0.bounds.height <= 620 && $0.contentSize.height > 30_000
             })
+            let table = try XCTUnwrap(scroll as? UITableView)
+            XCTAssertLessThan(table.visibleCells.count, 20,
+                              "Native focus must only search recycled viewport cells, not every directory entry.")
+            XCTAssertFalse(table.clipsToBounds)
+            for cell in table.visibleCells {
+                XCTAssertFalse(cell.clipsToBounds)
+                XCTAssertFalse(cell.contentView.clipsToBounds)
+            }
             let outer = try XCTUnwrap(scrollViews(in: window).first { $0 !== scroll })
             outer.scrollRectToVisible(scroll.convert(scroll.bounds, to: outer), animated: false)
-            scroll.setContentOffset(
-                CGPoint(x: 0, y: scroll.contentSize.height - scroll.bounds.height), animated: false
-            )
+            table.scrollToRow(at: IndexPath(row: model.locations.count - 1, section: 0), at: .bottom, animated: false)
             try await Task.sleep(for: .milliseconds(100))
             window.layoutIfNeeded()
             let marker = UIView(frame: scroll.convert(

@@ -143,7 +143,31 @@ private struct SettingsFocusBody: View {
     let configuration: ButtonStyle.Configuration
     let size: SettingsRowSize
     @Environment(\.isFocused) private var isFocused
+
+    var body: some View {
+        SettingsFocusRow(isFocused: isFocused, isPressed: configuration.isPressed, size: size) {
+            configuration.label
+        }
+    }
+}
+
+/// Shared row chrome for SwiftUI buttons and reusable native list cells.
+public struct SettingsFocusRow<Content: View>: View {
+    private let isFocused: Bool
+    private let isPressed: Bool
+    private let size: SettingsRowSize
+    private let content: Content
     @Environment(\.colorScheme) private var colorScheme
+
+    public init(
+        isFocused: Bool, isPressed: Bool = false, size: SettingsRowSize = .standard,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.isFocused = isFocused
+        self.isPressed = isPressed
+        self.size = size
+        self.content = content()
+    }
 
     // Concentric focus card: the top-level Settings cards use an outer radius
     // of `mediumCardCornerRadius` (28) with 28pt horizontal / 16pt vertical
@@ -181,8 +205,8 @@ private struct SettingsFocusBody: View {
         colorScheme == .dark ? Color.black : Color.white
     }
 
-    var body: some View {
-        configuration.label
+    public var body: some View {
+        content
             // Inject the focused state + the "what color should focused
             // content be?" into the environment so descendants (subtitle,
             // chevron, icon, green chip…) can adapt without each row
@@ -210,7 +234,7 @@ private struct SettingsFocusBody: View {
             // Explicit `.foregroundStyle(...)` on individual leaves (chips,
             // checkmarks) still wins.
             .foregroundStyle(isFocused ? AnyShapeStyle(focusForeground) : AnyShapeStyle(.primary))
-            .opacity(configuration.isPressed ? 0.88 : 1.0)
+            .opacity(isPressed ? 0.88 : 1.0)
             // Focus is INSTANT — no fill/scale/shadow easing when focus moves
             // between rows. (Deliberately no `.animation(value: isFocused)`.)
     }

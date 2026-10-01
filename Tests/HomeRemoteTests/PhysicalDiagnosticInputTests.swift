@@ -3,6 +3,66 @@ import notify
 
 @MainActor
 final class PhysicalDiagnosticInputTests: XCTestCase {
+    func testRepeatedDownThroughExistingSubfolders() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PLOZZ_CAPTURE_FOLDER_DOWN"] == "1",
+              let bundleID = environment["PLOZZ_CAPTURE_BUNDLE_ID"], !bundleID.isEmpty else {
+            throw XCTSkip("Explicit repeated-Down capture in an already-open folder only.")
+        }
+        guard #available(tvOS 26.0, *) else { throw XCTSkip("Native hitch metrics require tvOS 26.") }
+        let app = XCUIApplication(bundleIdentifier: bundleID)
+        XCTAssertEqual(app.state, .runningForeground)
+        guard app.state == .runningForeground else { return }
+        let focused = app.descendants(matching: .any).matching(NSPredicate(format: "hasFocus == true")).firstMatch
+        guard app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", "Or open a subfolder")).firstMatch.exists,
+              focused.exists,
+              focused.identifier.hasPrefix("share-location:") || focused.images["folder.fill"].exists else {
+            let state = XCTAttachment(string: app.debugDescription)
+            state.name = "Folder input refused - current accessibility"
+            state.lifetime = .keepAlways
+            add(state)
+            let image = XCTAttachment(screenshot: app.screenshot())
+            image.name = "Folder input refused - current screen"
+            image.lifetime = .keepAlways
+            add(image)
+            XCTFail("Position focus on an existing subfolder before measuring; no input sent.")
+            return
+        }
+        let beforeLabel = focused.label
+        let before = XCTAttachment(screenshot: app.screenshot())
+        before.name = "Before repeated folder Down"
+        before.lifetime = .keepAlways
+        add(before)
+        let options = XCTMeasureOptions()
+        options.iterationCount = 1
+        options.invocationOptions = [.manuallyStart, .manuallyStop]
+        var iteration = 0
+        measure(metrics: [XCTHitchMetric(application: app)], options: options) {
+            iteration += 1
+            print("PLZFOLDER iteration.begin index=\(iteration)")
+            startMeasuring()
+            for index in 1...8 {
+                let start = ProcessInfo.processInfo.systemUptime
+                print("PLZFOLDER down.begin index=\(index) epoch=\(Date().timeIntervalSince1970)")
+                XCUIRemote.shared.press(.down)
+                print("PLZFOLDER down.end index=\(index) commandSeconds=\(ProcessInfo.processInfo.systemUptime - start)")
+                Thread.sleep(forTimeInterval: 0.35)
+            }
+            stopMeasuring()
+        }
+        let after = app.descendants(matching: .any).matching(NSPredicate(format: "hasFocus == true")).firstMatch
+        XCTAssertTrue(after.exists && (after.identifier.hasPrefix("share-location:") || after.images["folder.fill"].exists))
+        XCTAssertNotEqual(after.label, beforeLabel, "Repeated Down must advance through the list.")
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "After repeated folder Down"
+        image.lifetime = .keepAlways
+        add(image)
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = "Folder navigation result"
+        tree.lifetime = .keepAlways
+        add(tree)
+    }
+
     func testInspectRecordingStatusWithoutInput() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard environment["PLOZZ_CAPTURE_INSPECT_STATUS"] == "1",

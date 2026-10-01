@@ -28,7 +28,7 @@ struct UnifiedAddShareView: View {
         case proto, address, port, portChip(Int)
         case authToggle, username, password, token, connect
         case approve, reject
-        case location(String), manualShare, displayName, contentType, anime, useFolder
+        case manualShare, displayName, contentType, anime, useFolder
         case comingSoonBack
     }
 
@@ -439,9 +439,6 @@ struct UnifiedAddShareView: View {
                     )
                     .focused($focus, equals: .anime)
                 }
-                Text("Content type controls scanning and matching. Personal Videos stay playable without movie or show matching. Re-adding the same location updates these settings without changing its library identity.")
-                    .font(.footnote)
-                    .plozzForeground(.secondary)
             }
         }
         .focusSection()
@@ -505,24 +502,8 @@ struct UnifiedAddShareView: View {
             if viewModel.locations.isEmpty {
                 placeholder(showsCurrentFolder ? "No subfolders here." : "Nothing here.")
             } else {
-                FadingScrollView(maxHeight: 620) {
-                    LazyVStack(spacing: 12) {
-                        ForEach(viewModel.locations) { item in
-                            Button { viewModel.selectLocation(item) } label: {
-                                HStack(spacing: 16) {
-                                    Image(systemName: item.isBrowsable ? "folder.fill" : "externaldrive.fill")
-                                        .plozzForeground(.secondary)
-                                    Text(item.name).font(.headline)
-                                    Spacer(minLength: 12)
-                                    Image(systemName: "chevron.forward").plozzForeground(.tertiary)
-                                }
-                                .contentShape(Rectangle()).padding(.vertical, 10).padding(.horizontal, 12)
-                            }
-                            .buttonStyle(SettingsFocusButtonStyle(size: .prominent))
-                            .focused($focus, equals: .location(item.path))
-                        }
-                    }
-                }
+                ShareLocationList(locations: viewModel.locations, onSelect: viewModel.selectLocation)
+                    .id(viewModel.currentPath)
             }
         }
         if viewModel.showsManualRootEntry {

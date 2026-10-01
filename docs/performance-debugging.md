@@ -773,6 +773,43 @@ Key reading tips:
 
 ## 5. Traps specific to this codebase
 
+### Large share-folder lists: lazy rendering is not bounded native focus
+
+The 1,551-folder WebDAV picker opened quickly after switching to `LazyVStack`,
+but repeated Down presses still froze. On the Apple TV 4K (2nd generation),
+eight measured presses in the live app produced seven hitches totaling 3.971 s
+(502.8 ms/s). A deterministic fixture using the production view reproduced
+seven hitches totaling 4.555 s (531.5 ms/s).
+
+A correlated CPU trace attributed 11,305 of 13,336 main-thread samples during
+navigation to native focus movement. Hot stacks included
+`_UIFocusRegionEvaluator` occlusion evaluation and `_UIFocusMapSnapshot`, not
+network folder enumeration. Removing the root per-folder `FocusState`, replacing
+the fade mask, or reducing scroll-geometry state updates individually did not
+resolve it; those experiments were reverted. SwiftUI `List` improved timing but
+still hitched and initially clipped horizontal focus cards.
+
+`ShareLocationList` instead recycles `UITableView` cells. Only realized native
+cells participate in focus; `SettingsFocusRow` shares the exact appearance and
+contrast behavior with `SettingsFocusButtonStyle`. Keep the hosting
+configuration's inherited SwiftUI environment and zero minimum content size.
+The cells reserve horizontal space for the card/shadow, and the existing
+vertical fade mask extends horizontally rather than cutting off either side.
+Recreating the list on path changes retires stale cells and preserves the
+screen's explicit "Use This Folder" entry focus.
+
+The same physical fixture with the completed change recorded zero hitches for
+its eight measured presses, with exact item advancement, folder entry/return,
+and rendered left/right overhang assertions passing. An earlier native-cell
+run recorded 0.050 s total (7.3 ms/s). These are controlled fixture results, not
+a guarantee for every server or input cadence. The full app's live-server
+navigation remains a separate check after installation.
+
+Use `ShareFolderNavigationTests` in `PlozzHomeFixtureTests` for the deterministic
+comparison. XCTest performs an eight-press warmup before the measured eight
+presses. Preserve actual input timestamps and metrics; command round-trip time
+and a passing functional test are not substitutes for presented-frame timing.
+
 ### tvOS focus handoffs (Search/sidebar)
 
 - **Measure the focus result, not the request.** Enable `PLZHFOCUS_STDOUT=1`;

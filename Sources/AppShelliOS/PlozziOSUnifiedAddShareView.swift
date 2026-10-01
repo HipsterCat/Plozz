@@ -480,9 +480,6 @@ struct PlozziOSUnifiedAddShareView: View {
                     )
                 )
             }
-            Text("Content type controls scanning and matching. Personal Videos stay playable without movie or show matching. Re-adding the same location updates these settings without changing its library identity.")
-                .font(.footnote)
-                .foregroundStyle(palette.secondaryText)
         }
     }
 
