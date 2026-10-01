@@ -19,7 +19,7 @@ struct UnifiedAddShareView: View {
     let onWebDAVConfigured: (WebDAVShareConfiguration) -> Void
     var onMediaShareConfigured: (MediaShareOnboardingResult) -> Void = { _ in }
 
-    @State private var viewModel = UnifiedAddShareModel()
+    @State var viewModel = UnifiedAddShareModel()
     @FocusState private var focus: Field?
 
     private enum Field: Hashable {
@@ -66,6 +66,12 @@ struct UnifiedAddShareView: View {
             if ready { viewModel.startScan() } else { viewModel.stopScan() }
         }
         .onChange(of: viewModel.step) { _, _ in focus = defaultFocus() }
+        .task(id: viewModel.locationLoad == .loaded ? viewModel.currentPath : nil) {
+            await Task.yield()
+            guard !Task.isCancelled, viewModel.locationLoad == .loaded,
+                  viewModel.step == .pickLocation, viewModel.showsCurrentFolder else { return }
+            focus = .useFolder
+        }
         .onDisappear { viewModel.stopScan() }
     }
 
@@ -500,7 +506,7 @@ struct UnifiedAddShareView: View {
                 placeholder(showsCurrentFolder ? "No subfolders here." : "Nothing here.")
             } else {
                 FadingScrollView(maxHeight: 620) {
-                    VStack(spacing: 12) {
+                    LazyVStack(spacing: 12) {
                         ForEach(viewModel.locations) { item in
                             Button { viewModel.selectLocation(item) } label: {
                                 HStack(spacing: 16) {

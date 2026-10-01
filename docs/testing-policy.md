@@ -176,6 +176,36 @@ Runner verdict regressions use the existing host-side unittest runner:
 
 ## App-hosted focus integration
 
+`SettingsSubtitleContrastHostedTests` measures rendered text and glyph contrast
+while native focus moves between shared settings rows in Black, Dark, and Light.
+It covers the media-share discovery subtitle, leading icons, manual-entry chevron,
+explicit primary text, and `SettingsIconLabelStyle`. Shared `.plozzForeground`
+tiers must inherit the inverted row foreground, then return to the normal palette
+on blur; text outside a row must remain unaffected. Body text requires 4.5:1
+contrast and supporting glyphs require 3:1 against their rendered surface.
+
+`ShareFolderBrowserHostedTests` opens the real unified share screen with 1,551
+instant-response folders, bounds main-actor stalls, and verifies returning to
+the original root without widening its browse boundary. Deep scrolling must
+realize onscreen native focus targets. The bounded folder
+viewport must create rows lazily rather than constructing every focused button.
+This is isolated UI coverage, not a live-server network benchmark.
+
+`DiagnosticRecordingStatusHostedTests` exercises real Darwin notifications and
+the visible acknowledgement, preserving native focus while showing the badge.
+It checks the render-server expiry animation, eventual removal, and receipt
+while a full-screen presentation detaches the app root from its window. Recorder
+control tests run with
+`python3 -m unittest discover -s tools/tests -p test_trace_device.py`: failed
+readiness/visibility must not send input, a sustained recording permits exactly
+one input, app-bound runner metadata is refused, and sample verification must
+resolve the target PID rather than count unrelated system activity.
+`PhysicalDiagnosticInputTests` is opt-in through `tools/trace-device.sh`;
+it never launches the app and remains outside ordinary unattended test runs.
+Its separate status-inspection method uses `PLOZZ_CAPTURE_INSPECT_STATUS=1`
+and `PLOZZ_CAPTURE_BUNDLE_ID` to retain the actual TV badge screenshot and
+accessibility tree without sending input.
+
 The `PlozziOSPresentationTests` scheme supplies a separate iOS app scene for
 native Form/picker and sheet rendering. Run it on an explicitly owned iOS
 simulator under the shared build lease, with a lane-private package workspace

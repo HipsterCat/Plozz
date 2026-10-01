@@ -244,17 +244,10 @@ public extension EnvironmentValues {
 /// still reads as "secondary" against the inverted fill instead of being
 /// invisible (white-on-white) or low-contrast.
 public struct SettingsRowSecondaryStyle: ViewModifier {
-    @Environment(\.settingsRowIsFocused) private var focused
-    @Environment(\.settingsRowFocusForeground) private var focusFg
-
     public init() {}
 
     public func body(content: Content) -> some View {
-        content.foregroundStyle(
-            focused
-            ? AnyShapeStyle(focusFg.opacity(0.72))
-            : AnyShapeStyle(.secondary)
-        )
+        content.plozzForeground(.secondary)
     }
 }
 
@@ -353,8 +346,6 @@ public struct SettingsCheckmark: View {
 /// icons on both platforms — no per-call-site styling. Rows that need a coloured
 /// icon (e.g. a destructive red row) opt out by setting their own `.labelStyle`.
 public struct SettingsIconLabelStyle: LabelStyle {
-    @Environment(\.themePalette) private var palette
-
     public init() {}
 
     public func makeBody(configuration: Configuration) -> some View {
@@ -362,7 +353,7 @@ public struct SettingsIconLabelStyle: LabelStyle {
             configuration.title
         } icon: {
             configuration.icon
-                .foregroundStyle(palette.secondaryText)
+                .settingsRowIcon()
         }
     }
 }
