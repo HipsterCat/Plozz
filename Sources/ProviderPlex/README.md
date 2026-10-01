@@ -66,6 +66,31 @@ documents the shared static/smart membership path.
 
 Tests: `PlexCollectionBrowsingTests` and shared `CollectionDetailBrowsingTests`.
 
+## Family guidance
+
+The server's item metadata supplies only the Common Sense age/score and short
+summary. Full reviews and content topics use
+`https://metadata.provider.plex.tv/library/metadata/{globalPlexID}/commonsensemedia`,
+not the Discover/watchlist host. This follows
+[`CommonSenseMedia._reload` in Python PlexAPI](https://github.com/pushingkarmaorg/python-plexapi/blob/8a9ade7f364582cabb6d5bc200994fddb2113d48/plexapi/media.py#L1393-L1403).
+
+Requests use the active Plex Home user's account-level cloud credential, never
+an owner fallback for a mapped Home user. Authorization failures, Plex Pass
+restrictions, and missing guidance remain distinct; Retry makes a fresh request
+using the current profile's credential. Only same-origin redirects are allowed.
+If an unprotected Home user's cloud credential is missing, Retry repairs only
+that credential through an authenticated Home-user switch. It does not resolve
+or rotate the library's server token, change its credential revision, or rebuild
+the detail page. Startup also repairs incomplete cached identities: a failed
+server-token lookup retains the same user's working server credential without
+discarding the newly authenticated cloud token. Both credential halves are
+cleared when leaving that Home identity, even when only the cloud half exists.
+Superseded profile, binding, activation, or account credentials cannot publish
+the repair. Protected users still require their normal Plex PIN flow; a Plozz
+profile PIN is not a Plex PIN.
+The bounded debug journal records the request route and HTTP status without
+credentials or review content.
+
 ## Streaming transcodes
 
 Universal-transcoder requests advertise HLS with fragmented MP4 audio/video

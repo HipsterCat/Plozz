@@ -61,6 +61,11 @@ import tempfile
 from collections import defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from l10n_freshness import (
+    ExtractionReceipt, FreshnessError, checkout_environment, extraction_files, extraction_lock,
+)
+
 REPO = Path(__file__).resolve().parent.parent
 CATALOG = REPO / "App/Resources/Localizable.xcstrings"
 APP_LANGUAGE_SOURCE = REPO / "Sources/CoreModels/AppLanguage.swift"
@@ -111,9 +116,11 @@ def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=REPO, text=True, **kwargs)
 
 
-def build_for_extraction(platform_keys: list[str], quiet: bool) -> None:
+def build_for_extraction(
+    platform_keys: list[str], quiet: bool, receipt: ExtractionReceipt | None = None
+) -> str | None:
     """Compile with extraction enabled so the compiler writes `.stringsdata`."""
-    env = dict(os.environ)
+    env = checkout_environment()
     # The host injects `safe.bareRepository=explicit`, which makes SwiftPM's
     # package resolution fail with "cannot use bare repository". Overwrite rather
     # than default: the variable is usually already SET to the offending value, so
@@ -140,6 +147,7 @@ def build_for_extraction(platform_keys: list[str], quiet: bool) -> None:
             print("\n".join(generation.stdout.splitlines()[-25:]), file=sys.stderr)
         sys.exit("✗ Project generation or canonical package-lock sync failed.")
 
+    inputs = receipt.inputs() if receipt else None
     for key in platform_keys:
         scheme, destination = PLATFORMS[key]
         print(f"▸ Extraction build: {scheme} ({destination})")
@@ -179,6 +187,7 @@ def build_for_extraction(platform_keys: list[str], quiet: bool) -> None:
                 print("\n".join(tail[-25:] or proc.stdout.splitlines()[-25:]),
                       file=sys.stderr)
             sys.exit(f"✗ Extraction build failed for {scheme}.")
+    return inputs
 
 
 def collect_stringsdata(arch: str) -> list[Path]:
@@ -203,11 +212,8 @@ def collect_stringsdata(arch: str) -> list[Path]:
         sys.exit("✗ No extraction build found. Run without --no-build first.")
 
     kept: list[Path] = []
-    for path in DERIVED.rglob("*.stringsdata"):
+    for path in extraction_files(DERIVED, arch):
         if any(marker in path.name for marker in EXCLUDED_FILE_MARKERS):
-            continue
-        # `.../Objects-normal/<arch>/Foo.stringsdata`
-        if path.parent.name != arch:
             continue
         try:
             payload = json.loads(path.read_text())
@@ -646,6 +652,8 @@ def main() -> int:
                         help="Extract from one platform only. Faster, but never prunes.")
     parser.add_argument("--no-build", action="store_true",
                         help="Reuse the previous extraction build.")
+    parser.add_argument("--reuse-if-unchanged", action="store_true",
+                        help="Reuse proven full extraction only when inputs and output are unchanged.")
     parser.add_argument("--validate-only", action="store_true",
                         help="Check the committed catalog without extracting anything (for CI).")
     parser.add_argument("--coverage", action="store_true",
@@ -656,6 +664,8 @@ def main() -> int:
                         help="Suppress xcodebuild output unless it fails.")
     parser.add_argument("--verbose", dest="quiet", action="store_false")
     args = parser.parse_args()
+    if args.reuse_if_unchanged and (args.platform or args.no_build or args.clean):
+        parser.error("--reuse-if-unchanged requires the complete, non-clean extraction route")
 
     if not CATALOG.exists():
         sys.exit(f"✗ Missing catalog: {CATALOG.relative_to(REPO)}")
@@ -679,6 +689,15 @@ def main() -> int:
     if shutil.which("xcrun") is None:
         sys.exit("✗ xcrun not found — Xcode command line tools are required.")
 
+    with extraction_lock(REPO):
+        try:
+            return extract_and_sync(args)
+        except (FreshnessError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            print(f"✗ Localization extraction evidence failed: {error}", file=sys.stderr)
+            return 1
+
+
+def extract_and_sync(args: argparse.Namespace) -> int:
     platform_keys = [args.platform] if args.platform else sorted(PLATFORMS)
     # Stale marking deletes catalog entries the build did not see, so it is only
     # safe when THIS run demonstrably produced the full tvOS + iOS union.
@@ -687,10 +706,17 @@ def main() -> int:
     # prune every iOS-only string.
     allow_stale = args.platform is None and not args.no_build
 
+    receipt = ExtractionReceipt(REPO, DERIVED, CLONED_SOURCE_PACKAGES, ARCH)
+    inputs = receipt.inputs()
+    reused = args.reuse_if_unchanged and receipt.matches(inputs)
+    if not reused:
+        receipt.invalidate()
     if args.clean and DERIVED.exists():
         shutil.rmtree(DERIVED)
-    if not args.no_build:
-        build_for_extraction(platform_keys, args.quiet)
+    if reused:
+        print("▸ Reusing verified ios+tvos extraction: inputs, toolchain, packages and output match.")
+    elif not args.no_build:
+        inputs = build_for_extraction(platform_keys, args.quiet, receipt)
 
     files = collect_stringsdata(ARCH)
     if args.no_build and args.platform is None:
@@ -714,12 +740,16 @@ def main() -> int:
                   file=sys.stderr)
             return 1
         print("✓ Catalog is up to date.")
+        if allow_stale and not conflicts:
+            receipt.record(inputs)
         return 1 if conflicts else 0
 
     keys = len(json.loads(after).get("strings", {}))
     verb = "unchanged" if before == after else "updated"
     print(f"✓ Catalog {verb} — {keys} keys"
           + ("" if allow_stale else " (stale marking skipped: partial scope)"))
+    if allow_stale and not conflicts:
+        receipt.record(inputs)
     return 1 if conflicts else 0
 
 

@@ -7,6 +7,22 @@ import XCTest
 
 @MainActor
 final class HeroTrailerPlaybackSuppressionTests: XCTestCase {
+    func testDepartingDetailCannotStopTheSameTitlesNewerTrailerOwner() async throws {
+        let url = try await makeVideo()
+        let controller = HeroTrailerController()
+        defer { controller.stop() }
+        controller.prepare(itemID: "movie", resolvedURL: url, muted: true)
+        controller.setEndHandler(ownerID: "new-page") {}
+        let current = controller.player.currentItem
+        controller.stop(ifShowing: "movie", ownedBy: "old-page")
+        controller.clearEndHandler(ownerID: "old-page")
+        XCTAssertEqual(controller.currentItemID, "movie")
+        XCTAssertTrue(controller.player.currentItem === current)
+        controller.stop(ifShowing: "movie", ownedBy: "new-page")
+        XCTAssertNil(controller.currentItemID)
+        XCTAssertNil(controller.player.currentItem)
+    }
+
     func testMainPlaybackPausesExistingTrailerAndRejectsLateStarts() async throws {
         let url = try await makeVideo()
         let controller = HeroTrailerController()

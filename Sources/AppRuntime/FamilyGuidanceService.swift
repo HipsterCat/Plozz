@@ -24,16 +24,30 @@ public final class FamilyGuidanceService: FamilyGuidanceLoading {
               accounts.activeAccountIDs.contains(accountID),
               let provider = accounts.provider(forAccountID: accountID) else {
             PlozzLog.app.error("Family guidance requested without an active source account")
+            HandoffDiagnostics.emit("guidance REJECTED reason=inactive-source")
             throw AppError.unauthorized
         }
         guard let guidanceProvider = provider as? any FamilyGuidanceProviding else { return .unavailable }
         let identity = contextID
         let homeUser = profiles.activeProfile.homeUserBinding(forPlexAccount: accountID)
-        let cloudToken = plexHome.discoverToken(for: accountID)
+        var cloudToken = plexHome.discoverToken(for: accountID)
         if provider.kind == .plex, homeUser != nil, cloudToken == nil {
-            PlozzLog.app.info("Family guidance is waiting for the Plex Home account credential")
-            throw AppError.unauthorized
+            PlozzLog.app.info("Family guidance is recovering the Plex Home account credential")
+            HandoffDiagnostics.emit("guidance RECOVERING reason=missing-home-credential")
+            cloudToken = try await plexHome.resolveDiscoverToken(for: accountID)
+            guard cloudToken != nil else {
+                PlozzLog.app.error("Family guidance could not recover the Plex Home account credential")
+                HandoffDiagnostics.emit("guidance REJECTED reason=missing-home-credential")
+                throw AppError.unauthorized
+            }
         }
+        try Task.checkCancellation()
+        guard identity == contextID,
+              accounts.activeAccountIDs.contains(accountID),
+              accounts.tokenResolver(accountID) == provider.session.accessToken else {
+            throw CancellationError()
+        }
+        HandoffDiagnostics.emit("guidance REQUEST provider=\(provider.kind) homeUser=\(homeUser != nil)")
         let result = try await guidanceProvider.familyGuidance(for: item, accountToken: cloudToken)
         try Task.checkCancellation()
         guard identity == contextID,

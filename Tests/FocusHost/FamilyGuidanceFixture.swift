@@ -66,6 +66,9 @@ private final class FixtureGuidanceLoader: FamilyGuidanceLoading {
         if requests == 1 && ProcessInfo.processInfo.arguments.contains("--family-guidance-failure") {
             throw AppError.serverUnreachable
         }
+        if requests == 1 && ProcessInfo.processInfo.arguments.contains("--family-guidance-expired-once") {
+            throw AppError.unauthorized
+        }
         return .available(FamilyGuidance(
             summary: .init(recommendedAge: 16, qualityRating: 5),
             audienceRatings: [

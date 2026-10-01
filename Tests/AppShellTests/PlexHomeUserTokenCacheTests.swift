@@ -85,4 +85,15 @@ final class PlexHomeUserTokenCacheTests: XCTestCase {
         let reopened = PlexHomeUserTokenCache(store: store)
         XCTAssertEqual(reopened.token(account: "acctA", homeUser: "user1"), "tok-A")
     }
+
+    func testCloudOnlyCredentialIsIndexedForAccountAndGlobalRemoval() {
+        let (cache, _) = makeCache()
+        cache.storeDiscoverToken("cloud-A", account: "acctA", homeUser: "userA")
+        cache.storeDiscoverToken("cloud-B", account: "acctB", homeUser: "userB")
+        cache.removeAll(account: "acctA")
+        XCTAssertNil(cache.discoverToken(account: "acctA", homeUser: "userA"))
+        XCTAssertEqual(cache.discoverToken(account: "acctB", homeUser: "userB"), "cloud-B")
+        cache.removeAll()
+        XCTAssertNil(cache.discoverToken(account: "acctB", homeUser: "userB"))
+    }
 }

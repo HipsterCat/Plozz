@@ -88,6 +88,29 @@ whenever a change could invalidate the map itself or is otherwise unmappable —
 a test target. Pure docs/asset changes select nothing. Every run prints the chosen
 suites and the reason each was selected.
 
+### Main-gate execution and reuse
+
+Use a fixed gate sequence instead of constructing a new orchestration for each
+landing. Record phase start/end times, current status, commands, and retained
+result locations. Start with the localization delta plan; an empty delta does
+not need artifact assembly/import.
+
+An interrupted landing may reuse a completed phase only when its complete
+source/configuration, toolchain/SDK, package workspace, simulator runtime, and
+command recipe match. Keep the authoritative passing summary and expected-bundle
+evidence, not just a success marker; missing or changed evidence reruns the gate.
+A failed fresh attempt invalidates an earlier success. Inputs changing between
+phases prevent the combined candidate from being declared ready. A changed
+candidate still requires the full package and hosted gates; targeted regressions
+used to diagnose a failure do not replace those final gates.
+
+Signed products additionally require matching build identity, executable and
+resource-seal fingerprints, and fresh signature verification before reuse.
+After all gates pass, recheck `main` and publish the authorized update **before**
+independent physical-device installation. Unavailable-device retry budgets stay
+unchanged but are not part of the main-push prerequisite. Keep the enclosing
+build lease through remaining delivery and retain exact artifacts as usual.
+
 ### 3. Fail fast — you learn a result in seconds, not minutes
 
 Most tests execute quickly, but `xcodebuild` on this Mac
@@ -289,6 +312,12 @@ unrealized source still returns to its captured shape without waiting for focus.
 The episode browser keeps its layout while masked until its final reveal and
 cannot take entry focus during a whole-show entrance. Episode-context opens
 retain their existing initial-focus behavior; Reduce Motion reveals it directly.
+Its rendered keyline check waits for native focus completion and the artwork's
+painted width to settle, then compares artwork and About in one captured frame.
+The settling condition is independent of x-position, so real misalignment still
+fails. Native/custom focus paint can outlive focus callbacks; fixed sleeps and
+separate snapshots can compare different stages of that return. Retain the exact
+measured images and the one-pixel alignment tolerance.
 
 When its real backdrop is ready, opening motion starts in card/router activation,
 before creating the detail page. An empty destination must not animate: a cold

@@ -41,9 +41,27 @@ enabled, collects the `.stringsdata`, and hands them to Apple's
 ```sh
 tools/l10n-sync.py                 # build both platforms, sync the catalog
 tools/l10n-sync.py --check         # fail if the catalog is out of date (CI)
+tools/l10n-sync.py --check --reuse-if-unchanged # reuse proven identical full extraction
 tools/l10n-sync.py --no-build      # reuse the last extraction build (fast iteration)
 tools/l10n-sync.py --platform tvos # faster partial run; never prunes (see below)
 ```
+
+`--reuse-if-unchanged` skips only the two extraction builds, never catalog sync or
+validation. A successful full extraction records a local content fingerprint of
+tracked and nonignored inputs, local xcconfigs, generated project settings,
+toolchain/SDKs, package checkout state, the catalog, and every extraction output.
+The generated build-number stamp is excluded; other project settings are not.
+An edit, missing/corrupt receipt, changed package checkout, or missing/changed
+`.stringsdata` causes a real rebuild. Partial, failed, and explicit `--no-build`
+runs cannot create full-scope evidence. Source changes during extraction fail
+the operation rather than recording an ambiguous result.
+Git's repository-selection variables are cleared for extraction subprocesses,
+so invoking the check from a push hook cannot redirect dependency lookups back
+to the parent repository. Build configuration and lease variables are retained.
+
+The main pre-push hook uses this verified reuse so it does not repeat the
+extraction just completed by the pre-main pass. Omit the option to force a fresh
+extraction; do not substitute `--no-build`, which cannot prove platform coverage.
 
 ### Why a dedicated build
 

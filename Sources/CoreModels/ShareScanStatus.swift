@@ -241,6 +241,7 @@ public final class ShareScanStatusModel {
         case scanStarted(id: String, name: String)
         case scanProgress(id: String, directories: Int, pending: Int, items: Int)
         case scanFinished(id: String)
+        case scanPaused(id: String)
         case scanChangedCatalog(id: String)
         case enrichStarted(id: String, total: Int)
         case enrichProgress(id: String, done: Int)
@@ -368,6 +369,7 @@ public final class ShareScanStatusModel {
                 itemsFound: items
             )
         case let .scanFinished(id): scanFinished(shareID: id)
+        case let .scanPaused(id): scanPaused(shareID: id)
         case let .scanChangedCatalog(id): catalogChanged(shareID: id)
         case let .enrichStarted(id, total): enrichStarted(shareID: id, total: total)
         case let .enrichProgress(id, done): enrichProgress(shareID: id, done: done)
@@ -489,6 +491,12 @@ public final class ShareScanStatusModel {
         publish(state, for: shareID)
     }
 
+    public func scanPaused(shareID: String) {
+        guard var state = byShare[shareID] else { return }
+        state.isScanning = false
+        publish(state, for: shareID)
+    }
+
     public func enrichStarted(shareID: String, total: Int) {
         guard !removedShareIDs.contains(shareID) else { return }
         // Create state if the enrich pass beat a (missed) scanStarted — the banner
@@ -573,6 +581,9 @@ public final class ShareScanStatusModel {
             scanFinished: { id in
                 inbox.submitLifecycle(.scanFinished(id: id))
             },
+            scanPaused: { id in
+                inbox.submitLifecycle(.scanPaused(id: id))
+            },
             scanChangedCatalog: { id in
                 inbox.submitLifecycle(.scanChangedCatalog(id: id))
             },
@@ -612,6 +623,7 @@ public struct ShareScanReporter: Sendable {
         _ itemsFound: Int
     ) -> Void
     public var scanFinished: @Sendable (_ shareID: String) -> Void
+    public var scanPaused: @Sendable (_ shareID: String) -> Void
     /// Called only when a completed pass actually changed the catalog.
     public var scanChangedCatalog: @Sendable (_ shareID: String) -> Void
     public var enrichStarted: @Sendable (_ shareID: String, _ total: Int) -> Void
@@ -626,6 +638,7 @@ public struct ShareScanReporter: Sendable {
         scanDetailedProgress: (@Sendable (String, Int, Int) -> Void)? = nil,
         scanFrontierProgress: (@Sendable (String, Int, Int, Int) -> Void)? = nil,
         scanFinished: @escaping @Sendable (String) -> Void,
+        scanPaused: @escaping @Sendable (String) -> Void = { _ in },
         // Optional so every existing reporter (tests, fakes) keeps compiling and
         // simply never reports a change.
         scanChangedCatalog: (@Sendable (String) -> Void)? = nil,
@@ -646,6 +659,7 @@ public struct ShareScanReporter: Sendable {
             resolvedDetailed(id, directories, items)
         }
         self.scanFinished = scanFinished
+        self.scanPaused = scanPaused
         self.enrichStarted = enrichStarted
         self.enrichProgress = enrichProgress
         self.enrichFinished = enrichFinished

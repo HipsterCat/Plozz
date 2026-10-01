@@ -1140,17 +1140,11 @@ public struct PlexClient: Sendable {
         _ = try await send(endpoint)
     }
 
-    // MARK: Watchlist (plex.tv Discover service)
-    //
-    // Plex's Watchlist is an **account-level** feature served by the global
-    // Discover host `discover.provider.plex.tv` — NOT the per-server PMS API and
-    // no longer the legacy `metadata.provider.plex.tv` read host (that now 404s;
-    // reads were migrated to the Discover host). It's keyed by the item's global
-    // `plex://` guid (its trailing id), so these requests bypass the connection
-    // resolver and hit the fixed plex.tv host directly with the account token.
-    // Failures surface to the caller, which reverts the optimistic UI.
+    // MARK: Family guidance
 
-    private static let watchlistBase = URL(string: "https://discover.provider.plex.tv")!
+    // Common Sense detail remains on metadata.provider.plex.tv. The watchlist's
+    // migration to Discover did not move this endpoint.
+    private static let familyGuidanceBase = URL(string: "https://metadata.provider.plex.tv")!
 
     func commonSenseMedia(metadataID: String) async throws -> FamilyGuidanceAvailability {
         guard metadataID.count == 24, metadataID.allSatisfy(\.isHexDigit) else {
@@ -1159,9 +1153,13 @@ public struct PlexClient: Sendable {
         }
         let endpoint = Endpoint(
             path: "/library/metadata/\(metadataID)/commonsensemedia",
-            headers: plexTVHeaders
+            headers: plexTVHeaders,
+            redirectPolicy: .sameOrigin
         )
-        let (data, response) = try await http.sendRaw(endpoint, baseURL: Self.watchlistBase)
+        let (data, response) = try await http.sendRaw(endpoint, baseURL: Self.familyGuidanceBase)
+        HandoffDiagnostics.emit(
+            "guidance RESPONSE item=\(HandoffDiagnostics.correlationID(metadataID)) host=metadata status=\(response.statusCode)"
+        )
         switch response.statusCode {
         case 200:
             do {
@@ -1182,6 +1180,13 @@ public struct PlexClient: Sendable {
             throw AppError.invalidResponse
         }
     }
+
+    // MARK: Watchlist (plex.tv Discover service)
+    //
+    // Watchlist requests use the global Discover host, not the per-server PMS or
+    // Common Sense metadata endpoint. The active viewer's account token owns the
+    // cloud request; failures surface to callers.
+    private static let watchlistBase = URL(string: "https://discover.provider.plex.tv")!
 
     /// An absolute artwork URL on the plex.tv Discover host.
     ///

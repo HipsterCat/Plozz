@@ -133,6 +133,10 @@ struct NativeTVCard<Content: View>: UIViewRepresentable {
         if view.cardBackgroundColor != background { view.cardBackgroundColor = background }
         view.hostedContent?.configuration = configuration(in: context)
         view.isEnabled = isEnabled && context.environment.isEnabled
+        if view.usesInformationFocus != context.environment.plozzNativeInformationFocus {
+            view.usesInformationFocus = context.environment.plozzNativeInformationFocus
+            container.setNeedsLayout()
+        }
         context.coordinator.update(focus: focus, action: action, view: view)
     }
 
@@ -193,6 +197,7 @@ struct NativeTVCard<Content: View>: UIViewRepresentable {
             if card.contentSize != bounds.size {
                 card.contentSize = bounds.size
             }
+            card.updateFocusSize()
             // TVCardView reserves symmetric space for its focus expansion.
             // Keep that invisible space outside the visible surface's layout slot.
             let intrinsic = card.intrinsicContentSize
@@ -204,10 +209,33 @@ struct NativeTVCard<Content: View>: UIViewRepresentable {
     }
 
     final class Card: TVCardView {
+        var usesInformationFocus = false
+        private var systemFocusSizeIncrease: NSDirectionalEdgeInsets?
         var defaultAccessibilityElement = false
         var hostedContent: (UIView & UIContentView)?
         var onFocus: ((Bool) -> Void)?
         var onAvailable: (() -> Void)?
+
+        func updateFocusSize() {
+            guard usesInformationFocus else {
+                if let systemFocusSizeIncrease {
+                    focusSizeIncrease = systemFocusSizeIncrease
+                    self.systemFocusSizeIncrease = nil
+                }
+                return
+            }
+            guard contentSize.width > 0, contentSize.height > 0 else { return }
+            if systemFocusSizeIncrease == nil { systemFocusSizeIncrease = focusSizeIncrease }
+            let fraction = min(
+                (PlozzTheme.Metrics.readOnlyFocusedCardScale - 1) / 2,
+                PlozzTheme.Metrics.informationFocusMaximumOutset / max(contentSize.width, contentSize.height)
+            )
+            let increase = NSDirectionalEdgeInsets(
+                top: -contentSize.height * fraction, leading: -contentSize.width * fraction,
+                bottom: -contentSize.height * fraction, trailing: -contentSize.width * fraction
+            )
+            if focusSizeIncrease != increase { focusSizeIncrease = increase }
+        }
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
@@ -597,6 +625,7 @@ struct NativeTVCardButtonStyle: PrimitiveButtonStyle {
         var body: some View {
             NativeTVCard(content: configuration.label, focus: $focus, isEnabled: isEnabled, action: configuration.trigger)
                 .focused($focus.focusState)
+                .zIndex(focus ? 1 : 0)
         }
     }
 }
