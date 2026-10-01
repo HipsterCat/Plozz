@@ -21,8 +21,7 @@ trap 'rm -f "$delta_file"' EXIT
 
 echo "▸ Pre-main localization gate"
 tools/l10n-guard.sh
-python3 tools/l10n-sync.py --check --quiet
-python3 tools/l10n-sync.py --validate-only
+python3 tools/l10n-sync.py --check --quiet --reuse-if-unchanged
 python3 tools/l10n-export-source.py "$delta_file" \
   --missing-for nl \
   --check-snapshot
