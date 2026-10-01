@@ -13,12 +13,16 @@ enum DiagnosticRecordingPhase: String, CaseIterable {
     var acknowledgement: String { notification + ".visible" }
     var lifetime: TimeInterval { self == .preparing ? 30 : self == .recording ? 15 : 8 }
 
-    var text: String {
+    var text: LocalizedStringResource {
         switch self {
-        case .preparing: "Preparing recording - please wait" // l10n:ignore — local developer diagnostic
-        case .recording: "Recording diagnostics - ready" // l10n:ignore — local developer diagnostic
-        case .finished: "Recording finished" // l10n:ignore — local developer diagnostic
-        case .failed: "Recording stopped - do not repeat" // l10n:ignore — local developer diagnostic
+        case .preparing:
+            LocalizedStringResource("Preparing recording - please wait", comment: "Diagnostic recording status. Wait before performing the action being recorded.")
+        case .recording:
+            LocalizedStringResource("Recording diagnostics - ready", comment: "Diagnostic recording status. Recording is active and the requested action can now be performed.")
+        case .finished:
+            LocalizedStringResource("Recording finished", comment: "Diagnostic recording has completed.")
+        case .failed:
+            LocalizedStringResource("Recording stopped - do not repeat", comment: "Diagnostic recording stopped unexpectedly. Do not repeat the requested action until another recording is ready.")
         }
     }
 }
@@ -92,7 +96,7 @@ final class DiagnosticRecordingController {
             badge = label
         }
         if changed {
-            label.text = "  \(phase.text)  "
+            label.text = "  \(String(localized: phase.text))  " // l10n:content — localized UIKit status label
             label.backgroundColor = phase == .recording
                 ? UIColor(red: 0.65, green: 0.02, blue: 0.03, alpha: 1)
                 : UIColor(white: 0.12, alpha: 1)
