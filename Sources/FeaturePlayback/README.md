@@ -344,6 +344,16 @@ allowing the existing alternate-engine fallback to keep the requested position
 instead of waiting for the first-frame watchdog and adopting the wrong clock.
 A paused handoff clears loading only when the engine has a displayable frame at
 the resumed position; it does not force playback merely to advance the clock.
+tvOS episode handoffs use the same range preparation for automatic advance, Next,
+Previous, and episode-picker selections. A matching in-flight/ready prefetch is
+reused; other selections from Plozzigen HDR playback resolve and probe before
+the outgoing engine stops. Matching HDR display classes retain Aether's display
+criteria; unknown ranges, SDR, or native-engine transitions still reset normally.
+Cancelled handoffs release unadopted sessions and clear retained display criteria.
+The source-range decision does not establish HDMI output; physical-TV verification
+must check both initial Dolby Vision and forward/backward episode transitions.
+Mobile retains its existing handoff path without adding a network probe to
+offline playback; it does not drive the tvOS HDMI display-mode switch.
 For a server conversion, Info's existing badge row describes the active rendition
 and is labelled Transcoded alongside the badges: exact encoded dimensions, video codec, known range,
 and actual audio format/channels. No original-file badges are substituted while

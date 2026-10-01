@@ -1498,6 +1498,145 @@ final class PlayerViewModelEOFTests: XCTestCase {
         await viewModel.stop()
     }
 
+    func testPreviousEpisodeHandoffKeepsHDRUntilSelectedEpisodeIsProbed() async throws {
+        let current = try makeNetworkFileRequest(itemID: "episode-2", kind: .episode)
+        let previous = try makeNetworkFileRequest(itemID: "episode-1", kind: .episode)
+        let provider = RecordingPlaybackProvider(
+            request: current, kind: .mediaShare, requestsByItemID: ["episode-1": previous]
+        )
+        let engine = SpyVideoEngine()
+        let gate = RangeProbeGate(result: .dolbyVision)
+        let viewModel = PlayerViewModel(
+            provider: provider, itemID: current.item.id,
+            engineFactory: EngineFactory(
+                makeNative: { _ in SpyVideoEngine() },
+                makePlozzigen: { engine },
+                probeSourceDynamicRange: { await gate.probe($0) }
+            ),
+            neighborResolver: { (previous.item, nil) }
+        )
+        await viewModel.load()
+        engine.onProbedSourceFactsChanged?(EngineProbedSourceFacts(range: .dolbyVision))
+        viewModel.playEpisode(previous.item)
+        XCTAssertTrue(viewModel.showBringUpSpinner)
+        let handoff = Task { await viewModel.prepareEpisodeHandoff(to: previous.item) }
+        await gate.waitUntilEntered()
+        XCTAssertEqual(engine.stopCount, 0)
+        engine.onEnded?()
+        viewModel.playEpisode(MediaItem(id: "ignored", title: "Ignored", kind: .episode))
+        XCTAssertEqual(viewModel.pendingNextEpisode?.id, previous.item.id,
+                       "EOF and repeated input cannot replace the user's in-flight selection.")
+        await gate.release()
+        let resolved = await handoff.value
+        let prepared = try XCTUnwrap(resolved)
+        let preserve = viewModel.shouldPreserveDisplayMode(forNext: prepared)
+        XCTAssertTrue(preserve)
+        await viewModel.stop(preserveDisplayMode: preserve)
+        XCTAssertEqual(engine.preservedDisplayStops, [true])
+
+        let incomingEngine = SpyVideoEngine()
+        let incoming = PlayerViewModel(
+            provider: provider, itemID: previous.item.id,
+            engineFactory: EngineFactory(
+                makeNative: { _ in SpyVideoEngine() }, makePlozzigen: { incomingEngine }
+            ),
+            adoptedResolved: prepared.inheritingPreservedDisplayMode(preserve)
+        )
+        await incoming.load()
+        let resolutions = await provider.playbackInfoCallCountValue()
+        XCTAssertEqual(resolutions, 2, "Current and selected episodes each resolve only once.")
+        XCTAssertEqual(incoming.inheritedPreservedDynamicRange, .dolbyVision)
+        await incoming.stop()
+    }
+
+    func testDismissalWhilePreparingEpisodeReleasesSessionWithoutPublishing() async throws {
+        let current = try makeNetworkFileRequest(itemID: "current", kind: .episode)
+        let previous = try makeNetworkFileRequest(
+            itemID: "previous", kind: .episode, playSessionID: "prepared-session"
+        )
+        let provider = RecordingPlaybackProvider(
+            request: current, requestsByItemID: ["previous": previous]
+        )
+        let engine = SpyVideoEngine()
+        let gate = RangeProbeGate(result: .dolbyVision)
+        let viewModel = PlayerViewModel(
+            provider: provider, itemID: current.item.id,
+            engineFactory: EngineFactory(
+                makeNative: { _ in SpyVideoEngine() }, makePlozzigen: { engine },
+                probeSourceDynamicRange: { await gate.probe($0) }
+            )
+        )
+        await viewModel.load()
+        engine.onProbedSourceFactsChanged?(EngineProbedSourceFacts(range: .dolbyVision))
+        let handoff = Task { await viewModel.prepareEpisodeHandoff(to: previous.item) }
+        await gate.waitUntilEntered()
+        await viewModel.stop()
+        await gate.release()
+        let prepared = await handoff.value
+        XCTAssertNil(prepared)
+        let reports = await provider.reports
+        XCTAssertEqual(reports.filter { $0.progress.playSessionID == "prepared-session" && $0.event == .stop }.count, 1)
+        XCTAssertEqual(engine.preservedDisplayStops, [false])
+    }
+
+    func testAbandonedPreparedHandoffClearsRetainedDisplayAndSession() async throws {
+        let current = try makeNetworkFileRequest(itemID: "current", kind: .episode)
+        let previous = try makeNetworkFileRequest(
+            itemID: "previous", kind: .episode, playSessionID: "prepared-session"
+        )
+        let provider = RecordingPlaybackProvider(
+            request: current, requestsByItemID: ["previous": previous]
+        )
+        let engine = SpyVideoEngine()
+        let viewModel = PlayerViewModel(
+            provider: provider, itemID: current.item.id,
+            engineFactory: EngineFactory(
+                makeNative: { _ in SpyVideoEngine() }, makePlozzigen: { engine },
+                probeSourceDynamicRange: { _ in .dolbyVision }
+            )
+        )
+        await viewModel.load()
+        engine.onProbedSourceFactsChanged?(EngineProbedSourceFacts(range: .dolbyVision))
+        let prepared = await viewModel.prepareEpisodeHandoff(to: previous.item)
+        XCTAssertNotNil(prepared)
+        await viewModel.stop(preserveDisplayMode: true)
+        await viewModel.discardEpisodeHandoff(prepared)
+        XCTAssertEqual(engine.preservedDisplayStops, [true, false])
+        let reports = await provider.reports
+        XCTAssertEqual(reports.filter { $0.progress.playSessionID == "prepared-session" && $0.event == .stop }.count, 1)
+    }
+
+    func testCancellationDuringEpisodeResolutionReleasesLegacyProviderSession() async throws {
+        let current = try makeNetworkFileRequest(itemID: "current", kind: .episode)
+        let previous = try makeNetworkFileRequest(
+            itemID: "previous", kind: .episode, playSessionID: "prepared-session"
+        )
+        let provider = RecordingPlaybackProvider(
+            request: current, requestsByItemID: ["previous": previous]
+        )
+        let engine = SpyVideoEngine()
+        let viewModel = PlayerViewModel(
+            provider: provider, itemID: current.item.id,
+            engineFactory: EngineFactory(
+                makeNative: { _ in SpyVideoEngine() }, makePlozzigen: { engine }
+            )
+        )
+        await viewModel.load()
+        engine.onProbedSourceFactsChanged?(EngineProbedSourceFacts(range: .dolbyVision))
+        let gate = PreCommitYieldGate()
+        await provider.setPlaybackInfoGate(gate)
+        let handoff = Task { await viewModel.prepareEpisodeHandoff(to: previous.item) }
+        await waitForGate(gate, entries: 1)
+        handoff.cancel()
+        gate.releaseNext()
+        let prepared = await handoff.value
+        XCTAssertNil(prepared)
+        let reports = await provider.reports
+        XCTAssertEqual(reports.filter { $0.progress.playSessionID == "prepared-session" && $0.event == .stop }.count, 1)
+        XCTAssertEqual(engine.stopCount, 0)
+        await viewModel.stop()
+    }
+
     func testCancelledDirectFilePrefetchProbeCannotPublishRange() async throws {
         let current = try makeNetworkFileRequest(
             itemID: "current",
@@ -1865,6 +2004,7 @@ private actor RecordingPlaybackProvider: MediaProvider {
     private let childrenByParent: [String: [MediaItem]]
     private var childErrors: [String: any Error] = [:]
     private var itemError: (any Error)?
+    private var playbackInfoGate: PreCommitYieldGate?
     private var childGates: [String: PreCommitYieldGate] = [:]
     private var childIDs: [String] = []
     private var playlistMemberError: AppError?
@@ -1931,9 +2071,11 @@ private actor RecordingPlaybackProvider: MediaProvider {
     }
     func playbackInfo(for itemID: String, mediaSourceID: String?, forceTranscode: Bool) async throws -> PlaybackRequest {
         playbackInfoCallCount += 1
+        await playbackInfoGate?.suspend()
         return requestsByItemID[itemID] ?? request
     }
 
+    func setPlaybackInfoGate(_ gate: PreCommitYieldGate) { playbackInfoGate = gate }
     func itemCallCountValue() -> Int { itemCallCount }
     func playbackInfoCallCountValue() -> Int { playbackInfoCallCount }
     func hasReport(itemID: String, event: PlaybackEvent) -> Bool {
@@ -2046,6 +2188,7 @@ private final class SpyVideoEngine: VideoEngine {
     var onSecondarySubtitleCues: (@MainActor ([SubtitleCue]) -> Void)?
     var loadCount = 0
     var stopCount = 0
+    var preservedDisplayStops: [Bool] = []
     var drainTransportCount = 0
     var reloadAfterForegroundCount = 0
     var drainGate: PreCommitYieldGate?
@@ -2071,7 +2214,11 @@ private final class SpyVideoEngine: VideoEngine {
         furthestObservedPosition = max(furthestObservedPosition, seconds)
     }
     func stop() {
+        stop(preserveDisplayMode: false)
+    }
+    func stop(preserveDisplayMode: Bool) {
         stopCount += 1
+        preservedDisplayStops.append(preserveDisplayMode)
         status = .idle
         duration = 0
     }
