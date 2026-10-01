@@ -1,5 +1,8 @@
 # Local Media Share Support — Design Proposal
 
+Current automatic scan/enrichment eligibility is documented in
+[Profile-scoped media-share work](media-share-work-scope.md).
+
 **Status:** Still just a design for the provider/library side, BUT — the scary part
 (Phase 1, getting SMB to actually play on the Apple TV) now works. A file off my
 NAS plays end to end: playback, seeking forward/back, guest login and a real

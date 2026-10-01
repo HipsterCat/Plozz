@@ -229,12 +229,14 @@ final class ShareScanLifecycleTests: XCTestCase {
     }
 
     private func makeCoordinator(
-        diagnostics: ScanDiagnosticsSpy
+        diagnostics: ScanDiagnosticsSpy,
+        initialWorkScope: MediaShareWorkScope? = nil
     ) -> ShareCatalogCoordinator {
         ShareCatalogCoordinator(
             arbiterFactory: { MediaIOArbiter(accountID: $0) },
             diagnostics: diagnostics,
-            pipelineFactory: TestPipelineFactory { MetadataResolverSpy() }
+            pipelineFactory: TestPipelineFactory { MetadataResolverSpy() },
+            initialWorkScope: initialWorkScope
         )
     }
 
@@ -252,6 +254,105 @@ final class ShareScanLifecycleTests: XCTestCase {
     }
 
     // MARK: - A5: completion gating and owner attribution
+
+    func testExcludedSourceRegistrationAndPollingDoNotScanOrDiscardItsCatalog() async {
+        let accountID = "scope-paused-\(UUID())"
+        let revision = CredentialRevision()
+        let controller = LifecycleListController(blocksRoot: false)
+        let coordinator = makeCoordinator(diagnostics: ScanDiagnosticsSpy(), initialWorkScope: .paused)
+        await coordinator.setAutomaticWorkScope(.paused, revision: 2)
+        await coordinator.setAutomaticWorkScope(
+            .init(profileID: "stale", accountKeys: [accountID]), revision: 1
+        )
+        let store = await coordinator.store(
+            accountKey: accountID, displayName: "Excluded",
+            credentialRevision: revision,
+            sessionFactory: makeSessionFactory(accountID: accountID, revision: revision, controller: controller)
+        )
+        await store.setMeta("scope-test", "retained")
+        for _ in 0..<5 { await coordinator.pollForChanges() }
+        XCTAssertEqual(controller.rootLists, 0, "Neither cached reads nor polling grants scan permission.")
+        let cached = await store.meta("scope-test")
+        XCTAssertEqual(cached, "retained")
+        await coordinator.setBackgroundWorkAllowed(false, revision: 1)
+        await coordinator.setBackgroundWorkAllowed(true, revision: 2)
+        await coordinator.pollForChanges()
+        XCTAssertEqual(controller.rootLists, 0, "Returning to foreground cannot reopen an excluded source.")
+        await coordinator.setAutomaticWorkScope(
+            .init(profileID: "current", accountKeys: [accountID]), revision: 3
+        )
+        let resumed = await poll { await coordinator.backgroundScanCompletedAt(accountID) != nil }
+        XCTAssertTrue(resumed)
+        XCTAssertEqual(controller.rootLists, 1)
+        await coordinator.invalidate(accountKey: accountID)
+    }
+
+    func testExplicitScanNowStillRunsOnceForAnExcludedSource() async {
+        let accountID = "scope-manual-\(UUID())"
+        let revision = CredentialRevision()
+        let controller = LifecycleListController(blocksRoot: false)
+        let coordinator = makeCoordinator(diagnostics: ScanDiagnosticsSpy(), initialWorkScope: .paused)
+        _ = await coordinator.store(
+            accountKey: accountID, displayName: "Excluded",
+            credentialRevision: revision,
+            sessionFactory: makeSessionFactory(accountID: accountID, revision: revision, controller: controller)
+        )
+        XCTAssertEqual(controller.rootLists, 0)
+        await coordinator.rescan(accountKey: accountID)
+        let finished = await poll { await coordinator.backgroundScanCompletedAt(accountID) != nil }
+        XCTAssertTrue(finished)
+        XCTAssertEqual(controller.rootLists, 1)
+        for _ in 0..<5 { await coordinator.pollForChanges() }
+        XCTAssertEqual(controller.rootLists, 1)
+        await coordinator.invalidate(accountKey: accountID)
+    }
+
+    func testProfileScopeChangeDrainsOnlyItsScanAndResumesWithoutOverlappingTransport() async {
+        let oldID = "scope-old-\(UUID())"
+        let newID = "scope-new-\(UUID())"
+        let revision = CredentialRevision()
+        let diagnostics = ScanDiagnosticsSpy()
+        let old = LifecycleListController(blocksRoot: true, ignoresTaskCancellation: true)
+        let new = LifecycleListController(blocksRoot: false)
+        let shutdown = LifecycleShutdownGate()
+        let coordinator = makeCoordinator(
+            diagnostics: diagnostics,
+            initialWorkScope: .init(profileID: "old-profile", accountKeys: [oldID])
+        )
+        let oldStore = await coordinator.store(
+            accountKey: oldID, displayName: "Old", credentialRevision: revision,
+            sessionFactory: makeSessionFactory(
+                accountID: oldID, revision: revision, controller: old, shutdownGate: shutdown
+            )
+        )
+        await oldStore.setMeta("scope-test", "retained")
+        _ = await coordinator.store(
+            accountKey: newID, displayName: "New", credentialRevision: revision,
+            sessionFactory: makeSessionFactory(accountID: newID, revision: revision, controller: new)
+        )
+        let oldStarted = await poll { old.rootLists == 1 }
+        XCTAssertTrue(oldStarted)
+        XCTAssertEqual(new.rootLists, 0)
+        await coordinator.setAutomaticWorkScope(
+            .init(profileID: "new-profile", accountKeys: [newID]), revision: 1
+        )
+        let newCompleted = await poll { await coordinator.backgroundScanCompletedAt(newID) != nil }
+        XCTAssertTrue(newCompleted, "An old source's transport teardown must not block the new profile.")
+        let cached = await oldStore.meta("scope-test")
+        XCTAssertEqual(cached, "retained", "Profile pausing must not close or purge the shared catalog.")
+        await coordinator.setAutomaticWorkScope(
+            .init(profileID: "old-profile", accountKeys: [oldID]), revision: 2
+        )
+        XCTAssertEqual(old.rootLists, 1, "A quick return must wait for the exact previous transport to drain.")
+        old.setBlocksRoot(false)
+        await shutdown.open()
+        let resumed = await poll { await coordinator.backgroundScanCompletedAt(oldID) != nil }
+        XCTAssertTrue(resumed)
+        XCTAssertEqual(old.rootLists, 2)
+        XCTAssertTrue(diagnostics.records.contains { $0.accountKey == oldID && $0.owner == .profileScopeChanged })
+        await coordinator.invalidate(accountKey: oldID)
+        await coordinator.invalidate(accountKey: newID)
+    }
 
     func testReopenedFreshCatalogKeepsOriginalCompletionDeadline() async throws {
         let accountID = "fresh-deadline-\(UUID().uuidString)"

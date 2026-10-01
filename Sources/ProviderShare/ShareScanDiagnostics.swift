@@ -20,6 +20,7 @@ enum ShareScanCancellationOwner: String, Sendable, Equatable {
     case playbackAdmission
     /// The application resigned active; foreground-only scan work was checkpointed.
     case applicationInactive
+    case profileScopeChanged
     /// A newer scanner/scan generation replaced this one with no explicit owner
     /// (e.g. the store rejected a superseded scan id, or the generation moved while
     /// the walk ran).

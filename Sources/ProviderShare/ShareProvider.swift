@@ -160,6 +160,25 @@ public struct ShareProvider: MediaProvider, MediaFileBrowsing, MediaSortFieldPro
 
     // MARK: Library browsing
 
+    public static func hasEnabledCatalogLibrary(
+        accountID: String,
+        configuration: MediaShareLibraryConfiguration?,
+        visibility: HomeLibraryVisibility
+    ) -> Bool {
+        let libraryIDs: [String]
+        switch configuration?.contentType {
+        case .movies:
+            libraryIDs = [ShareCatalogID.moviesLibrary]
+        case .tvShows:
+            libraryIDs = [configuration?.isAnime == true ? ShareCatalogID.animeLibrary : ShareCatalogID.tvLibrary]
+        case .automatic, nil:
+            libraryIDs = [ShareCatalogID.moviesLibrary, ShareCatalogID.tvLibrary, ShareCatalogID.animeLibrary]
+        case .personalVideos:
+            return false
+        }
+        return libraryIDs.contains { visibility.isEnabled("\(accountID):\($0)") }
+    }
+
     /// App-owned catalog for this share (SQLite index built by a background
     /// `ShareScanner`), resolved through the injected read capability so the
     /// concrete store never leaks into the facade.

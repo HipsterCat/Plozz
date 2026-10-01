@@ -147,6 +147,9 @@ actor ShareEnricher {
         concurrency: Int = 1,
         beforeResolve: (@Sendable (String) async -> Bool)? = nil
     ) async -> ShareEnrichmentSliceResult {
+        guard !Task.isCancelled else {
+            return ShareEnrichmentSliceResult(attempted: 0, hasMore: true)
+        }
         if isRunning {
             return ShareEnrichmentSliceResult(attempted: 0, hasMore: true)
         }
@@ -165,6 +168,9 @@ actor ShareEnricher {
             enrichDone = 0
             passStartedAt = startedAt
             isPassActive = true
+        }
+        guard !Task.isCancelled else {
+            return ShareEnrichmentSliceResult(attempted: 0, hasMore: true)
         }
         if !isAdvertisingEnrich {
             isAdvertisingEnrich = true
@@ -314,6 +320,12 @@ actor ShareEnricher {
         // A scheduler pause interrupts execution, not the logical enrichment pass.
         // Keeping the lifecycle open prevents pause/resume from repeatedly removing
         // and reinserting the same progress UI while durable backlog remains.
+    }
+
+    func pauseForProfileScope() {
+        guard isAdvertisingEnrich else { return }
+        isAdvertisingEnrich = false
+        reporter.enrichFinished(shareID)
     }
 
     func finishLogicalPass() {

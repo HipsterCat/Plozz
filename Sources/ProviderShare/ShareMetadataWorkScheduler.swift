@@ -55,6 +55,7 @@ actor ShareMetadataWorkScheduler {
         var queuedBacklogs: Int
         var queuedItems: Int
         var runningAccountKey: String?
+        var isWorkerRunning: Bool
     }
 
     typealias MayRun = @Sendable () async -> Bool
@@ -67,8 +68,10 @@ actor ShareMetadataWorkScheduler {
         var runSlice: RunSlice
         var runItem: RunItem
         var pausePass: PassAction
+        var pauseForScope: PassAction
         var finishPass: PassAction
         var notBefore: ContinuousClock.Instant?
+        var freshPassRequested = false
     }
 
     private struct UrgentWork: Equatable {
@@ -126,6 +129,7 @@ actor ShareMetadataWorkScheduler {
         var work: Work
         var registrationGeneration: UInt64
         var enqueuedAt: ContinuousClock.Instant
+        var userRequested = false
     }
 
     private let configuration: Configuration
@@ -139,7 +143,10 @@ actor ShareMetadataWorkScheduler {
     private var admissionGenerations: [String: UInt64] = [:]
     private var registrationGenerations: [String: UInt64] = [:]
     private var suspensionCounts: [String: Int] = [:]
+    private var scopePauseCounts: [String: Int] = [:]
     private var preferredAccountKeys: Set<String> = []
+    private var automaticAccountKeys: Set<String>?
+    private var automaticScopeRevision: UInt64 = 0
     /// Preferred backlog admissions that ran back-to-back with no intervening
     /// non-preferred admission. Updated only on a REAL admission so a blocked
     /// account cannot consume the burst quota.
@@ -159,8 +166,13 @@ actor ShareMetadataWorkScheduler {
     ///   fixed `Configuration` and pass false so the schedule stays deterministic —
     ///   an adaptive budget would otherwise make slice sizes and delays depend on
     ///   whatever machine the suite runs on.
-    init(adaptiveBudget: Bool = true, configuration: Configuration = Configuration()) {
+    init(
+        adaptiveBudget: Bool = true,
+        configuration: Configuration = Configuration(),
+        automaticAccountKeys: Set<String>? = nil
+    ) {
         self.configuration = configuration
+        self.automaticAccountKeys = automaticAccountKeys
         self.adaptiveBudget = adaptiveBudget
         self.budget = adaptiveBudget
             ? ShareMetadataBudget.forCurrentDevice()
@@ -188,6 +200,7 @@ actor ShareMetadataWorkScheduler {
         runSlice: @escaping RunSlice,
         runItem: @escaping RunItem,
         pausePass: @escaping PassAction = {},
+        pauseForScope: @escaping PassAction = {},
         finishPass: @escaping PassAction = {}
     ) {
         let notBefore = jobs[accountKey]?.notBefore
@@ -198,32 +211,42 @@ actor ShareMetadataWorkScheduler {
             runSlice: runSlice,
             runItem: runItem,
             pausePass: pausePass,
+            pauseForScope: pauseForScope,
             finishPass: finishPass,
             notBefore: notBefore
         )
         ensureWorker()
     }
 
-    func enqueueBacklog(accountKey: String) {
+    func enqueueBacklog(accountKey: String, userRequested: Bool = false) {
         guard jobs[accountKey] != nil else { return }
-        requeueBacklog(accountKey)
+        if userRequested { jobs[accountKey]?.freshPassRequested = true }
+        requeueBacklog(accountKey, userRequested: userRequested)
         ensureWorker()
     }
 
-    func enqueueItem(accountKey: String, itemID: String) {
+    func enqueueItem(accountKey: String, itemID: String, userRequested: Bool = false) {
         guard jobs[accountKey] != nil else { return }
         let urgent = UrgentWork(accountKey: accountKey, itemID: itemID)
         let currentRegistration = registrationGenerations[accountKey, default: 0]
         if running?.work == .item(urgent),
            running?.registrationGeneration == currentRegistration {
+            if userRequested { running?.queued.userRequested = true }
             return
         }
         let key = urgentKey(urgent)
-        guard queuedUrgentKeys.insert(key).inserted else { return }
+        guard queuedUrgentKeys.insert(key).inserted else {
+            if userRequested {
+                preserveExplicitIntent(.item(urgent))
+                ensureWorker()
+            }
+            return
+        }
         urgentQueue.append(QueuedWork(
             work: .item(urgent),
             registrationGeneration: currentRegistration,
-            enqueuedAt: clock.now
+            enqueuedAt: clock.now,
+            userRequested: userRequested
         ))
         ensureWorker()
     }
@@ -237,6 +260,42 @@ actor ShareMetadataWorkScheduler {
            !accountKeys.contains(running.work.accountKey),
            backlogQueue.contains(where: { accountKeys.contains($0.work.accountKey) }) {
             running.task.cancel()
+        }
+        ensureWorker()
+    }
+
+    func setAutomaticAccountKeys(_ accountKeys: Set<String>, revision: UInt64) async {
+        guard revision > automaticScopeRevision
+                || (revision == automaticScopeRevision && automaticAccountKeys == accountKeys) else { return }
+        automaticScopeRevision = revision
+        automaticAccountKeys = accountKeys
+        for key in jobs.keys where !accountKeys.contains(key) {
+            admissionGenerations[key, default: 0] &+= 1
+        }
+        if running == nil || running.map({ !permits($0.queued) }) == true {
+            worker?.task.cancel()
+            worker = nil
+            if let running {
+                running.task.cancel()
+                draining[running.id] = running
+                self.running = nil
+                requeue(running.queued, resetAge: false)
+            }
+        }
+        for (key, job) in Array(jobs) where !accountKeys.contains(key) {
+            let explicitWork = (running?.work.accountKey == key && running?.queued.userRequested == true)
+                || backlogQueue.contains { $0.work.accountKey == key && $0.userRequested }
+                || urgentQueue.contains { $0.work.accountKey == key && $0.userRequested }
+            if !explicitWork {
+                scopePauseCounts[key, default: 0] += 1
+                await job.pauseForScope()
+                let remaining = (scopePauseCounts[key] ?? 1) - 1
+                scopePauseCounts[key] = remaining > 0 ? remaining : nil
+            }
+            guard revision == automaticScopeRevision else {
+                ensureWorker()
+                return
+            }
         }
         ensureWorker()
     }
@@ -367,7 +426,8 @@ actor ShareMetadataWorkScheduler {
         Snapshot(
             queuedBacklogs: backlogQueue.count,
             queuedItems: urgentQueue.count,
-            runningAccountKey: running?.work.accountKey
+            runningAccountKey: running?.work.accountKey,
+            isWorkerRunning: worker != nil
         )
     }
 
@@ -439,6 +499,8 @@ actor ShareMetadataWorkScheduler {
                 continue
             }
             let work = queued.work
+            let startsFreshPass = work.isBacklog && jobs[work.accountKey]?.freshPassRequested == true
+            if startsFreshPass { jobs[work.accountKey]?.freshPassRequested = false }
 
             let task = Task(priority: .utility) {
                 switch work {
@@ -446,6 +508,7 @@ actor ShareMetadataWorkScheduler {
                     await job.runItem(urgent.itemID)
                     return Outcome.item
                 case .backlog:
+                    if startsFreshPass { await job.finishPass() }
                     let deviceItems = ShareMetadataBudget.forCurrentDevice().itemsPerSlice
                     let constrained = ShareMetadataBudget.isConstrained()
                     let thermal = ProcessInfo.processInfo.thermalState.rawValue
@@ -468,6 +531,7 @@ actor ShareMetadataWorkScheduler {
                 task: task
             )
             let outcome = await task.value
+            let completedWork = running?.id == runningID ? (running?.queued ?? queued) : queued
             let wasCancelled = task.isCancelled
             let wasDraining = draining.removeValue(forKey: runningID) != nil
             if running?.id == runningID {
@@ -478,7 +542,7 @@ actor ShareMetadataWorkScheduler {
                 continue
             }
             guard worker?.id == workerID, backgroundWorkAllowed else {
-                requeue(queued, resetAge: true)
+                requeue(completedWork, resetAge: true)
                 continue
             }
             // The registration that owned this work may have been replaced while it
@@ -491,7 +555,7 @@ actor ShareMetadataWorkScheduler {
             switch outcome {
             case .item:
                 // A served turn restarts age; requeue is generation-guarded.
-                if wasCancelled { requeue(queued, resetAge: true) }
+                if wasCancelled { requeue(completedWork, resetAge: true) }
             case .backlog(let result):
                 // Close the loop: correct the budget with what the slice's
                 // DEVICE-BOUND work actually cost, and re-read thermal/low-power
@@ -532,14 +596,19 @@ actor ShareMetadataWorkScheduler {
                         }
                         jobs[work.accountKey] = updated
                     }
-                    requeue(queued, resetAge: true)
+                    requeue(completedWork, resetAge: true)
                 }
             }
         }
     }
 
     private var hasQueuedWork: Bool {
-        !urgentQueue.isEmpty || !backlogQueue.isEmpty
+        urgentQueue.contains(where: permits) || backlogQueue.contains(where: permits)
+    }
+
+    private func permits(_ queued: QueuedWork) -> Bool {
+        scopePauseCounts[queued.work.accountKey, default: 0] == 0
+            && (queued.userRequested || automaticAccountKeys?.contains(queued.work.accountKey) != false)
     }
 
     /// Tries every currently queued item once so one playback-blocked share cannot
@@ -570,6 +639,7 @@ actor ShareMetadataWorkScheduler {
 
         for queued in candidates {
             let work = queued.work
+            guard permits(queued) else { continue }
             guard takeQueued(work), let job = jobs[work.accountKey] else { continue }
             if draining.values.contains(where: {
                 $0.work.accountKey == work.accountKey
@@ -589,6 +659,7 @@ actor ShareMetadataWorkScheduler {
             }
             let admissionGeneration = admissionGenerations[work.accountKey, default: 0]
             if await job.mayRun(),
+               permits(queued),
                backgroundWorkAllowed,
                worker?.id == workerID,
                jobs[work.accountKey] != nil,
@@ -654,29 +725,54 @@ actor ShareMetadataWorkScheduler {
         let enqueuedAt = resetAge ? clock.now : queued.enqueuedAt
         switch queued.work {
         case .item(let urgent):
-            guard queuedUrgentKeys.insert(urgentKey(urgent)).inserted else { return }
+            guard queuedUrgentKeys.insert(urgentKey(urgent)).inserted else {
+                if queued.userRequested { preserveExplicitIntent(queued.work) }
+                return
+            }
             urgentQueue.append(QueuedWork(
                 work: .item(urgent),
                 registrationGeneration: queued.registrationGeneration,
-                enqueuedAt: enqueuedAt
+                enqueuedAt: enqueuedAt,
+                userRequested: queued.userRequested
             ))
         case .backlog(let accountKey):
-            guard queuedBacklogs.insert(accountKey).inserted else { return }
+            guard queuedBacklogs.insert(accountKey).inserted else {
+                if queued.userRequested { preserveExplicitIntent(queued.work) }
+                return
+            }
             backlogQueue.append(QueuedWork(
                 work: .backlog(accountKey: accountKey),
                 registrationGeneration: queued.registrationGeneration,
-                enqueuedAt: enqueuedAt
+                enqueuedAt: enqueuedAt,
+                userRequested: queued.userRequested
             ))
         }
     }
 
-    private func requeueBacklog(_ accountKey: String) {
-        guard queuedBacklogs.insert(accountKey).inserted else { return }
+    private func requeueBacklog(_ accountKey: String, userRequested: Bool = false) {
+        guard queuedBacklogs.insert(accountKey).inserted else {
+            if userRequested { preserveExplicitIntent(.backlog(accountKey: accountKey)) }
+            return
+        }
         backlogQueue.append(QueuedWork(
             work: .backlog(accountKey: accountKey),
             registrationGeneration: registrationGenerations[accountKey, default: 0],
-            enqueuedAt: clock.now
+            enqueuedAt: clock.now,
+            userRequested: userRequested
         ))
+    }
+
+    private func preserveExplicitIntent(_ work: Work) {
+        switch work {
+        case .item:
+            if let index = urgentQueue.firstIndex(where: { $0.work == work }) {
+                urgentQueue[index].userRequested = true
+            }
+        case .backlog:
+            if let index = backlogQueue.firstIndex(where: { $0.work == work }) {
+                backlogQueue[index].userRequested = true
+            }
+        }
     }
 
     private func urgentKey(_ work: UrgentWork) -> String {

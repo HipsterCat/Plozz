@@ -5,6 +5,23 @@ import XCTest
 /// "Updating library…" banner and the Settings last-scanned line.
 @MainActor
 final class ShareScanStatusModelTests: XCTestCase {
+    func testPausedScanStopsAdvertisingWithoutInventingACompletionDate() {
+        let model = ShareScanStatusModel()
+        model.scanStarted(shareID: "source", name: "Library")
+        model.scanProgress(shareID: "source", directoriesScanned: 4, itemsFound: 12)
+        model.scanPaused(shareID: "source")
+        XCTAssertFalse(model.isAnyBusy)
+        XCTAssertNil(model.state(forShareID: "source")?.lastScanAt)
+        XCTAssertEqual(model.state(forShareID: "source")?.itemsFound, 12)
+        model.scanStarted(shareID: "source", name: "Library")
+        model.scanFinished(shareID: "source")
+        let lastCompleted = model.state(forShareID: "source")?.lastScanAt
+        model.scanStarted(shareID: "source", name: "Library")
+        model.scanPaused(shareID: "source")
+        XCTAssertEqual(model.state(forShareID: "source")?.lastScanAt, lastCompleted)
+        XCTAssertFalse(model.isAnyBusy)
+    }
+
     func testBusyWhileScanningThenClearsOnFinish() {
         let model = ShareScanStatusModel()
         XCTAssertFalse(model.isAnyBusy)

@@ -43,7 +43,9 @@ final class PlozziOSAppModel {
     }
 
     var canEnterApp: Bool { admissionContext.canEnterApp }
-    var isLiveTVProfileAuthorized: Bool {
+    var isLiveTVProfileAuthorized: Bool { isActiveProfileAuthorized }
+
+    var isActiveProfileAuthorized: Bool {
         let profile = profiles.activeProfile
         return canEnterApp && !mustChooseProfile
             && (!requiresLaunchProfileSelection || didCompleteLaunchProfileSelection)
@@ -315,6 +317,23 @@ final class PlozziOSAppModel {
     }
     let authenticatedHTTPResolver: ManagedAuthenticatedHTTPResolver
     let mediaShareRuntime: DefaultMediaShareRuntime
+
+    @ObservationIgnored
+    private lazy var mediaShareWorkScope = MediaShareWorkScopeController(
+        snapshot: { [weak self] in
+            guard let self else { return .paused }
+            return .resolve(
+                profileID: profiles.activeProfileID,
+                isProfileAuthorized: isActiveProfileAuthorized,
+                activeAccountIDs: accountsProviders.activeAccountIDs,
+                accounts: accountsProviders.accounts,
+                visibility: settings.homeVisibility.visibility
+            )
+        },
+        apply: { [runtime = mediaShareRuntime] scope, revision in
+            await runtime.setAutomaticWorkScope(scope, revision: revision)
+        }
+    )
     /// Household-wide metadata provider roles/order override (mirrors tvOS `AppState`).
     /// App-wide like the enrichment pipeline itself, so created once.
     let metadataProviderSettingsModel = MetadataProviderSettingsModel()
@@ -827,6 +846,7 @@ final class PlozziOSAppModel {
         prepareMediaAliasLedger()
         startCloudSyncIfEnabled()
         observeApplicationScenes()
+        mediaShareWorkScope.start()
     }
 
     var accounts: [Account] {

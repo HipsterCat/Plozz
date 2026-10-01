@@ -60,7 +60,9 @@ public final class AppState {
     }
 
     public var canEnterApp: Bool { admissionContext.canEnterApp }
-    var isLiveTVProfileAuthorized: Bool {
+    var isLiveTVProfileAuthorized: Bool { isActiveProfileAuthorized }
+
+    var isActiveProfileAuthorized: Bool {
         guard canEnterApp, case .ready = state else { return false }
         let profile = profilesModel.activeProfile
         return !profileFlow.isChoosingProfile
@@ -866,6 +868,23 @@ public final class AppState {
     /// status, the active-share set, and the "Scan now" entry point. Built in
     /// `init` once the accounts hub exists (it depends into the hub for rescans).
     public let mediaShare: MediaShareRuntimeFacet
+
+    @ObservationIgnored
+    private lazy var mediaShareWorkScope = MediaShareWorkScopeController(
+        snapshot: { [weak self] in
+            guard let self else { return .paused }
+            return .resolve(
+                profileID: profilesModel.activeProfileID,
+                isProfileAuthorized: isActiveProfileAuthorized,
+                activeAccountIDs: accountsProviders.activeAccountIDs,
+                accounts: accountsProviders.accounts,
+                visibility: profileSettings.homeLibraryVisibilityModel.visibility
+            )
+        },
+        apply: { [runtime = mediaShare.runtime] scope, revision in
+            await runtime.setAutomaticWorkScope(scope, revision: revision)
+        }
+    )
     private let durableLocalStateStore: DurableLocalStateStore?
     /// Optional tvOS system-user seam (default app-owned no-op). See
     /// `SystemProfileBridging`.
@@ -1177,6 +1196,7 @@ public final class AppState {
         accountsProviders.onActiveAccountsChanged = { [weak self] resolved, accounts in
             self?.mediaShare.setActiveShareAccounts(resolved, accounts: accounts)
         }
+        mediaShareWorkScope.start()
     }
 
     private static func makeDefaultAccountStore() -> AccountPersisting {

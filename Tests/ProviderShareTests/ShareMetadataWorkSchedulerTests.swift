@@ -114,6 +114,268 @@ final class ShareMetadataWorkSchedulerTests: XCTestCase {
         return await predicate()
     }
 
+    func testExcludedAutomaticWorkStaysQueuedWithoutAnIdleWorker() async {
+        let recorder = Recorder()
+        let scheduler = ShareMetadataWorkScheduler(adaptiveBudget: false, automaticAccountKeys: ["active"])
+        for account in ["inactive", "active"] {
+            await scheduler.register(
+                accountKey: account, mayRun: { true },
+                runSlice: { _ in
+                    _ = await recorder.nextSlice(account)
+                    return .init(attempted: 1, hasMore: false)
+                },
+                runItem: { _ in _ = await recorder.nextSlice("item-\(account)") }
+            )
+            await scheduler.enqueueBacklog(accountKey: account)
+        }
+        await scheduler.enqueueItem(accountKey: "inactive", itemID: "automatic-detail")
+        let activeFinished = await waitUntil {
+            let snapshot = await scheduler.snapshot()
+            return (await recorder.sliceCalls)["active"] == 1 && !snapshot.isWorkerRunning
+        }
+        XCTAssertTrue(activeFinished)
+        var calls = await recorder.sliceCalls
+        XCTAssertNil(calls["inactive"])
+        XCTAssertNil(calls["item-inactive"])
+        let paused = await scheduler.snapshot()
+        XCTAssertEqual(paused.queuedBacklogs, 1)
+        XCTAssertEqual(paused.queuedItems, 1)
+        await scheduler.setAutomaticAccountKeys(["inactive"], revision: 2)
+        let resumed = await waitUntil {
+            let snapshot = await scheduler.snapshot()
+            let calls = await recorder.sliceCalls
+            return calls["inactive"] == 1 && calls["item-inactive"] == 1 && !snapshot.isWorkerRunning
+        }
+        XCTAssertTrue(resumed)
+        calls = await recorder.sliceCalls
+        XCTAssertEqual(calls["active"], 1)
+        await scheduler.remove(accountKey: "active")
+        await scheduler.remove(accountKey: "inactive")
+    }
+
+    func testExplicitPassOnExcludedSourceDoesNotAuthorizeLaterAutomaticWork() async {
+        let recorder = Recorder()
+        let scheduler = ShareMetadataWorkScheduler(
+            adaptiveBudget: false,
+            configuration: .init(delayBetweenSlices: .milliseconds(1)),
+            automaticAccountKeys: []
+        )
+        await scheduler.register(
+            accountKey: "disabled", mayRun: { true },
+            runSlice: { _ in
+                let count = await recorder.nextSlice("disabled")
+                return .init(attempted: 1, hasMore: count < 2)
+            },
+            runItem: { _ in _ = await recorder.nextSlice("item") }
+        )
+        await scheduler.enqueueBacklog(accountKey: "disabled")
+        await scheduler.enqueueBacklog(accountKey: "disabled", userRequested: true)
+        let finished = await waitUntil {
+            let snapshot = await scheduler.snapshot()
+            return (await recorder.sliceCalls)["disabled"] == 2 && !snapshot.isWorkerRunning
+        }
+        XCTAssertTrue(finished)
+        await scheduler.enqueueBacklog(accountKey: "disabled")
+        await scheduler.enqueueItem(accountKey: "disabled", itemID: "manual", userRequested: true)
+        let itemFinished = await waitUntil {
+            let snapshot = await scheduler.snapshot()
+            return (await recorder.sliceCalls)["item"] == 1 && !snapshot.isWorkerRunning
+        }
+        XCTAssertTrue(itemFinished)
+        let calls = await recorder.sliceCalls
+        XCTAssertEqual(calls["disabled"], 2)
+        let paused = await scheduler.snapshot()
+        XCTAssertEqual(paused.queuedBacklogs, 1)
+        XCTAssertFalse(paused.isWorkerRunning)
+        await scheduler.remove(accountKey: "disabled")
+    }
+
+    func testProfileChangeDoesNotWaitForCancellationInsensitiveMetadata() async {
+        let recorder = Recorder()
+        let gate = WorkGate()
+        let scheduler = ShareMetadataWorkScheduler(adaptiveBudget: false, automaticAccountKeys: ["old"])
+        await scheduler.register(
+            accountKey: "old", mayRun: { true },
+            runSlice: { _ in
+                _ = await recorder.nextSlice("old")
+                await gate.wait()
+                return .init(attempted: 1, hasMore: true)
+            },
+            runItem: { _ in }
+        )
+        await scheduler.register(
+            accountKey: "new", mayRun: { true },
+            runSlice: { _ in
+                _ = await recorder.nextSlice("new")
+                return .init(attempted: 1, hasMore: false)
+            },
+            runItem: { _ in }
+        )
+        await scheduler.enqueueBacklog(accountKey: "old")
+        let oldStarted = await waitUntil { (await recorder.sliceCalls)["old"] == 1 }
+        XCTAssertTrue(oldStarted)
+        await scheduler.setAutomaticAccountKeys(["new"], revision: 3)
+        await scheduler.setAutomaticAccountKeys(["old"], revision: 2)
+        await scheduler.enqueueBacklog(accountKey: "new")
+        let newFinished = await waitUntil { (await recorder.sliceCalls)["new"] == 1 }
+        XCTAssertTrue(newFinished, "The new profile must not wait for old HTTP/transport teardown.")
+        await gate.open()
+        let idle = await waitUntil { !(await scheduler.snapshot()).isWorkerRunning }
+        XCTAssertTrue(idle)
+        let calls = await recorder.sliceCalls
+        XCTAssertEqual(calls["old"], 1, "Neither a stale scope nor late cancelled work may restart the old profile.")
+        await scheduler.remove(accountKey: "old")
+        await scheduler.remove(accountKey: "new")
+    }
+
+    func testScopeRevokedDuringAdmissionCannotStartAResolver() async {
+        let recorder = Recorder()
+        let gate = AdmissionGate()
+        let scheduler = ShareMetadataWorkScheduler(adaptiveBudget: false, automaticAccountKeys: ["source"])
+        await scheduler.register(
+            accountKey: "source", mayRun: { await gate.mayRun() },
+            runSlice: { _ in
+                _ = await recorder.nextSlice("source")
+                return .init(attempted: 1, hasMore: false)
+            },
+            runItem: { _ in }
+        )
+        await scheduler.enqueueBacklog(accountKey: "source")
+        await gate.waitUntilFirstCallStarts()
+        await scheduler.setAutomaticAccountKeys([], revision: 1)
+        await gate.releaseFirstCall()
+        let idle = await waitUntil { !(await scheduler.snapshot()).isWorkerRunning }
+        XCTAssertTrue(idle)
+        let calls = await recorder.sliceCalls
+        XCTAssertTrue(calls.isEmpty)
+        await scheduler.remove(accountKey: "source")
+    }
+
+    func testReenabledSourceWaitsForItsEarlierPauseCallback() async {
+        let recorder = Recorder()
+        let pause = WorkGate()
+        let scheduler = ShareMetadataWorkScheduler(adaptiveBudget: false, automaticAccountKeys: ["source"])
+        await scheduler.register(
+            accountKey: "source", mayRun: { true },
+            runSlice: { _ in
+                _ = await recorder.nextSlice("work")
+                return .init(attempted: 1, hasMore: false)
+            },
+            runItem: { _ in },
+            pauseForScope: {
+                _ = await recorder.nextSlice("pause")
+                await pause.wait()
+            }
+        )
+        let disabling = Task { await scheduler.setAutomaticAccountKeys([], revision: 1) }
+        let pausing = await waitUntil { (await recorder.sliceCalls)["pause"] == 1 }
+        XCTAssertTrue(pausing)
+        await scheduler.enqueueBacklog(accountKey: "source")
+        await scheduler.setAutomaticAccountKeys(["source"], revision: 2)
+        let held = await scheduler.snapshot()
+        XCTAssertFalse(held.isWorkerRunning, "The stale pause must finish before new work can advertise progress.")
+        await pause.open()
+        await disabling.value
+        let resumed = await waitUntil { (await recorder.sliceCalls)["work"] == 1 }
+        XCTAssertTrue(resumed)
+        await scheduler.remove(accountKey: "source")
+    }
+
+    func testExplicitMetadataPassRetainsIntentAcrossForegroundSuspension() async {
+        let recorder = Recorder()
+        let gate = WorkGate()
+        let scheduler = ShareMetadataWorkScheduler(
+            adaptiveBudget: false,
+            configuration: .init(delayBetweenSlices: .milliseconds(1)),
+            automaticAccountKeys: []
+        )
+        await scheduler.register(
+            accountKey: "excluded", mayRun: { true },
+            runSlice: { _ in
+                let call = await recorder.nextSlice("work")
+                if call == 1 { await gate.wait() }
+                return .init(attempted: 1, hasMore: false)
+            },
+            runItem: { _ in },
+            finishPass: { _ = await recorder.nextSlice("finish") }
+        )
+        await scheduler.enqueueBacklog(accountKey: "excluded", userRequested: true)
+        let started = await waitUntil { (await recorder.sliceCalls)["work"] == 1 }
+        XCTAssertTrue(started)
+        await scheduler.setBackgroundWorkAllowed(false)
+        await gate.open()
+        await scheduler.setBackgroundWorkAllowed(true)
+        let resumed = await waitUntil {
+            let snapshot = await scheduler.snapshot()
+            return (await recorder.sliceCalls)["work"] == 2 && !snapshot.isWorkerRunning
+        }
+        XCTAssertTrue(resumed)
+        let calls = await recorder.sliceCalls
+        XCTAssertEqual(calls["finish"], 1, "Reset the preceding logical pass once; suspension must not reset it again.")
+        await scheduler.enqueueBacklog(accountKey: "excluded")
+        let paused = await scheduler.snapshot()
+        XCTAssertFalse(paused.isWorkerRunning)
+        await scheduler.remove(accountKey: "excluded")
+    }
+
+    func testAutomaticDuplicateCannotStripAnExplicitPassOfItsRemainingPermission() async {
+        let recorder = Recorder()
+        let gate = WorkGate()
+        let scheduler = ShareMetadataWorkScheduler(
+            adaptiveBudget: false,
+            configuration: .init(delayBetweenSlices: .milliseconds(1)),
+            automaticAccountKeys: []
+        )
+        await scheduler.register(
+            accountKey: "excluded", mayRun: { true },
+            runSlice: { _ in
+                let count = await recorder.nextSlice("work")
+                if count == 1 { await gate.wait() }
+                return .init(attempted: 1, hasMore: count < 2)
+            },
+            runItem: { _ in }
+        )
+        await scheduler.enqueueBacklog(accountKey: "excluded", userRequested: true)
+        let started = await waitUntil { (await recorder.sliceCalls)["work"] == 1 }
+        XCTAssertTrue(started)
+        await scheduler.enqueueBacklog(accountKey: "excluded")
+        await gate.open()
+        let finished = await waitUntil {
+            let snapshot = await scheduler.snapshot()
+            return (await recorder.sliceCalls)["work"] == 2 && !snapshot.isWorkerRunning
+        }
+        XCTAssertTrue(finished, "Coalescing an automatic request must retain the explicit pass's remaining slices.")
+        await scheduler.remove(accountKey: "excluded")
+    }
+
+    func testExplicitRefreshCanAdoptAnAlreadyRunningItem() async {
+        let recorder = Recorder()
+        let gate = WorkGate()
+        let scheduler = ShareMetadataWorkScheduler(adaptiveBudget: false, automaticAccountKeys: ["source"])
+        await scheduler.register(
+            accountKey: "source", mayRun: { true },
+            runSlice: { _ in .init(attempted: 0, hasMore: false) },
+            runItem: { _ in
+                _ = await recorder.nextSlice("item")
+                await gate.wait()
+                if Task.isCancelled { await recorder.noteCancelled() }
+            }
+        )
+        await scheduler.enqueueItem(accountKey: "source", itemID: "title")
+        let started = await waitUntil { (await recorder.sliceCalls)["item"] == 1 }
+        XCTAssertTrue(started)
+        await scheduler.enqueueItem(accountKey: "source", itemID: "title", userRequested: true)
+        await scheduler.setAutomaticAccountKeys([], revision: 1)
+        await gate.open()
+        let finished = await waitUntil { !(await scheduler.snapshot()).isWorkerRunning }
+        XCTAssertTrue(finished)
+        let cancelled = await recorder.cancelled
+        XCTAssertEqual(cancelled, 0)
+        let snapshot = await scheduler.snapshot()
+        XCTAssertEqual(snapshot.queuedItems, 0)
+        await scheduler.remove(accountKey: "source")
+    }
+
     func testBacklogSlicesAreSerializedAcrossAccounts() async {
         let recorder = Recorder()
         let scheduler = ShareMetadataWorkScheduler(adaptiveBudget: false, configuration: .init(
