@@ -215,6 +215,8 @@ Only intersecting captions lift above those bounds: dialogue and dual
 lanes move together, while bitmap and authored-position cues are checked at
 their own positions. Ordinary track menus retain the normal title clearance
 while the title fades, preventing subtitles from dropping into its empty space.
+The normal transport reserves its full title-to-tabs band, including gaps between
+controls: a short title must not let centered captions stay beneath the timeline.
 Info/Cast and full appearance editing release that reserved clearance.
 Hiding the controls restores normal placement; style
 editing, previews, and saved position values are unchanged. The normal dialogue
@@ -504,8 +506,11 @@ collection owns directional focus and realizes cells throughout held Left/Right
 input. Stable episode IDs and layout offset adjustments preserve the focused cell
 and its exact viewport position when earlier seasons or retry rows arrive,
 including during native focus transitions and in RTL. Native scroll targets use
-complete card slots constrained to fully reveal the focused cell. First-card
-entry and return share the same gutter, with no idle realignment. Mobile SwiftUI
+complete card slots constrained to fully reveal the focused cell, with a 48pt
+peek of preceding artwork when available. The first episode retains its normal
+gutter. Entry targets the current/last-focused episode, not the partial previous
+card. Loading uses the same artwork dimensions, spacing, and peek offset, including
+right-to-left layout. Mobile SwiftUI
 rows defer leading insertions until scrolling settles.
 tvOS resets artwork content when the row changes enabled state and when focus
 leaves the collection for a tab, without replacing cells or their viewport.

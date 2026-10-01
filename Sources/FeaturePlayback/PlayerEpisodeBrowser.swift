@@ -45,6 +45,7 @@ public final class PlayerEpisodeBrowser {
     private var initialSeasonID: String?
     private let initialEpisodeID: String
     private let accountID: String?
+    private let openingEpisodeNumber: Int?
     private enum Load: String { case initial, previous, next }
     @ObservationIgnored private var loads: [Load: Task<Void, Never>] = [:]
     @ObservationIgnored private var isStopped = false
@@ -54,6 +55,14 @@ public final class PlayerEpisodeBrowser {
         initialSeasonID = item.seasonID
         initialEpisodeID = item.id
         accountID = item.sourceAccountID
+        openingEpisodeNumber = item.episodeNumber
+    }
+
+    var initialHasPreviousEpisode: Bool {
+        if let index = episodes.firstIndex(where: { $0.item.id == initialEpisodeID }) {
+            return index > 0
+        }
+        return (openingEpisodeNumber ?? 1) > 1
     }
 
     public var initialEntryID: PlayerEpisodeEntry.ID? {

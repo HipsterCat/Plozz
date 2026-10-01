@@ -292,6 +292,37 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
         try await assertStablePrepend(direction: .rightToLeft)
     }
 
+    func testOpeningMiddleEpisodeShowsPreviousArtworkAndKeepsTheFocusedCardFullyVisible() async throws {
+        for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+            let playing = EpisodeRowProvider.episode(season: 2, number: 2)
+            let player = PlayerViewModel(provider: EpisodeRowProvider(), itemID: playing.id, episodeItem: playing)
+            let browser = try XCTUnwrap(player.episodeBrowser)
+            await browser.loadIfNeeded()
+            try await withProductionPanel(player, direction: direction) { model, window in
+                try await self.waitUntil {
+                    !self.nativePosters(in: window).isEmpty && model.observedFocus == .button(.episodes)
+                }
+                try await Task.sleep(for: .milliseconds(200))
+                let collection = try XCTUnwrap(self.scrollView(in: window) as? UICollectionView)
+                let previous = try XCTUnwrap(self.nativePosters(in: window).first { $0.accessibilityLabel == "Season 2 Episode 1" })
+                let viewport = collection.convert(collection.bounds, to: window)
+                let artwork = previous.contentView.convert(previous.contentView.bounds, to: window)
+                XCTAssertEqual(artwork.intersection(viewport).width, 48, accuracy: 1)
+                model.target = browser.initialEntryID
+                try await self.waitUntil {
+                    (UIFocusSystem.focusSystem(for: window)?.focusedItem as? PlayerEpisodeNativeCell)?
+                        .accessibilityLabel == playing.title
+                }
+                try await Task.sleep(for: .milliseconds(300))
+                let focused = try XCTUnwrap(self.nativePosters(in: window).first(where: \.isFocused))
+                XCTAssertTrue(viewport.contains(focused.convert(focused.bounds, to: window)))
+                XCTAssertEqual(previous.contentView.convert(previous.contentView.bounds, to: window)
+                    .intersection(viewport).width, 48, accuracy: 4)
+            }
+            await player.stop()
+        }
+    }
+
     private func assertStablePrepend(direction: LayoutDirection) async throws {
         let provider = EpisodeRowProvider()
         await provider.hold("season-1")
@@ -496,6 +527,77 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
             let loadedScroll = try XCTUnwrap(self.scrollView(in: window))
             XCTAssertEqual(loadedScroll.convert(loadedScroll.bounds, to: window).height, scrollFrame.height, accuracy: 1)
         }
+    }
+
+    func testLoadingArtworkMatchesResolvedEpisodeFramesIncludingThePreviousPeek() async throws {
+        for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+            for number in [1, 2] {
+                let provider = EpisodeRowProvider()
+                await provider.hold("series")
+                let playing = EpisodeRowProvider.episode(season: 1, number: number)
+                let player = PlayerViewModel(provider: provider, itemID: playing.id, episodeItem: playing)
+                let browser = try XCTUnwrap(player.episodeBrowser)
+                try await withProductionPanel(player, direction: direction) { model, window in
+                    try await self.waitUntil { await provider.isHolding("series") }
+                    try await self.waitUntil { model.observedFocus == .button(.episodes) }
+                    try await Task.sleep(for: .milliseconds(150))
+                    let skeleton = try XCTUnwrap(DetailTransitionSnapshot.image(of: window))
+                    let loadingAttachment = XCTAttachment(image: skeleton)
+                    loadingAttachment.name = "Episode \(number) skeleton \(direction)"
+                    loadingAttachment.lifetime = .keepAlways
+                    self.add(loadingAttachment)
+                    await provider.release("series")
+                    try await self.waitUntil { browser.hasLoaded && !self.nativePosters(in: window).isEmpty }
+                    try await Task.sleep(for: .milliseconds(200))
+                    let cell = try XCTUnwrap(self.nativePosters(in: window).first { $0.accessibilityLabel == playing.title })
+                    let artwork = cell.contentView.convert(cell.contentView.bounds, to: window)
+                    for edge in [
+                        (CGPoint(x: artwork.minX + 4, y: artwork.midY), CGPoint(x: artwork.minX - 4, y: artwork.midY)),
+                        (CGPoint(x: artwork.maxX - 4, y: artwork.midY), CGPoint(x: artwork.maxX + 4, y: artwork.midY)),
+                        (CGPoint(x: artwork.midX, y: artwork.minY + 4), CGPoint(x: artwork.midX, y: artwork.minY - 4)),
+                        (CGPoint(x: artwork.midX, y: artwork.maxY - 4), CGPoint(x: artwork.midX, y: artwork.maxY + 4))
+                    ] {
+                        let inside = try self.brightness(of: skeleton, at: edge.0, in: window)
+                        let outside = try self.brightness(of: skeleton, at: edge.1, in: window)
+                        XCTAssertGreaterThan(inside - outside, 8,
+                                             "Skeleton must paint the same artwork edges as loaded episode \(number), \(direction): \(artwork)")
+                    }
+                    if number > 1 {
+                        let previous = try XCTUnwrap(self.nativePosters(in: window).first { $0.accessibilityLabel == "Season 1 Episode 1" })
+                        let collection = try XCTUnwrap(self.scrollView(in: window))
+                        let viewport = collection.convert(collection.bounds, to: window)
+                        let peek = previous.contentView.convert(previous.contentView.bounds, to: window).intersection(viewport)
+                        XCTAssertEqual(peek.width, 48, accuracy: 1)
+                        let peekInk = try self.brightness(of: skeleton, at: CGPoint(x: peek.midX, y: peek.midY), in: window)
+                        let gap = CGPoint(x: direction == .leftToRight ? peek.maxX + 8 : peek.minX - 8, y: peek.midY)
+                        let gapInk = try self.brightness(of: skeleton, at: gap, in: window)
+                        XCTAssertGreaterThan(peekInk - gapInk, 8)
+                    }
+                    let loadedAttachment = XCTAttachment(image: DetailTransitionSnapshot.image(of: window))
+                    loadedAttachment.name = "Episode \(number) loaded \(direction)"
+                    loadedAttachment.lifetime = .keepAlways
+                    self.add(loadedAttachment)
+                }
+                await player.stop()
+            }
+        }
+    }
+
+    private func brightness(of image: UIImage, at point: CGPoint, in window: UIWindow) throws -> Int {
+        let source = try XCTUnwrap(image.cgImage)
+        let scale = CGFloat(source.width) / window.bounds.width
+        let crop = try XCTUnwrap(source.cropping(to: CGRect(
+            x: point.x * scale, y: point.y * scale, width: 1, height: 1
+        )))
+        var pixel = [UInt8](repeating: 0, count: 4)
+        try pixel.withUnsafeMutableBytes { bytes in
+            let context = try XCTUnwrap(CGContext(
+                data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        return Int(pixel[0]) + Int(pixel[1]) + Int(pixel[2])
     }
 
     func testReopeningEpisodesWhileCancelledRequestDrainsLoadsWithoutAnotherTabChange() async throws {

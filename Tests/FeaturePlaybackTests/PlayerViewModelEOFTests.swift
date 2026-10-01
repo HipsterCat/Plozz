@@ -50,6 +50,12 @@ final class PlayerViewModelEOFTests: XCTestCase {
             )
             #endif
             XCTAssertEqual(episodes.bottomInset, episodes.cardMetrics.cardInset)
+            XCTAssertEqual(episodes.previousArtworkPeek, 48)
+            XCTAssertEqual(episodes.episodeOffset(for: 0), 0)
+            XCTAssertEqual(
+                episodes.cardWidth - episodes.cardMetrics.cardInset - episodes.episodeOffset(for: 1),
+                48, accuracy: 0.01
+            )
             XCTAssertEqual(
                 episodes.imageHeight + episodes.titleHeight + episodes.cardMetrics.landscapeCaptionTopSpacing
                     + episodes.cardMetrics.cardInset + episodes.bottomInset,
