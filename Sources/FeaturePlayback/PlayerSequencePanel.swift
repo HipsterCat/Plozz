@@ -14,9 +14,7 @@ struct PlayerSequenceLayout {
 
     var compact: Bool { metrics.contentHeight < 160 }
     var gap: CGFloat { compact ? 6 : 10 }
-    var columnSpacing: CGFloat {
-        metrics.columnSpacing + (contained ? metrics.contentPadding / 2 : 0)
-    }
+    var columnSpacing: CGFloat { metrics.columnSpacing }
     var containerVerticalInset: CGFloat { contained ? metrics.contentPadding / 2 : 0 }
     var rowHeight: CGFloat {
         metrics.cardHeight - containerVerticalInset * 2

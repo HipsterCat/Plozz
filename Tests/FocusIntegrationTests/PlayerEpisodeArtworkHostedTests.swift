@@ -308,6 +308,11 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
                 let viewport = collection.convert(collection.bounds, to: window)
                 let artwork = previous.contentView.convert(previous.contentView.bounds, to: window)
                 XCTAssertEqual(artwork.intersection(viewport).width, 24, accuracy: 1)
+                let current = try XCTUnwrap(self.nativePosters(in: window).first { $0.accessibilityLabel == playing.title })
+                let currentArtwork = current.contentView.convert(current.contentView.bounds, to: window)
+                let gap = direction == .leftToRight
+                    ? currentArtwork.minX - artwork.maxX : artwork.minX - currentArtwork.maxX
+                XCTAssertEqual(gap, 52, accuracy: 1)
                 model.target = browser.initialEntryID
                 try await self.waitUntil {
                     (UIFocusSystem.focusSystem(for: window)?.focusedItem as? PlayerEpisodeNativeCell)?
@@ -316,8 +321,9 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(300))
                 let focused = try XCTUnwrap(self.nativePosters(in: window).first(where: \.isFocused))
                 XCTAssertTrue(viewport.contains(focused.convert(focused.bounds, to: window)))
-                XCTAssertEqual(previous.contentView.convert(previous.contentView.bounds, to: window)
-                    .intersection(viewport).width, 24, accuracy: 4)
+                XCTAssertGreaterThanOrEqual(previous.contentView.convert(previous.contentView.bounds, to: window)
+                    .intersection(viewport).width, 24,
+                    "Native focus may reveal more of the previous card to fit its lift, but must not hide the peek.")
             }
             await player.stop()
         }

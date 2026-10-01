@@ -38,10 +38,8 @@ final class PlayerViewModelEOFTests: XCTestCase {
                 episodes.rowHeight + episodes.containerVerticalInset * 2,
                 metrics.cardHeight
             )
-            XCTAssertEqual(
-                episodes.columnSpacing,
-                metrics.columnSpacing + metrics.contentPadding / 2
-            )
+            XCTAssertEqual(episodes.columnSpacing, metrics.columnSpacing)
+            XCTAssertEqual(layout.columnSpacing, metrics.columnSpacing)
             XCTAssertGreaterThan(episodes.imageHeight, metrics.castHeadshot * 0.85)
             #if canImport(UIKit)
             XCTAssertEqual(
@@ -80,6 +78,8 @@ final class PlayerViewModelEOFTests: XCTestCase {
         )
         XCTAssertGreaterThan(tvEpisodes.imageHeight, 205)
         XCTAssertGreaterThan(tvEpisodes.imageWidth, 365)
+        XCTAssertEqual(tvEpisodes.columnSpacing, 28)
+        XCTAssertEqual(tvEpisodes.columnSpacing + tvEpisodes.cardMetrics.cardInset * 2, 52)
     }
 
     func testMobileWakeIntentCoversStartupAndBufferingButRespectsPause() async {
