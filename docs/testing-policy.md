@@ -263,6 +263,12 @@ unrealized source still returns to its captured shape without waiting for focus.
 The episode browser keeps its layout while masked until its final reveal and
 cannot take entry focus during a whole-show entrance. Episode-context opens
 retain their existing initial-focus behavior; Reduce Motion reveals it directly.
+Its rendered keyline check waits for native focus completion and the artwork's
+painted width to settle, then compares artwork and About in one captured frame.
+The settling condition is independent of x-position, so real misalignment still
+fails. Native/custom focus paint can outlive focus callbacks; fixed sleeps and
+separate snapshots can compare different stages of that return. Retain the exact
+measured images and the one-pixel alignment tolerance.
 
 When its real backdrop is ready, opening motion starts in card/router activation,
 before creating the detail page. An empty destination must not animate: a cold
