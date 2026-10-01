@@ -182,6 +182,22 @@ final class ShareProviderCapabilityTests: XCTestCase {
         XCTAssertFalse(libraries.contains { $0.id == ShareCatalogID.tvLibrary })
     }
 
+    func testAnimeWorkScopeRequiresAnEnabledMovieOrAnimeLibrary() {
+        let configuration = MediaShareLibraryConfiguration(name: "Anime", contentType: .anime)
+        let movies = "share:\(ShareCatalogID.moviesLibrary)"
+        let anime = "share:\(ShareCatalogID.animeLibrary)"
+        for disabled in [Set<String>(), [movies], [anime]] {
+            XCTAssertTrue(ShareProvider.hasEnabledCatalogLibrary(
+                accountID: "share", configuration: configuration,
+                visibility: .init(disabledKeys: disabled)
+            ))
+        }
+        XCTAssertFalse(ShareProvider.hasEnabledCatalogLibrary(
+            accountID: "share", configuration: configuration,
+            visibility: .init(disabledKeys: [movies, anime])
+        ), "An enabled ordinary TV or raw-files entry must not keep an Anime root scanning.")
+    }
+
     func testLegacyAutomaticShareKeepsSyntheticIDsAndDistinguishesRawBrowsing() async throws {
         let reader = FakeCatalogReader()
         reader.movieItems = [

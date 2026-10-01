@@ -170,7 +170,9 @@ public struct ShareProvider: MediaProvider, MediaFileBrowsing, MediaSortFieldPro
         case .movies:
             libraryIDs = [ShareCatalogID.moviesLibrary]
         case .tvShows:
-            libraryIDs = [configuration?.isAnime == true ? ShareCatalogID.animeLibrary : ShareCatalogID.tvLibrary]
+            libraryIDs = [configuration?.usesAnimeMetadata == true ? ShareCatalogID.animeLibrary : ShareCatalogID.tvLibrary]
+        case .anime:
+            libraryIDs = [ShareCatalogID.moviesLibrary, ShareCatalogID.animeLibrary]
         case .automatic, nil:
             libraryIDs = [ShareCatalogID.moviesLibrary, ShareCatalogID.tvLibrary, ShareCatalogID.animeLibrary]
         case .personalVideos:
