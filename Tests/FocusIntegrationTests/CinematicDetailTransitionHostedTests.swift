@@ -209,11 +209,13 @@ final class CinematicDetailTransitionHostedTests: XCTestCase {
         fixture.model.open(in: fixture.window, usesCard: true)
         try await waitUntil { fixture.model.session?.stage == .complete }
         let session = try XCTUnwrap(fixture.model.session)
-        // UIKit can cancel a pop or re-present this controller. The route
-        // remains present; a browse snapshot must not masquerade as a completed pop.
+        // A cancelled native pop keeps the route; a browse snapshot must not
+        // masquerade as a completed pop.
+        let transition = CancelledDetailTransition()
         session.close {}
+        session.navigationWillDisappear(using: transition)
         try await Task.sleep(for: .milliseconds(350))
-        session.pageAppeared()
+        transition.complete()
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertFalse(session.isClosing)
         XCTAssertFalse(session.blocksNavigation)
@@ -239,6 +241,9 @@ final class CinematicDetailTransitionHostedTests: XCTestCase {
         let transition = CancelledDetailTransition()
         session.close {}
         session.navigationWillDisappear(using: transition)
+        session.pageAppeared()
+        XCTAssertTrue(session.isClosing, "An appearance callback is not proof that this return was cancelled.")
+        XCTAssertTrue(session.blocksNavigation)
         transition.complete()
         XCTAssertFalse(session.isClosing)
         XCTAssertFalse(session.blocksNavigation)

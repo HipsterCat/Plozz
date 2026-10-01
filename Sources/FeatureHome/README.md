@@ -18,7 +18,7 @@ fallback when the user's server has no attached trailer.
   for movies, episodes, and people.
   Page ownership is identity-based, not an appearance-callback counter: repeated
   appearances and late departures cannot hide a different detail or give it the
-  previous movie's trailer. A cancelled cinematic Back restores the page that
+  previous movie's trailer. A confirmed cancelled cinematic Back restores the page that
   remains on the real navigation stack, removes its cover/input guard, and keeps
   its controls focusable. Older transition completions cannot finish a newer pop.
   The bounded debug handoff journal records page membership, return outcomes,

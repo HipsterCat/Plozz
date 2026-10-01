@@ -808,11 +808,7 @@ public final class TVDetailEntranceSession {
     }
 
     func pageAppeared() {
-        if isClosing {
-            PlozzLog.app.info("Detail return did not remove this page; restoring its visible controls")
-            HandoffDiagnostics.emit("detail RETURN_CANCELLED source=\(HandoffDiagnostics.correlationID(sourceKey))")
-            finishImmediately()
-        }
+        guard !isClosing else { return }
         pageIsVisible = true
         navigationChrome?.detailAppeared(chromeToken)
         pageAppearedAt = CACurrentMediaTime()
@@ -835,6 +831,9 @@ public final class TVDetailEntranceSession {
         let registered = coordinator.animate(alongsideTransition: nil) { [weak self] context in
             guard let self, isClosing, returnGeneration == generation else { return }
             if context.isCancelled {
+                PlozzLog.app.info("Detail return was cancelled; restoring the retained page")
+                HandoffDiagnostics.emit("detail RETURN_CANCELLED source=\(HandoffDiagnostics.correlationID(sourceKey))")
+                finishImmediately()
                 pageAppeared()
                 return
             }
