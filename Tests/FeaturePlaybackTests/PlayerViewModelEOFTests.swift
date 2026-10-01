@@ -393,7 +393,7 @@ final class PlayerViewModelEOFTests: XCTestCase {
         for error: any Error in [CancellationError(), AppError.cancelled, URLError(.cancelled)] {
             await provider.setItemError(error)
             await browser.loadIfNeeded()
-            XCTAssertNil(browser.loadError)
+            XCTAssertEqual(browser.loadError, .cancelled, "Provider cancellation on an active panel must offer Retry.")
             XCTAssertFalse(browser.isLoading)
             XCTAssertFalse(browser.hasLoaded)
         }
@@ -427,6 +427,127 @@ final class PlayerViewModelEOFTests: XCTestCase {
         XCTAssertEqual(browser.episodes.first?.item.sourceAccountID, "account")
         let requests = await provider.childRequests
         XCTAssertEqual(requests, 1)
+    }
+
+    func testReopenedEpisodePanelCompletesAfterItsCancelledLoadDrains() async throws {
+        let playing = MediaItem(
+            id: "playing", title: "Playing", kind: .episode, seriesID: "series"
+        )
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(
+                item: playing, streamURL: URL(string: "https://example.test/episode.m3u8")!
+            ),
+            childrenByParent: ["series": [playing]]
+        )
+        let browser = PlayerEpisodeBrowser(item: playing, provider: provider)
+        let gate = PreCommitYieldGate()
+        await provider.setChildGate(gate, for: "series")
+        let firstOpening = Task { await browser.loadIfNeeded() }
+        await waitForGate(gate, entries: 1)
+        firstOpening.cancel()
+        var reopenedFinished = false
+        let reopened = Task {
+            await browser.loadIfNeeded()
+            reopenedFinished = true
+        }
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(reopenedFinished, "The reopened panel must await or replace the old request, not skip loading.")
+        await provider.setChildGate(nil, for: "series")
+        gate.releaseNext()
+        await firstOpening.value
+        await reopened.value
+        XCTAssertTrue(browser.hasLoaded)
+        XCTAssertFalse(browser.isLoading)
+        XCTAssertNil(browser.loadError)
+        XCTAssertEqual(browser.episodes.map(\.item.id), [playing.id])
+        let requests = await provider.requestedChildIDs()
+        XCTAssertEqual(requests, ["series", "series"], "Only the cancelled request is retried.")
+    }
+
+    func testConcurrentEpisodeOpeningsJoinTheSameUncancelledLoad() async {
+        let playing = MediaItem(id: "playing", title: "Playing", kind: .episode, seriesID: "series")
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(item: playing, streamURL: URL(string: "https://example.test/episode.m3u8")!),
+            childrenByParent: ["series": [playing]]
+        )
+        let browser = PlayerEpisodeBrowser(item: playing, provider: provider)
+        let gate = PreCommitYieldGate()
+        await provider.setChildGate(gate, for: "series")
+        let first = Task { await browser.loadIfNeeded() }
+        await waitForGate(gate, entries: 1)
+        let second = Task { await browser.loadIfNeeded() }
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(gate.entryCount, 1)
+        gate.releaseNext()
+        await first.value
+        await second.value
+        XCTAssertTrue(browser.hasLoaded)
+        let requests = await provider.requestedChildIDs()
+        XCTAssertEqual(requests, ["series"])
+    }
+
+    func testStoppingPlayerCancelsEpisodeLoadAndPreventsLatePublication() async throws {
+        let playing = MediaItem(id: "playing", title: "Playing", kind: .episode, seriesID: "series")
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(item: playing, streamURL: URL(string: "https://example.test/episode.m3u8")!),
+            childrenByParent: ["series": [playing]]
+        )
+        let player = PlayerViewModel(provider: provider, itemID: playing.id, episodeItem: playing)
+        let browser = try XCTUnwrap(player.episodeBrowser)
+        let gate = PreCommitYieldGate()
+        await provider.setChildGate(gate, for: "series")
+        let opening = Task { await browser.loadIfNeeded() }
+        await waitForGate(gate, entries: 1)
+        await player.stop()
+        gate.releaseNext()
+        await opening.value
+        await browser.loadIfNeeded()
+        XCTAssertFalse(browser.hasLoaded)
+        XCTAssertFalse(browser.isLoading)
+        XCTAssertNil(browser.loadError)
+        XCTAssertTrue(browser.episodes.isEmpty)
+        let requests = await provider.requestedChildIDs()
+        XCTAssertEqual(requests, ["series"])
+    }
+
+    func testReopenedEpisodeEdgesResumeCancelledLoadsWithoutAnotherScroll() async {
+        let playing = MediaItem(
+            id: "middle", title: "Playing", kind: .episode, seriesID: "series", seasonID: "season-2"
+        )
+        let seasons = (1...3).map { MediaItem(id: "season-\($0)", title: "Season", kind: .season) }
+        let provider = RecordingPlaybackProvider(
+            request: PlaybackRequest(item: playing, streamURL: URL(string: "https://example.test/episode.m3u8")!),
+            childrenByParent: [
+                "series": seasons, "season-1": [MediaItem(id: "earlier", title: "Earlier", kind: .episode)],
+                "season-2": [playing], "season-3": [MediaItem(id: "later", title: "Later", kind: .episode)]
+            ]
+        )
+        let browser = PlayerEpisodeBrowser(item: playing, provider: provider)
+        await browser.loadIfNeeded()
+        let previous = PreCommitYieldGate()
+        let next = PreCommitYieldGate()
+        await provider.setChildGate(previous, for: "season-1")
+        await provider.setChildGate(next, for: "season-3")
+        let oldPrevious = Task { await browser.loadPrevious() }
+        let oldNext = Task { await browser.loadNext() }
+        await waitForGate(previous, entries: 1)
+        await waitForGate(next, entries: 1)
+        oldPrevious.cancel()
+        oldNext.cancel()
+        let newPrevious = Task { await browser.loadPrevious() }
+        let newNext = Task { await browser.loadNext() }
+        for _ in 0..<20 { await Task.yield() }
+        await provider.setChildGate(nil, for: "season-1")
+        await provider.setChildGate(nil, for: "season-3")
+        previous.releaseNext()
+        next.releaseNext()
+        await oldPrevious.value
+        await oldNext.value
+        await newPrevious.value
+        await newNext.value
+        XCTAssertEqual(browser.episodes.map(\.item.id), ["earlier", "middle", "later"])
+        XCTAssertNil(browser.previousLoadError)
+        XCTAssertNil(browser.nextLoadError)
     }
 
     func testOneSeasonBrowserShowsEpisodesWithoutLoadingOtherSeasons() async {
@@ -582,7 +703,7 @@ final class PlayerViewModelEOFTests: XCTestCase {
         )
     }
 
-    func testEpisodeCancellationNeverBecomesAnErrorOrBlocksLaterLoading() async {
+    func testProviderCancellationOnAnActiveEpisodePanelOffersRetry() async {
         let seasons = (1...3).map {
             MediaItem(id: "season-\($0)", title: "Season", kind: .season)
         }
@@ -609,7 +730,7 @@ final class PlayerViewModelEOFTests: XCTestCase {
             XCTAssertFalse(browser.hasLoaded)
             await provider.setChildError(cancellation, for: "series")
             await browser.loadIfNeeded()
-            XCTAssertNil(browser.loadError)
+            XCTAssertEqual(browser.loadError, .cancelled)
             XCTAssertFalse(browser.isLoading)
             XCTAssertFalse(browser.hasLoaded)
             await provider.setChildError(nil, for: "series")
@@ -621,8 +742,8 @@ final class PlayerViewModelEOFTests: XCTestCase {
             await provider.setChildError(cancellation, for: seasons[2].id)
             await browser.loadPrevious()
             await browser.loadNext()
-            XCTAssertNil(browser.previousLoadError)
-            XCTAssertNil(browser.nextLoadError)
+            XCTAssertEqual(browser.previousLoadError, .cancelled)
+            XCTAssertEqual(browser.nextLoadError, .cancelled)
             XCTAssertFalse(browser.isLoadingPrevious)
             XCTAssertFalse(browser.isLoadingNext)
             XCTAssertEqual(browser.previousSeasonIndex, 0)
@@ -631,8 +752,8 @@ final class PlayerViewModelEOFTests: XCTestCase {
 
             await provider.setChildError(nil, for: seasons[0].id)
             await provider.setChildError(nil, for: seasons[2].id)
-            await browser.loadPrevious()
-            await browser.loadNext()
+            await browser.retryPrevious()
+            await browser.retryNext()
             XCTAssertEqual(browser.episodes.map(\.item.id), ["earlier", "middle", "later"])
         }
     }

@@ -2129,6 +2129,7 @@ public final class PlayerViewModel {
         // shows happening on iOS.
         PlaybackTrace.note("stop() teardown curr=\(String(format: "%.2f", engine.currentTime)) shouldDismiss=\(shouldDismiss) pendingNext=\(pendingNextEpisode != nil) isSeeking=\(controls.isSeeking)")
         didStop = true
+        episodeBrowser?.stop()
         playlistAdvanceTask?.cancel()
         playlistAdvanceTask = nil
         streamingLoadGeneration += 1

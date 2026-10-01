@@ -492,8 +492,14 @@ shared artwork scrim rather than a capsule. Only the current season loads on
 entry; adjacent seasons load as browsing reaches the row's edges. Empty seasons
 are skipped, and a failed adjacent load exposes a retry at that edge. Adjacent
 loads belong to the row and follow visible edges, not the lifecycle of lazy
-cards; once started they finish even if that edge scrolls offscreen. Task and
-transport cancellations do not become retry errors. On tvOS, a reusable native
+cards; once started they finish even if that edge scrolls offscreen. Cancelling
+a view task drains the request without showing an error. A replacement
+panel joins that request and restarts it if cancelled, rather than leaving a
+loading skeleton with no work running. Transport cancellation on a still-active
+panel exposes Retry like other request failures. Initial and adjacent loads
+coalesce independently, and player teardown cancels all of them. Switching the
+retained sequence panel from Playlist to Episodes starts its load without
+requiring the view to remount. On tvOS, a reusable native
 collection owns directional focus and realizes cells throughout held Left/Right
 input. Stable episode IDs and layout offset adjustments preserve the focused cell
 and its exact viewport position when earlier seasons or retry rows arrive,

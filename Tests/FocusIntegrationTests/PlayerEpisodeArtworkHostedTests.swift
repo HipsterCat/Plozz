@@ -498,6 +498,47 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
         }
     }
 
+    func testReopeningEpisodesWhileCancelledRequestDrainsLoadsWithoutAnotherTabChange() async throws {
+        let provider = EpisodeRowProvider()
+        await provider.hold("series")
+        defer { Task { await provider.release("series") } }
+        let playing = EpisodeRowProvider.episode(season: 2, number: 2)
+        let player = PlayerViewModel(provider: provider, itemID: playing.id, episodeItem: playing)
+        let browser = try XCTUnwrap(player.episodeBrowser)
+        try await withProductionPanel(player) { model, window in
+            try await self.waitUntil { await provider.isHolding("series") }
+            model.panelVisible = false
+            try await self.waitUntil { model.panelDisappearances == 1 }
+            model.panelVisible = true
+            try await self.waitUntil { model.panelAppearances == 2 }
+            XCTAssertTrue(browser.isLoading, "Hold the cancelled request until the new panel is present.")
+            await provider.release("series")
+            try await self.waitUntil { browser.hasLoaded && !self.nativePosters(in: window).isEmpty }
+            XCTAssertNil(browser.loadError)
+            XCTAssertEqual(model.panelAppearances, 2, "No extra reopen should be required.")
+            let requests = await provider.requests
+            XCTAssertEqual(requests.filter { $0 == "series" }.count, 2)
+            XCTAssertTrue(browser.episodes.contains { $0.item.id == playing.id })
+        }
+        await player.stop()
+    }
+
+    func testChangingRetainedSequencePanelFromPlaylistToEpisodesStartsLoading() async throws {
+        let provider = EpisodeRowProvider()
+        let playing = EpisodeRowProvider.episode(season: 2, number: 2)
+        let player = PlayerViewModel(provider: provider, itemID: playing.id, episodeItem: playing)
+        let browser = try XCTUnwrap(player.episodeBrowser)
+        try await withProductionPanel(player, initialSource: .playlist) { model, window in
+            try await self.waitUntil { model.panelAppearances == 1 }
+            XCTAssertFalse(browser.hasLoaded)
+            model.source = .episodes
+            try await self.waitUntil { browser.hasLoaded && !self.nativePosters(in: window).isEmpty }
+            XCTAssertEqual(model.panelAppearances, 1, "The source change must rerun loading without remounting.")
+            XCTAssertNil(browser.loadError)
+        }
+        await player.stop()
+    }
+
     func testOnlyCurrentArtworkKeepsNativeFocusAndOverflowStaysInsidePanel() async throws {
         try await waitUntil {
             UIApplication.shared.connectedScenes.contains { $0.activationState == .foregroundActive }
@@ -708,6 +749,7 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
     private func withProductionPanel(
         _ player: PlayerViewModel,
         direction: LayoutDirection = .leftToRight,
+        initialSource: PlayerSequencePanel.Source = .episodes,
         body: (EpisodeArtworkFixtureModel, UIWindow) async throws -> Void
     ) async throws {
         try await waitUntil {
@@ -719,6 +761,7 @@ final class PlayerEpisodeArtworkHostedTests: XCTestCase {
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
         let model = EpisodeArtworkFixtureModel()
+        model.source = initialSource
         window.rootViewController = UIHostingController(rootView: ProductionEpisodeFixture(
             player: player, model: model
         ).environment(\.layoutDirection, direction))
@@ -752,6 +795,10 @@ private enum EpisodeArtworkFixtureError: Error { case focusTimeout }
 private final class EpisodeArtworkFixtureModel {
     var target: PlayerEpisodeEntry.ID?
     var observedFocus: PlayerControls.FocusSlot?
+    var panelVisible = true
+    var source: PlayerSequencePanel.Source = .episodes
+    var panelAppearances = 0
+    var panelDisappearances = 0
 }
 
 private struct EpisodeArtworkFixture: View {
@@ -796,8 +843,12 @@ private struct ProductionEpisodeFixture: View {
         VStack {
             Button("Browse") {}
                 .focused($focus, equals: .button(.episodes))
-            PlayerSequencePanel(player: player, source: .episodes, focus: $focus)
-                .frame(width: 1000)
+            if model.panelVisible {
+                PlayerSequencePanel(player: player, source: model.source, focus: $focus)
+                    .frame(width: 1000)
+                    .onAppear { model.panelAppearances += 1 }
+                    .onDisappear { model.panelDisappearances += 1 }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black)
