@@ -37,8 +37,22 @@ def read_stable(path: Path) -> bytes:
     return data
 
 
+def checkout_environment() -> dict[str, str]:
+    env = dict(os.environ)
+    # Git exports repository selectors into hooks. They override cwd/-C and
+    # otherwise make a dependency lookup inspect the parent repository instead.
+    for name in (
+        "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX",
+        "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_NAMESPACE",
+    ):
+        env.pop(name, None)
+    return env
+
+
 def command(repo: Path, *args: str) -> bytes:
-    return subprocess.check_output(args, cwd=repo, stderr=subprocess.PIPE, timeout=30)
+    return subprocess.check_output(args, cwd=repo, env=checkout_environment(),
+                                   stderr=subprocess.PIPE, timeout=30)
 
 
 def source_fingerprint(repo: Path, *, exclude: set[str] | None = None) -> str:

@@ -55,6 +55,9 @@ An edit, missing/corrupt receipt, changed package checkout, or missing/changed
 `.stringsdata` causes a real rebuild. Partial, failed, and explicit `--no-build`
 runs cannot create full-scope evidence. Source changes during extraction fail
 the operation rather than recording an ambiguous result.
+Git's repository-selection variables are cleared for extraction subprocesses,
+so invoking the check from a push hook cannot redirect dependency lookups back
+to the parent repository. Build configuration and lease variables are retained.
 
 The main pre-push hook uses this verified reuse so it does not repeat the
 extraction just completed by the pre-main pass. Omit the option to force a fresh

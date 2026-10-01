@@ -62,7 +62,9 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
-from l10n_freshness import ExtractionReceipt, FreshnessError, extraction_files, extraction_lock
+from l10n_freshness import (
+    ExtractionReceipt, FreshnessError, checkout_environment, extraction_files, extraction_lock,
+)
 
 REPO = Path(__file__).resolve().parent.parent
 CATALOG = REPO / "App/Resources/Localizable.xcstrings"
@@ -118,7 +120,7 @@ def build_for_extraction(
     platform_keys: list[str], quiet: bool, receipt: ExtractionReceipt | None = None
 ) -> str | None:
     """Compile with extraction enabled so the compiler writes `.stringsdata`."""
-    env = dict(os.environ)
+    env = checkout_environment()
     # The host injects `safe.bareRepository=explicit`, which makes SwiftPM's
     # package resolution fail with "cannot use bare repository". Overwrite rather
     # than default: the variable is usually already SET to the offending value, so

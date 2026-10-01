@@ -184,6 +184,29 @@ class ExtractionFreshnessTests(unittest.TestCase):
             state["head"] = "pin-two"
             self.assertFalse(self.matches())
 
+    def test_parent_push_hook_environment_does_not_redirect_dependency_git(self):
+        checkout = self.workspace / "checkouts/Dependency"
+        checkout.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+        (checkout / "Source.swift").write_text("// dependency fixture\n")
+        subprocess.run(["git", "-C", str(checkout), "add", "."], check=True)
+        subprocess.run([
+            "git", "-C", str(checkout), "-c", "user.name=Fixture",
+            "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false",
+            "commit", "-qm", "Fixture",
+        ], check=True)
+        expected = freshness.package_workspace_fingerprint(self.root, self.workspace)
+        with patch.dict(os.environ, {
+            "GIT_DIR": str(self.root / ".git"),
+            "GIT_WORK_TREE": str(self.root),
+            "GIT_INDEX_FILE": str(self.root / ".git/index"),
+        }):
+            self.assertEqual(
+                freshness.package_workspace_fingerprint(self.root, self.workspace), expected
+            )
+            self.record()
+            self.assertTrue(self.matches())
+
     def test_other_architecture_and_product_copies_are_not_current_extraction(self):
         self.record()
         self.write(".build/extraction/Build/Intermediates.noindex/Objects-normal/x86_64/Stale.stringsdata", "{}")
