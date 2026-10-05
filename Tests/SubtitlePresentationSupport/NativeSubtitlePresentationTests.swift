@@ -136,6 +136,93 @@ final class NativeSubtitlePresentationTests: XCTestCase {
         try await waitUntil { cues.isEmpty }
     }
 
+    #if os(tvOS)
+    func testDirectMP4SidecarsKeepSelectionStyleOffsetAndEmbeddedCaptionsWithoutWrappingVideo() async throws {
+        let server = try SubtitleFixtureServer(directory: fixtureDirectory())
+        let port = try await server.start()
+        defer { server.stop() }
+        let videoURL = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)/embedded.mp4"))
+        for (name, codec) in [("full.vtt", "webvtt"), ("sidecar.srt", "srt")] {
+            let locator = try AuthenticatedHTTPPlaybackLocator(
+                provider: .jellyfin, accountID: "fixture", credentialRevision: CredentialRevision(),
+                itemID: "fixture", deliveryMode: .directFile, purpose: .subtitle,
+                resource: try AuthenticatedHTTPResource(pathBase: .configuredBaseURL, path: name)
+            )
+            let resolver = SidecarResolver(
+                locator: locator,
+                url: try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)/\(name)"))
+            )
+            let engine = NativeVideoEngine(authenticatedHTTPResolver: resolver, startsMuted: true)
+            let embedded = MediaTrack(id: 2, kind: .subtitle, displayTitle: "Embedded", language: "en", codec: "mov_text")
+            let sidecar = MediaTrack(
+                id: 9, kind: .subtitle, displayTitle: "Sidecar", language: "en", codec: codec,
+                deliverySource: .authenticatedHTTP(locator)
+            )
+            let playback = request(videoURL, tracks: [embedded, sidecar])
+            let host = SidecarTrackHost(engine: engine, request: playback, resolver: resolver)
+            engine.onSubtitleCues = { [model = host.subtitles] in model.updateLiveCues($0) }
+            let window = try await mount(engine, subtitles: host.subtitles)
+            defer {
+                host.loader.cancelAll()
+                engine.stop()
+                window.isHidden = true
+                window.rootViewController = nil
+            }
+            await engine.load(request: playback, startPosition: 0)
+            let surface = try XCTUnwrap(engine.makeVideoOutputView() as? PlayerLayerView)
+            try await waitUntil(timeout: 30) {
+                surface.playerLayer.isReadyForDisplay && engine.currentTime > 0.1
+            }
+            let item = try XCTUnwrap(
+                surface.playerLayer.isReadyForDisplay && engine.currentTime > 0.1
+                    ? engine.underlyingPlayer?.currentItem : nil,
+                "The direct MP4 fixture must present frames before seeking"
+            )
+            engine.pause()
+            await engine.seek(to: 1.5)
+            XCTAssertEqual((item.asset as? AVURLAsset)?.url, videoURL)
+            XCTAssertTrue(resolver.resolutions.isEmpty, "Available sidecars must not change or delay the video asset")
+            host.controller.loadTrackOptions()
+            XCTAssertTrue(host.controls.subtitleOptions.contains { $0.id == sidecar.id })
+            host.controller.selectSubtitleOption(id: PlayerTrackOption.offID)
+            XCTAssertTrue(resolver.resolutions.isEmpty)
+            host.controller.selectSubtitleOption(id: sidecar.id)
+            try await waitUntil { host.subtitles.primary.compactMap(\.text) == ["Alpha"] }
+            XCTAssertEqual(resolver.resolutions, [locator])
+            XCTAssertTrue(engine.supportsSubtitleTimingAdjustments(for: sidecar))
+            try assertOnlySuppressedOutput(engine)
+
+            host.subtitles.offset = 1
+            try await waitUntil { host.subtitles.primary.isEmpty }
+            host.subtitles.offset = 0
+            try await waitUntil { host.subtitles.primary.compactMap(\.text) == ["Alpha"] }
+            let initialFrame = try XCTUnwrap(captionFrames(in: window, relativeTo: window).first)
+            host.subtitles.style.followsSystemStyle = false
+            host.subtitles.style.fontScale = 1.4
+            host.subtitles.style.textColor = .yellow
+            try await waitUntil {
+                window.layoutIfNeeded()
+                return self.captionFrames(in: window, relativeTo: window).first.map {
+                    $0.height > initialFrame.height * 1.2
+                } == true
+            }
+            XCTAssertEqual(engine.currentTime, 1.5, accuracy: 1.0 / 24)
+
+            host.controller.selectSubtitleOption(id: embedded.id)
+            await engine.seek(to: 0)
+            try await waitUntil { host.subtitles.primary.isEmpty }
+            engine.play()
+            try await waitUntil { host.subtitles.primary.compactMap(\.text) == ["Alpha"] }
+            XCTAssertTrue(host.subtitles.rendersPrimary, "Embedded captions still use native cue extraction")
+            host.controller.selectSubtitleOption(id: PlayerTrackOption.offID)
+            try await waitUntil { host.subtitles.primary.isEmpty }
+            XCTAssertTrue(engine.underlyingPlayer?.currentItem === item)
+            XCTAssertEqual((item.asset as? AVURLAsset)?.url, videoURL)
+            XCTAssertTrue(item.appliesPerFrameHDRDisplayMetadata)
+        }
+    }
+    #endif
+
     func testNativeHLSOverlapsSameLanguageSwitchingPresentationStatesAndClearing() async throws {
         let server = try SubtitleFixtureServer(directory: fixtureDirectory())
         let port = try await server.start()
@@ -355,6 +442,76 @@ final class NativeSubtitlePresentationTests: XCTestCase {
     }
 }
 
+@MainActor
+private final class SidecarResolver: AuthenticatedHTTPResourceResolving {
+    let locator: AuthenticatedHTTPPlaybackLocator
+    let url: URL
+    private(set) var resolutions: [AuthenticatedHTTPPlaybackLocator] = []
+
+    init(locator: AuthenticatedHTTPPlaybackLocator, url: URL) {
+        self.locator = locator
+        self.url = url
+    }
+
+    func resolve(_ locator: AuthenticatedHTTPPlaybackLocator) async throws -> URL {
+        resolutions.append(locator)
+        guard locator == self.locator else { throw AppError.invalidResponse }
+        return url
+    }
+}
+
+@MainActor
+private final class SidecarTrackHost: SubtitleTrackControllerHost, SubtitleOverlayLoaderHost {
+    let engine: NativeVideoEngine
+    let request: PlaybackRequest
+    let resolver: SidecarResolver
+    let subtitles = LiveSubtitleModel()
+    let controls = PlayerControlsModel()
+    lazy var controller = SubtitleTrackController(host: self)
+    lazy var loader = SubtitleOverlayLoader(host: self)
+
+    init(engine: NativeVideoEngine, request: PlaybackRequest, resolver: SidecarResolver) {
+        self.engine = engine
+        self.request = request
+        self.resolver = resolver
+    }
+
+    var trackEngine: any VideoEngine { engine }
+    var trackEngineKind: PlaybackEngineKind { .native }
+    var trackRequest: PlaybackRequest? { request }
+    var trackBehavior: SubtitleBehavior { .default }
+    var trackControls: PlayerControlsModel { controls }
+    var trackLiveSubtitles: LiveSubtitleModel { subtitles }
+    var trackSubtitleOverlay: SubtitleOverlayLoader { loader }
+    var trackStyle: SubtitleStyle { subtitles.style }
+    var trackPlozzigenAvailable: Bool { false }
+    var trackAppLocale: Locale { Locale(identifier: "en_US") }
+    var trackAuthenticatedHTTPResolver: (any AuthenticatedHTTPResourceResolving)? { resolver }
+    func trackApplySubtitleStyle(_ style: SubtitleStyle) { subtitles.style = style }
+    func trackRememberedSubtitle(for item: MediaItem) -> RememberedSubtitleSelection? { .off }
+    func trackEffectiveSubtitleRule(for item: MediaItem) -> SubtitlePolicy.Rule { .init() }
+    func trackRecordAudioSelection(language: String?) {}
+    func trackRecordSubtitleSelection(_ selection: RememberedSubtitleSelection?) {}
+    func trackRefreshSubtitleDelayAvailability() {}
+    func trackPlayResolvedForImageSubtitleSwap(_ request: PlaybackRequest, startPosition: TimeInterval) async {
+        XCTFail("A text sidecar must not switch engines")
+    }
+    var primarySubtitleSelectionID: Int? { controller.selectedSubtitleTrackID }
+    var secondarySubtitleSelectionID: Int? { controller.selectedSecondarySubtitleTrackID }
+    func overlayResolveDeliveryURL(_ track: MediaTrack) async throws -> URL? {
+        try await controller.resolveSubtitleDeliveryURL(track)
+    }
+    func overlayApplyPrimaryCues(_ stream: SubtitleCueStream?) { subtitles.loadPrimary(stream) }
+    func overlayApplySecondaryCues(_ stream: SubtitleCueStream?) { subtitles.loadSecondary(stream) }
+    func overlayDetectedLanguage(for id: Int) -> String? { "en" }
+    func overlayRecordDetectedLanguage(_ language: String, for id: Int) {}
+    func overlayReloadTrackOptions() {}
+    func overlaySetSecondaryStatus(_ status: SecondarySubtitleStatus) { controls.secondarySubtitleStatus = status }
+    #if DEBUG
+    func overlaySetPrimaryDiagnostic(route: String, cues: Int?) {}
+    #endif
+}
+
 private final class SubtitleFixtureServer: @unchecked Sendable {
     private let listener: NWListener
     private let files: [String: Data]
@@ -414,10 +571,49 @@ private final class SubtitleFixtureServer: @unchecked Sendable {
             let path = header.split(separator: " ").dropFirst().first ?? ""
             let name = path.split(separator: "/").last.map(String.init) ?? ""
             let body = files[name] ?? Data()
-            let status = files[name] == nil ? "404 Not Found" : "200 OK"
-            let type = name.hasSuffix(".m3u8") ? "application/vnd.apple.mpegurl" : name.hasSuffix(".vtt") ? "text/vtt" : "video/mp4"
-            let response = Data("HTTP/1.1 \(status)\r\nContent-Type: \(type)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8) + body
+            var payload = body
+            var status = files[name] == nil ? "404 Not Found" : "200 OK"
+            var contentRange = ""
+            if files[name] != nil,
+               let rangeLine = header.components(separatedBy: "\r\n").first(where: {
+                   $0.lowercased().hasPrefix("range:")
+               }) {
+                let value = rangeLine.dropFirst("range:".count).trimmingCharacters(in: .whitespaces)
+                if let range = byteRange(value, count: body.count) {
+                    payload = body.subdata(in: range)
+                    status = "206 Partial Content"
+                    contentRange = "Content-Range: bytes \(range.lowerBound)-\(range.upperBound - 1)/\(body.count)\r\n"
+                } else {
+                    payload = Data()
+                    status = "416 Range Not Satisfiable"
+                    contentRange = "Content-Range: bytes */\(body.count)\r\n"
+                }
+            }
+            let type = name.hasSuffix(".m3u8") ? "application/vnd.apple.mpegurl"
+                : name.hasSuffix(".vtt") ? "text/vtt"
+                : name.hasSuffix(".srt") ? "application/x-subrip" : "video/mp4"
+            let headers = "HTTP/1.1 \(status)\r\nContent-Type: \(type)\r\nAccept-Ranges: bytes\r\n\(contentRange)Content-Length: \(payload.count)\r\nConnection: close\r\n\r\n"
+            let response = Data(headers.utf8) + (header.hasPrefix("HEAD ") ? Data() : payload)
             connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
         }
+    }
+
+    private func byteRange(_ value: String, count: Int) -> Range<Int>? {
+        guard count > 0, value.hasPrefix("bytes=") else { return nil }
+        let bounds = value.dropFirst("bytes=".count).split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        guard bounds.count == 2 else { return nil }
+        if bounds[0].isEmpty {
+            guard let suffix = Int(bounds[1]), suffix > 0 else { return nil }
+            return max(0, count - min(suffix, count))..<count
+        }
+        guard let start = Int(bounds[0]), start >= 0, start < count else { return nil }
+        let end: Int
+        if bounds[1].isEmpty {
+            end = count - 1
+        } else {
+            guard let requestedEnd = Int(bounds[1]), requestedEnd >= start else { return nil }
+            end = min(requestedEnd, count - 1)
+        }
+        return start..<(end + 1)
     }
 }

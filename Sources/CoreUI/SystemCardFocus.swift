@@ -9,7 +9,16 @@ private struct NativeArtworkSurfaceKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+private struct NativeInformationFocusKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
+    var plozzNativeInformationFocus: Bool {
+        get { self[NativeInformationFocusKey.self] }
+        set { self[NativeInformationFocusKey.self] = newValue }
+    }
+
     var plozzNativeFocusSurface: Bool {
         get { self[NativeFocusSurfaceKey.self] }
         set { self[NativeFocusSurfaceKey.self] = newValue }

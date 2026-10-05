@@ -34,8 +34,7 @@ public struct ItemDetailView: View {
     /// as `onNavigate`: a `navigationDestination` destination does not inherit
     /// environment installed on the stack that owns it.
     private let stackDepth: DetailStackDepth?
-    /// This page's own level on the stack, recorded once it has appeared.
-    @State private var ownStackDepth: Int?
+    @State private var pageIdentity = UUID()
     @State private var isPageVisible = false
     /// Fast/local trailer resolver. A nil result leaves the static detail hero;
     /// online YouTube autoplay remains deliberately out of the first version.
@@ -280,10 +279,10 @@ public struct ItemDetailView: View {
             viewModel.suspendEnrichment()
             let itemID = viewModel.state.value?.item.id
             if let itemID {
-                heroTrailerController.clearEndHandler(ownerID: "detail-\(itemID)")
                 if !preservesHeroTrailerOnDisappear(itemID) {
-                    heroTrailerController.stop(ifShowing: itemID)
+                    heroTrailerController.stop(ifShowing: itemID, ownedBy: trailerHandlerOwnerID)
                 }
+                heroTrailerController.clearEndHandler(ownerID: trailerHandlerOwnerID)
             }
         }
         .onAppear {
@@ -302,10 +301,13 @@ public struct ItemDetailView: View {
             await refreshVisibleSeasonRequests()
         }
         .task(id: heroTrailerTaskID) {
-            guard isPageVisible, let item = viewModel.state.value?.item else { return }
-            guard heroBackground.settings.detailMode == .trailer, !hasChildOnTop else {
-                heroTrailerController.clearEndHandler(ownerID: "detail-\(item.id)")
-                heroTrailerController.stop(ifShowing: item.id)
+            guard let item = viewModel.state.value?.item else { return }
+            guard isTrailerOwner,
+                  heroBackground.settings.detailMode == .trailer else {
+                if isPageVisible || !preservesHeroTrailerOnDisappear(item.id) {
+                    heroTrailerController.stop(ifShowing: item.id, ownedBy: trailerHandlerOwnerID)
+                }
+                heroTrailerController.clearEndHandler(ownerID: trailerHandlerOwnerID)
                 return
             }
             if let currentID = heroTrailerController.currentItemID,
@@ -315,8 +317,9 @@ public struct ItemDetailView: View {
             // Detail owns end-of-item while it is frontmost. This replaces Home's
             // page-advance callback so the hidden carousel cannot start a
             // different title behind this detail page.
-            heroTrailerController.setEndHandler(ownerID: "detail-\(item.id)") {
-                heroTrailerController.stop()
+            let ownerID = trailerHandlerOwnerID
+            heroTrailerController.setEndHandler(ownerID: ownerID) {
+                heroTrailerController.stop(ifShowing: item.id, ownedBy: ownerID)
             }
             // Home→detail continuity: if the shared controller already has this
             // item, do nothing — the picture keeps rolling (and keeps its live
@@ -329,7 +332,7 @@ public struct ItemDetailView: View {
             guard !Task.isCancelled else { return }
             guard let source = await heroTrailerResolver(item),
                   !Task.isCancelled,
-                  isPageVisible, !hasChildOnTop,
+                  isTrailerOwner,
                   heroBackground.settings.detailMode == .trailer,
                   viewModel.state.value?.item.id == item.id else { return }
             heroTrailerController.play(
@@ -381,13 +384,8 @@ public struct ItemDetailView: View {
         }
         // A push does not disappear the page beneath it, so a page can only learn
         // it has been covered from the *child's* lifecycle — see DetailStackDepth.
-        // The level is recorded here, after incrementing, because a child view's
-        // `onAppear` runs BEFORE this one and would capture the pre-push value.
-        .onAppear {
-            stackDepth?.pageAppeared()
-            if ownStackDepth == nil { ownStackDepth = stackDepth?.depth }
-        }
-        .onDisappear { stackDepth?.pageDismissed() }
+        .onAppear { stackDepth?.pageAppeared(pageIdentity) }
+        .onDisappear { stackDepth?.pageDismissed(pageIdentity) }
         // Bound from the loaded detail, which is the only thing that knows which
         // server answered for this title — and therefore whose person ids the
         // cast list holds.
@@ -409,8 +407,14 @@ public struct ItemDetailView: View {
 
     private var heroTrailerTaskID: String {
         let itemID = viewModel.state.value?.item.id ?? "-"
-        return "\(itemID)|\(heroBackground.settings.detailMode.rawValue)|\(isPageVisible)|\(hasChildOnTop)"
+        return "\(itemID)|\(heroBackground.settings.detailMode.rawValue)|\(isTrailerOwner)"
     }
+
+    private var isTrailerOwner: Bool {
+        isPageVisible && (stackDepth?.isTopPage(pageIdentity) ?? true)
+    }
+
+    private var trailerHandlerOwnerID: String { "detail-\(pageIdentity)" }
 
     /// Layout for non-series detail: a hero plus, for seasons/folders/collections,
     /// a single rail of children. Movies and episodes show just the hero + Play.
@@ -562,14 +566,12 @@ public struct ItemDetailView: View {
 
     /// Whether another detail page is pushed on top of this one.
     private var hasChildOnTop: Bool {
-        guard let ownStackDepth, let depth = stackDepth?.depth else { return false }
-        return depth > ownStackDepth
+        coveredBy > 0
     }
 
     /// How many detail pages are stacked on top of this one.
     private var coveredBy: Int {
-        guard let ownStackDepth, let depth = stackDepth?.depth else { return 0 }
-        return max(0, depth - ownStackDepth)
+        stackDepth?.pagesCovering(pageIdentity) ?? 0
     }
 
     /// Pages buried at least this deep stop building their content.

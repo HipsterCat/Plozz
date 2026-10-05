@@ -106,6 +106,10 @@ public protocol MediaShareRuntime: Sendable {
     /// passive backlog drains before work retained for other profiles.
     func setPreferredAccountKeys(_ accountKeys: Set<String>, revision: UInt64) async
 
+    /// A hard admission gate for automatic scans and metadata, independent of
+    /// cache priority. Explicit one-off requests retain their own intent.
+    func setAutomaticWorkScope(_ scope: MediaShareWorkScope, revision: UInt64) async
+
     /// A point-in-time snapshot of the metadata enrichment subsystem for the Step 6
     /// Settings "Diagnostics" section (per-source counts, cache bytes, breaker state,
     /// scan/queue status). Default: an empty snapshot (test fakes need not implement).
@@ -141,6 +145,7 @@ public extension MediaShareRuntime {
     /// Default: nothing to poll.
     func pollForChanges() async {}
     func setBackgroundWorkAllowed(_ allowed: Bool, revision: UInt64) async {}
+    func setAutomaticWorkScope(_ scope: MediaShareWorkScope, revision: UInt64) async {}
 }
 
 /// The single production `MediaShareRuntime`. Construct it only through
@@ -218,7 +223,8 @@ public final class DefaultMediaShareRuntime: MediaShareRuntime {
                 enrichmentConfig: enrichmentConfig,
                 providerConfig: providerConfig,
                 providerRuntime: providerRuntime
-            )
+            ),
+            initialWorkScope: .paused
         )
         // Apply persisted cache budgets to the live caches at startup (eviction runs
         // immediately if a budget was lowered since last launch).
@@ -332,6 +338,10 @@ public final class DefaultMediaShareRuntime: MediaShareRuntime {
 
     public func setPreferredAccountKeys(_ accountKeys: Set<String>, revision: UInt64) async {
         await coordinator.setPreferredAccountKeys(accountKeys, revision: revision)
+    }
+
+    public func setAutomaticWorkScope(_ scope: MediaShareWorkScope, revision: UInt64) async {
+        await coordinator.setAutomaticWorkScope(scope, revision: revision)
     }
 
     public func metadataDiagnosticsSnapshot() async -> MetadataEnrichmentDiagnosticsSnapshot {

@@ -21,6 +21,11 @@ cache that every feature module reuses. tvOS-only — guarded behind
   Settings card.
 - **Cast & metadata cards** — `CastRowView` and friends, used by Home /
   detail.
+- **Detail information focus** — the tvOS About/Ratings/Information band uses
+  native focus with at most 2% growth and 6pt of expansion per edge, leaving
+  clearance in its 18pt gutters. Focused read-only cards and card buttons draw
+  above their peers. This policy does not change ordinary media-card growth,
+  custom focus styles, or touch layouts.
 - **Continue Watching logo contrast** — logo-overlay cards use a 40% base
   artwork dim, reduced for dark artwork and increased by up to 25 percentage
   points when the logo blends into its background (65% maximum). The dim sits

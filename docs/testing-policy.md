@@ -88,6 +88,29 @@ whenever a change could invalidate the map itself or is otherwise unmappable —
 a test target. Pure docs/asset changes select nothing. Every run prints the chosen
 suites and the reason each was selected.
 
+### Main-gate execution and reuse
+
+Use a fixed gate sequence instead of constructing a new orchestration for each
+landing. Record phase start/end times, current status, commands, and retained
+result locations. Start with the localization delta plan; an empty delta does
+not need artifact assembly/import.
+
+An interrupted landing may reuse a completed phase only when its complete
+source/configuration, toolchain/SDK, package workspace, simulator runtime, and
+command recipe match. Keep the authoritative passing summary and expected-bundle
+evidence, not just a success marker; missing or changed evidence reruns the gate.
+A failed fresh attempt invalidates an earlier success. Inputs changing between
+phases prevent the combined candidate from being declared ready. A changed
+candidate still requires the full package and hosted gates; targeted regressions
+used to diagnose a failure do not replace those final gates.
+
+Signed products additionally require matching build identity, executable and
+resource-seal fingerprints, and fresh signature verification before reuse.
+After all gates pass, recheck `main` and publish the authorized update **before**
+independent physical-device installation. Unavailable-device retry budgets stay
+unchanged but are not part of the main-push prerequisite. Keep the enclosing
+build lease through remaining delivery and retain exact artifacts as usual.
+
 ### 3. Fail fast — you learn a result in seconds, not minutes
 
 Most tests execute quickly, but `xcodebuild` on this Mac
@@ -176,13 +199,69 @@ Runner verdict regressions use the existing host-side unittest runner:
 
 ## App-hosted focus integration
 
+`SettingsSubtitleContrastHostedTests` measures rendered text and glyph contrast
+while native focus moves between shared settings rows in Black, Dark, and Light.
+It covers the media-share discovery subtitle, leading icons, manual-entry chevron,
+explicit primary text, and `SettingsIconLabelStyle`. Shared `.plozzForeground`
+tiers must inherit the inverted row foreground, then return to the normal palette
+on blur; text outside a row must remain unaffected. Body text requires 4.5:1
+contrast and supporting glyphs require 3:1 against their rendered surface.
+
+`ShareFolderBrowserHostedTests` opens the real unified share screen with 1,551
+instant-response folders, bounds main-actor stalls, and verifies returning to
+the original root without widening its browse boundary. Deep scrolling must
+realize onscreen native focus targets. The bounded folder viewport uses recycled
+native cells: fewer than 20 are visible for the large fixture, short lists retain
+their natural height, and the table/cells do not clip horizontal focus overflow.
+This is isolated UI coverage, not a live-server network benchmark.
+
+`ShareFolderNavigationTests` launches `PlozzFocusHost --share-folder-fixture`
+with the same 1,551-folder production picker. It drives real remote Down input,
+checks exact item advancement, opening/returning to a folder, and primary-action
+focus restoration. Its Black-mode screenshot checks both focus-card overhangs
+outside the label bounds. Native `XCTHitchMetric` collection requires tvOS 26+
+and physical hardware for meaningful timing; inspect the retained duration,
+count, and time-ratio measurements separately from XCTest's functional verdict.
+One measured eight-press iteration also runs XCTest's eight-press warmup.
+Accessibility queries and screenshot capture stay outside the measured window.
+For an attached profile, `PLOZZ_FOLDER_REUSE_FIXTURE=1` requires the fixture to
+already be foreground and avoids launching/terminating it.
+
+`DiagnosticRecordingStatusHostedTests` exercises real Darwin notifications and
+the visible acknowledgement, preserving native focus while showing the badge.
+It checks the render-server expiry animation, eventual removal, and receipt
+while a full-screen presentation detaches the app root from its window. Recorder
+control tests run with
+`python3 -m unittest discover -s tools/tests -p test_trace_device.py`: failed
+readiness/visibility must not send input, a sustained recording permits exactly
+one input, app-bound runner metadata is refused, and sample verification must
+resolve the target PID rather than count unrelated system activity.
+`PhysicalDiagnosticInputTests` is opt-in; it never launches the app and remains
+outside ordinary unattended test runs. `tools/trace-device.sh` controls the
+single-Select recording path. Its separate repeated-Down test requires
+`PLOZZ_CAPTURE_FOLDER_DOWN=1`, `PLOZZ_CAPTURE_BUNDLE_ID`, an already-foreground
+app, the subfolder heading, and a focused folder row. It supports the legacy
+folder-icon buttons and the native `share-location:` cell identifiers. XCTest
+adds a warmup, so expect sixteen Down presses in total, not eight. Host shell
+variables need the `TEST_RUNNER_` prefix when forwarded through `xcodebuild`.
+Its separate status-inspection method uses `PLOZZ_CAPTURE_INSPECT_STATUS=1`
+and `PLOZZ_CAPTURE_BUNDLE_ID` to retain the actual TV badge screenshot and
+accessibility tree without sending input.
+
 The `PlozziOSPresentationTests` scheme supplies a separate iOS app scene for
 native Form/picker and sheet rendering. Run it on an explicitly owned iOS
 simulator under the shared build lease, with a lane-private package workspace
 and retained result bundle. Its host and tests share only the `AppShelliOS`
 package product. `ServerSetupPresentationTests` checks rendered primary-button
 text in all themes, the native provider picker's logo bounds, and transparent
-WebDAV badge edges. Package-only UIKit snapshots cannot replace this gate:
+WebDAV badge edges. The received-setup summary is exercised with 25 servers,
+multiple sign-ins per server, and 40 profiles on compact/large phones, landscape,
+iPad-sized windows, accessibility text sizes, and right-to-left layout. Its
+primary action stays in the bottom safe area while the full summary scrolls;
+server names, usernames, profile names, and the final instructions wrap.
+Empty and single-profile summaries keep the same reachable action. These tests
+use synthetic received data, not pairing services or stored household credentials.
+Package-only UIKit snapshots cannot replace this gate:
 without an application scene, `drawHierarchy` returns an empty image.
 
 `tools/run-focus-tests.sh` runs the `PlozzFocusTests` scheme in a minimal,
@@ -240,6 +319,12 @@ unrealized source still returns to its captured shape without waiting for focus.
 The episode browser keeps its layout while masked until its final reveal and
 cannot take entry focus during a whole-show entrance. Episode-context opens
 retain their existing initial-focus behavior; Reduce Motion reveals it directly.
+Its rendered keyline check waits for native focus completion and the artwork's
+painted width to settle, then compares artwork and About in one captured frame.
+The settling condition is independent of x-position, so real misalignment still
+fails. Native/custom focus paint can outlive focus callbacks; fixed sleeps and
+separate snapshots can compare different stages of that return. Retain the exact
+measured images and the one-pixel alignment tolerance.
 
 When its real backdrop is ready, opening motion starts in card/router activation,
 before creating the detail page. An empty destination must not animate: a cold
@@ -692,6 +777,11 @@ Count-only changes insert/remove tail slots without resetting the collection.
 Catalog refreshes update existing `LibrarySlot` objects in place, including the
 pages visible when the refresh commits; they must not strand cell observers on
 discarded objects.
+The issue #15 regression uses 2,178 items and the default 28/42-item paging plan:
+load index 1,750, scroll away, refresh the catalog, and return without reopening.
+Both the shared model and the hosted native grid must refill the invalidated
+off-screen page; the native placeholder must update in place and select the
+refreshed item after its delayed page response arrives.
 
 The displayed grid's `contentGeneration` is separate from the first-page/refresh
 request token. Only replacing the browsing order invalidates cell callbacks.

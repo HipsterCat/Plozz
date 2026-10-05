@@ -662,6 +662,7 @@ public final class TVDetailEntranceSession {
     @ObservationIgnored private var returnNavigationFinished = false
     @ObservationIgnored private var navigationTransitionPending = false
     @ObservationIgnored private var returnHandoffScheduled = false
+    @ObservationIgnored private var returnGeneration: UUID?
     @ObservationIgnored private var returnFrame: DetailReturnFrame?
     @ObservationIgnored private var scrollPositions: [DetailTransitionScrollPosition] = []
     @ObservationIgnored private let restoreToken = UUID()
@@ -825,9 +826,17 @@ public final class TVDetailEntranceSession {
 
     func navigationWillDisappear(using coordinator: any UIViewControllerTransitionCoordinator) {
         guard isClosing else { return }
+        let generation = returnGeneration
         navigationTransitionPending = true
-        let registered = coordinator.animate(alongsideTransition: nil) { [weak self] _ in
-            guard let self else { return }
+        let registered = coordinator.animate(alongsideTransition: nil) { [weak self] context in
+            guard let self, isClosing, returnGeneration == generation else { return }
+            if context.isCancelled {
+                PlozzLog.app.info("Detail return was cancelled; restoring the retained page")
+                HandoffDiagnostics.emit("detail RETURN_CANCELLED source=\(HandoffDiagnostics.correlationID(sourceKey))")
+                finishImmediately()
+                pageAppeared()
+                return
+            }
             navigationTransitionPending = false
             returnNavigationFinished = !pageIsVisible
             finishReturnIfReady()
@@ -913,6 +922,8 @@ public final class TVDetailEntranceSession {
             inputGuard = DetailTransitionNavigation.installInputGuard(in: window, phase: .returning)
         }
         isClosing = true
+        returnGeneration = UUID()
+        HandoffDiagnostics.emit("detail RETURN_BEGIN source=\(HandoffDiagnostics.correlationID(sourceKey))")
         navigationChrome?.detailDisappeared(chromeToken)
         backdropRequest?.cancel()
         backdropRequest = nil
@@ -1006,6 +1017,7 @@ public final class TVDetailEntranceSession {
             DispatchQueue.main.async { [self] in
                 guard isClosing, overlay === cover else { return }
                 cover.removeFromSuperview()
+                HandoffDiagnostics.emit("detail RETURN_FINISHED source=\(HandoffDiagnostics.correlationID(sourceKey))")
                 overlay = nil
                 animator = nil
                 releaseInput()
@@ -1068,6 +1080,7 @@ public final class TVDetailEntranceSession {
         returnFrame?.invalidate()
         returnFrame = nil
         let wasStarted = hasStarted
+        returnGeneration = nil
         navigationTransitionPending = false
         hasStarted = true
         foregroundSequenceStarted = true

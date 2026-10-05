@@ -311,6 +311,9 @@ public enum PlozzTheme {
         /// panels, and a browse-card scale on one reads as the whole column
         /// jumping.
         public static let readOnlyFocusedCardScale: CGFloat = 1.02
+        /// Leaves clearance inside the information grid's 18pt gutters, including
+        /// the outgoing card while native focus settles onto its neighbor.
+        public static let informationFocusMaximumOutset: CGFloat = 6
         /// Scale applied to a focused browsing tile (matches Twozz Browse).
         public static let focusedCardScale: CGFloat = 1.08
 

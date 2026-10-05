@@ -2,6 +2,38 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "id": "release/046",
+      "version": "2026.9.30",
+      "marketingVersion": "2026.9.25",
+      "build": 46,
+      "releasedAt": "2026-09-30",
+      "sections": [
+        {
+          "category": "New",
+          "items": [
+            "Automatic sign-in toggle."
+          ]
+        },
+        {
+          "category": "Updated",
+          "items": [
+            "Home page performance improvements.",
+            {
+              "text": "Clearer loading cards and logos.",
+              "platforms": ["tvOS"]
+            },
+            "Updated playback engine and HDR handling."
+          ]
+        },
+        {
+          "category": "Fixed",
+          "items": [
+            "Emby watched status and SMB resume progress."
+          ]
+        }
+      ]
+    },
+    {
       "id": "release/045",
       "version": "2026.9.29",
       "marketingVersion": "2026.9.25",

@@ -199,18 +199,24 @@ feature-branch pushes stay fast. The repository uses `core.hooksPath=.githooks`.
 When an agent is told to merge or push a feature to `main`, the merge-time rule
 in the private Plozz agent instructions requires it to:
 
-1. syncs the English source catalog and exports disposable artifacts from the
-   committed catalogs;
-2. exports the exact missing-or-source-changed delta, including permission
-   prompts, using the committed source fingerprint snapshot;
-3. plans bounded multilingual batches, assigns each to an author and a separate
-   reviewer, and checks complete coverage using actual task identities;
+1. validates and syncs the English source catalog, using
+   `l10n-sync.py --reuse-if-unchanged` when complete extraction evidence matches;
+2. plans the exact missing-or-source-changed delta, including permission prompts,
+   using the committed source fingerprint snapshot;
+3. for a nonempty plan, exports disposable artifacts, assigns bounded batches to
+   an author and a separate reviewer, and checks complete coverage using actual
+   task identities;
 4. assembles reviewed batches through `l10n-batches.py merge` (which reuses
    `l10n-merge-delta.py`) and imports only through `l10n-import.py`;
 5. runs catalog/source guards, pipeline tests, platform builds, and the full test
    suite;
 6. updates the source snapshot and fast-forwards `main` only when every gate
    passes and `main` has not moved.
+
+When the plan reports **zero units and zero batches**, there is nothing to author,
+review, assemble, or import. Skip the full-language artifact round trip and
+continue with source/catalog guards, pipeline tests, platform builds, and the
+full test gates. Do not manufacture review evidence for an empty delta.
 
 The pre-push hook is the mechanical backstop. It blocks `main` when source
 extraction is stale, any language lacks a key, a source fingerprint changed

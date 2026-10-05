@@ -7,7 +7,9 @@ import CoreModels
 struct FocusHostApp: App {
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--episode-row-fixture") {
+            if ProcessInfo.processInfo.arguments.contains("--share-folder-fixture") {
+                ShareFolderBrowserFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--episode-row-fixture") {
                 EpisodeRowRemoteFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--subtitle-style-input-fixture") {
                 SubtitleStyleInputFixture()

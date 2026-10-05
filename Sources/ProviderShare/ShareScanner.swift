@@ -396,12 +396,11 @@ actor ShareScanner {
             await Self.clearResumeState(store: store, scanGeneration: scanGeneration)
         }
         let started = Date()
-        reporter.scanStarted(shareID, name)
-
         guard !Task.isCancelled, backgroundWorkAllowed, !isInvalidated else {
             await finishScan(listers: [])
             return isInvalidated ? .invalidated : .cancelled(scanGeneration: scanGeneration)
         }
+        reporter.scanStarted(shareID, name)
 
         if libraryConfiguration?.contentType == .personalVideos {
             // Personal Videos use the live file tree directly. Do not walk the
@@ -444,7 +443,7 @@ actor ShareScanner {
             PlozzLog.boot(
                 "share.scan personal-videos live-tree-only elapsed=\(Int(Date().timeIntervalSince(started) * 1_000))ms"
             )
-            await finishScan(listers: [])
+            await finishScan(listers: [], completed: true)
             return configurationApplied ? .completedClean : .completedPartial
         }
 
@@ -954,7 +953,7 @@ actor ShareScanner {
                 scanGeneration: scanGeneration
             )
             await store.setLibraryAnimeContext(
-                libraryConfiguration?.isAnime == true,
+                libraryConfiguration?.usesAnimeMetadata == true,
                 scanGeneration: scanGeneration
             )
         }
@@ -986,7 +985,7 @@ actor ShareScanner {
             "share.scan done scanID=\(scanID) deep=\(deep) dirs=\(dirsWalked) skipped=\(dirsSkipped) storeMs=\(storeNanos / 1_000_000) skipStoreMs=\(skipStoreNanos / 1_000_000) listWaitMs=\(listWaitNanos / 1_000_000) interior=\(directoriesWithSubdirectories.count) files=\(filesFound) extras=\(extrasFound) catalog=\(discovery.total) newLastHour=\(discovery.recent) unchanged=\(unchangedPass) pruned=\(!anyListingFailed) failed=\(listFailureCounts.values.reduce(0, +)) failures=[\(failureSummary)] elapsed=\(Int(Date().timeIntervalSince(started) * 1_000))ms"
         )
         activeResumeState = nil
-        await finishScan(listers: pool)
+        await finishScan(listers: pool, completed: true)
         // A completed pass earns a completion stamp. When some listing failed the pass
         // stayed unpruned (partial), but it is still a *completed* pass under the
         // approved partial throttle — the coordinator distinguishes this from a
@@ -994,7 +993,7 @@ actor ShareScanner {
         return anyListingFailed ? .completedPartial : .completedClean
     }
 
-    private func finishScan(listers: [ScanLister]) async {
+    private func finishScan(listers: [ScanLister], completed: Bool = false) async {
         await withTaskGroup(of: Void.self) { group in
             for lister in listers {
                 group.addTask {
@@ -1006,7 +1005,11 @@ actor ShareScanner {
         activeResumeState = nil
         activeListerGeneration = nil
         isRunning = false
-        reporter.scanFinished(shareID)
+        if completed, !Task.isCancelled, !isInvalidated {
+            reporter.scanFinished(shareID)
+        } else {
+            reporter.scanPaused(shareID)
+        }
     }
 
     /// Result of listing one directory: the connection it used (returned to the
@@ -1473,8 +1476,8 @@ actor ShareScanner {
             )
         case .episode(let ep):
             let anime = libraryConfiguration?.contentType == .tvShows
-                ? libraryConfiguration?.isAnime == true
-                : libraryConfiguration?.isAnime == true || isAnimePath(relPath)
+                ? libraryConfiguration?.usesAnimeMetadata == true
+                : libraryConfiguration?.usesAnimeMetadata == true || isAnimePath(relPath)
             let library: CatalogLibrary = anime ? .anime : .tv
             let fallback = "S\(ep.season)·E\(String(format: "%02d", ep.episode))"
             return CatalogAsset(
@@ -1511,8 +1514,9 @@ actor ShareScanner {
             return ancestors[0...idx].joined(separator: "/")
         }
         guard libraryConfiguration?.contentType == .tvShows
+                || libraryConfiguration?.contentType == .anime
                 || (libraryConfiguration?.contentType == .automatic
-                    && libraryConfiguration?.isAnime == true),
+                    && libraryConfiguration?.usesAnimeMetadata == true),
               let first = ancestors.first,
               !ShareMediaParser.isSeasonFolder(first) else {
             return nil
@@ -1541,7 +1545,7 @@ actor ShareScanner {
         guard let libraryConfiguration else { return "legacy" }
         return [
             libraryConfiguration.contentType.rawValue,
-            libraryConfiguration.isAnime ? "anime" : "standard",
+            libraryConfiguration.usesAnimeMetadata ? "anime" : "standard",
         ].joined(separator: ":")
     }
 

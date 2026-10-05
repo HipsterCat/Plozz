@@ -38,7 +38,9 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
     /// enrichers, account key, generation UUIDs) and always report back through a
     /// coordinator method — never the runtime instance.
     private var runtimes: [String: ShareCatalogRuntime] = [:]
-    private let metadataScheduler = ShareMetadataWorkScheduler()
+    private let metadataScheduler: ShareMetadataWorkScheduler
+    private var automaticWorkScope: MediaShareWorkScope?
+    private var automaticScopeRevision: UInt64 = 0
     private var preferredAccountRevision: UInt64 = 0
     private let arbiterFactory: ArbiterFactory
     private let pipelineFactory: any ShareMetadataPipelineFactory
@@ -65,7 +67,11 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
     private var backgroundWorkAllowed = true
     private var backgroundWorkRevision: UInt64 = 0
     private var scansPendingForeground: [String: Bool] = [:]
-    private var scanForcesByTaskID: [UUID: Bool] = [:]
+    private struct ScanRequest {
+        let force: Bool
+        let generation: UUID
+    }
+    private var scanRequestsByTaskID: [UUID: ScanRequest] = [:]
     private struct SuspensionDrainEntry: Sendable {
         let accountKey: String
         let store: ShareCatalogStore
@@ -89,8 +95,11 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
     private var reportedBlockedResumeRevisions: [String: UInt64] = [:]
 
     public init(
-        arbiterFactory: @escaping ArbiterFactory = { MediaIOArbiter(accountID: $0) }
+        arbiterFactory: @escaping ArbiterFactory = { MediaIOArbiter(accountID: $0) },
+        initialWorkScope: MediaShareWorkScope? = nil
     ) {
+        self.automaticWorkScope = initialWorkScope
+        self.metadataScheduler = ShareMetadataWorkScheduler(automaticAccountKeys: initialWorkScope?.accountKeys)
         self.arbiterFactory = arbiterFactory
         self.diagnostics = DefaultShareScanDiagnostics()
         self.pipelineFactory = DefaultShareMetadataPipelineFactory(clients: .production)
@@ -100,8 +109,11 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
 
     public init(
         arbiterFactory: @escaping ArbiterFactory = { MediaIOArbiter(accountID: $0) },
-        artworkCacheLifecycle: any ShareLocalArtworkCacheLifecycle
+        artworkCacheLifecycle: any ShareLocalArtworkCacheLifecycle,
+        initialWorkScope: MediaShareWorkScope? = nil
     ) {
+        self.automaticWorkScope = initialWorkScope
+        self.metadataScheduler = ShareMetadataWorkScheduler(automaticAccountKeys: initialWorkScope?.accountKeys)
         self.arbiterFactory = arbiterFactory
         self.diagnostics = DefaultShareScanDiagnostics()
         self.pipelineFactory = DefaultShareMetadataPipelineFactory(clients: .production)
@@ -116,8 +128,11 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
     public init(
         arbiterFactory: @escaping ArbiterFactory = { MediaIOArbiter(accountID: $0) },
         artworkCacheLifecycle: any ShareLocalArtworkCacheLifecycle,
-        metadataComposition: ShareMetadataComposition
+        metadataComposition: ShareMetadataComposition,
+        initialWorkScope: MediaShareWorkScope? = nil
     ) {
+        self.automaticWorkScope = initialWorkScope
+        self.metadataScheduler = ShareMetadataWorkScheduler(automaticAccountKeys: initialWorkScope?.accountKeys)
         self.arbiterFactory = arbiterFactory
         self.diagnostics = DefaultShareScanDiagnostics()
         self.pipelineFactory = DefaultShareMetadataPipelineFactory(
@@ -136,8 +151,11 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         diagnostics: ShareScanDiagnostics = DefaultShareScanDiagnostics(),
         pipelineFactory: any ShareMetadataPipelineFactory,
         artworkCacheLifecycle: any ShareLocalArtworkCacheLifecycle =
-            NoopShareLocalArtworkCacheLifecycle()
+            NoopShareLocalArtworkCacheLifecycle(),
+        initialWorkScope: MediaShareWorkScope? = nil
     ) {
+        self.automaticWorkScope = initialWorkScope
+        self.metadataScheduler = ShareMetadataWorkScheduler(automaticAccountKeys: initialWorkScope?.accountKeys)
         self.arbiterFactory = arbiterFactory
         self.diagnostics = diagnostics
         self.pipelineFactory = pipelineFactory
@@ -168,6 +186,60 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         preferredAccountRevision = revision
         await metadataScheduler.setPreferredAccountKeys(accountKeys)
         await artworkCacheLifecycle.setPreferredAccountKeys(accountKeys, revision: revision)
+    }
+
+    public func setAutomaticWorkScope(_ scope: MediaShareWorkScope, revision: UInt64) async {
+        guard revision > automaticScopeRevision
+                || (revision == automaticScopeRevision && automaticWorkScope == scope) else { return }
+        automaticScopeRevision = revision
+        automaticWorkScope = scope
+        var pausedScans = 0
+        for (accountKey, runtime) in Array(runtimes) where !scope.accountKeys.contains(accountKey) {
+            let tasks = runtime.scanTasks.filter { scanRequestsByTaskID[$0.key]?.force == false }
+            guard !tasks.isEmpty else { continue }
+            pausedScans += tasks.count
+            runtime.stampCancellationReasons(taskIDs: tasks.keys, owner: .profileScopeChanged)
+            tasks.values.forEach { $0.cancel() }
+            markScanPendingForeground(accountKey, force: false)
+            reporter.scanPaused(accountKey)
+            drainProfileScan(accountKey: accountKey, runtime: runtime, tasks: tasks)
+        }
+        await metadataScheduler.setAutomaticAccountKeys(scope.accountKeys, revision: revision)
+        guard revision == automaticScopeRevision else { return }
+        HandoffDiagnostics.emit("share-work SCOPE revision=\(revision) enabled=\(scope.accountKeys.count) pausedScans=\(pausedScans)")
+        for accountKey in Array(runtimes.keys) where scope.accountKeys.contains(accountKey) {
+            await resumePendingForegroundScan(accountKey)
+            guard revision == automaticScopeRevision else { return }
+            await ensureScanning(accountKey)
+            guard revision == automaticScopeRevision else { return }
+        }
+    }
+
+    private func permitsAutomaticWork(_ accountKey: String) -> Bool {
+        automaticWorkScope?.accountKeys.contains(accountKey) != false
+    }
+
+    private func drainProfileScan(
+        accountKey: String,
+        runtime: ShareCatalogRuntime,
+        tasks: [UUID: Task<Void, Never>]
+    ) {
+        let id = UUID()
+        let store = runtime.store
+        let scanner = runtime.scanner
+        let generations = tasks.keys.compactMap { scanRequestsByTaskID[$0]?.generation }
+        let task = Task(priority: .utility) { [weak self] in
+            for generation in generations {
+                await scanner?.forceCloseActiveListers(scanGeneration: generation)
+            }
+            for task in tasks.values { await task.value }
+            await self?.suspensionDrainFinished(
+                id: id, accountKey: accountKey, store: store, taskIDs: Set(tasks.keys)
+            )
+        }
+        // Reserve ownership before any actor hop; a quick re-enable must wait for
+        // this exact generation, not open a second transport alongside its drain.
+        suspensionDrains[id] = SuspensionDrain(accountKey: accountKey, store: store, task: task)
     }
 
     /// Media-share scans are intentionally foreground-only. Resigning active
@@ -248,7 +320,7 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         var drainEntries: [SuspensionDrainEntry] = []
         for (accountKey, runtime) in runtimeEntries {
             let force = runtime.scanTasks.keys.contains {
-                scanForcesByTaskID[$0] == true
+                scanRequestsByTaskID[$0]?.force == true
             }
             if runtime.hasActiveScanTasks {
                 markScanPendingForeground(accountKey, force: force)
@@ -677,8 +749,8 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
                (
                    scanner.libraryConfiguration?.contentType
                        != libraryConfiguration?.contentType
-                       || scanner.libraryConfiguration?.isAnime
-                       != libraryConfiguration?.isAnime
+                       || scanner.libraryConfiguration?.usesAnimeMetadata
+                       != libraryConfiguration?.usesAnimeMetadata
                ) {
                 if libraryConfiguration?.contentType == .personalVideos {
                     let staleLocalEnricher = runtime.localEnricher
@@ -814,6 +886,9 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
                     pausePass: {
                         await enricher.pauseScheduledPass()
                     },
+                    pauseForScope: {
+                        await enricher.pauseForProfileScope()
+                    },
                     finishPass: {
                         await enricher.finishLogicalPass()
                     }
@@ -845,6 +920,7 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
     /// throttle. This defers to both, so a poll can never displace real work or
     /// scan more often than the interval allows.
     public func pollForChanges() async {
+        await resumePendingForegroundScans()
         for (accountKey, _) in runtimes {
             await ensureScanning(accountKey)
         }
@@ -1044,7 +1120,7 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
             )
             if cooling { return }
         }
-        await metadataScheduler.enqueueItem(accountKey: accountKey, itemID: itemID)
+        await metadataScheduler.enqueueItem(accountKey: accountKey, itemID: itemID, userRequested: userRequested)
     }
 
     /// Manual item-level re-enrichment (Step 6 "Refresh"): enqueues the item ahead of
@@ -1100,6 +1176,7 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
     /// no-op scan+enrich on every access. `ShareScanner.scanIfStale` still
     /// governs whether the actual walk runs when a spawn IS allowed.
     private func ensureScanning(_ accountKey: String) async {
+        guard permitsAutomaticWork(accountKey) else { return }
         guard backgroundWorkAllowed else {
             markScanPendingForeground(accountKey, force: false)
             return
@@ -1157,6 +1234,7 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         scanner: ShareScanner,
         force: Bool
     ) async {
+        guard force || permitsAutomaticWork(accountKey) else { return }
         guard backgroundWorkAllowed else {
             markScanPendingForeground(accountKey, force: force)
             return
@@ -1180,6 +1258,7 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
         let scanGeneration = UUID()
         if shouldEnrich { await metadataScheduler.suspend(accountKey: accountKey) }
         guard backgroundWorkAllowed,
+              force || permitsAutomaticWork(accountKey),
               lifecycleRevision == backgroundWorkRevision,
               runtime.isActive,
               runtime.scanner === scanner,
@@ -1202,10 +1281,12 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
             scannerLease = try await runtime.arbiter.acquireScanner(resource: resource)
         } catch {
             if shouldEnrich { await metadataScheduler.resume(accountKey: accountKey) }
+            if force { markScanPendingForeground(accountKey, force: true) }
             return
         }
         if shouldEnrich { await metadataScheduler.resume(accountKey: accountKey) }
         guard backgroundWorkAllowed,
+              force || permitsAutomaticWork(accountKey),
               lifecycleRevision == backgroundWorkRevision,
               runtime.isActive,
               runtime.scanner === scanner,
@@ -1243,6 +1324,7 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
             }
             ShareBackgroundActivity.scanStarted()
             BrowseDiagnostics.event("scan+ \(accountKey) force=\(force)")
+            HandoffDiagnostics.emit("share-work SCAN account=\(HandoffDiagnostics.correlationID(accountKey)) explicit=\(force)")
             let outcome: ShareScanOutcome
             if force {
                 outcome = await scanner.scan(scanGeneration: scanGeneration)
@@ -1254,7 +1336,7 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
             resource.markDrained()
             await scannerLease.finishAndWait()
             if shouldEnrich, !Task.isCancelled {
-                await self?.metadataScheduler.enqueueBacklog(accountKey: accountKey)
+                await self?.metadataScheduler.enqueueBacklog(accountKey: accountKey, userRequested: force)
             }
             let completedAt: Date?
             if outcome.earnsCompletionStamp,
@@ -1283,13 +1365,14 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
             await self?.clearScanTask(accountKey, taskID: taskID)
         }
         resource.attach(task)
-        scanForcesByTaskID[taskID] = force
+        scanRequestsByTaskID[taskID] = ScanRequest(force: force, generation: scanGeneration)
+        scansPendingForeground[accountKey] = nil
         runtime.addScanTask(taskID, task)
         await startGate.open()
     }
 
     private func clearScanTask(_ accountKey: String, taskID: UUID) {
-        scanForcesByTaskID[taskID] = nil
+        scanRequestsByTaskID[taskID] = nil
         // The runtime discards the task entry AND any reason stamped for it in the
         // window between `recordScanOutcome` consuming its first reason and this
         // removal. taskIDs are unique UUIDs, so this never changes attribution of any
@@ -1327,6 +1410,10 @@ public actor ShareCatalogCoordinator: ShareCatalogCoordinating {
             scannerID: scannerID,
             credentialRevision: credentialRevision
         )
+        if taskCancelled, scanRequestsByTaskID[taskID]?.force == true,
+           generationCurrent, runtime.isActive, !runtime.restarting {
+            markScanPendingForeground(accountKey, force: true)
+        }
         if outcome.earnsCompletionStamp && !taskCancelled && generationCurrent {
             // A reopened catalog can return a no-op just before its durable
             // deadline. Preserve that deadline instead of restarting the timer.

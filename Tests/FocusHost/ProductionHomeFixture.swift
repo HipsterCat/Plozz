@@ -1,5 +1,6 @@
 import CoreModels
 import PlozzCoreUI
+import AVFoundation
 import notify
 import FeatureHome
 import FeatureHomeCore
@@ -11,6 +12,7 @@ import UIKit
 struct ProductionHomeFixture: View {
     @State private var fixture: ProductionHomeState?
     @State private var path: [MediaItem] = []
+    @State private var libraryPath = NavigationPath()
     @State private var selection = NavigationRailDestination.home
     @State private var profile = Profile(name: "Viewer")
     @State private var expectedNativeDestination: NavigationRailDestination?
@@ -37,7 +39,7 @@ struct ProductionHomeFixture: View {
                             profile: profile, entries: [], destinations: [.home, .search, .settings],
                             selection: $selection, onOpenProfileSwitcher: {},
                             chrome: fixture.chrome,
-                            content: ProductionHomeContent(fixture: fixture, path: $path, isPinned: true),
+                            content: ProductionHomeContent(fixture: fixture, path: $path, libraryPath: $libraryPath, isPinned: true),
                             contentDestination: .home
                         )
                     } else if isNativeSidebar {
@@ -52,7 +54,7 @@ struct ProductionHomeFixture: View {
                                 AnyView(NativeSidebarFocusDestination(
                                     destination: .home, selection: selection, handoff: nativeSidebarFocus,
                                     content: ProductionHomeContent(
-                                    fixture: fixture, path: $path, isPinned: false,
+                                    fixture: fixture, path: $path, libraryPath: $libraryPath, isPinned: false,
                                     isActive: selection == .home
                                 )
                                 .background {
@@ -95,12 +97,20 @@ struct ProductionHomeFixture: View {
                             .allowsHitTesting(false)
                         }
                     } else {
-                        ProductionHomeContent(fixture: fixture, path: $path, isPinned: false)
+                        ProductionHomeContent(fixture: fixture, path: $path, libraryPath: $libraryPath, isPinned: false)
                     }
                 }
                 .overlay(alignment: .topTrailing) {
                     VStack {
                         Text("Production Home ready")
+                        if ProcessInfo.processInfo.arguments.contains("--library-detail-sequence") {
+                            Text(verbatim: "\(libraryPath.count)")
+                                .accessibilityIdentifier("detail-sequence-route-depth")
+                            Text(verbatim: "\(fixture.detailDepth.depth)")
+                                .accessibilityIdentifier("detail-sequence-page-depth")
+                            Text(verbatim: fixture.trailer.currentItemID ?? "none")
+                                .accessibilityIdentifier("detail-sequence-trailer-owner")
+                        }
                         if ProcessInfo.processInfo.arguments.contains("--progressive-home-load") {
                             Text(verbatim: fixture.model.loadingRows.contains(.continueWatching) ? "pending" : "ready")
                                 .accessibilityIdentifier("home-fixture-resume-state")
@@ -141,48 +151,91 @@ struct ProductionHomeFixture: View {
 private struct ProductionHomeContent: View {
     let fixture: ProductionHomeState
     @Binding var path: [MediaItem]
+    @Binding var libraryPath: NavigationPath
     let isPinned: Bool
     var isActive = true
+    private var isLibrarySequence: Bool {
+        ProcessInfo.processInfo.arguments.contains("--library-detail-sequence")
+    }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            HomeView(
-                viewModel: fixture.model,
-                visibility: fixture.visibility,
-                heroSettings: fixture.heroSettings,
-                heroBackground: fixture.background,
-                heroTrailerController: fixture.trailer,
-                heroIsFrontmost: isActive && path.isEmpty,
-                heroRuntime: fixture.runtime,
-                heroArtworkProvider: { $0.backdropURL },
-                heroArtworkValidator: { _ in true },
-                navigationStyle: isPinned ? .rail
-                    : (ProcessInfo.processInfo.arguments.contains("--native-sidebar-home") ? .sidebar : .default),
-                onSelectItem: { item in withCinematicDetailNavigation(for: item) { path.append(item) } },
-                onPlayItem: { _ in },
-                onSelectLibrary: { _ in }
-            )
-            .navigationDestination(for: MediaItem.self) { item in
-                ItemDetailView(
-                    viewModel: fixture.detail(for: item),
-                    onPlay: { _ in },
-                    onSelectChild: { next in
-                        withCinematicDetailNavigation(for: next) { path.append(next) }
+        Group {
+            if isLibrarySequence {
+                NavigationStack(path: $libraryPath) {
+                    LibraryBrowseView(
+                        viewModel: fixture.library, title: Text("Movie sequence library"),
+                        onSelect: { item in
+                            withCinematicDetailNavigation(for: item) {
+                                libraryPath.append(LibraryDetailRoute(item: item, originAccountID: "home-fixture"))
+                            }
+                        }
+                    )
+                    .navigationDestination(for: LibraryDetailRoute.self) { route in
+                        detailPage(for: route.item)
                     }
-                )
-                .environment(fixture.trailer)
-                .environment(fixture.background)
-                .overlay(alignment: .topTrailing) {
-                    Text("Detail fixture \(item.title)")
-                        .font(.caption2)
-                        .allowsHitTesting(false)
+                }
+            } else {
+                NavigationStack(path: $path) {
+                    HomeView(
+                        viewModel: fixture.model,
+                        visibility: fixture.visibility,
+                        heroSettings: fixture.heroSettings,
+                        heroBackground: fixture.background,
+                        heroTrailerController: fixture.trailer,
+                        heroIsFrontmost: isActive && path.isEmpty,
+                        heroRuntime: fixture.runtime,
+                        heroArtworkProvider: { $0.backdropURL },
+                        heroArtworkValidator: { _ in true },
+                        navigationStyle: isPinned
+                            ? .rail
+                            : (ProcessInfo.processInfo.arguments.contains("--native-sidebar-home")
+                                ? .sidebar : .default),
+                        onSelectItem: { item in withCinematicDetailNavigation(for: item) { path.append(item) } },
+                        onPlayItem: { _ in },
+                        onSelectLibrary: { _ in }
+                    )
+                    .navigationDestination(for: MediaItem.self) { item in
+                        detailPage(for: item)
+                    }
                 }
             }
         }
-        .reportsNavigationDepth(path.count, to: isPinned ? fixture.chrome : nil)
+        .reportsNavigationDepth(isLibrarySequence ? libraryPath.count : path.count, to: isPinned ? fixture.chrome : nil)
         .mediaItemActionHandler(
             ProcessInfo.processInfo.arguments.contains("--home-menu-control") ? fixture.actions : nil
         )
+    }
+
+    private func detailPage(for item: MediaItem) -> some View {
+        ItemDetailView(
+            viewModel: fixture.detail(for: item),
+            onPlay: { _ in },
+            onSelectChild: { next in
+                withCinematicDetailNavigation(for: next) {
+                    if isLibrarySequence {
+                        libraryPath.append(LibraryDetailRoute(item: next, originAccountID: "home-fixture"))
+                    } else {
+                        path.append(next)
+                    }
+                }
+            },
+            stackDepth: isLibrarySequence ? fixture.detailDepth : nil,
+            heroTrailerResolver: { [url = fixture.trailerURL] item in
+                url.map {
+                    HeroTrailerSource(
+                        ownerItemID: item.id, trailerItemID: "trailer-\(item.id)",
+                        url: $0, duration: 60
+                    )
+                }
+            }
+        )
+        .environment(fixture.trailer)
+        .environment(fixture.background)
+        .overlay(alignment: .topTrailing) {
+            Text("Detail fixture \(item.title)")
+                .font(.caption2)
+                .allowsHitTesting(false)
+        }
     }
 }
 
@@ -202,6 +255,9 @@ private final class ProductionHomeActions: MediaItemActionHandling {
 @MainActor
 private final class ProductionHomeState {
     let model: HomeViewModel
+    let library: LibraryBrowseViewModel
+    let detailDepth = DetailStackDepth()
+    let trailerURL: URL?
     let visibility = HomeLibraryVisibilityModel()
     let heroSettings = HeroSettingsModel()
     let background = HeroBackgroundSettingsModel()
@@ -212,9 +268,14 @@ private final class ProductionHomeState {
     private let provider: ProductionHomeProvider
     private var details: [String: ItemDetailViewModel] = [:]
 
-    private init(poster: URL, backdrop: URL, logo: URL) {
+    private init(poster: URL, backdrop: URL, logo: URL, trailerURL: URL?) {
+        self.trailerURL = trailerURL
         let provider = ProductionHomeProvider(poster: poster, backdrop: backdrop, logo: logo)
         self.provider = provider
+        library = LibraryBrowseViewModel(
+            provider: provider, containerID: "detail-sequence-library", containerKind: .movie,
+            sourceAccountID: "home-fixture"
+        )
         let account = Account(
             id: "home-fixture", server: provider.session.server,
             userID: "fixture", userName: "Fixture", deviceID: "fixture"
@@ -250,6 +311,7 @@ private final class ProductionHomeState {
         settings.style = ProcessInfo.processInfo.arguments.contains("--immersive-home") ? .followsFocus : .carousel
         heroSettings.settings = settings
         background.settings.homeTrailerEnabled = false
+        if trailerURL != nil { background.settings.detailMode = .trailer }
     }
 
     func detail(for item: MediaItem) -> ItemDetailViewModel {
@@ -271,7 +333,17 @@ private final class ProductionHomeState {
             name: "logo", size: scheduleFixture ? CGSize(width: 180, height: 320) : CGSize(width: 320, height: 100),
             color: .white
         )
-        let state = ProductionHomeState(poster: poster, backdrop: backdrop, logo: logo)
+        let trailerURL: URL?
+        if ProcessInfo.processInfo.arguments.contains("--library-detail-sequence") {
+            do {
+                trailerURL = try await makeTrailerVideo()
+            } catch {
+                preconditionFailure("The detail sequence requires a playable local trailer: \(error)")
+            }
+        } else {
+            trailerURL = nil
+        }
+        let state = ProductionHomeState(poster: poster, backdrop: backdrop, logo: logo, trailerURL: trailerURL)
         if ProcessInfo.processInfo.arguments.contains("--cached-home-hero") {
             state.model.cacheHeroItems([state.provider.heroSeed], for: state.heroSettings.settings)
             await state.model.waitForHeroPersistence()
@@ -284,6 +356,46 @@ private final class ProductionHomeState {
             await state.model.load()
         }
         return state
+    }
+
+    private static func makeTrailerVideo() async throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("detail-sequence-\(UUID()).mov")
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: 160, AVVideoHeightKey: 96
+        ])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: 160, kCVPixelBufferHeightKey as String: 96
+            ]
+        )
+        writer.add(input)
+        guard writer.startWriting() else { throw writer.error ?? AppError.unknown("") }
+        writer.startSession(atSourceTime: .zero)
+        var buffer: CVPixelBuffer?
+        guard CVPixelBufferCreate(kCFAllocatorDefault, 160, 96, kCVPixelFormatType_32BGRA, nil, &buffer) == kCVReturnSuccess,
+              let buffer else { throw AppError.invalidResponse }
+        CVPixelBufferLockBaseAddress(buffer, [])
+        if let address = CVPixelBufferGetBaseAddress(buffer) {
+            memset(address, 0x80, CVPixelBufferGetDataSize(buffer))
+        }
+        CVPixelBufferUnlockBaseAddress(buffer, [])
+        let deadline = ContinuousClock.now + .seconds(10)
+        for frame in 0..<60 {
+            while !input.isReadyForMoreMediaData, writer.status == .writing, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            guard input.isReadyForMoreMediaData,
+                  adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 1))
+            else { throw writer.error ?? AppError.invalidResponse }
+        }
+        input.markAsFinished()
+        await writer.finishWriting()
+        guard writer.status == .completed else { throw writer.error ?? AppError.invalidResponse }
+        return url
     }
 
     private static func artwork(name: String, size: CGSize, color: UIColor) async -> URL {
@@ -431,6 +543,13 @@ private struct ProductionHomeProvider: MediaProvider {
     }
     func children(of itemID: String) async throws -> [MediaItem] { [] }
     func items(in containerID: String, kind: MediaItemKind, page: PageRequest) async throws -> MediaPage {
+        if containerID == "detail-sequence-library" {
+            let end = min(page.startIndex + page.limit, rowCount * 2)
+            return MediaPage(
+                items: page.startIndex < end ? (page.startIndex..<end).map(movie) : [],
+                startIndex: page.startIndex, totalCount: rowCount * 2
+            )
+        }
         guard containerID.hasPrefix("fixture-library-"),
               let index = Int(containerID.split(separator: "-").last ?? "") else {
             return MediaPage(items: [], startIndex: page.startIndex, totalCount: 0)

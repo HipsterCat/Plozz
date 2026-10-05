@@ -1,4 +1,5 @@
 import CoreNetworking
+import CoreModels
 import Foundation
 import Observation
 import SwiftUI
@@ -20,35 +21,35 @@ import SwiftUI
 @MainActor
 @Observable
 public final class DetailStackDepth {
-    /// The number of detail pages currently on the stack.
-    public private(set) var depth = 0
+    private var pages: [UUID] = []
+    /// Appearance callbacks can repeat or arrive out of order. Membership is
+    /// owned by a page identity, never by the number of callbacks received.
+    public var depth: Int { pages.count }
 
     public init() {}
 
-    public func pageAppeared() {
-        depth += 1
+    public func pageAppeared(_ page: UUID) {
+        guard !pages.contains(page) else { return }
+        pages.append(page)
+        HandoffDiagnostics.emit("detail APPEAR page=\(page.uuidString.prefix(8)) depth=\(depth)")
         note("appeared")
     }
 
-    public func pageDismissed() {
-        depth = max(0, depth - 1)
+    public func pageDismissed(_ page: UUID) {
+        guard let index = pages.firstIndex(of: page) else { return }
+        pages.remove(at: index)
+        HandoffDiagnostics.emit("detail DISAPPEAR page=\(page.uuidString.prefix(8)) depth=\(depth)")
         note("dismissed")
     }
 
-    // MARK: - Runaway detection (temporary)
-    //
-    // `depth` is mutated from `onAppear` and READ during `ItemDetailView`'s body
-    // (`isShed`), so if a page's identity churns, `onAppear` runs again and the
-    // counter climbs with no matching `onDisappear` — a loop that feeds itself
-    // and never settles. A device capture showed ItemDetailView rebuilding ~1,289
-    // times against 343 parent renders, and the app hanging indefinitely rather
-    // than recovering, which is the shape that would produce.
-    //
-    // RATE-LIMITED on purpose. The obvious version — log every transition — is
-    // exactly the mistake that made an earlier capture worse: at storm frequency,
-    // a synchronous write per event is itself enough to saturate the main thread.
-    // This emits at most once a second, plus once when the depth first passes a
-    // level no real navigation reaches.
+    public func pagesCovering(_ page: UUID) -> Int {
+        guard let index = pages.firstIndex(of: page) else { return 0 }
+        return pages.count - index - 1
+    }
+
+    public func isTopPage(_ page: UUID) -> Bool { pages.last == page }
+
+    // Rate-limited lifecycle diagnostics, including unexpectedly deep real stacks.
 
     /// Total transitions seen, so a rate-limited line can still report the true
     /// rate rather than only the ones that got logged.

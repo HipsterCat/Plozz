@@ -160,6 +160,27 @@ public struct ShareProvider: MediaProvider, MediaFileBrowsing, MediaSortFieldPro
 
     // MARK: Library browsing
 
+    public static func hasEnabledCatalogLibrary(
+        accountID: String,
+        configuration: MediaShareLibraryConfiguration?,
+        visibility: HomeLibraryVisibility
+    ) -> Bool {
+        let libraryIDs: [String]
+        switch configuration?.contentType {
+        case .movies:
+            libraryIDs = [ShareCatalogID.moviesLibrary]
+        case .tvShows:
+            libraryIDs = [configuration?.usesAnimeMetadata == true ? ShareCatalogID.animeLibrary : ShareCatalogID.tvLibrary]
+        case .anime:
+            libraryIDs = [ShareCatalogID.moviesLibrary, ShareCatalogID.animeLibrary]
+        case .automatic, nil:
+            libraryIDs = [ShareCatalogID.moviesLibrary, ShareCatalogID.tvLibrary, ShareCatalogID.animeLibrary]
+        case .personalVideos:
+            return false
+        }
+        return libraryIDs.contains { visibility.isEnabled("\(accountID):\($0)") }
+    }
+
     /// App-owned catalog for this share (SQLite index built by a background
     /// `ShareScanner`), resolved through the injected read capability so the
     /// concrete store never leaks into the facade.
@@ -194,13 +215,13 @@ public struct ShareProvider: MediaProvider, MediaFileBrowsing, MediaSortFieldPro
             ))
         case .tvShows:
             result.append(MediaLibrary(
-                id: libraryConfiguration?.isAnime == true
+                id: libraryConfiguration?.usesAnimeMetadata == true
                     ? ShareCatalogID.animeLibrary
                     : ShareCatalogID.tvLibrary,
                 title: libraryConfiguration?.name ?? session.server.name,
                 kind: .series
             ))
-        case .automatic, nil:
+        case .automatic, .anime, nil:
             if counts.movies > 0 {
                 result.append(MediaLibrary(id: ShareCatalogID.moviesLibrary, title: "Movies", kind: .movie,
                                            synthesizedName: .movies))

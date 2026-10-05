@@ -351,9 +351,13 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(bounds.minY, 71, "The compact logo must retain its 72pt top clearance.")
             XCTAssertLessThanOrEqual(bounds.maxY, 273, "The compact logo must remain above Seasons.")
 
+            let seasonSnapshot = renderedKeylineSnapshot(in: window)
             let seasonEdge = try leadingPixel(
-                in: window, region: CGRect(x: 60, y: 310, width: 240, height: 10)
+                in: seasonSnapshot, region: CGRect(x: 60, y: 310, width: 240, height: 10)
             ) { r, g, b in r > 12 && r < 90 && abs(Int(r) - Int(g)) < 4 && abs(Int(r) - Int(b)) < 4 }
+            let seasonAboutEdge = try leadingPixel(
+                in: seasonSnapshot, region: CGRect(x: 0, y: 975, width: 300, height: 60)
+            ) { r, g, b in r > 230 && g > 230 && b > 230 }
             let season = try XCTUnwrap(focusTargets(in: page).first {
                 (100...250).contains($0.frame.width) && (40...90).contains($0.frame.height)
             })
@@ -362,25 +366,29 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
             system.updateFocusIfNeeded()
             try await waitUntil {
                 system.focusedItem.map(ObjectIdentifier.init) == ObjectIdentifier(season)
+                    && host.settledFocusItemID == ObjectIdentifier(season)
             }
             host.target = nil
             let rail = try XCTUnwrap(episodeScroll(in: page))
             rail.setContentOffset(CGPoint(x: -rail.adjustedContentInset.left, y: rail.contentOffset.y), animated: false)
-            try await Task.sleep(for: .milliseconds(500))
-            let episodeEdge = try leadingPixel(
-                in: window, region: CGRect(x: 60, y: 510, width: 540, height: 40)
-            ) { r, g, b in b > 150 && r < 50 && g < 80 }
+            window.layoutIfNeeded()
+            let restingSnapshot = try await restingEpisodeSnapshot(in: window)
+            let episodeEdge = try episodeArtworkSpan(in: restingSnapshot).lowerBound
             let aboutEdge = try leadingPixel(
-                in: window, region: CGRect(x: 0, y: 975, width: 300, height: 60)
+                in: restingSnapshot, region: CGRect(x: 0, y: 975, width: 300, height: 60)
             ) { r, g, b in r > 230 && g > 230 && b > 230 }
             XCTAssertEqual(episodeEdge, aboutEdge, accuracy: 1,
-                           "Resting episode artwork and About must share the same leading keyline.")
-            XCTAssertEqual(seasonEdge, aboutEdge, accuracy: 1,
-                           "The season pill's outer edge, not its label, must align with About.")
-            let aligned = XCTAttachment(image: DetailTransitionSnapshot.image(of: window))
+                           "\(scenario): resting episode artwork and About must share the same leading keyline.")
+            XCTAssertEqual(seasonEdge, seasonAboutEdge, accuracy: 1,
+                           "\(scenario): the season pill's outer edge, not its label, must align with About.")
+            let aligned = XCTAttachment(image: restingSnapshot)
             aligned.name = "production-series-keylines-\(scenario)"
             aligned.lifetime = .keepAlways
             add(aligned)
+            let seasonAligned = XCTAttachment(image: seasonSnapshot)
+            seasonAligned.name = "production-season-keylines-\(scenario)"
+            seasonAligned.lifetime = .keepAlways
+            add(seasonAligned)
         }
     }
 
@@ -457,10 +465,57 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
         return result
     }
 
+    private func renderedKeylineSnapshot(in window: UIWindow) -> UIImage {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+            XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+        }
+    }
+
+    private func restingEpisodeSnapshot(in window: UIWindow) async throws -> UIImage {
+        let deadline = ContinuousClock.now + .seconds(3)
+        var previous: ClosedRange<CGFloat>?
+        var stableSamples = 0
+        while ContinuousClock.now < deadline {
+            let snapshot = renderedKeylineSnapshot(in: window)
+            let range = try episodeArtworkSpan(in: snapshot)
+            let width = range.upperBound - range.lowerBound + 1
+            // Native/custom focus paint outlives the focus callback. Check its
+            // resting width, not its x-position, so a misaligned card still fails.
+            let restingWidth = EpisodeColumnCard.artworkSize.width
+            if (restingWidth - 2...restingWidth).contains(width), range == previous {
+                stableSamples += 1
+                if stableSamples == 2 { return snapshot }
+            } else {
+                stableSamples = 0
+            }
+            previous = range
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTFail("Episode focus paint did not return to its resting width: \(String(describing: previous)).")
+        throw AppError.notFound
+    }
+
     private func leadingPixel(
-        in window: UIWindow, region: CGRect, matching: (UInt8, UInt8, UInt8) -> Bool
+        in snapshot: UIImage, region: CGRect, matching: (UInt8, UInt8, UInt8) -> Bool
     ) throws -> CGFloat {
-        let image = try XCTUnwrap(DetailTransitionSnapshot.image(of: window).cgImage?.cropping(to: region))
+        try XCTUnwrap(horizontalPixelSpans(in: snapshot, region: region, matching: matching).first).lowerBound
+    }
+
+    private func episodeArtworkSpan(in snapshot: UIImage) throws -> ClosedRange<CGFloat> {
+        let spans = try horizontalPixelSpans(
+            in: snapshot, region: CGRect(x: 60, y: 510, width: 540, height: 40)
+        ) { r, g, b in b > 150 && r < 50 && g < 80 }
+        return try XCTUnwrap(spans.max {
+            $0.upperBound - $0.lowerBound < $1.upperBound - $1.lowerBound
+        })
+    }
+
+    private func horizontalPixelSpans(
+        in snapshot: UIImage, region: CGRect, matching: (UInt8, UInt8, UInt8) -> Bool
+    ) throws -> [ClosedRange<CGFloat>] {
+        let image = try XCTUnwrap(snapshot.cgImage?.cropping(to: region))
         let width = image.width
         let height = image.height
         var bytes = [UInt8](repeating: 0, count: width * height * 4)
@@ -471,16 +526,48 @@ final class DetailTransitionVisualRegressionTests: XCTestCase {
             ))
             context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         }
+        var first: Int?
+        var spans: [ClosedRange<CGFloat>] = []
         for x in 0..<width {
-            for y in 0..<height {
+            let hasMatchingPixel = (0..<height).contains { y in
                 let index = (y * width + x) * 4
-                if matching(bytes[index], bytes[index + 1], bytes[index + 2]) {
-                    return region.minX + CGFloat(x)
-                }
+                return matching(bytes[index], bytes[index + 1], bytes[index + 2])
+            }
+            if hasMatchingPixel {
+                if first == nil { first = x }
+            } else if let start = first {
+                spans.append((region.minX + CGFloat(start))...(region.minX + CGFloat(x - 1)))
+                first = nil
             }
         }
-        XCTFail("Expected rendered pixels in \(region).")
-        throw AppError.notFound
+        if let first {
+            spans.append((region.minX + CGFloat(first))...(region.minX + CGFloat(width - 1)))
+        }
+        return spans
+    }
+
+    func testKeylineSamplingRetainsRealMisalignmentAndIgnoresAPartialNeighbor() throws {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        for offset in [CGFloat.zero, 4] {
+            let snapshot = UIGraphicsImageRenderer(size: CGSize(width: 640, height: 1080), format: format).image { context in
+                UIColor.black.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 640, height: 1080))
+                UIColor.blue.setFill()
+                context.fill(CGRect(x: 60, y: 510, width: 4, height: 40))
+                context.fill(CGRect(x: 80 + offset, y: 510, width: 480, height: 40))
+                UIColor.white.setFill()
+                context.fill(CGRect(x: 81, y: 990, width: 20, height: 20))
+            }
+            let artwork = try episodeArtworkSpan(in: snapshot)
+            let about = try leadingPixel(
+                in: snapshot, region: CGRect(x: 0, y: 975, width: 300, height: 60)
+            ) { r, g, b in r > 230 && g > 230 && b > 230 }
+            XCTAssertEqual(artwork.upperBound - artwork.lowerBound + 1, 480)
+            XCTAssertEqual(artwork.lowerBound, 80 + offset)
+            XCTAssertEqual(abs(artwork.lowerBound - about) <= 1, offset == 0,
+                           "A resting-width card must still fail alignment when shifted.")
+        }
     }
 
     func testMissingDetailBackdropDoesNotReuseTheOutgoingPoster() async throws {
@@ -1025,6 +1112,7 @@ private final class TransitionShowModel {
     let trailer = HeroTrailerController()
     var trailerReturnItemID: String?
     let stackDepth = DetailStackDepth()
+    let coveredPageID = UUID()
     let homeRecede = HomeHeroRecedeModel()
     var showsHomeHero = true
     @ObservationIgnored var resolveTrailer: HeroTrailerResolving = { _ in nil }
@@ -1085,8 +1173,8 @@ private struct TransitionShowRoot: View {
                         .navigationDestination(for: Int.self) { destination in
                             if destination == 2 {
                                 Button("Covered detail") {}
-                                    .onAppear { model.stackDepth.pageAppeared() }
-                                    .onDisappear { model.stackDepth.pageDismissed() }
+                                    .onAppear { model.stackDepth.pageAppeared(model.coveredPageID) }
+                                    .onDisappear { model.stackDepth.pageDismissed(model.coveredPageID) }
                             } else {
                                 ItemDetailView(
                                     viewModel: model.detail, onPlay: { _ in }, onSelectChild: { _ in },
@@ -1114,9 +1202,23 @@ private struct TransitionShowRoot: View {
 @MainActor
 private final class TransitionShowController: UIHostingController<TransitionShowRoot> {
     var target: (any UIFocusEnvironment)?
+    private var focusAnimationGeneration = 0
+    private(set) var settledFocusItemID: ObjectIdentifier?
 
     override var preferredFocusEnvironments: [any UIFocusEnvironment] {
         target.map { [$0] } ?? super.preferredFocusEnvironments
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        focusAnimationGeneration += 1
+        let generation = focusAnimationGeneration
+        let focused = context.nextFocusedItem.map(ObjectIdentifier.init)
+        settledFocusItemID = nil
+        coordinator.addCoordinatedAnimations(nil) { [weak self] in
+            guard let self, focusAnimationGeneration == generation else { return }
+            settledFocusItemID = focused
+        }
     }
 }
 
